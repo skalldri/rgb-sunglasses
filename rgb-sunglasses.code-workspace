@@ -1,0 +1,86 @@
+{
+	"folders": [
+		{
+			"path": "./"
+		},
+		{
+			"path": "../../../../../ncs/v2.3.0"
+		}
+	],
+	"settings": {
+		"nrf-connect.topdir": "${nrf-connect.sdk:2.3.0}",
+		"nrf-connect.toolchain.path": "${nrf-connect.toolchain:2.3.0}",
+		"nrf-connect.applications": [
+			"."
+		],
+		"nrf-connect.boardRoots": [
+			"${workspaceFolder}"
+		],
+		"files.associations": {
+			"kernel.h": "c",
+			"kernel_includes.h": "c",
+			"debug.h": "c",
+			"array": "c",
+			"atomic": "c",
+			"bit": "c",
+			"*.tcc": "c",
+			"cctype": "c",
+			"clocale": "c",
+			"cmath": "c",
+			"compare": "c",
+			"concepts": "c",
+			"cstdarg": "c",
+			"cstddef": "c",
+			"cstdint": "c",
+			"cstdio": "c",
+			"cstdlib": "c",
+			"ctime": "c",
+			"cwchar": "c",
+			"cwctype": "c",
+			"deque": "c",
+			"string": "c",
+			"unordered_map": "c",
+			"vector": "c",
+			"exception": "c",
+			"algorithm": "c",
+			"functional": "c",
+			"iterator": "c",
+			"memory": "c",
+			"memory_resource": "c",
+			"netfwd": "c",
+			"numeric": "c",
+			"random": "c",
+			"ratio": "c",
+			"string_view": "c",
+			"system_error": "c",
+			"tuple": "c",
+			"type_traits": "c",
+			"utility": "c",
+			"initializer_list": "c",
+			"iosfwd": "c",
+			"limits": "c",
+			"new": "c",
+			"numbers": "c",
+			"ostream": "c",
+			"stdexcept": "c",
+			"streambuf": "c",
+			"cinttypes": "c",
+			"typeinfo": "c"
+		},
+		"nrf-connect.debugging.bindings": {
+			"${workspaceFolder}/build": "Launch build"
+		}
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"type": "nrf-connect",
+				"request": "launch",
+				"name": "Launch build",
+				"config": "${workspaceFolder}/build",
+				"runToEntryPoint": "main"
+			}
+		]
+	}
+}
