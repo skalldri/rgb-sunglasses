@@ -80,6 +80,12 @@
 				"name": "Launch build",
 				"config": "${workspaceFolder}/build",
 				"runToEntryPoint": "main"
+			},
+			{
+				"type": "nrf-connect",
+				"request": "attach",
+				"name": "Attach build",
+				"config": "${workspaceFolder}/build"
 			}
 		]
 	}

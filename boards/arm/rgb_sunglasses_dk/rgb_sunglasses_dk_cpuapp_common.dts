@@ -12,8 +12,8 @@
 / {
 
 	chosen {
-		zephyr,console = &uart0;
-		zephyr,shell-uart = &uart0;
+		zephyr,console = &cdc_acm_uart0;
+		zephyr,shell-uart = &cdc_acm_uart0;
 		zephyr,uart-mcumgr = &uart0;
 		zephyr,bt-mon-uart = &uart0;
 		zephyr,bt-c2h-uart = &uart0;
@@ -231,19 +231,9 @@ led_strip_spi: &spi1 {
 		slot0_partition: partition@30000 {
 			label = "image-0";
 		};
-		/*
-		slot0_ns_partition: partition@50000 {
-			label = "image-0-nonsecure";
-		};
-		*/
 		slot1_partition: partition@90000 {
 			label = "image-1";
 		};
-		/*
-		slot1_ns_partition: partition@c0000 {
-			label = "image-1-nonsecure";
-		};
-		*/
 		scratch_partition: partition@f0000 {
 			label = "image-scratch";
 			reg = <0x000f0000 0xa000>;

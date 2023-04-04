@@ -68,7 +68,7 @@ const struct led_rgb rainbow_colors[] = {
     {0, 143, 0, 200}   // Violet-ish
 };
 
-float rainbowBrightness = 0.2f;
+float rainbowBrightness = 0.05f;
 
 void control_strip(const struct device *led_strip) {
     int32_t breath_level = MIN_BREATH_LEVEL;
