@@ -42,7 +42,6 @@
 BT_NSMS_DEF(nsms_btn1, "Button 1", false, "Unknown", 20);
 BT_NSMS_DEF(nsms_btn2, "Button 2", IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED), "Unknown", 20);
 
-
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
@@ -61,14 +60,14 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 	printk("Connected\n");
 
-	dk_set_led_on(CON_STATUS_LED);
+	//dk_set_led_on(CON_STATUS_LED);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	printk("Disconnected (reason %u)\n", reason);
 
-	dk_set_led_off(CON_STATUS_LED);
+	//dk_set_led_off(CON_STATUS_LED);
 }
 
 #if IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED)
@@ -147,7 +146,7 @@ static struct bt_conn_auth_cb conn_auth_callbacks;
 static struct bt_conn_auth_info_cb conn_auth_info_callbacks;
 #endif /* IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED) */
 
-
+/*
 static void button_changed(uint32_t button_state, uint32_t has_changed)
 {
 	if (has_changed & STATUS1_BUTTON) {
@@ -158,8 +157,9 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 		bt_nsms_set_status(&nsms_btn2,
 				   (button_state & STATUS2_BUTTON) ? "Pressed" : "Released");
 	}
-}
+}*/
 
+/*
 static int init_button(void)
 {
 	int err;
@@ -170,7 +170,7 @@ static int init_button(void)
 	}
 
 	return err;
-}
+}*/
 
 void main(void)
 {
@@ -179,17 +179,17 @@ void main(void)
 
 	printk("Starting Bluetooth Peripheral Status example\n");
 
-	err = dk_leds_init();
+	/*err = dk_leds_init();
 	if (err) {
 		printk("LEDs init failed (err %d)\n", err);
 		return;
-	}
+	}*/
 
-	err = init_button();
+	/*err = init_button();
 	if (err) {
 		printk("Button init failed (err %d)\n", err);
 		return;
-	}
+	}*/
 
 	if (IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED)) {
 		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
@@ -228,7 +228,7 @@ void main(void)
 	printk("This is a new APP!!!\n");
 
 	for (;;) {
-		dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
+		//dk_set_led(RUN_STATUS_LED, (++blink_status) % 2);
 		k_sleep(K_MSEC(RUN_LED_BLINK_INTERVAL));
 	}
 }

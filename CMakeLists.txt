@@ -12,6 +12,7 @@ project(NONE)
 target_sources(app PRIVATE
   src/main.c
   src/led_controller.cpp
+  src/buttons.cpp
 )
 
 # NORDIC SDK APP END

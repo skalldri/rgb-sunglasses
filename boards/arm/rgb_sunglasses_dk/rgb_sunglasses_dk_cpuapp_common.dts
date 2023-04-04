@@ -22,7 +22,7 @@
 		zephyr,ieee802154 = &ieee802154;
 	};
 
-	leds {
+	/*leds {
 		compatible = "gpio-leds";
 		led0: led_0 {
 			gpios = <&gpio0 28 GPIO_ACTIVE_LOW>;
@@ -40,14 +40,14 @@
 			gpios = <&gpio0 31 GPIO_ACTIVE_LOW>;
 			label = "Green LED 3";
 		};
-	};
+	};*/
 
-	pwmleds {
+	/*pwmleds {
 		compatible = "pwm-leds";
 		pwm_led0: pwm_led_0 {
 			pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_INVERTED>;
 		};
-	};
+	};*/
 
 	buttons {
 		compatible = "gpio-keys";
@@ -123,18 +123,19 @@
 
 	/* These aliases are provided for compatibility with samples */
 	aliases {
-		led0 = &led0;
+		/*led0 = &led0;
 		led1 = &led1;
 		led2 = &led2;
 		led3 = &led3;
-		pwm-led0 = &pwm_led0;
+		pwm-led0 = &pwm_led0;*/
 		sw0 = &button0;
 		sw1 = &button1;
 		sw2 = &button2;
 		sw3 = &button3;
-		bootloader-led0 = &led0;
+		sw-wake = &button4;
+		/*bootloader-led0 = &led0;*/
 		mcuboot-button0 = &button0;
-		mcuboot-led0 = &led0;
+		/*mcuboot-led0 = &led0;*/
 		watchdog0 = &wdt0;
 		led-strip = &led_strip;
 		/*spi-flash0 = &mx25r64;*/
