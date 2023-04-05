@@ -134,7 +134,7 @@
 		sw3 = &button3;
 		sw-wake = &button4;
 		/*bootloader-led0 = &led0;*/
-		mcuboot-button0 = &button0;
+		mcuboot-button0 = &button1;
 		/*mcuboot-led0 = &led0;*/
 		watchdog0 = &wdt0;
 		led-strip = &led_strip;
@@ -219,7 +219,6 @@ led_strip_spi: &spi1 {
 
 /* WARNING: these partition definitions do nothing because we are always building in multi-image mode, so we instead use Nordic's "Partition manager" */
 &flash0 {
-
 	partitions {
 		compatible = "fixed-partitions";
 		#address-cells = <1>;
