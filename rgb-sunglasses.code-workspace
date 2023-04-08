@@ -65,7 +65,8 @@
 			"stdexcept": "c",
 			"streambuf": "c",
 			"cinttypes": "c",
-			"typeinfo": "c"
+			"typeinfo": "c",
+			"sensor.h": "c"
 		},
 		"nrf-connect.debugging.bindings": {
 			"${workspaceFolder}/build": "Launch build"

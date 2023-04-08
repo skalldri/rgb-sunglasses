@@ -14,9 +14,9 @@
 	chosen {
 		zephyr,console = &cdc_acm_uart0;
 		zephyr,shell-uart = &cdc_acm_uart0;
-		zephyr,uart-mcumgr = &uart0;
-		zephyr,bt-mon-uart = &uart0;
-		zephyr,bt-c2h-uart = &uart0;
+		zephyr,uart-mcumgr = &cdc_acm_uart1;
+		//zephyr,bt-mon-uart = &uart0;
+		//zephyr,bt-c2h-uart = &uart0;
 		zephyr,bt-hci-rpmsg-ipc = &ipc0;
 		nordic,802154-spinel-ipc = &ipc0;
 		zephyr,ieee802154 = &ieee802154;
@@ -158,16 +158,22 @@
 	status = "okay";
 };
 
-&i2c1 {
+&i2c0 {
 	compatible = "nordic,nrf-twim";
 	status = "okay";
-	pinctrl-0 = <&i2c1_default>;
-	pinctrl-1 = <&i2c1_sleep>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-1 = <&i2c0_sleep>;
 	pinctrl-names = "default", "sleep";
+
+	tps25750: tps25750@21 {
+		compatible = "ti,tps25750";
+		reg = <0x21>;
+		status = "okay";
+	};
 };
 
 &uart0 {
-	status = "okay";
+	//status = "okay";
 	current-speed = <115200>;
 	pinctrl-0 = <&uart0_default>;
 	pinctrl-1 = <&uart0_sleep>;
@@ -257,10 +263,13 @@ zephyr_udc0: &usbd {
 	cdc_acm_uart0: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
+
+	cdc_acm_uart1: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
 };
 
 / {
-
 	reserved-memory {
 		#address-cells = <1>;
 		#size-cells = <1>;

@@ -24,3 +24,5 @@ config BT_STATUS_SECURITY_ENABLED
 	  connection is secure.
 
 endmenu
+
+rsource "drivers/Kconfig"

@@ -1,0 +1,7 @@
+config TPS25750
+    bool "Enable the TPS25750 driver"
+    depends on I2C
+
+config TPS25750_INIT_PRIORITY
+    int "TPS25750 device initialization priority"
+    default 2

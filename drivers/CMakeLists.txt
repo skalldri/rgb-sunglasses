@@ -1,0 +1,1 @@
+add_subdirectory_ifdef(CONFIG_TPS25750 tps25750)

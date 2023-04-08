@@ -1,0 +1,5 @@
+description: TPS25750 USB Power Delivery Controller
+
+compatible: "ti,tps25750"
+
+include: [i2c-device.yaml]
