@@ -7,12 +7,9 @@
 static int cmd_power_pd_dump(const struct shell *shell,
                             size_t argc, char **argv, void *data)
 {   
-    
-    //const struct device *pd = DEVICE_DT_GET_ONE(ti_tps25750);
     const struct device *pd = DEVICE_DT_GET(DT_NODELABEL(tps25750));
 
     tps25750_dump(pd);
-
     return 0;
 }
 
