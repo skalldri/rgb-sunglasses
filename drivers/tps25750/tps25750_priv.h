@@ -10,9 +10,9 @@ typedef struct __packed tps25750_mode
 BUILD_ASSERT(sizeof(tps25750_mode_t) == 5);
 
 // Possible values for the "MODE" register
-#define TPS25750_REG_MODE_VAL_APP = "APP";
-#define TPS25750_REG_MODE_VAL_BOOT = "BOOT";
-#define TPS25750_REG_MODE_VAL_PTCH = "PTCH";
+#define TPS25750_REG_MODE_VAL_APP  "APP "
+#define TPS25750_REG_MODE_VAL_BOOT "BOOT"
+#define TPS25750_REG_MODE_VAL_PTCH "PTCH"
 
 #define TPS25750_REG_TYPE_ADDR 0x04
 #define TPS25750_REG_TYPE_SIZE 4
@@ -23,6 +23,8 @@ BUILD_ASSERT(sizeof(tps25750_mode_t) == 5);
 #define TPS25750_REG_CMD1_ADDR 0x08
 #define TPS25750_REG_CMD1_SIZE 4
 
+#define TPS25750_REG_CMD1_VAL_PBMS "PBMs"
+
 typedef struct __packed tps25750_cmd1 
 {
     uint8_t byte_count;
@@ -31,7 +33,7 @@ typedef struct __packed tps25750_cmd1
 BUILD_ASSERT(sizeof(tps25750_cmd1_t) == 5);
 
 // CMD1 register value indicating a command error
-#define TPS25750_REG_CMD1_VAL_ERROR = "!CMD";
+#define TPS25750_REG_CMD1_VAL_ERROR "!CMD"
 
 #define TPS25750_REG_DATA1_ADDR 0x09
 #define TPS25750_REG_DATA1_SIZE 64
@@ -49,61 +51,6 @@ BUILD_ASSERT(sizeof(tps25750_cmd1_t) == 5);
 
 // All INT_XXXX registers have the same size
 #define TPS25750_REG_INT_SIZE 11
-
-// All INT_XXXX registers use the same data format
-typedef struct tps25750_int
-{
-    bool I2CMasterNACKed; // A transaction on the I2C master was NACKed.
-    bool ReadyForPatch;   // Device ready for a patch bundle from the host.
-    bool PatchLoaded;     // Patch was loaded to the device.
-
-    bool TXMemBufferEmpty; // Transmit memory buffer empty.
-
-    bool ErrorUnableToSource; // The Source was unable to increase the voltage to the negotiated  voltage of the contract.
-
-    bool PlugEarlyNotification; // A connection has been detected but not debounced.
-
-    bool SnkTransitionComplete; // This event only occurs when in source mode
-                                // (PD_STATUS.PresentPDRole = 1b). It occurs tSrcTransition (ms)
-                                // after sending an Accept message to a Request message, just
-                                // before sending the PS_RDY message.
-
-    bool ErrorMessageData;   // An erroneous message was received.
-    bool ErrorProtocolError; // An unexpected message was received from the partner device.
-
-    bool ErrorMissingGetCapMessage;            // The partner device did not respond to the Get_Sink_Cap or
-                                               // Get_Source_Cap message that was sent.
-    bool ErrorPowerEventOccurred;              // An OVP, or ILIM event occurred on VBUS. Or a TSD event
-                                               // occurred.
-    bool ErrorCanProvideVoltageOrCurrentLater; // The USB PD Source can provide acceptable voltage and current,
-                                               // but not at the present time. A "wait" message was sent or received.
-    bool ErrorCannotProvideVoltageOrCurrent;   // The USB PD Source cannot provide an acceptable voltage and/or
-                                               // current. A Reject message was sent to the Sink or a Capability
-                                               // Mismatch was received from the Sink.
-    bool ErrorDeviceIncompatible;              // When set to 1, a USB PD device with an incompatible specification
-                                               // version was connected. Or the partner device is not USB PD
-                                               // capable.
-
-    bool CMDComplete;            // Set whenever a non-zero value in CMD register is set to zero or !CMD
-    bool PDStatusUpdate;         // Set whenever contents of PD_STATUS register (0x40) change.
-    bool StatusUpdate;           // Set whenever contents of STATUS register (0x1A) change.
-    bool PowerStatusUpdate;      // Set whenever contents of POWER_STATUS register (0x3F) change.
-    bool PPswitchChanged;        // Set whenever contents of POWER_PATH_STATUS register (0x26) changes.
-    bool UsbHostPresentNoLonger; // Set when STATUS.UsbHostPresent transitions to anything other than 11b.
-    bool UsbHostPresent;         // Set when STATUS.UsbHostPresent transitions to 11b.
-    bool DRSwapRequested;        // A DR swap was requested by the Port Partner.
-    bool PRSwapRequested;        // A PR swap was requested by the Port Partner.
-    bool SourceCapMsgRcvd;       // This is asserted when a Source Capabilities message is received from the Port Partner.
-    bool NewContractAsProv;      // An RDO from the far-end device has been accepted and the PD Controller is a Source. 
-                                 // This is asserted after the PS_RDY message has been sent. See ACTIVE_CONTRACT_PDO register (0x34) 
-                                 // and ACTIVE_CONTRACT_RDO register (0x35) for details.
-    bool NewContractAsCons;      // Far-end source has accepted an RDO sent by the PD Controller as a Sink. See ACTIVE_CONTRACT_PDO register (0x34)
-                                 // and ACTIVE_CONTRACT_RDO register (0x35) for details.
-    bool DRSwapComplete;         // A Data Role swap has completed. See STATUS register (0x1A) and PD_STATUS register (0x40) for port state.
-    bool PRSwapComplete;         // A Power role swap has completed. See STATUS register (0x1A) and PD_STATUS register (0x40) for port state.
-    bool PlugInsertOrRemoval;    // USB Plug Status has Changed. See Status register for more plug details.
-    bool PDHardReset;            // A PD Hard Reset has been performed. See PD_STATUS.HardResetDetails for more information.
-} tps25750_int_t;
 
 // Format:
 // #define TPS25750_INT_BIT(_name, _byte, _bit)
@@ -180,6 +127,17 @@ typedef struct tps25750_int
 TPS25750_INT_BIT_LIST
 #undef TPS25750_INT_BIT
 
+// All INT_XXXX registers use the same data format
+typedef struct tps25750_int
+{
+#define TPS25750_INT_BIT(_name, _byte, _bit) \
+    bool _name;
+
+    TPS25750_INT_BIT_LIST
+#undef TPS25750_INT_BIT
+} tps25750_int_t;
+
+
 #define TPS25750_REG_STATUS_ADDR 0x1A
 #define TPS25750_REG_STATUS_SIZE 5
 
@@ -241,6 +199,16 @@ typedef struct tps25750_std_task_response
 {
     uint8_t result;
 } tps25750_std_task_response_t;
+
+typedef struct __packed tps25750_pbms_data_in {
+    uint8_t byte_count;
+    uint8_t payload[]
+} tps25750_pbms_data_in_t;
+
+typedef struct __packed tps25750_data1 {
+    uint8_t byte_count;
+    uint8_t data[TPS25750_REG_DATA1_SIZE];
+} tps25750_data1_t;
 
 struct tps25750_dev_data
 {
