@@ -2,10 +2,12 @@
 
 #define TPS25750_REG_MODE_ADDR 0x03
 #define TPS25750_REG_MODE_SIZE 4
-typedef struct tps25750_mode
+typedef struct __packed tps25750_mode
 {
+    char byte_count;
     char mode[TPS25750_REG_MODE_SIZE];
 } tps25750_mode_t;
+BUILD_ASSERT(sizeof(tps25750_mode_t) == 5);
 
 // Possible values for the "MODE" register
 #define TPS25750_REG_MODE_VAL_APP = "APP";
@@ -21,10 +23,12 @@ typedef struct tps25750_mode
 #define TPS25750_REG_CMD1_ADDR 0x08
 #define TPS25750_REG_CMD1_SIZE 4
 
-typedef struct tps25750_cmd1
+typedef struct __packed tps25750_cmd1 
 {
+    uint8_t byte_count;
     char cmd[TPS25750_REG_CMD1_SIZE];
 } tps25750_cmd1_t;
+BUILD_ASSERT(sizeof(tps25750_cmd1_t) == 5);
 
 // CMD1 register value indicating a command error
 #define TPS25750_REG_CMD1_VAL_ERROR = "!CMD";
@@ -38,13 +42,13 @@ typedef struct tps25750_cmd1
 #define TPS25750_REG_VERSION_ADDR 0x0F
 #define TPS25750_REG_VERSION_SIZE 4
 
-// All INT_XXXX registers have the same size
-#define TPS25750_REG_INT_SIZE 11
-
 
 #define TPS25750_REG_INT_EVENT1_ADDR 0x14
 #define TPS25750_REG_INT_MASK1_ADDR 0x16
 #define TPS25750_REG_INT_CLEAR1_ADDR 0x18
+
+// All INT_XXXX registers have the same size
+#define TPS25750_REG_INT_SIZE 11
 
 // All INT_XXXX registers use the same data format
 typedef struct tps25750_int
@@ -169,7 +173,7 @@ typedef struct tps25750_int
 
 // Define a bunch of functions for accessing bits in the byte array
 #define TPS25750_INT_BIT(_name, _byte, _bit) \
-    inline bool tps25750_int_bit_##_name(const uint8_t bytes[TPS25750_REG_INT_SIZE]) { \
+    inline bool tps25750_int_bit_##_name(const uint8_t* bytes) { \
         return ((bytes[_byte] & (1 << _bit)) == (1 << _bit)); \
     }
 

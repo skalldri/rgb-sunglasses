@@ -16,7 +16,7 @@ LOG_MODULE_REGISTER(tps25750, LOG_LEVEL_INF);
  * @param i 
  * @param bytes 
  */
-void _tps25750_int_to_bytes(const tps25750_int_t* i, uint8_t bytes[TPS25750_REG_INT_SIZE]) {
+void _tps25750_int_to_bytes(const tps25750_int_t* i, uint8_t* bytes) {
     #define TPS25750_INT_BIT(_name, _byte, _bit) \
         bytes[_byte] = (bytes[_byte] & (~(1 << _bit))) | (i->_name << _bit);
 
@@ -30,7 +30,7 @@ void _tps25750_int_to_bytes(const tps25750_int_t* i, uint8_t bytes[TPS25750_REG_
  * @param bytes 
  * @param i 
  */
-void _bytes_to_tps25750_int(const uint8_t bytes[TPS25750_REG_INT_SIZE], tps25750_int_t* i) {
+void _bytes_to_tps25750_int(const uint8_t* bytes, tps25750_int_t* i) {
     #define TPS25750_INT_BIT(_name, _byte, _bit) \
         i->_name = tps25750_int_bit_##_name(bytes);
 
@@ -46,7 +46,7 @@ int tps25750_read_int_event1(const struct device *dev, tps25750_int_t* i) {
 
     const struct tps25750_dev_config *cfg = dev->config;
 
-    uint8_t bytes[TPS25750_REG_INT_SIZE];
+    uint8_t bytes[TPS25750_REG_INT_SIZE + 1];
 
     if (!device_is_ready(cfg->i2c.bus)) {
         LOG_ERR("bus not ready");
@@ -63,7 +63,8 @@ int tps25750_read_int_event1(const struct device *dev, tps25750_int_t* i) {
         return ret;
     }
     
-    _bytes_to_tps25750_int(bytes, i);
+    // Skip the first byte, which contains a useless "data size"
+    _bytes_to_tps25750_int(&bytes[1], i);
 
     LOG_HEXDUMP_INF(bytes, sizeof(bytes), "INT_EVENT1");
 
@@ -78,7 +79,7 @@ int tps25750_read_int_mask1(const struct device *dev, tps25750_int_t* i) {
 
     const struct tps25750_dev_config *cfg = dev->config;
 
-    uint8_t bytes[TPS25750_REG_INT_SIZE];
+    uint8_t bytes[TPS25750_REG_INT_SIZE + 1];
 
     if (!device_is_ready(cfg->i2c.bus)) {
         LOG_ERR("bus not ready");
@@ -95,7 +96,7 @@ int tps25750_read_int_mask1(const struct device *dev, tps25750_int_t* i) {
         return ret;
     }
     
-    _bytes_to_tps25750_int(bytes, i);
+    _bytes_to_tps25750_int(&bytes[1], i);
 
     LOG_HEXDUMP_INF(bytes, sizeof(bytes), "INT_MASK1");
 
@@ -118,8 +119,8 @@ int tps25750_read_mode(const struct device *dev, tps25750_mode_t* mode) {
     return i2c_burst_read_dt(
         &cfg->i2c, 
         TPS25750_REG_MODE_ADDR, 
-        mode->mode, 
-        sizeof(mode->mode));
+        (uint8_t*)mode, 
+        sizeof(tps25750_mode_t));
 }
 
 int tps25750_read_cmd1(const struct device *dev, tps25750_cmd1_t* cmd) {
@@ -138,8 +139,8 @@ int tps25750_read_cmd1(const struct device *dev, tps25750_cmd1_t* cmd) {
     return i2c_burst_read_dt(
         &cfg->i2c, 
         TPS25750_REG_CMD1_ADDR, 
-        cmd->cmd, 
-        sizeof(cmd->cmd));
+        (uint8_t*)cmd, 
+        sizeof(tps25750_cmd1_t));
 }
 
 int tps25750_write_cmd1(const struct device *dev, tps25750_cmd1_t* cmd) {
@@ -155,11 +156,14 @@ int tps25750_write_cmd1(const struct device *dev, tps25750_cmd1_t* cmd) {
         return -ENODEV;
     }
 
+    // Oh TI... why do you always hurt me like this
+    cmd->byte_count = sizeof(tps25750_cmd1_t) - sizeof(cmd->byte_count);
+
     return i2c_burst_write_dt(
         &cfg->i2c, 
         TPS25750_REG_CMD1_ADDR, 
-        cmd->cmd, 
-        sizeof(cmd->cmd));
+        (uint8_t*)cmd, 
+        sizeof(tps25750_cmd1_t));
 }
 
 int tps25750_dump(const struct device *dev)
