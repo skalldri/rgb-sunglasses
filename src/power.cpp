@@ -3,8 +3,16 @@
 #include <zephyr/devicetree.h>
 
 #include <zephyr/drivers/tps25750/tps25750.h>
+#include <zephyr/drivers/flash.h>
+
+#include <tps25750/tps25750-config.h>
+
+// Needed to modify VDD voltage
+#include <nrf5340_application.h>
+#include <nrf5340_application_bitfields.h>
 
 const struct device *pd = DEVICE_DT_GET(DT_NODELABEL(tps25750));
+const struct device *flash = DEVICE_DT_GET(DT_NODELABEL(flash_controller));
 
 static int cmd_power_pd_dump(const struct shell *shell,
                             size_t argc, char **argv, void *data)
@@ -13,17 +21,81 @@ static int cmd_power_pd_dump(const struct shell *shell,
     return 0;
 }
 
+static int cmd_power_pd_clear_dead_battery(const struct shell *shell,
+                            size_t argc, char **argv, void *data)
+{
+    tps25750_clear_dead_battery(pd);
+    return 0;
+}
+
 static int cmd_power_pd_patch(const struct shell *shell,
                             size_t argc, char **argv, void *data)
 {
-    tps25750_download_patch(pd);
+    shell_print(shell, "Sending '%s' patch to device...", argv[0]);
+
+    int selection = (int) data;
+    if (selection == 1) {
+        tps25750_download_patch(pd, tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
+    } else if (selection == 2) {
+        // tps25750_download_patch(pd, tps25750x_fullFlash_i2c_array, gSizeFullFlashArray);
+        shell_error(shell, "Full Flash not supported");
+    } else if (selection == 3) {
+        tps25750_download_patch(pd, NULL, 0);
+    } else {
+        shell_error(shell, "Unknown patch type %d", selection);
+        return -ENOEXEC;
+    }
+    
     return 0;
 }
+
+static int cmd_power_sys_boost(const struct shell *shell,
+                            size_t argc, char **argv, void *data)
+{
+    uint32_t currentVreghvout = (NRF_UICR_S->VREGHVOUT & UICR_VREGHVOUT_VREGHVOUT_Msk);
+
+    // First check the current mode
+    if (currentVreghvout == UICR_VREGHVOUT_VREGHVOUT_3V3) {
+        shell_print(
+            shell, 
+            "Current UICR already indicates 3.3v output! Nothing to do");
+        return 0;
+    } else if (currentVreghvout != UICR_VREGHVOUT_VREGHVOUT_DEFAULT) {
+        shell_print(
+            shell, 
+            "Current UICR mode is non-default (%u != %lu)! Cannot change without a mass-chip-erase",
+            currentVreghvout, 
+            UICR_VREGHVOUT_VREGHVOUT_DEFAULT);
+        return -ENOEXEC;
+    }
+
+    uint32_t newVreghvoutValue = (NRF_UICR_S->VREGHVOUT & ~UICR_VREGHVOUT_VREGHVOUT_Msk) | UICR_VREGHVOUT_VREGHVOUT_3V3;
+    
+    // Write the change using the flash APIs
+    int ret = flash_write(flash, (uint32_t)&(NRF_UICR_S->VREGHVOUT), &newVreghvoutValue, sizeof(newVreghvoutValue));
+
+    if (ret) {
+        shell_error(shell, "Failed to write UICR->VREGHVOUT: %d", ret);
+        return ret;
+    } else {
+        shell_print(shell, "UICR updated! Restart device");
+    }
+    
+    return 0;
+}
+
+SHELL_SUBCMD_DICT_SET_CREATE(sub_patch, cmd_power_pd_patch,
+        (low_region, 1, "low-region binary"), 
+        (full_flash, 2, "full-flash binary"), 
+        (none, 3, "No patch, just boot")
+);
 
 // Subcommands for "power pd"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power_pd,
         SHELL_CMD(dump,   NULL, "Dump TPS25750 Registers to console", cmd_power_pd_dump),
-        SHELL_CMD(patch,   NULL, "Download TPS25750 firmware patch", cmd_power_pd_patch),
+        SHELL_CMD(clear_dbfg,   NULL, "Clear TPS25750 dead battery flag", cmd_power_pd_clear_dead_battery),
+        SHELL_CMD(boost,   NULL, "Increase NRF5340 VDD to 3.3v", cmd_power_sys_boost),
+        SHELL_CMD(patch,   &sub_patch, "Download TPS25750 firmware patch", NULL),
         SHELL_SUBCMD_SET_END
 );
 

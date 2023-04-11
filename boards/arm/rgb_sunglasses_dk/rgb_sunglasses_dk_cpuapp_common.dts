@@ -167,8 +167,11 @@
 
 	tps25750: tps25750@21 {
 		compatible = "ti,tps25750";
-		reg = <0x21>;
+		reg = <0x21>; /* The address of the device in "normal" mode */
+		patch-address = <0x15>; /* The address of the device during patch download */
+		patch-chunk-size = <128>; /* the size of the packets sent during patch download */
 		status = "okay";
+		irq-gpios = <&gpio0 22 (GPIO_ACTIVE_LOW)>; /* Might need to add GPIO_PULL_UP or GPIO_PULL_DOWN here? */
 	};
 };
 
@@ -225,6 +228,7 @@ led_strip_spi: &spi1 {
 
 /* WARNING: these partition definitions do nothing because we are always building in multi-image mode, so we instead use Nordic's "Partition manager" */
 &flash0 {
+	status = "okay";
 	partitions {
 		compatible = "fixed-partitions";
 		#address-cells = <1>;

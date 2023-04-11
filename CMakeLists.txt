@@ -12,11 +12,21 @@ add_subdirectory(drivers)
 add_subdirectory(include)
 
 # NORDIC SDK APP START
-target_sources(app PRIVATE
-  src/main.c
-  src/led_controller.cpp
-  src/buttons.cpp
-  src/power.cpp
+target_sources(
+  app 
+  PRIVATE
+    src/main.c
+    src/led_controller.cpp
+    src/buttons.cpp
+    src/power.cpp
+    misc/tps25750/tps25750-config.c
+    # misc/tps25750/tps25750-full-config.c
+)
+
+target_include_directories(
+  app 
+  PRIVATE
+    misc/
 )
 
 # NORDIC SDK APP END

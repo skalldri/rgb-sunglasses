@@ -3,3 +3,22 @@ description: TPS25750 USB Power Delivery Controller
 compatible: "ti,tps25750"
 
 include: [i2c-device.yaml]
+
+properties:
+  patch-address:
+    type: int
+    default: 0x15
+    description: |
+      The I2C address to use during patch download.
+  patch-chunk-size:
+    type: int
+    default: 32
+    description: |
+      The size of chunks sent during patch download.
+  irq-gpios:
+      type: phandle-array
+      description: |
+        I2CS_IRQ pin
+        This pin defaults to active low when produced by the sensor.
+        The property value should ensure the flags properly describe
+        the signal that is presented to the driver.

@@ -6,7 +6,9 @@ extern "C" {
 
 int tps25750_dump(const struct device *dev);
 
-int tps25750_download_patch(const struct device *dev);
+int tps25750_download_patch(const struct device *dev, const char* patch, uint32_t patchSize);
+
+int tps25750_clear_dead_battery(const struct device *dev);
 
 #ifdef __cplusplus
 };

@@ -24,6 +24,9 @@ BUILD_ASSERT(sizeof(tps25750_mode_t) == 5);
 #define TPS25750_REG_CMD1_SIZE 4
 
 #define TPS25750_REG_CMD1_VAL_PBMS "PBMs"
+#define TPS25750_REG_CMD1_VAL_PBMC "PBMc"
+#define TPS25750_REG_CMD1_VAL_GO2P "GO2P"
+#define TPS25750_REG_CMD1_VAL_DBFG "DBfg"
 
 typedef struct __packed tps25750_cmd1 
 {
@@ -150,11 +153,22 @@ typedef struct tps25750_int
 #define TPS25750_REG_BOOT_STATUS_ADDR 0x2D
 #define TPS25750_REG_BOOT_STATUS_SIZE 5
 
+typedef struct __packed tps25750_boot_status {
+    uint8_t byte_count;
+    uint8_t boot_flags[4];
+    uint8_t revision_id;
+} tps25750_boot_status_t;
+
 #define TPS25750_REG_BUILD_DESCRIPTION_ADDR 0x2E
 #define TPS25750_REG_BUILD_DESCRIPTION_SIZE 49
 
 #define TPS25750_REG_DEVICE_INFO_ADDR 0x2F
 #define TPS25750_REG_DEVICE_INFO_SIZE 40
+
+typedef struct __packed tps25750_device_info {
+    uint8_t byte_count;
+    char str[TPS25750_REG_DEVICE_INFO_SIZE];
+} tps25750_device_info_t;
 
 #define TPS25750_REG_RX_SOURCE_CAPS_ADDR 0x30
 #define TPS25750_REG_RX_SOURCE_CAPS_SIZE 29
@@ -202,7 +216,7 @@ typedef struct tps25750_std_task_response
 
 typedef struct __packed tps25750_pbms_data_in {
     uint8_t byte_count;
-    uint8_t payload[]
+    uint8_t payload[];
 } tps25750_pbms_data_in_t;
 
 typedef struct __packed tps25750_data1 {
@@ -217,4 +231,8 @@ struct tps25750_dev_data
 struct tps25750_dev_config
 {
     struct i2c_dt_spec i2c;
+    struct gpio_dt_spec int_gpio;
+    uint8_t patch_address;
+    uint32_t patch_chunk_size;
+    uint8_t* patch_buffer;
 };

@@ -66,7 +66,9 @@
 			"streambuf": "c",
 			"cinttypes": "c",
 			"typeinfo": "c",
-			"sensor.h": "c"
+			"sensor.h": "c",
+			"tps25750-config.h": "c",
+			"nrfx_twim.h": "c"
 		},
 		"nrf-connect.debugging.bindings": {
 			"${workspaceFolder}/build": "Launch build"

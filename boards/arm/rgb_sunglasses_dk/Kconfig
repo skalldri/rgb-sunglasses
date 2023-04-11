@@ -22,6 +22,11 @@ config BOARD_ENABLE_DCDC_HV
 	# @salldritt: mistake in the devkit. Didn't populate DCCH. Cannot use DCDC mode for the HV regulator
 	default n
 
+config BOARD_ENABLE_UICR_ACCESS
+	bool "Enable application writes to the UICR flash"
+	select SOC_FLASH_NRF_UICR
+	default y
+
 config BOARD_ENABLE_CPUNET
 	bool "NRF53 Network MCU"
 	select SOC_NRF_GPIO_FORWARDER_FOR_NRF5340 if \
