@@ -27,6 +27,8 @@ BUILD_ASSERT(sizeof(tps25750_mode_t) == 5);
 #define TPS25750_REG_CMD1_VAL_PBMC "PBMc"
 #define TPS25750_REG_CMD1_VAL_GO2P "GO2P"
 #define TPS25750_REG_CMD1_VAL_DBFG "DBfg"
+#define TPS25750_REG_CMD1_VAL_I2CW "I2Cw"
+#define TPS25750_REG_CMD1_VAL_I2CR "I2Cr"
 
 typedef struct __packed tps25750_cmd1 
 {
@@ -200,6 +202,11 @@ typedef struct __packed tps25750_device_info {
 #define TPS25750_REG_GPIO_STATUS_ADDR 0x72
 #define TPS25750_REG_GPIO_STATUS_SIZE 8
 
+// Max I2C write length
+#define TPS25750_MAX_I2C_WRITE 10
+
+// Max I2C read length
+#define TPS25750_MAX_I2C_READ 63
 typedef enum tps25750_std_task_result
 {
     SUCCESS = 0x0,

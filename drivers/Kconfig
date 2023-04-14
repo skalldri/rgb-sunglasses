@@ -1,2 +1,3 @@
 
 rsource "tps25750/Kconfig"
+rsource "bq25792/Kconfig"

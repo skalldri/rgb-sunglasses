@@ -162,7 +162,8 @@ int tps25750_read_cmd1(const struct device *dev, tps25750_cmd1_t *cmd)
         sizeof(*cmd));
 }
 
-int tps25750_read_cmd_status(const struct device *dev) {
+int tps25750_read_cmd_status(const struct device *dev)
+{
     tps25750_cmd1_t cmd;
 
     // Readback the CMD1 register to check command status
@@ -360,21 +361,22 @@ int tps25750_dump(const struct device *dev)
     TPS25750_INT_BIT_LIST
 #undef TPS25750_INT_BIT
 
-/*
-    ret = tps25750_read_int_mask1(dev, &i);
-    if (ret)
-    {
-        LOG_ERR("tps25750_read_int_mask1: %d", ret);
-        return ret;
-    }
+    /*
+        ret = tps25750_read_int_mask1(dev, &i);
+        if (ret)
+        {
+            LOG_ERR("tps25750_read_int_mask1: %d", ret);
+            return ret;
+        }
 
-// Use X-macro magic to make dumping the gigantic INT_MASK1 register less painful
-#define TPS25750_INT_BIT(_name, _byte, _bit) \
-    LOG_INF("MASK %s: %d", #_name, i._name);
+    // Use X-macro magic to make dumping the gigantic INT_MASK1 register less painful
+    #define TPS25750_INT_BIT(_name, _byte, _bit) \
+        LOG_INF("MASK %s: %d", #_name, i._name);
 
-    TPS25750_INT_BIT_LIST
-#undef TPS25750_INT_BIT
-*/
+        TPS25750_INT_BIT_LIST
+    #undef TPS25750_INT_BIT
+    */
+
     tps25750_device_info_t info;
     ret = tps25750_read_device_info(dev, &info);
     if (ret)
@@ -428,12 +430,15 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
 
     // If we are in mode == PTCH, we can proceed
     if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode) != 0))
-    {   
+    {
         // Check if we are in APP mode
-        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode) == 0)) {
+        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode) == 0))
+        {
             LOG_INF("Patch already loaded!");
             return 0;
-        } else {
+        }
+        else
+        {
             LOG_ERR("MODE is not PTCH (got %.*s) Cannot download patch!", sizeof(mode.mode), mode.mode);
             return -EBUSY;
         }
@@ -454,7 +459,8 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
         return -EBUSY;
     }
 
-    if (patch) {
+    if (patch)
+    {
         // We are actually ready to patch: construct a patch start command
         data.byte_count = 6;
         data.data[0] = (uint8_t)((patchSize >> 0) & 0xFF);  // Byte1 of bundle size
@@ -485,7 +491,9 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
         {
             LOG_ERR("tps25750_read_cmd_status: %d", ret);
             return ret;
-        } else {
+        }
+        else
+        {
             LOG_INF("Controller accepted PBMs command + data payload!");
         }
 
@@ -519,10 +527,10 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
         {
             uint32_t writeSize = MIN(cfg->patch_chunk_size, remainingBytes);
             memcpy(cfg->patch_buffer, writePointer, writeSize);
-            
+
             ret = i2c_write_dt(&i2c_patch,
-                            cfg->patch_buffer,
-                            writeSize);
+                               cfg->patch_buffer,
+                               writeSize);
             if (ret)
             {
                 LOG_ERR("Failed writing patch: %d", ret);
@@ -539,7 +547,9 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
         k_msleep(10);
 
         LOG_INF("Patch data sent. Sending PBMc command...");
-    } else {
+    }
+    else
+    {
         LOG_INF("No patch data. Sending PBMc command...");
     }
 
@@ -552,7 +562,8 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
     }
 
     uint8_t retries = 0;
-    do {
+    do
+    {
         // Wait 50ms... the controller is busy CRC-ing the patch and may NAK
         // Ideally we want to not experience a NAK if we can avoid it
         k_msleep(50);
@@ -562,13 +573,16 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
         if (ret)
         {
             LOG_ERR("PBMC: tps25750_read_cmd_status: %d", ret);
-        } else {
+        }
+        else
+        {
             LOG_INF("Controller accepted PBMc command!");
             break;
         }
     } while (ret && (retries++ < 10));
 
-    if (ret) {
+    if (ret)
+    {
         LOG_ERR("Failed reading PBMC command status after %d retries", retries);
         return ret;
     }
@@ -615,7 +629,8 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
     return 0;
 }
 
-int tps25750_clear_dead_battery(const struct device *dev) {
+int tps25750_clear_dead_battery(const struct device *dev)
+{
     if (!dev)
     {
         LOG_ERR("NULL-device pointer");
@@ -645,12 +660,20 @@ int tps25750_clear_dead_battery(const struct device *dev) {
     {
         LOG_ERR("'%s': tps25750_read_cmd_status: %d", TPS25750_REG_CMD1_VAL_DBFG, ret);
         return ret;
-    } 
+    }
 
     LOG_INF("Controller accepted '%s' command!", TPS25750_REG_CMD1_VAL_DBFG);
 
     return 0;
 }
+
+#if defined(CONFIG_TPS25750_PATCH_ON_STARTUP)
+// This is the default name of the patch array that ships from the TI generator tool
+extern const char tps25750x_lowRegion_i2c_array[];
+
+// This is the default name of the array size variable that ships from the TI generator tool
+extern int gSizeLowRegionArray;
+#endif // CONFIG_TPS25750_PATCH_ON_STARTUP
 
 static int tps25750_init(const struct device *dev)
 {
@@ -669,24 +692,235 @@ static int tps25750_init(const struct device *dev)
         return -ENODEV;
     }
 
+#if defined(CONFIG_TPS25750_PATCH_ON_STARTUP)
+    int ret = tps25750_download_patch(dev, tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
+
+    if (ret)
+    {
+        LOG_ERR("Patch download failed! %d", ret);
+    }
+    else
+    {
+        LOG_INF("Patch download success!");
+    }
+#endif // CONFIG_TPS25750_PATCH_ON_STARTUP
+
     return 0;
 }
 
-#define TPS25750_DEFINE(inst)                                             \
-    static struct tps25750_dev_data tps25750_data_##inst;                 \
-                                                                          \
+static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8_t reg, uint8_t *dataBuff, uint8_t dataSize)
+{
+
+
+    if (dataSize > TPS25750_MAX_I2C_WRITE)
+    {
+        LOG_ERR("Cannot write %u bytes: max write length is %u", dataSize, TPS25750_MAX_I2C_WRITE);
+        return -ENOMEM;
+    }
+
+    tps25750_data1_t data;
+    data.byte_count = 14;
+    data.data[0] = addr;
+    data.data[1] = MIN(dataSize, TPS25750_MAX_I2C_WRITE);
+    // Byte 2: reserved
+    data.data[3] = reg;
+
+    if (dataBuff && dataSize > 0)
+    {
+        memcpy(&data.data[4], dataBuff, MIN(dataSize, TPS25750_MAX_I2C_WRITE));
+    }
+
+    int ret = tps25750_write_data1(dev, &data);
+    if (ret)
+    {
+        LOG_ERR("tps25750_write_data1: %d", ret);
+        return ret;
+    }
+
+    // Send an "I2Cw" command to the device to send the data out over I2C
+    ret = tps25750_write_cmd1(dev, TPS25750_REG_CMD1_VAL_I2CW);
+    if (ret)
+    {
+        LOG_ERR("tps25750_write_cmd1: %d", ret);
+        return ret;
+    }
+
+    // Readback the CMD1 register to check command status
+    ret = tps25750_read_cmd_status(dev);
+    if (ret)
+    {
+        LOG_ERR("tps25750_read_cmd_status: %d", ret);
+        return ret;
+    }
+    else
+    {
+        LOG_INF("Controller accepted I2Cw command!");
+    }
+
+    // Read DATA1 to see transaction status
+    ret = tps25750_read_data1(dev, &data);
+    if (ret)
+    {
+        LOG_ERR("tps25750_read_data1: %d", ret);
+        return ret;
+    }
+
+    if (data.data[0] != 0)
+    {
+        LOG_ERR("PD Controller I2CM write failure: %u", data.data[0]);
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_t reg, uint8_t *dataBuff, uint8_t dataSize)
+{
+    if (dataSize > TPS25750_MAX_I2C_READ)
+    {
+        LOG_ERR("Cannot read %u bytes: max read length is %u", dataSize, TPS25750_MAX_I2C_READ);
+        return -ENOMEM;
+    }
+
+    tps25750_data1_t data;
+    data.byte_count = 3;
+    data.data[0] = addr;
+    data.data[1] = reg;
+    data.data[2] = MIN(dataSize, TPS25750_MAX_I2C_READ);
+
+    int ret = tps25750_write_data1(dev, &data);
+    if (ret)
+    {
+        LOG_ERR("tps25750_write_data1: %d", ret);
+        return ret;
+    }
+
+    // Send an "I2Cr" command to the device to send the data out over I2C
+    ret = tps25750_write_cmd1(dev, TPS25750_REG_CMD1_VAL_I2CR);
+    if (ret)
+    {
+        LOG_ERR("tps25750_write_cmd1: %d", ret);
+        return ret;
+    }
+
+    // Readback the CMD1 register to check command status
+    ret = tps25750_read_cmd_status(dev);
+    if (ret)
+    {
+        LOG_ERR("tps25750_read_cmd_status: %d", ret);
+        return ret;
+    }
+    else
+    {
+        LOG_INF("Controller accepted " TPS25750_REG_CMD1_VAL_I2CR " command!");
+    }
+
+    // Read DATA1 to see transaction status
+    ret = tps25750_read_data1(dev, &data);
+    if (ret)
+    {
+        LOG_ERR("tps25750_read_data1: %d", ret);
+        return ret;
+    }
+
+    if (data.data[0] != 0)
+    {
+        LOG_ERR("PD Controller I2CM read failure: %u", data.data[0]);
+        return -EFAULT;
+    }
+
+    size_t copySize = dataSize;
+    copySize = MIN(copySize, TPS25750_MAX_I2C_READ);
+    copySize = MIN(copySize, data.byte_count);
+
+    LOG_INF("Copying %u bytes returned from peripheral", copySize);
+
+    memcpy(dataBuff, &data.data[1], copySize);
+
+    return 0;
+}
+
+static int i2c_tps25750_i2cm_transfer(const struct device *dev,
+                                      struct i2c_msg *msgs,
+                                      uint8_t num_msgs, uint16_t addr)
+{
+    LOG_INF("Got I2C master command for address %u, num msgs %u", addr, num_msgs);
+    size_t i = 0;
+
+    if (num_msgs != 2)
+    {
+        LOG_ERR("Unsupported num messages %u", num_msgs);
+        return -ENOTSUP;
+    }
+
+    // TPS25750 commands don't support 10-bit addressing
+    if (msgs[0].flags & I2C_MSG_ADDR_10_BITS || msgs[1].flags & I2C_MSG_ADDR_10_BITS)
+    {
+        LOG_ERR("10 bit addressing is not supported");
+        return -ENOTSUP;
+    }
+
+    // All I2C register transactions start with a write, which we expect to be a single byte.
+    // We expect no other flags on the first message
+    if (msgs[0].flags != I2C_MSG_WRITE || msgs[0].len != 1)
+    {
+        LOG_ERR("Unsupported first transaction: flags %u, len %u", msgs[0].flags, msgs[0].len);
+        return -ENOTSUP;
+    }
+
+    uint8_t reg_addr = msgs[0].buf[0];
+
+    // Now: is it a register read or a register write?
+    if (msgs[1].flags & I2C_MSG_READ)
+    {
+        // Register read. 
+        // We should have the I2C_MSG_RESTART flag here, as well as I2C_MSG_STOP
+        if ((msgs[1].flags & I2C_MSG_RESTART) != I2C_MSG_RESTART || (msgs[1].flags & I2C_MSG_STOP) != I2C_MSG_STOP) 
+        {
+            LOG_ERR("Second I2C message did not have RESTART or STOP flag!");
+            return -ENOTSUP;
+        }
+        
+        return tps25750_i2cm_read_reg(dev, addr, reg_addr, msgs[1].buf, msgs[1].len);
+    }
+
+    // Register Write.
+    // We should have the I2C_MSG_STOP flag here
+    if ((msgs[1].flags & I2C_MSG_STOP) != I2C_MSG_STOP)
+    {
+        LOG_ERR("Second I2C message did not have STOP flag!");
+        return -ENOTSUP;
+    }
+    
+    return tps25750_i2cm_write_reg(dev, addr, reg_addr, msgs[1].buf, msgs[1].len);
+}
+
+static const struct i2c_driver_api i2c_tps25750_i2cm_driver_api = {
+    .transfer = i2c_tps25750_i2cm_transfer,
+};
+
+#define TPS25750_DEFINE(inst)                                                          \
+    static struct tps25750_dev_data tps25750_data_##inst;                              \
+                                                                                       \
     static uint8_t tps25750_patch_buffer_##inst[DT_INST_PROP(inst, patch_chunk_size)]; \
-                                                                          \
-    static const struct tps25750_dev_config tps25750_config_##inst =      \
-        {                                                                 \
-            .i2c = I2C_DT_SPEC_INST_GET(inst),                            \
-            .int_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, irq_gpios, {0}),   \
-            .patch_buffer = tps25750_patch_buffer_##inst,                 \
-            .patch_address = DT_INST_PROP(inst, patch_address),           \
-            .patch_chunk_size = DT_INST_PROP(inst, patch_chunk_size)};    \
-                                                                          \
-    DEVICE_DT_INST_DEFINE(inst, tps25750_init, NULL,                      \
-                          &tps25750_data_##inst, &tps25750_config_##inst, \
+                                                                                       \
+    static const struct tps25750_dev_config tps25750_config_##inst =                   \
+        {                                                                              \
+            .i2c = I2C_DT_SPEC_INST_GET(inst),                                         \
+            .int_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, irq_gpios, {0}),                \
+            .patch_buffer = tps25750_patch_buffer_##inst,                              \
+            .patch_address = DT_INST_PROP(inst, patch_address),                        \
+            .patch_chunk_size = DT_INST_PROP(inst, patch_chunk_size)};                 \
+                                                                                       \
+    I2C_DEVICE_DT_INST_DEFINE(inst, tps25750_init, NULL,                               \
+                              &tps25750_data_##inst, &tps25750_config_##inst,          \
+                              APPLICATION, CONFIG_TPS25750_INIT_PRIORITY,              \
+                              &i2c_tps25750_i2cm_driver_api);
+
+#if 0
+    DEVICE_DT_INST_DEFINE(inst, tps25750_init, NULL,                                  
+                          &tps25750_data_##inst, &tps25750_config_##inst,             
                           APPLICATION, CONFIG_TPS25750_INIT_PRIORITY, NULL);
+#endif
 
 DT_INST_FOREACH_STATUS_OKAY(TPS25750_DEFINE)

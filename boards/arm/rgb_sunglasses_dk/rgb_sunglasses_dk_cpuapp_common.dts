@@ -172,6 +172,16 @@
 		patch-chunk-size = <128>; /* the size of the packets sent during patch download */
 		status = "okay";
 		irq-gpios = <&gpio0 22 (GPIO_ACTIVE_LOW)>; /* Might need to add GPIO_PULL_UP or GPIO_PULL_DOWN here? */
+
+		/* TPS25750 is also an I2C master. Define required properties */
+		#address-cells = <1>;
+    	#size-cells = <0>;
+
+		bq25792: bq25792@107 {
+			compatible = "ti,bq25792";
+			reg = <0x6B>;
+			status = "okay";
+		};
 	};
 };
 
