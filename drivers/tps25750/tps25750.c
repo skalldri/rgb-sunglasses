@@ -710,8 +710,6 @@ static int tps25750_init(const struct device *dev)
 
 static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8_t reg, uint8_t *dataBuff, uint8_t dataSize)
 {
-
-
     if (dataSize > TPS25750_MAX_I2C_WRITE)
     {
         LOG_ERR("Cannot write %u bytes: max write length is %u", dataSize, TPS25750_MAX_I2C_WRITE);
@@ -754,7 +752,7 @@ static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8
     }
     else
     {
-        LOG_INF("Controller accepted I2Cw command!");
+        // LOG_INF("Controller accepted I2Cw command!");
     }
 
     // Read DATA1 to see transaction status
@@ -812,7 +810,7 @@ static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_
     }
     else
     {
-        LOG_INF("Controller accepted " TPS25750_REG_CMD1_VAL_I2CR " command!");
+        // LOG_INF("Controller accepted " TPS25750_REG_CMD1_VAL_I2CR " command!");
     }
 
     // Read DATA1 to see transaction status
@@ -833,7 +831,7 @@ static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_
     copySize = MIN(copySize, TPS25750_MAX_I2C_READ);
     copySize = MIN(copySize, data.byte_count);
 
-    LOG_INF("Copying %u bytes returned from peripheral", copySize);
+    //LOG_INF("Copying %u bytes returned from peripheral", copySize);
 
     memcpy(dataBuff, &data.data[1], copySize);
 
@@ -844,8 +842,7 @@ static int i2c_tps25750_i2cm_transfer(const struct device *dev,
                                       struct i2c_msg *msgs,
                                       uint8_t num_msgs, uint16_t addr)
 {
-    LOG_INF("Got I2C master command for address %u, num msgs %u", addr, num_msgs);
-    size_t i = 0;
+    //LOG_INF("Got I2C master command for address %u, num msgs %u", addr, num_msgs);
 
     if (num_msgs != 2)
     {

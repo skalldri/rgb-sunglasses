@@ -8,7 +8,35 @@
 
 #define DT_DRV_COMPAT ti_bq25792
 
-LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_DBG);
+
+#define BIT_EXTRACT(_val, _start, _num) (((_val) & (((1 << _num) - 1) << _start)) >> _start)
+
+#define BQ25792_BIT(_name, _bitLowest, _numBits) \
+    dst->_name = BIT_EXTRACT(r, _bitLowest, _numBits); \
+    LOG_DBG(#_name ": %u", dst->_name); 
+
+#define REG(_regName) \
+    int bq25792_read_##_regName(const struct device *dev, _regName##_t* dst) { \
+        const struct bq25792_dev_config *cfg = dev->config; \
+        uint8_t r; \
+        int ret = i2c_burst_read_dt( \
+        &cfg->i2c, \
+        _regName##_ADDR, \
+        (uint8_t *)&r, \
+        sizeof(r)); \
+        if (ret) {   \
+            LOG_ERR("I2C Read failed: %d", ret); \
+            return ret; \
+        } \
+        LOG_DBG("Reading " #_regName ": %u", r); \
+        _regName##_BITS \
+        return 0; \
+    }
+
+REG_LIST
+
+#undef REG
 
 int bq25792_read_charger_status(const struct device *dev) {
     if (!dev)
@@ -25,62 +53,20 @@ int bq25792_read_charger_status(const struct device *dev) {
         return -ENODEV;
     }
 
-    uint8_t b;
+    BQ25792_REG_CHARGER_STATUS_0_t status0;
+    int ret = bq25792_read_BQ25792_REG_CHARGER_STATUS_0(dev, &status0);
 
-    int ret = i2c_burst_read_dt(
-        &cfg->i2c,
-        BQ25792_REG_CHARGER_STATUS_0_ADDR,
-        (uint8_t *)&b,
-        sizeof(b));
-    if (ret) {
-        LOG_ERR("I2C Read failed: %d", ret);
-        return ret;
-    }
-    LOG_INF("Charger Status 0: %u", b);
+    BQ25792_REG_CHARGER_STATUS_1_t status1;
+    ret = bq25792_read_BQ25792_REG_CHARGER_STATUS_1(dev, &status1);
 
-    ret = i2c_burst_read_dt(
-        &cfg->i2c,
-        BQ25792_REG_CHARGER_STATUS_1_ADDR,
-        (uint8_t *)&b,
-        sizeof(b));
-    if (ret) {
-        LOG_ERR("I2C Read failed: %d", ret);
-        return ret;
-    }
-    LOG_INF("Charger Status 1: %u", b);
+    BQ25792_REG_CHARGER_STATUS_2_t status2;
+    ret = bq25792_read_BQ25792_REG_CHARGER_STATUS_2(dev, &status2);
 
-    ret = i2c_burst_read_dt(
-        &cfg->i2c,
-        BQ25792_REG_CHARGER_STATUS_2_ADDR,
-        (uint8_t *)&b,
-        sizeof(b));
-    if (ret) {
-        LOG_ERR("I2C Read failed: %d", ret);
-        return ret;
-    }
-    LOG_INF("Charger Status 2: %u", b);
+    BQ25792_REG_CHARGER_STATUS_3_t status3;
+    ret = bq25792_read_BQ25792_REG_CHARGER_STATUS_3(dev, &status3);
 
-    ret = i2c_burst_read_dt(
-        &cfg->i2c,
-        BQ25792_REG_CHARGER_STATUS_3_ADDR,
-        (uint8_t *)&b,
-        sizeof(b));
-    if (ret) {
-        LOG_ERR("I2C Read failed: %d", ret);
-        return ret;
-    }
-    LOG_INF("Charger Status 3: %u", b);
-
-    ret = i2c_burst_read_dt(
-        &cfg->i2c,
-        BQ25792_REG_CHARGER_STATUS_4_ADDR,
-        (uint8_t *)&b,
-        sizeof(b));
-    if (ret) {
-        LOG_ERR("I2C Read failed: %d", ret);
-        return ret;
-    }
-    LOG_INF("Charger Status 4: %u", b);
+    BQ25792_REG_CHARGER_STATUS_4_t status4;
+    ret = bq25792_read_BQ25792_REG_CHARGER_STATUS_4(dev, &status4);
 
     return 0;
 }
@@ -103,6 +89,9 @@ int bq25792_dump(const struct device *dev)
     }
 
     ret = bq25792_read_charger_status(dev);
+
+    BQ25792_REG_FAULT_STATUS_1_t reg;
+    bq25792_read_BQ25792_REG_FAULT_STATUS_1(dev, &reg);
 
     return 0;
 }
