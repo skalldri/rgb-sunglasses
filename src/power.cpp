@@ -68,6 +68,14 @@ static int cmd_power_bq_dump(const struct shell *shell,
     return 0;
 }
 
+static int cmd_power_bq_temp_override(const struct shell *shell,
+                             size_t argc, char **argv, void *data)
+{
+    int selection = (int)data;
+    bq25792_temp_override(bq, (bool) selection);
+    return 0;
+}
+
 static int cmd_power_pd_dump(const struct shell *shell,
                              size_t argc, char **argv, void *data)
 {
@@ -163,8 +171,13 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_power_pd,
                                SHELL_CMD(patch, &sub_patch, "Download TPS25750 firmware patch", NULL),
                                SHELL_SUBCMD_SET_END);
 
+SHELL_SUBCMD_DICT_SET_CREATE(sub_temp_override, cmd_power_bq_temp_override,
+                             (disable, 0, "disable temp monitor override"),
+                             (enable, 1, "enable temp monitor override"));
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power_bq,
                                SHELL_CMD(dump, NULL, "Dump BQ25792 Registers to console", cmd_power_bq_dump),
+                               SHELL_CMD(temp_override, &sub_temp_override, "Override BQ25792 battery temperature monitoring", NULL),
                                SHELL_SUBCMD_SET_END);
 // Subcommands for "power"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,

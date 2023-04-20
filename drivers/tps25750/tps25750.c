@@ -717,16 +717,27 @@ static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8
     }
 
     tps25750_data1_t data;
-    data.byte_count = 14;
+    memset(&data, 0, sizeof(data));
+
+    // Clamp dataSize
+    dataSize = MIN(dataSize, TPS25750_MAX_I2C_WRITE);
+
+    data.byte_count = 4 + dataSize;
     data.data[0] = addr;
-    data.data[1] = MIN(dataSize, TPS25750_MAX_I2C_WRITE);
+    // TI's amazing datasheets at work: the payloadSize must also include the length of the register address
+    // Even though this is a register-write command.
+    // And there's no way to ommit the payload address.
+    // And that isn't mentioned anywhere in the docs, just this forum thread: https://e2e.ti.com/support/power-management-group/power-management/f/power-management-forum/1097140/bq25792-i2cw-task-can-not-work/4065201?focus=true
+    data.data[1] = dataSize + 1; 
     // Byte 2: reserved
     data.data[3] = reg;
 
     if (dataBuff && dataSize > 0)
     {
-        memcpy(&data.data[4], dataBuff, MIN(dataSize, TPS25750_MAX_I2C_WRITE));
+        memcpy(&data.data[4], dataBuff, dataSize);
     }
+
+    LOG_HEXDUMP_INF(&data, data.byte_count + sizeof(data.byte_count), "Writing payload: ");
 
     int ret = tps25750_write_data1(dev, &data);
     if (ret)
@@ -831,7 +842,7 @@ static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_
     copySize = MIN(copySize, TPS25750_MAX_I2C_READ);
     copySize = MIN(copySize, data.byte_count);
 
-    //LOG_INF("Copying %u bytes returned from peripheral", copySize);
+    // LOG_INF("Copying %u bytes returned from peripheral", copySize);
 
     memcpy(dataBuff, &data.data[1], copySize);
 
@@ -842,7 +853,7 @@ static int i2c_tps25750_i2cm_transfer(const struct device *dev,
                                       struct i2c_msg *msgs,
                                       uint8_t num_msgs, uint16_t addr)
 {
-    //LOG_INF("Got I2C master command for address %u, num msgs %u", addr, num_msgs);
+    // LOG_INF("Got I2C master command for address %u, num msgs %u", addr, num_msgs);
 
     if (num_msgs != 2)
     {
@@ -870,14 +881,14 @@ static int i2c_tps25750_i2cm_transfer(const struct device *dev,
     // Now: is it a register read or a register write?
     if (msgs[1].flags & I2C_MSG_READ)
     {
-        // Register read. 
+        // Register read.
         // We should have the I2C_MSG_RESTART flag here, as well as I2C_MSG_STOP
-        if ((msgs[1].flags & I2C_MSG_RESTART) != I2C_MSG_RESTART || (msgs[1].flags & I2C_MSG_STOP) != I2C_MSG_STOP) 
+        if ((msgs[1].flags & I2C_MSG_RESTART) != I2C_MSG_RESTART || (msgs[1].flags & I2C_MSG_STOP) != I2C_MSG_STOP)
         {
             LOG_ERR("Second I2C message did not have RESTART or STOP flag!");
             return -ENOTSUP;
         }
-        
+
         return tps25750_i2cm_read_reg(dev, addr, reg_addr, msgs[1].buf, msgs[1].len);
     }
 
@@ -888,7 +899,7 @@ static int i2c_tps25750_i2cm_transfer(const struct device *dev,
         LOG_ERR("Second I2C message did not have STOP flag!");
         return -ENOTSUP;
     }
-    
+
     return tps25750_i2cm_write_reg(dev, addr, reg_addr, msgs[1].buf, msgs[1].len);
 }
 
