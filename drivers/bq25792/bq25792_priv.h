@@ -1,5 +1,30 @@
 #pragma once
 
+#include <zephyr/drivers/InternalDeviceRegister.hpp>
+
+template <uint8_t reg, size_t registerWidth, typename U, typename... Us>
+class BQ25792Register : DeviceRegister<registerWidth, U, Us...>
+{
+public:
+    BQ25792Register(const struct bq25792_dev_config * cfg) cfg_(cfg) {};
+
+    int readI2C()
+    {
+        return 0;
+    }
+
+    int write()
+    {
+        return 0;
+    }
+
+    int dump()
+    {
+        return 0;
+    }
+private:
+    const struct bq25792_dev_config *cfg_;
+};
 
 // Format:
 // #define BQ25792_BIT(_name, _bitLowest, _numBits)
@@ -11,80 +36,80 @@
 #define BQ25792_REG_CHARGER_CONTROL_0_ADDR 0x0F
 
 #define BQ25792_REG_CHARGER_CONTROL_0_BITS \
-    BQ25792_BIT(EN_AUTO_IBATDIS, 7, 1) \
-    BQ25792_BIT(FORCE_IBATDIS, 6, 1) \
-    BQ25792_BIT(EN_CHG, 5, 1) \
-    BQ25792_BIT(EN_ICO, 4, 1) \
-    BQ25792_BIT(FORCE_ICO, 3, 1) \
-    BQ25792_BIT(EN_HIZ, 2, 1) \
+    BQ25792_BIT(EN_AUTO_IBATDIS, 7, 1)     \
+    BQ25792_BIT(FORCE_IBATDIS, 6, 1)       \
+    BQ25792_BIT(EN_CHG, 5, 1)              \
+    BQ25792_BIT(EN_ICO, 4, 1)              \
+    BQ25792_BIT(FORCE_ICO, 3, 1)           \
+    BQ25792_BIT(EN_HIZ, 2, 1)              \
     BQ25792_BIT(EN_TERM, 1, 1)
 
 #define BQ25792_REG_CHARGER_CONTROL_1_ADDR 0x10
 
 #define BQ25792_REG_CHARGER_CONTROL_1_BITS \
-    BQ25792_BIT(VAC_OVP, 4, 2) \
-    BQ25792_BIT(WD_RST, 3, 1) \
+    BQ25792_BIT(VAC_OVP, 4, 2)             \
+    BQ25792_BIT(WD_RST, 3, 1)              \
     BQ25792_BIT(WATCHDOG, 0, 2)
 
 #define BQ25792_REG_CHARGER_CONTROL_2_ADDR 0x11
 
 #define BQ25792_REG_CHARGER_CONTROL_2_BITS \
-    BQ25792_BIT(FORCE_INDET, 7, 1) \
-    BQ25792_BIT(AUTO_INDET_EN, 6, 1) \
-    BQ25792_BIT(EN_12V, 5, 1) \
-    BQ25792_BIT(EN_9V, 4, 1) \
-    BQ25792_BIT(HVDCP_EN, 3, 1) \
-    BQ25792_BIT(SDRV_CTRL, 1, 2) \
+    BQ25792_BIT(FORCE_INDET, 7, 1)         \
+    BQ25792_BIT(AUTO_INDET_EN, 6, 1)       \
+    BQ25792_BIT(EN_12V, 5, 1)              \
+    BQ25792_BIT(EN_9V, 4, 1)               \
+    BQ25792_BIT(HVDCP_EN, 3, 1)            \
+    BQ25792_BIT(SDRV_CTRL, 1, 2)           \
     BQ25792_BIT(SDRV_DLY, 0, 1)
 
 #define BQ25792_REG_CHARGER_CONTROL_3_ADDR 0x12
 
 #define BQ25792_REG_CHARGER_CONTROL_3_BITS \
-    BQ25792_BIT(DIS_ACDRV, 7, 1) \
-    BQ25792_BIT(EN_OTG, 6, 1) \
-    BQ25792_BIT(PFM_OTG_DIS, 5, 1) \
-    BQ25792_BIT(PFM_FWD_DIS, 4, 1) \
-    BQ25792_BIT(WKUP_DLY, 3, 1) \
-    BQ25792_BIT(DIS_LDO, 2, 1) \
-    BQ25792_BIT(DIS_OTG_OOA, 1, 1) \
+    BQ25792_BIT(DIS_ACDRV, 7, 1)           \
+    BQ25792_BIT(EN_OTG, 6, 1)              \
+    BQ25792_BIT(PFM_OTG_DIS, 5, 1)         \
+    BQ25792_BIT(PFM_FWD_DIS, 4, 1)         \
+    BQ25792_BIT(WKUP_DLY, 3, 1)            \
+    BQ25792_BIT(DIS_LDO, 2, 1)             \
+    BQ25792_BIT(DIS_OTG_OOA, 1, 1)         \
     BQ25792_BIT(DIS_FWD_OOA, 0, 1)
 
 #define BQ25792_REG_CHARGER_CONTROL_4_ADDR 0x13
 
 #define BQ25792_REG_CHARGER_CONTROL_4_BITS \
-    BQ25792_BIT(EN_ACDRV2, 7, 1) \
-    BQ25792_BIT(EN_ACDRV1, 6, 1) \
-    BQ25792_BIT(PWM_FREQ, 5, 1) \
-    BQ25792_BIT(DIS_STAT, 4, 1) \
-    BQ25792_BIT(DIS_VSYS_SHORT, 3, 1) \
-    BQ25792_BIT(DIS_VOTG_UVP, 2, 1) \
-    BQ25792_BIT(FORCE_VINDPM_DET, 1, 1) \
+    BQ25792_BIT(EN_ACDRV2, 7, 1)           \
+    BQ25792_BIT(EN_ACDRV1, 6, 1)           \
+    BQ25792_BIT(PWM_FREQ, 5, 1)            \
+    BQ25792_BIT(DIS_STAT, 4, 1)            \
+    BQ25792_BIT(DIS_VSYS_SHORT, 3, 1)      \
+    BQ25792_BIT(DIS_VOTG_UVP, 2, 1)        \
+    BQ25792_BIT(FORCE_VINDPM_DET, 1, 1)    \
     BQ25792_BIT(EN_IBUS_OCP, 0, 1)
 
 #define BQ25792_REG_CHARGER_CONTROL_5_ADDR 0x14
 
 #define BQ25792_REG_CHARGER_CONTROL_5_BITS \
-    BQ25792_BIT(SFET_PRESENT, 7, 1) \
-    BQ25792_BIT(EN_IBAT, 5, 1) \
-    BQ25792_BIT(IBAT_REG, 3, 2) \
-    BQ25792_BIT(EN_IINDPM, 2, 1) \
-    BQ25792_BIT(EN_EXTILIM, 1, 1) \
+    BQ25792_BIT(SFET_PRESENT, 7, 1)        \
+    BQ25792_BIT(EN_IBAT, 5, 1)             \
+    BQ25792_BIT(IBAT_REG, 3, 2)            \
+    BQ25792_BIT(EN_IINDPM, 2, 1)           \
+    BQ25792_BIT(EN_EXTILIM, 1, 1)          \
     BQ25792_BIT(EN_BATOC, 0, 1)
 
 #define BQ25792_REG_NTC_CONTROL_0_ADDR 0x17
 
 #define BQ25792_REG_NTC_CONTROL_0_BITS \
-    BQ25792_BIT(JEITA_VSET, 5, 3) \
-    BQ25792_BIT(JEITA_ISETH, 3, 2) \
+    BQ25792_BIT(JEITA_VSET, 5, 3)      \
+    BQ25792_BIT(JEITA_ISETH, 3, 2)     \
     BQ25792_BIT(JEITA_ISETC, 1, 2)
 
 #define BQ25792_REG_NTC_CONTROL_1_ADDR 0x18
 
 #define BQ25792_REG_NTC_CONTROL_1_BITS \
-    BQ25792_BIT(TS_COOL, 6, 2) \
-    BQ25792_BIT(TS_WARM, 4, 2) \
-    BQ25792_BIT(BHOT, 2, 2) \
-    BQ25792_BIT(BCOLD, 1, 1) \
+    BQ25792_BIT(TS_COOL, 6, 2)         \
+    BQ25792_BIT(TS_WARM, 4, 2)         \
+    BQ25792_BIT(BHOT, 2, 2)            \
+    BQ25792_BIT(BCOLD, 1, 1)           \
     BQ25792_BIT(TS_IGNORE, 0, 1)
 
 #define BQ25792_REG_ICO_CURRENT_LIMIT_ADDR 0x19
@@ -95,87 +120,86 @@
 #define BQ25792_REG_CHARGER_STATUS_0_ADDR 0x1B
 
 #define BQ25792_REG_CHARGER_STATUS_0_BITS \
-    BQ25792_BIT(IINDPM_STAT, 7, 1) \
-    BQ25792_BIT(VINDPM_STAT, 6, 1) \
-    BQ25792_BIT(WD_STAT, 5, 1) \
-    BQ25792_BIT(POORSRC_STAT, 4, 1) \
-    BQ25792_BIT(PG_STAT, 3, 1) \
-    BQ25792_BIT(AC2_PRESENT_STAT, 2, 1) \
-    BQ25792_BIT(AC1_PRESENT_STAT, 1, 1) \
+    BQ25792_BIT(IINDPM_STAT, 7, 1)        \
+    BQ25792_BIT(VINDPM_STAT, 6, 1)        \
+    BQ25792_BIT(WD_STAT, 5, 1)            \
+    BQ25792_BIT(POORSRC_STAT, 4, 1)       \
+    BQ25792_BIT(PG_STAT, 3, 1)            \
+    BQ25792_BIT(AC2_PRESENT_STAT, 2, 1)   \
+    BQ25792_BIT(AC1_PRESENT_STAT, 1, 1)   \
     BQ25792_BIT(VBUS_PRESENT_STAT, 0, 1)
 
 #define BQ25792_REG_CHARGER_STATUS_1_ADDR 0x1C
 
 #define BQ25792_REG_CHARGER_STATUS_1_BITS \
-    BQ25792_BIT(CHG_STAT, 5, 3) \
-    BQ25792_BIT(VBUS_STAT, 1, 4) \
+    BQ25792_BIT(CHG_STAT, 5, 3)           \
+    BQ25792_BIT(VBUS_STAT, 1, 4)          \
     BQ25792_BIT(BC1_2_DONE_STAT, 1, 1)
 
 #define BQ25792_REG_CHARGER_STATUS_2_ADDR 0x1D
 
 #define BQ25792_REG_CHARGER_STATUS_2_BITS \
-    BQ25792_BIT(ICO_STAT, 6, 2) \
-    BQ25792_BIT(TREG_STAT, 2, 1) \
-    BQ25792_BIT(DPDM_STAT, 1, 1) \
+    BQ25792_BIT(ICO_STAT, 6, 2)           \
+    BQ25792_BIT(TREG_STAT, 2, 1)          \
+    BQ25792_BIT(DPDM_STAT, 1, 1)          \
     BQ25792_BIT(VBAT_PRESENT_STAT, 0, 1)
 
 #define BQ25792_REG_CHARGER_STATUS_3_ADDR 0x1E
 
 #define BQ25792_REG_CHARGER_STATUS_3_BITS \
-    BQ25792_BIT(ACRB2_STAT, 7, 1) \
-    BQ25792_BIT(ACRB1_STAT, 6, 1) \
-    BQ25792_BIT(ADC_DONE_STAT, 5, 1) \
-    BQ25792_BIT(VSYS_STAT, 4, 1) \
-    BQ25792_BIT(CHG_TMR_STAT, 3, 1) \
-    BQ25792_BIT(TRICHG_TMR_STAT, 2, 1) \
+    BQ25792_BIT(ACRB2_STAT, 7, 1)         \
+    BQ25792_BIT(ACRB1_STAT, 6, 1)         \
+    BQ25792_BIT(ADC_DONE_STAT, 5, 1)      \
+    BQ25792_BIT(VSYS_STAT, 4, 1)          \
+    BQ25792_BIT(CHG_TMR_STAT, 3, 1)       \
+    BQ25792_BIT(TRICHG_TMR_STAT, 2, 1)    \
     BQ25792_BIT(PRECHG_TMR_STAT, 1, 1)
 
 #define BQ25792_REG_CHARGER_STATUS_4_ADDR 0x1F
 
 #define BQ25792_REG_CHARGER_STATUS_4_BITS \
-    BQ25792_BIT(VBATOTG_LOW_STAT, 4, 1) \
-    BQ25792_BIT(TS_COLD_STAT, 3, 1) \
-    BQ25792_BIT(TS_COOL_STAT, 2, 1) \
-    BQ25792_BIT(TS_WARM_STAT, 1, 1) \
+    BQ25792_BIT(VBATOTG_LOW_STAT, 4, 1)   \
+    BQ25792_BIT(TS_COLD_STAT, 3, 1)       \
+    BQ25792_BIT(TS_COOL_STAT, 2, 1)       \
+    BQ25792_BIT(TS_WARM_STAT, 1, 1)       \
     BQ25792_BIT(TS_HOT_STAT, 0, 1)
 
 #define BQ25792_REG_FAULT_STATUS_0_ADDR 0x20
 
 #define BQ25792_REG_FAULT_STATUS_0_BITS \
-    BQ25792_BIT(IBAT_REG_STAT, 7, 1) \
-    BQ25792_BIT(VBUS_OVP_STAT, 6, 1) \
-    BQ25792_BIT(VBAT_OVP_STAT, 5, 1) \
-    BQ25792_BIT(IBUS_OCP_STAT, 4, 1) \
-    BQ25792_BIT(IBAT_OCP_STAT, 3, 1) \
-    BQ25792_BIT(CONV_OCP_STAT, 2, 1) \
-    BQ25792_BIT(VAC2_OVP_STAT, 1, 1) \
+    BQ25792_BIT(IBAT_REG_STAT, 7, 1)    \
+    BQ25792_BIT(VBUS_OVP_STAT, 6, 1)    \
+    BQ25792_BIT(VBAT_OVP_STAT, 5, 1)    \
+    BQ25792_BIT(IBUS_OCP_STAT, 4, 1)    \
+    BQ25792_BIT(IBAT_OCP_STAT, 3, 1)    \
+    BQ25792_BIT(CONV_OCP_STAT, 2, 1)    \
+    BQ25792_BIT(VAC2_OVP_STAT, 1, 1)    \
     BQ25792_BIT(VAC1_OVP_STAT, 0, 1)
 
 #define BQ25792_REG_FAULT_STATUS_1_ADDR 0x21
 
 #define BQ25792_REG_FAULT_STATUS_1_BITS \
-    BQ25792_BIT(VSYS_SHORT_STAT, 7, 1) \
-    BQ25792_BIT(VSYS_OVP_STAT, 6, 1) \
-    BQ25792_BIT(OTG_OVP_STAT, 5, 1) \
-    BQ25792_BIT(OTG_UVP_STAT, 4, 1) \
+    BQ25792_BIT(VSYS_SHORT_STAT, 7, 1)  \
+    BQ25792_BIT(VSYS_OVP_STAT, 6, 1)    \
+    BQ25792_BIT(OTG_OVP_STAT, 5, 1)     \
+    BQ25792_BIT(OTG_UVP_STAT, 4, 1)     \
     BQ25792_BIT(TSHUT_STAT, 2, 1)
 
-
-#define REG_LIST \
+#define REG_LIST                       \
     REG(BQ25792_REG_CHARGER_CONTROL_0) \
     REG(BQ25792_REG_CHARGER_CONTROL_1) \
     REG(BQ25792_REG_CHARGER_CONTROL_2) \
     REG(BQ25792_REG_CHARGER_CONTROL_3) \
     REG(BQ25792_REG_CHARGER_CONTROL_4) \
     REG(BQ25792_REG_CHARGER_CONTROL_5) \
-    REG(BQ25792_REG_NTC_CONTROL_0) \
-    REG(BQ25792_REG_NTC_CONTROL_1) \
-    REG(BQ25792_REG_CHARGER_STATUS_0) \
-    REG(BQ25792_REG_CHARGER_STATUS_1) \
-    REG(BQ25792_REG_CHARGER_STATUS_2) \
-    REG(BQ25792_REG_CHARGER_STATUS_3) \
-    REG(BQ25792_REG_CHARGER_STATUS_4) \
-    REG(BQ25792_REG_FAULT_STATUS_0) \
+    REG(BQ25792_REG_NTC_CONTROL_0)     \
+    REG(BQ25792_REG_NTC_CONTROL_1)     \
+    REG(BQ25792_REG_CHARGER_STATUS_0)  \
+    REG(BQ25792_REG_CHARGER_STATUS_1)  \
+    REG(BQ25792_REG_CHARGER_STATUS_2)  \
+    REG(BQ25792_REG_CHARGER_STATUS_3)  \
+    REG(BQ25792_REG_CHARGER_STATUS_4)  \
+    REG(BQ25792_REG_FAULT_STATUS_0)    \
     REG(BQ25792_REG_FAULT_STATUS_1)
 
 /* If this baby hits 88 mph... you're gonna see some serious shit */
@@ -183,22 +207,14 @@
 #define BQ25792_BIT(_name, _bitLowest, _numBits) \
     uint8_t _name;
 
-#define REG(_regName) \
-    typedef struct _regName { \
-        uint8_t raw; \
-        _regName##_BITS \
+#define REG(_regName)       \
+    typedef struct _regName \
+    {                       \
+        uint8_t raw;        \
+        _regName##_BITS     \
     } _regName##_t;
 
 REG_LIST
 
 #undef REG
 #undef BQ25792_BIT
-
-struct bq25792_dev_data
-{
-};
-
-struct bq25792_dev_config
-{
-    struct i2c_dt_spec i2c;
-};

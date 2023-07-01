@@ -5,8 +5,7 @@
 
 #include <zephyr/drivers/bq25792/bq25792.h>
 #include "bq25792_priv.h"
-
-#define DT_DRV_COMPAT ti_bq25792
+#include "bq25792_init.h"
 
 LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_DBG);
 
@@ -20,7 +19,7 @@ LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_DBG);
 
 #define REG(_regName) \
     int bq25792_read_##_regName(const struct device *dev, _regName##_t* dst) { \
-        const struct bq25792_dev_config *cfg = dev->config; \
+        const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config; \
         int ret = i2c_burst_read_dt( \
             &cfg->i2c, \
             _regName##_ADDR, \
@@ -44,7 +43,7 @@ REG_LIST
 
 #define REG(_regName) \
     int bq25792_write_##_regName(const struct device *dev, _regName##_t* dst) { \
-        const struct bq25792_dev_config *cfg = dev->config; \
+        const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config; \
         dst->raw = 0; \
         _regName##_BITS \
         LOG_INF("Writing 0x%02x", dst->raw);\
@@ -88,7 +87,7 @@ REG_LIST
 // This is the _only_ register in the entire chip that requires a 2 byte write. 
 // Instead of adding complex logic to the X-macros, just define this one by hand
 int bq25792_read_BQ25792_REG_ICO_CURRENT_LIMIT(const struct device *dev, uint16_t* currentLimit_mA) {
-    const struct bq25792_dev_config *cfg = dev->config; 
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config; 
     int ret = i2c_burst_read_dt( 
         &cfg->i2c, 
         BQ25792_REG_ICO_CURRENT_LIMIT_ADDR, 
@@ -96,7 +95,7 @@ int bq25792_read_BQ25792_REG_ICO_CURRENT_LIMIT(const struct device *dev, uint16_
         sizeof(currentLimit_mA));
 
     if (ret) {
-        LOG_ERR("I2C Read failed: %d", ret); 
+        LOG_ERR("I2C Read failed: %d", ret);
         return ret; 
     } 
 
@@ -117,7 +116,7 @@ int bq25792_dump_BQ25792_REG_ICO_CURRENT_LIMIT(const struct device *dev) {
 }
 
 int bq25792_read_BQ25792_REG_INPUT_CURRENT_LIMIT(const struct device *dev, uint16_t* currentLimit_mA) {
-    const struct bq25792_dev_config *cfg = dev->config; 
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config; 
     int ret = i2c_burst_read_dt( 
         &cfg->i2c, 
         BQ25792_REG_INPUT_CURRENT_LIMIT_ADDR, 
@@ -163,7 +162,7 @@ int bq25792_dump(const struct device *dev)
         return -ENODEV;
     }
 
-    const struct bq25792_dev_config *cfg = dev->config;
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
     int ret;
 
     if (!device_is_ready(cfg->i2c.bus))
@@ -210,23 +209,3 @@ int bq25792_temp_override(const struct device *dev, bool enable) {
 
     return 0;
 }
-
-static int bq25792_init(const struct device *dev) {
-    return 0;
-}
-
-#define BQ25792_DEFINE(inst)                                                           \
-    static struct bq25792_dev_data bq25792_data_##inst;                                \
-                                                                                       \
-                                                                                       \
-    static const struct bq25792_dev_config bq25792_config_##inst =                     \
-        {                                                                              \
-            .i2c = I2C_DT_SPEC_INST_GET(inst)                                          \
-        };                                                                             \
-                                                                                       \
-    DEVICE_DT_INST_DEFINE(inst, bq25792_init, NULL,                                    \
-                      &bq25792_data_##inst, &bq25792_config_##inst,                    \
-                      APPLICATION, CONFIG_BQ25792_INIT_PRIORITY, NULL);
-    
-
-DT_INST_FOREACH_STATUS_OKAY(BQ25792_DEFINE)
