@@ -10,13 +10,27 @@
 #include <algorithm>
 
 #define LED_STRIP_NODE_ID DT_ALIAS(led_strip)
+#define LED_STRIP_1_NODE_ID DT_ALIAS(led_strip_1)
 
-void second_thread_entry(void* a, void* b, void* c);
+void led_strip_control_thread(void* a, void* b, void* c);
+void led_strip_1_control_thread(void* a, void* b, void* c);
 
 K_THREAD_DEFINE(
-    second_thread, 
+    led_strip_control, 
     8096,
-    second_thread_entry,
+    led_strip_control_thread,
+    NULL,
+    NULL,
+    NULL,
+    6,
+    0,
+    0
+);
+
+K_THREAD_DEFINE(
+    led_strip_1_control, 
+    8096,
+    led_strip_1_control_thread,
     NULL,
     NULL,
     NULL,
@@ -32,27 +46,21 @@ enum strip_state {
     STRIP_STATE_END,
 };
 
-static strip_state curr_state = RAINBOW;
-
 #define MIN_BREATH_LEVEL 10
 #define MAX_BREATH_LEVEL 255
 #define BREATH_TIME_MS 1000
 #define BREATH_STEP ((MAX_BREATH_LEVEL - MIN_BREATH_LEVEL) / (BREATH_TIME_MS / FADE_DELAY_MS))
-
-// TODO: get from device tree
-#define NUM_PIXELS 8
-static struct led_rgb pixel_data[NUM_PIXELS];
 
 #define MAX_BRIGHTNESS	100
 
 #define FADE_DELAY_MS	10
 #define FADE_DELAY	K_MSEC(FADE_DELAY_MS)
 
-void _set_all_leds(uint8_t red, uint8_t green, uint8_t blue) {
-    for (int i = 0; i < NUM_PIXELS; i++) {
-        pixel_data[i].r = red;
-        pixel_data[i].g = green;
-        pixel_data[i].b = blue;
+void _set_all_leds(uint8_t red, uint8_t green, uint8_t blue, struct led_rgb* leds, size_t numLeds) {
+    for (int i = 0; i < numLeds; i++) {
+        leds[i].r = red;
+        leds[i].g = green;
+        leds[i].b = blue;
     }
 }
 
@@ -76,6 +84,12 @@ void control_strip(const struct device *led_strip) {
 
     size_t current_rainbow_step = 0;
     const size_t rainbow_steps_per_color = (BREATH_TIME_MS / FADE_DELAY_MS);
+
+    // TODO: get from device tree
+    #define NUM_PIXELS 8
+    static struct led_rgb pixel_data[NUM_PIXELS];
+
+    static strip_state curr_state = RAINBOW;
     
     // - We will execute rainbow for (BREATH_TIME_MS * ARRAY_SIZE(rainbow_colors))
     // - Total steps = (BREATH_TIME_MS * ARRAY_SIZE(rainbow_colors)) / FADE_DELAY_MS
@@ -85,7 +99,7 @@ void control_strip(const struct device *led_strip) {
     while (true) {
         switch (curr_state) {
             case BREATHING:
-                _set_all_leds(breath_level, 0, 0);
+                _set_all_leds(breath_level, 0, 0, pixel_data, NUM_PIXELS);
 
                 if (breath_up) {
                     breath_level += BREATH_STEP;
@@ -138,8 +152,20 @@ void control_strip(const struct device *led_strip) {
     }
 }
 
-void second_thread_entry(void* a, void* b, void* c) {
+void led_strip_control_thread(void* a, void* b, void* c) {
     const struct device *led_strip = DEVICE_DT_GET(LED_STRIP_NODE_ID);
+	if (!device_is_ready(led_strip)) {
+		printk("Device %s is not ready\n", led_strip->name);
+		return;
+	}
+
+    control_strip(led_strip);
+
+    return;
+}
+
+void led_strip_1_control_thread(void* a, void* b, void* c) {
+    const struct device *led_strip = DEVICE_DT_GET(LED_STRIP_1_NODE_ID);
 	if (!device_is_ready(led_strip)) {
 		printk("Device %s is not ready\n", led_strip->name);
 		return;
