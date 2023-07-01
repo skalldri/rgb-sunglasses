@@ -1,0 +1,36 @@
+
+
+
+Breakpoint=C:/ncs/v2.3.0/zephyr/drivers/gpio/gpio_nrfx.c:358, State=BP_STATE_ON
+Breakpoint=C:/Users/skall/source/repos/rgb-sunglasses/src/buttons.cpp:23, State=BP_STATE_ON
+Breakpoint=C:/Users/skall/source/repos/rgb-sunglasses/src/buttons.cpp:30, State=BP_STATE_ON
+Breakpoint=C:/Users/skall/source/repos/rgb-sunglasses/src/buttons.cpp:48, State=BP_STATE_ON
+OpenDocument="gpio.h", FilePath="C:/ncs/v2.3.0/zephyr/include/zephyr/drivers/gpio.h", Line=1425
+OpenDocument="gpio_utils.h", FilePath="C:/ncs/v2.3.0/zephyr/include/zephyr/drivers/gpio/gpio_utils.h", Line=7
+OpenDocument="atomic_builtin.h", FilePath="C:/ncs/v2.3.0/zephyr/include/zephyr/sys/atomic_builtin.h", Line=30
+OpenDocument="nrfx_flag32_allocator.c", FilePath="C:/ncs/v2.3.0/modules/hal/nordic/nrfx/helpers/nrfx_flag32_allocator.c", Line=44
+OpenDocument="nrf_gpio.h", FilePath="C:/ncs/v2.3.0/modules/hal/nordic/nrfx/hal/nrf_gpio.h", Line=807
+OpenDocument="nrfx_gpiote.c", FilePath="C:/ncs/v2.3.0/modules/hal/nordic/nrfx/drivers/src/nrfx_gpiote.c", Line=968
+OpenDocument="gpio_nrfx.c", FilePath="C:/ncs/v2.3.0/zephyr/drivers/gpio/gpio_nrfx.c", Line=19
+OpenDocument="slist.h", FilePath="C:/ncs/v2.3.0/zephyr/include/zephyr/sys/slist.h", Line=374
+OpenDocument="buttons.cpp", FilePath="C:/Users/skall/source/repos/rgb-sunglasses/src/buttons.cpp", Line=7
+OpenDocument="main.c", FilePath="C:/Users/skall/source/repos/rgb-sunglasses/src/main.c", Line=151
+OpenToolbar="Debug", Floating=0, x=0, y=0
+OpenWindow="Call Stack", DockArea=RIGHT, x=0, y=3, w=984, h=161, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Registers 1", DockArea=RIGHT, x=0, y=4, w=984, h=116, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, FilteredItems=[], RefreshRate=1
+OpenWindow="Disassembly", DockArea=RIGHT, x=0, y=2, w=984, h=97, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Memory 1", DockArea=BOTTOM, x=1, y=0, w=1181, h=451, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, EditorAddress=0x45628
+OpenWindow="Local Data", DockArea=RIGHT, x=0, y=0, w=984, h=224, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Functions", DockArea=LEFT, x=0, y=0, w=378, h=751, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Console", DockArea=BOTTOM, x=0, y=0, w=1028, h=451, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Zephyr", DockArea=RIGHT, x=0, y=1, w=984, h=149, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, Showing="Task List"
+SmartViewPlugin="", Page="", Toolbar="Hidden", Window="SmartView 1"
+TableHeader="Functions", SortCol="Name", SortOrder="ASCENDING", VisibleCols=["Name";"Address";"Size";"#Insts";"Class";"Source"], ColWidths=[1248;100;100;100;650;632]
+TableHeader="Call Stack", SortCol="Function", SortOrder="ASCENDING", VisibleCols=["Function";"Stack Frame";"Source";"PC";"Return Address";"Stack Used"], ColWidths=[168;212;357;107;168;100]
+TableHeader="Power Sampling", SortCol="None", SortOrder="ASCENDING", VisibleCols=["Index";"Time";"Ch 0"], ColWidths=[100;100;100]
+TableHeader="...", SortCol="None", SortOrder="ASCENDING", VisibleCols=["..."], ColWidths=[984]
+TableHeader="Task List", SortCol="None", SortOrder="ASCENDING", VisibleCols=["Threads";"TID";"Entry";"Priority";"Status";"Stack"], ColWidths=[131;110;110;110;110;413]
+TableHeader="Registers 1", SortCol="Name", SortOrder="ASCENDING", VisibleCols=["Name";"Value";"Description"], ColWidths=[156;105;706]
+TableHeader="RegisterSelectionDialog", SortCol="None", SortOrder="ASCENDING", VisibleCols=[], ColWidths=[]
+TableHeader="TargetExceptionDialog", SortCol="Name", SortOrder="ASCENDING", VisibleCols=["Name";"Value";"Address";"Description"], ColWidths=[200;228;100;1040]
+TableHeader="Local Data", SortCol="Name", SortOrder="ASCENDING", VisibleCols=["Name";"Value";"Location";"Size";"Type";"Access";"Scope"], ColWidths=[108;232;100;100;196;100;148]
