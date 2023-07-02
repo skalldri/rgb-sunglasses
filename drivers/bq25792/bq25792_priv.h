@@ -2,28 +2,21 @@
 
 #include <zephyr/drivers/InternalDeviceRegister.hpp>
 
-template <uint8_t reg, size_t registerWidth, typename U, typename... Us>
-class BQ25792Register : DeviceRegister<registerWidth, U, Us...>
+/**
+ * @brief
+ *
+ * @tparam reg
+ * @tparam registerWidth
+ * @tparam U
+ * @tparam Us
+ */
+template <const char *name, uint8_t reg, size_t registerWidth, typename U, typename... Us>
+class BQ25792Register : public I2CDeviceRegister<name, reg, registerWidth, U, Us...>
 {
+    using Base = I2CDeviceRegister<name, reg, registerWidth, U, Us...>;
+
 public:
-    BQ25792Register(const struct bq25792_dev_config * cfg) cfg_(cfg) {};
-
-    int readI2C()
-    {
-        return 0;
-    }
-
-    int write()
-    {
-        return 0;
-    }
-
-    int dump()
-    {
-        return 0;
-    }
-private:
-    const struct bq25792_dev_config *cfg_;
+    BQ25792Register(const struct bq25792_dev_config *cfg) : Base(&(cfg->i2c)) {}
 };
 
 // Format:
@@ -128,6 +121,45 @@ private:
     BQ25792_BIT(AC2_PRESENT_STAT, 2, 1)   \
     BQ25792_BIT(AC1_PRESENT_STAT, 1, 1)   \
     BQ25792_BIT(VBUS_PRESENT_STAT, 0, 1)
+
+static const char IINDPM_STAT_NAME[] = "IINDPM_STAT";
+using BQ25792_CHARGER_STATUS_0_IINDPM_STAT = RegisterField<IINDPM_STAT_NAME, 7, 1>;
+
+static const char VINDPM_STAT_NAME[] = "VINDPM_STAT";
+using BQ25792_CHARGER_STATUS_0_VINDPM_STAT = RegisterField<VINDPM_STAT_NAME, 6, 1>;
+
+static const char WD_STAT_NAME[] = "WD_STAT";
+using BQ25792_CHARGER_STATUS_0_WD_STAT = RegisterField<WD_STAT_NAME, 5, 1>;
+
+static const char POORSRC_STAT_NAME[] = "POORSRC_STAT";
+using BQ25792_CHARGER_STATUS_0_POORSRC_STAT = RegisterField<POORSRC_STAT_NAME, 4, 1>;
+
+static const char PG_STAT_NAME[] = "PG_STAT";
+using BQ25792_CHARGER_STATUS_0_PG_STAT = RegisterField<PG_STAT_NAME, 3, 1>;
+
+static const char AC2_PRESENT_STAT_NAME[] = "AC2_PRESENT_STAT";
+using BQ25792_CHARGER_STATUS_0_AC2_PRESENT_STAT = RegisterField<AC2_PRESENT_STAT_NAME, 2, 1>;
+
+static const char AC1_PRESENT_STAT_NAME[] = "AC1_PRESENT_STAT";
+using BQ25792_CHARGER_STATUS_0_AC1_PRESENT_STAT = RegisterField<AC1_PRESENT_STAT_NAME, 1, 1>;
+
+static const char VBUS_PRESENT_STAT_NAME[] = "VBUS_PRESENT_STAT";
+using BQ25792_CHARGER_STATUS_0_VBUS_PRESENT_STAT = RegisterField<VBUS_PRESENT_STAT_NAME, 0, 1>;
+
+static const char CHARGER_STATUS_0_NAME[] = "CHARGER_STATUS_0";
+using BQ25792_CHARGER_STATUS_0 = 
+    BQ25792Register<
+        CHARGER_STATUS_0_NAME, 
+        BQ25792_REG_CHARGER_STATUS_0_ADDR, 
+        8,
+        BQ25792_CHARGER_STATUS_0_IINDPM_STAT,
+        BQ25792_CHARGER_STATUS_0_VINDPM_STAT,
+        BQ25792_CHARGER_STATUS_0_WD_STAT,
+        BQ25792_CHARGER_STATUS_0_POORSRC_STAT,
+        BQ25792_CHARGER_STATUS_0_PG_STAT,
+        BQ25792_CHARGER_STATUS_0_AC2_PRESENT_STAT,
+        BQ25792_CHARGER_STATUS_0_AC1_PRESENT_STAT,
+        BQ25792_CHARGER_STATUS_0_VBUS_PRESENT_STAT>;
 
 #define BQ25792_REG_CHARGER_STATUS_1_ADDR 0x1C
 

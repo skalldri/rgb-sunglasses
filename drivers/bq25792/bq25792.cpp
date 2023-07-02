@@ -4,10 +4,13 @@
 #include <zephyr/logging/log.h>
 
 #include <zephyr/drivers/bq25792/bq25792.h>
-#include "bq25792_priv.h"
 #include "bq25792_init.h"
 
 LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_DBG);
+
+// Must be included after LOG_MODULE_REGISTER() since this contains LOG_XXX statements
+// TODO: fix this!
+#include "bq25792_priv.h"
 
 #define BIT_EXTRACT(_val, _start, _num) (((_val) & (((1 << _num) - 1) << _start)) >> _start)
 
@@ -172,6 +175,9 @@ int bq25792_dump(const struct device *dev)
     }
 
     REG_LIST
+
+    BQ25792_CHARGER_STATUS_0 chg_stat_0(cfg);
+    chg_stat_0.dump();
 
     ret = bq25792_dump_BQ25792_REG_ICO_CURRENT_LIMIT(dev);
     if (ret) {
