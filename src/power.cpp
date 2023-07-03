@@ -84,6 +84,22 @@ static int cmd_power_bq_adc_enable(const struct shell *shell,
     return 0;
 }
 
+static int cmd_power_bq_pfm_enable(const struct shell *shell,
+                             size_t argc, char **argv, void *data)
+{
+    int selection = (int)data;
+    bq25792_pfm_enable(bq, (bool) selection);
+    return 0;
+}
+
+static int cmd_power_bq_freq_change(const struct shell *shell,
+                             size_t argc, char **argv, void *data)
+{
+    int selection = (int)data;
+    bq25792_set_charge_frequency(bq, (bq25792_charge_frequency_t) selection);
+    return 0;
+}
+
 static int cmd_power_pd_dump(const struct shell *shell,
                              size_t argc, char **argv, void *data)
 {
@@ -183,14 +199,24 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_temp_override, cmd_power_bq_temp_override,
                              (disable, 0, "disable temp monitor override"),
                              (enable, 1, "enable temp monitor override"));
 
-SHELL_SUBCMD_DICT_SET_CREATE(sub_adc_enable, cmd_power_bq_adc_enable,
+SHELL_SUBCMD_DICT_SET_CREATE(sub_adc, cmd_power_bq_adc_enable,
                              (disable, 0, "disable internal adc"),
                              (enable, 1, "enable internal adc"));
+
+SHELL_SUBCMD_DICT_SET_CREATE(sub_pfm, cmd_power_bq_pfm_enable,
+                             (disable, 0, "disable PFM"),
+                             (enable, 1, "enable PFM"));
+
+SHELL_SUBCMD_DICT_SET_CREATE(sub_freq, cmd_power_bq_freq_change,
+                             (high, bq25792_charge_frequency_t::HIGH, "1.5Mhz PWM Frequency"),
+                             (low, bq25792_charge_frequency_t::LOW, "750 Khz PWM Frequency"));
 
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power_bq,
                                SHELL_CMD(dump, NULL, "Dump BQ25792 Registers to console", cmd_power_bq_dump),
                                SHELL_CMD(temp_override, &sub_temp_override, "Override BQ25792 battery temperature monitoring", NULL),
-                               SHELL_CMD(adc_enable, &sub_adc_enable, "Enable BQ25792 ADC", NULL),
+                               SHELL_CMD(adc, &sub_adc, "Enable/Disable BQ25792 ADC", NULL),
+                               SHELL_CMD(pfm, &sub_pfm, "Enable/Disable BQ25792 Pulse Frequency Modulation (PFM)", NULL),
+                               SHELL_CMD(freq, &sub_freq, "Change BQ25792 PWM Frequency", NULL),
                                SHELL_SUBCMD_SET_END);
 // Subcommands for "power"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,

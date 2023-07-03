@@ -74,3 +74,42 @@ int bq25792_adc_enable(const struct device *dev, bool enable) {
 
     return reg.set<BQ25792_ADC_CONTROL_ADC_EN>(adc_en, true /* flush */);
 }
+
+int bq25792_pfm_enable(const struct device *dev, bool enable) {
+    if (!dev)
+    {
+        LOG_ERR("NULL-device pointer");
+        return -ENODEV;
+    }
+
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
+
+    BQ25792_CHARGER_CONTROL_3 reg(cfg);
+    
+    uint32_t pfm_fwd_dis = enable ? 0 : 1;
+    LOG_INF("Setting PFM_FWD_DIS to %u", pfm_fwd_dis);
+
+    return reg.set<BQ25792_CHARGER_CONTROL_3_PFM_FWD_DIS>(pfm_fwd_dis, true /* flush */);
+}
+
+int bq25792_set_charge_frequency(const struct device *dev, bq25792_charge_frequency_t freq) {
+    if (!dev)
+    {
+        LOG_ERR("NULL-device pointer");
+        return -ENODEV;
+    }
+
+    if (freq > NUM_CHARGE_FREQUENCY) {
+        LOG_ERR("Invalid frequency setting %u", freq);
+        return -EINVAL;
+    }
+
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
+
+    BQ25792_CHARGER_CONTROL_4 reg(cfg);
+    
+    uint32_t pwm_freq = (freq == bq25792_charge_frequency_t::LOW) ? 1 : 0;
+    LOG_INF("Setting PWM_FREQ to %u", pwm_freq);
+
+    return reg.set<BQ25792_CHARGER_CONTROL_4_PWM_FREQ>(pwm_freq, true /* flush */);
+}
