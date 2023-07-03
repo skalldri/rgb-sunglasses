@@ -19,13 +19,9 @@ public:
     BQ25792Register(const struct bq25792_dev_config *cfg) : Base(&(cfg->i2c)) {}
 };
 
-// Format:
-// #define BQ25792_BIT(_name, _bitLowest, _numBits)
-
-
 /**
  * Register 0x00 - MINIMAL_SYSTEM_VOLTAGE
- * 
+ *
  */
 #define BQ25792_REG_MINIMAL_SYSTEM_VOLTAGE_ADDR 0x00
 static const char MINIMAL_SYSTEM_VOLTAGE_NAME[] = "MINIMAL_SYSTEM_VOLTAGE";
@@ -33,16 +29,16 @@ static const char MINIMAL_SYSTEM_VOLTAGE_NAME[] = "MINIMAL_SYSTEM_VOLTAGE";
 static const char VSYS_MIN_NAME[] = "VSYS_MIN";
 using BQ25792_MINIMAL_SYSTEM_VOLTAGE_VSYS_MIN = RegisterField<VSYS_MIN_NAME, 0, 6>;
 
-using BQ25792_MINIMAL_SYSTEM_VOLTAGE = 
+using BQ25792_MINIMAL_SYSTEM_VOLTAGE =
     BQ25792Register<
-        MINIMAL_SYSTEM_VOLTAGE_NAME, 
-        BQ25792_REG_MINIMAL_SYSTEM_VOLTAGE_ADDR, 
+        MINIMAL_SYSTEM_VOLTAGE_NAME,
+        BQ25792_REG_MINIMAL_SYSTEM_VOLTAGE_ADDR,
         8,
         BQ25792_MINIMAL_SYSTEM_VOLTAGE_VSYS_MIN>;
 
 /**
  * Register 0x01 - CHARGE_VOLTAGE_LIMIT
- * 
+ *
  */
 #define BQ25792_REG_CHARGE_VOLTAGE_LIMIT_ADDR 0x01
 static const char CHARGE_VOLTAGE_LIMIT_NAME[] = "CHARGE_VOLTAGE_LIMIT";
@@ -63,33 +59,46 @@ public:
 static const char VREG_NAME[] = "VREG";
 using BQ25792_CHARGE_VOLTAGE_LIMIT_VREG = RegisterField<VREG_NAME, 0, 11, BQ25792_CHARGE_VOLTAGE_LIMIT_VREG_UnitConversion>;
 
-using BQ25792_CHARGE_VOLTAGE_LIMIT = 
+using BQ25792_CHARGE_VOLTAGE_LIMIT =
     BQ25792Register<
-        CHARGE_VOLTAGE_LIMIT_NAME, 
-        BQ25792_REG_CHARGE_VOLTAGE_LIMIT_ADDR, 
+        CHARGE_VOLTAGE_LIMIT_NAME,
+        BQ25792_REG_CHARGE_VOLTAGE_LIMIT_ADDR,
         16,
         BQ25792_CHARGE_VOLTAGE_LIMIT_VREG>;
 
 /**
  * Register 0x03 - CHARGE_CURRENT_LIMIT
- * 
+ *
  */
 #define BQ25792_REG_CHARGE_CURRENT_LIMIT_ADDR 0x03
 static const char CHARGE_CURRENT_LIMIT_NAME[] = "CHARGE_CURRENT_LIMIT";
 
-static const char ICHG_NAME[] = "ICHG";
-using BQ25792_CHARGE_CURRENT_LIMIT_ICHG = RegisterField<ICHG_NAME, 0, 9>;
+class BQ25792_CHARGE_CURRENT_LIMIT_ICHG_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mA";
+    }
 
-using BQ25792_CHARGE_CURRENT_LIMIT = 
+    static inline uint32_t conversion(uint32_t val)
+    {
+        return val * 10;
+    }
+};
+static const char ICHG_NAME[] = "ICHG";
+using BQ25792_CHARGE_CURRENT_LIMIT_ICHG = RegisterField<ICHG_NAME, 0, 9, BQ25792_CHARGE_CURRENT_LIMIT_ICHG_UnitConversion>;
+
+using BQ25792_CHARGE_CURRENT_LIMIT =
     BQ25792Register<
-        CHARGE_CURRENT_LIMIT_NAME, 
-        BQ25792_REG_CHARGE_CURRENT_LIMIT_ADDR, 
+        CHARGE_CURRENT_LIMIT_NAME,
+        BQ25792_REG_CHARGE_CURRENT_LIMIT_ADDR,
         16,
         BQ25792_CHARGE_CURRENT_LIMIT_ICHG>;
 
 /**
  * Register 0x05 - INPUT_VOLTAGE_LIMIT
- * 
+ *
  */
 #define BQ25792_REG_INPUT_VOLTAGE_LIMIT_ADDR 0x05
 static const char INPUT_VOLTAGE_LIMIT_NAME[] = "INPUT_VOLTAGE_LIMIT";
@@ -97,35 +106,48 @@ static const char INPUT_VOLTAGE_LIMIT_NAME[] = "INPUT_VOLTAGE_LIMIT";
 static const char VINDPM_NAME[] = "VINDPM";
 using BQ25792_INPUT_VOLTAGE_LIMIT_VINDPM = RegisterField<VINDPM_NAME, 0, 8>;
 
-using BQ25792_INPUT_VOLTAGE_LIMIT = 
+using BQ25792_INPUT_VOLTAGE_LIMIT =
     BQ25792Register<
-        INPUT_VOLTAGE_LIMIT_NAME, 
-        BQ25792_REG_INPUT_VOLTAGE_LIMIT_ADDR, 
+        INPUT_VOLTAGE_LIMIT_NAME,
+        BQ25792_REG_INPUT_VOLTAGE_LIMIT_ADDR,
         8,
         BQ25792_INPUT_VOLTAGE_LIMIT_VINDPM>;
 
 /**
  * Register 0x06 - INPUT_CURRENT_LIMIT
- * 
+ *
  */
 #define BQ25792_REG_INPUT_CURRENT_LIMIT_ADDR 0x06
 // Per datasheet, LSB = 10mA
 #define BQ25792_REG_INPUT_CURRENT_LIMIT_IINDPM_SCALE 10
 static const char INPUT_CURRENT_LIMIT_NAME[] = "INPUT_CURRENT_LIMIT";
 
-static const char IINDPM_NAME[] = "IINDPM";
-using BQ25792_INPUT_CURRENT_LIMIT_IINDPM = RegisterField<IINDPM_NAME, 0, 9>;
+class BQ25792_INPUT_CURRENT_LIMIT_IINDPM_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mA";
+    }
 
-using BQ25792_INPUT_CURRENT_LIMIT = 
+    static inline uint32_t conversion(uint32_t val)
+    {
+        return val * 10;
+    }
+};
+static const char IINDPM_NAME[] = "IINDPM";
+using BQ25792_INPUT_CURRENT_LIMIT_IINDPM = RegisterField<IINDPM_NAME, 0, 9, BQ25792_INPUT_CURRENT_LIMIT_IINDPM_UnitConversion>;
+
+using BQ25792_INPUT_CURRENT_LIMIT =
     BQ25792Register<
-        INPUT_CURRENT_LIMIT_NAME, 
-        BQ25792_REG_INPUT_CURRENT_LIMIT_ADDR, 
+        INPUT_CURRENT_LIMIT_NAME,
+        BQ25792_REG_INPUT_CURRENT_LIMIT_ADDR,
         16,
         BQ25792_INPUT_CURRENT_LIMIT_IINDPM>;
 
 /**
  * Register 0x08 - PRECHARGE_CONTROL
- * 
+ *
  */
 #define BQ25792_REG_PRECHARGE_CONTROL_ADDR 0x08
 static const char PRECHARGE_CONTROL_NAME[] = "PRECHARGE_CONTROL";
@@ -136,17 +158,17 @@ using BQ25792_PRECHARGE_CONTROL_VBAT_LOWV = RegisterField<VBAT_LOWV_NAME, 6, 2>;
 static const char IPRECHG_NAME[] = "IPRECHG";
 using BQ25792_PRECHARGE_CONTROL_IPRECHG = RegisterField<IPRECHG_NAME, 0, 6>;
 
-using BQ25792_PRECHARGE_CONTROL = 
+using BQ25792_PRECHARGE_CONTROL =
     BQ25792Register<
-        PRECHARGE_CONTROL_NAME, 
-        BQ25792_REG_PRECHARGE_CONTROL_ADDR, 
+        PRECHARGE_CONTROL_NAME,
+        BQ25792_REG_PRECHARGE_CONTROL_ADDR,
         8,
         BQ25792_PRECHARGE_CONTROL_VBAT_LOWV,
         BQ25792_PRECHARGE_CONTROL_IPRECHG>;
 
 /**
  * Register 0x09 - TERMINATION_CONTROL
- * 
+ *
  */
 #define BQ25792_REG_TERMINATION_CONTROL_ADDR 0x09
 static const char TERMINATION_CONTROL_NAME[] = "TERMINATION_CONTROL";
@@ -157,17 +179,17 @@ using BQ25792_TERMINATION_CONTROL_REG_RST = RegisterField<REG_RST_NAME, 0, 1>;
 static const char ITERM_NAME[] = "ITERM";
 using BQ25792_TERMINATION_CONTROL_ITERM = RegisterField<ITERM_NAME, 0, 5>;
 
-using BQ25792_TERMINATION_CONTROL = 
+using BQ25792_TERMINATION_CONTROL =
     BQ25792Register<
-        TERMINATION_CONTROL_NAME, 
-        BQ25792_REG_TERMINATION_CONTROL_ADDR, 
+        TERMINATION_CONTROL_NAME,
+        BQ25792_REG_TERMINATION_CONTROL_ADDR,
         8,
         BQ25792_TERMINATION_CONTROL_REG_RST,
         BQ25792_TERMINATION_CONTROL_ITERM>;
 
 /**
  * Register 0x0A - RECHARGE_CONTROL
- * 
+ *
  */
 #define BQ25792_REG_RECHARGE_CONTROL_ADDR 0x0A
 static const char RECHARGE_CONTROL_NAME[] = "RECHARGE_CONTROL";
@@ -181,10 +203,10 @@ using BQ25792_RECHARGE_CONTROL_TRECHG = RegisterField<TRECHG_NAME, 4, 2>;
 static const char VRECHG_NAME[] = "VRECHG";
 using BQ25792_RECHARGE_CONTROL_VRECHG = RegisterField<VRECHG_NAME, 0, 4>;
 
-using BQ25792_RECHARGE_CONTROL = 
+using BQ25792_RECHARGE_CONTROL =
     BQ25792Register<
-        RECHARGE_CONTROL_NAME, 
-        BQ25792_REG_RECHARGE_CONTROL_ADDR, 
+        RECHARGE_CONTROL_NAME,
+        BQ25792_REG_RECHARGE_CONTROL_ADDR,
         8,
         BQ25792_RECHARGE_CONTROL_CELL,
         BQ25792_RECHARGE_CONTROL_TRECHG,
@@ -192,24 +214,37 @@ using BQ25792_RECHARGE_CONTROL =
 
 /**
  * Register 0x0B - VOTG_REGULATION
- * 
+ *
  */
 #define BQ25792_REG_VOTG_REGULATION_ADDR 0x0B
 static const char VOTG_REGULATION_NAME[] = "VOTG_REGULATION";
 
-static const char VOTG_NAME[] = "VOTG";
-using BQ25792_VOTG_REGULATION_VOTG = RegisterField<VOTG_NAME, 0, 11>;
+class BQ25792_VOTG_REGULATION_VOTG_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mV";
+    }
 
-using BQ25792_VOTG_REGULATION = 
+    static inline uint32_t conversion(uint32_t val)
+    {
+        return (val * 10) + 2800;
+    }
+};
+static const char VOTG_NAME[] = "VOTG";
+using BQ25792_VOTG_REGULATION_VOTG = RegisterField<VOTG_NAME, 0, 11, BQ25792_VOTG_REGULATION_VOTG_UnitConversion>;
+
+using BQ25792_VOTG_REGULATION =
     BQ25792Register<
-        VOTG_REGULATION_NAME, 
-        BQ25792_REG_VOTG_REGULATION_ADDR, 
+        VOTG_REGULATION_NAME,
+        BQ25792_REG_VOTG_REGULATION_ADDR,
         16,
         BQ25792_VOTG_REGULATION_VOTG>;
 
 /**
  * Register 0x0D - IOTG_REGULATION
- * 
+ *
  */
 
 #define BQ25792_REG_IOTG_REGULATION_ADDR 0x0D
@@ -221,17 +256,17 @@ using BQ25792_IOTG_REGULATION_PRECHG_TIMER = RegisterField<PRECHG_TIMER_NAME, 7,
 static const char IOTG_NAME[] = "IOTG";
 using BQ25792_IOTG_REGULATION_IOTG = RegisterField<IOTG_NAME, 0, 7>;
 
-using BQ25792_IOTG_REGULATION = 
+using BQ25792_IOTG_REGULATION =
     BQ25792Register<
-        IOTG_REGULATION_NAME, 
-        BQ25792_REG_IOTG_REGULATION_ADDR, 
+        IOTG_REGULATION_NAME,
+        BQ25792_REG_IOTG_REGULATION_ADDR,
         8,
         BQ25792_IOTG_REGULATION_PRECHG_TIMER,
         BQ25792_IOTG_REGULATION_IOTG>;
 
 /**
  * Register 0x0E - TIMER_CONTROL
- * 
+ *
  */
 
 #define BQ25792_REG_TIMER_CONTROL_ADDR 0x0E
@@ -255,9 +290,9 @@ using BQ25792_TIMER_CONTROL_CHG_TMR = RegisterField<CHG_TMR_NAME, 1, 2>;
 static const char TMR2X_EN_NAME[] = "TMR2X_EN";
 using BQ25792_TIMER_CONTROL_TMR2X_EN = RegisterField<TMR2X_EN_NAME, 0, 1>;
 
-using BQ25792_TIMER_CONTROL = 
+using BQ25792_TIMER_CONTROL =
     BQ25792Register<
-        TIMER_CONTROL_NAME, 
+        TIMER_CONTROL_NAME,
         BQ25792_REG_TIMER_CONTROL_ADDR,
         8,
         BQ25792_TIMER_CONTROL_TOPOFF_TMR,
@@ -269,20 +304,10 @@ using BQ25792_TIMER_CONTROL =
 
 /**
  * Register 0x0F - CHARGER_CONTROL_0
- * 
+ *
  */
 
 #define BQ25792_REG_CHARGER_CONTROL_0_ADDR 0x0F
-
-#define BQ25792_REG_CHARGER_CONTROL_0_BITS \
-    BQ25792_BIT(EN_AUTO_IBATDIS, 7, 1)     \
-    BQ25792_BIT(FORCE_IBATDIS, 6, 1)       \
-    BQ25792_BIT(EN_CHG, 5, 1)              \
-    BQ25792_BIT(EN_ICO, 4, 1)              \
-    BQ25792_BIT(FORCE_ICO, 3, 1)           \
-    BQ25792_BIT(EN_HIZ, 2, 1)              \
-    BQ25792_BIT(EN_TERM, 1, 1)
-
 static const char CHARGER_CONTROL_0_NAME[] = "CHARGER_CONTROL_0";
 
 static const char EN_AUTO_IBATDIS_NAME[] = "EN_AUTO_IBATDIS";
@@ -306,9 +331,9 @@ using BQ25792_CHARGER_CONTROL_0_EN_HIZ = RegisterField<EN_HIZ_NAME, 2, 1>;
 static const char EN_TERM_NAME[] = "EN_TERM";
 using BQ25792_CHARGER_CONTROL_0_EN_TERM = RegisterField<EN_TERM_NAME, 1, 1>;
 
-using BQ25792_CHARGER_CONTROL_0 = 
+using BQ25792_CHARGER_CONTROL_0 =
     BQ25792Register<
-        CHARGER_CONTROL_0_NAME, 
+        CHARGER_CONTROL_0_NAME,
         BQ25792_REG_CHARGER_CONTROL_0_ADDR,
         8,
         BQ25792_CHARGER_CONTROL_0_EN_AUTO_IBATDIS,
@@ -321,16 +346,10 @@ using BQ25792_CHARGER_CONTROL_0 =
 
 /**
  * Register 0x10 - CHARGER_CONTROL_1
- * 
+ *
  */
 
 #define BQ25792_REG_CHARGER_CONTROL_1_ADDR 0x10
-
-#define BQ25792_REG_CHARGER_CONTROL_1_BITS \
-    BQ25792_BIT(VAC_OVP, 4, 2)             \
-    BQ25792_BIT(WD_RST, 3, 1)              \
-    BQ25792_BIT(WATCHDOG, 0, 2)
-
 static const char CHARGER_CONTROL_1_NAME[] = "CHARGER_CONTROL_1";
 
 static const char VAC_OVP_NAME[] = "VAC_OVP";
@@ -342,31 +361,20 @@ using BQ25792_CHARGER_CONTROL_1_WD_RST = RegisterField<WD_RST_NAME, 3, 1>;
 static const char WATCHDOG_NAME[] = "WATCHDOG";
 using BQ25792_CHARGER_CONTROL_1_WATCHDOG = RegisterField<WATCHDOG_NAME, 0, 2>;
 
-using BQ25792_CHARGER_CONTROL_1 = 
+using BQ25792_CHARGER_CONTROL_1 =
     BQ25792Register<
-        CHARGER_CONTROL_1_NAME, 
+        CHARGER_CONTROL_1_NAME,
         BQ25792_REG_CHARGER_CONTROL_1_ADDR,
         8,
         BQ25792_CHARGER_CONTROL_1_VAC_OVP,
         BQ25792_CHARGER_CONTROL_1_WD_RST,
         BQ25792_CHARGER_CONTROL_1_WATCHDOG>;
 
-
 /**
  * Register 0x11 - CHARGER_CONTROL_2
- * 
+ *
  */
 #define BQ25792_REG_CHARGER_CONTROL_2_ADDR 0x11
-
-#define BQ25792_REG_CHARGER_CONTROL_2_BITS \
-    BQ25792_BIT(FORCE_INDET, 7, 1)         \
-    BQ25792_BIT(AUTO_INDET_EN, 6, 1)       \
-    BQ25792_BIT(EN_12V, 5, 1)              \
-    BQ25792_BIT(EN_9V, 4, 1)               \
-    BQ25792_BIT(HVDCP_EN, 3, 1)            \
-    BQ25792_BIT(SDRV_CTRL, 1, 2)           \
-    BQ25792_BIT(SDRV_DLY, 0, 1)
-
 static const char CHARGER_CONTROL_2_NAME[] = "CHARGER_CONTROL_2";
 
 static const char FORCE_INDET_NAME[] = "FORCE_INDET";
@@ -390,9 +398,9 @@ using BQ25792_CHARGER_CONTROL_2_SDRV_CTRL = RegisterField<SDRV_CTRL_NAME, 1, 2>;
 static const char SDRV_DLY_NAME[] = "SDRV_DLY";
 using BQ25792_CHARGER_CONTROL_2_SDRV_DLY = RegisterField<SDRV_DLY_NAME, 0, 1>;
 
-using BQ25792_CHARGER_CONTROL_2 = 
+using BQ25792_CHARGER_CONTROL_2 =
     BQ25792Register<
-        CHARGER_CONTROL_2_NAME, 
+        CHARGER_CONTROL_2_NAME,
         BQ25792_REG_CHARGER_CONTROL_2_ADDR,
         8,
         BQ25792_CHARGER_CONTROL_2_FORCE_INDET,
@@ -403,24 +411,12 @@ using BQ25792_CHARGER_CONTROL_2 =
         BQ25792_CHARGER_CONTROL_2_SDRV_CTRL,
         BQ25792_CHARGER_CONTROL_2_SDRV_DLY>;
 
-
 /**
  * Register 0x12 - CHARGER_CONTROL_3
- * 
+ *
  */
 
 #define BQ25792_REG_CHARGER_CONTROL_3_ADDR 0x12
-
-#define BQ25792_REG_CHARGER_CONTROL_3_BITS \
-    BQ25792_BIT(DIS_ACDRV, 7, 1)           \
-    BQ25792_BIT(EN_OTG, 6, 1)              \
-    BQ25792_BIT(PFM_OTG_DIS, 5, 1)         \
-    BQ25792_BIT(PFM_FWD_DIS, 4, 1)         \
-    BQ25792_BIT(WKUP_DLY, 3, 1)            \
-    BQ25792_BIT(DIS_LDO, 2, 1)             \
-    BQ25792_BIT(DIS_OTG_OOA, 1, 1)         \
-    BQ25792_BIT(DIS_FWD_OOA, 0, 1)
-
 static const char CHARGER_CONTROL_3_NAME[] = "CHARGER_CONTROL_3";
 
 static const char DIS_ACDRV_NAME[] = "DIS_ACDRV";
@@ -447,9 +443,9 @@ using BQ25792_CHARGER_CONTROL_3_DIS_OTG_OOA = RegisterField<DIS_OTG_OOA_NAME, 1,
 static const char DIS_FWD_OOA_NAME[] = "DIS_FWD_OOA";
 using BQ25792_CHARGER_CONTROL_3_DIS_FWD_OOA = RegisterField<DIS_FWD_OOA_NAME, 0, 1>;
 
-using BQ25792_CHARGER_CONTROL_3 = 
+using BQ25792_CHARGER_CONTROL_3 =
     BQ25792Register<
-        CHARGER_CONTROL_3_NAME, 
+        CHARGER_CONTROL_3_NAME,
         BQ25792_REG_CHARGER_CONTROL_3_ADDR,
         8,
         BQ25792_CHARGER_CONTROL_3_DIS_ACDRV,
@@ -463,21 +459,10 @@ using BQ25792_CHARGER_CONTROL_3 =
 
 /**
  * Register 0x13 - CHARGER_CONTROL_4
- * 
+ *
  */
 
 #define BQ25792_REG_CHARGER_CONTROL_4_ADDR 0x13
-
-#define BQ25792_REG_CHARGER_CONTROL_4_BITS \
-    BQ25792_BIT(EN_ACDRV2, 7, 1)           \
-    BQ25792_BIT(EN_ACDRV1, 6, 1)           \
-    BQ25792_BIT(PWM_FREQ, 5, 1)            \
-    BQ25792_BIT(DIS_STAT, 4, 1)            \
-    BQ25792_BIT(DIS_VSYS_SHORT, 3, 1)      \
-    BQ25792_BIT(DIS_VOTG_UVP, 2, 1)        \
-    BQ25792_BIT(FORCE_VINDPM_DET, 1, 1)    \
-    BQ25792_BIT(EN_IBUS_OCP, 0, 1)
-
 static const char CHARGER_CONTROL_4_NAME[] = "CHARGER_CONTROL_4";
 
 static const char EN_ACDRV2_NAME[] = "EN_ACDRV2";
@@ -504,9 +489,9 @@ using BQ25792_CHARGER_CONTROL_4_FORCE_VINDPM_DET = RegisterField<FORCE_VINDPM_DE
 static const char EN_IBUS_OCP_NAME[] = "EN_IBUS_OCP";
 using BQ25792_CHARGER_CONTROL_4_EN_IBUS_OCP = RegisterField<EN_IBUS_OCP_NAME, 0, 1>;
 
-using BQ25792_CHARGER_CONTROL_4 = 
+using BQ25792_CHARGER_CONTROL_4 =
     BQ25792Register<
-        CHARGER_CONTROL_4_NAME, 
+        CHARGER_CONTROL_4_NAME,
         BQ25792_REG_CHARGER_CONTROL_4_ADDR,
         8,
         BQ25792_CHARGER_CONTROL_4_EN_ACDRV2,
@@ -520,19 +505,10 @@ using BQ25792_CHARGER_CONTROL_4 =
 
 /**
  * Register 0x14 - CHARGER_CONTROL_5
- * 
+ *
  */
 
 #define BQ25792_REG_CHARGER_CONTROL_5_ADDR 0x14
-
-#define BQ25792_REG_CHARGER_CONTROL_5_BITS \
-    BQ25792_BIT(SFET_PRESENT, 7, 1)        \
-    BQ25792_BIT(EN_IBAT, 5, 1)             \
-    BQ25792_BIT(IBAT_REG, 3, 2)            \
-    BQ25792_BIT(EN_IINDPM, 2, 1)           \
-    BQ25792_BIT(EN_EXTILIM, 1, 1)          \
-    BQ25792_BIT(EN_BATOC, 0, 1)
-
 static const char CHARGER_CONTROL_5_NAME[] = "CHARGER_CONTROL_5";
 
 static const char SFET_PRESENT_NAME[] = "SFET_PRESENT";
@@ -553,9 +529,9 @@ using BQ25792_CHARGER_CONTROL_5_EN_EXTILIM = RegisterField<EN_EXTILIM_NAME, 1, 1
 static const char EN_BATOC_NAME[] = "EN_BATOC";
 using BQ25792_CHARGER_CONTROL_5_EN_BATOC = RegisterField<EN_BATOC_NAME, 0, 1>;
 
-using BQ25792_CHARGER_CONTROL_5 = 
+using BQ25792_CHARGER_CONTROL_5 =
     BQ25792Register<
-        CHARGER_CONTROL_5_NAME, 
+        CHARGER_CONTROL_5_NAME,
         BQ25792_REG_CHARGER_CONTROL_5_ADDR,
         8,
         BQ25792_CHARGER_CONTROL_5_SFET_PRESENT,
@@ -567,7 +543,7 @@ using BQ25792_CHARGER_CONTROL_5 =
 
 /**
  * Register 0x16 - TEMPERATURE_CONTROL
- * 
+ *
  */
 
 #define BQ25792_REG_TEMPERATURE_CONTROL_ADDR 0x16
@@ -588,9 +564,9 @@ using BQ25792_TEMPERATURE_CONTROL_VAC1_PD_EN = RegisterField<VAC1_PD_EN_NAME, 2,
 static const char VAC2_PD_EN_NAME[] = "VAC2_PD_EN";
 using BQ25792_TEMPERATURE_CONTROL_VAC2_PD_EN = RegisterField<VAC2_PD_EN_NAME, 1, 1>;
 
-using BQ25792_TEMPERATURE_CONTROL = 
+using BQ25792_TEMPERATURE_CONTROL =
     BQ25792Register<
-        TEMPERATURE_CONTROL_NAME, 
+        TEMPERATURE_CONTROL_NAME,
         BQ25792_REG_TEMPERATURE_CONTROL_ADDR,
         8,
         BQ25792_TEMPERATURE_CONTROL_TREG,
@@ -601,16 +577,11 @@ using BQ25792_TEMPERATURE_CONTROL =
 
 /**
  * Register 0x17 - NTC_CONTROL_0
- * 
+ *
  */
 
 #define BQ25792_REG_NTC_CONTROL_0_ADDR 0x17
 static const char NTC_CONTROL_0_NAME[] = "NTC_CONTROL_0";
-
-#define BQ25792_REG_NTC_CONTROL_0_BITS \
-    BQ25792_BIT(JEITA_VSET, 5, 3)      \
-    BQ25792_BIT(JEITA_ISETH, 3, 2)     \
-    BQ25792_BIT(JEITA_ISETC, 1, 2)
 
 static const char JEITA_VSET_NAME[] = "JEITA_VSET";
 using BQ25792_NTC_CONTROL_0_JEITA_VSET = RegisterField<JEITA_VSET_NAME, 5, 3>;
@@ -621,9 +592,9 @@ using BQ25792_NTC_CONTROL_0_JEITA_ISETH = RegisterField<JEITA_ISETH_NAME, 3, 2>;
 static const char JEITA_ISETC_NAME[] = "JEITA_ISETC";
 using BQ25792_NTC_CONTROL_0_JEITA_ISETC = RegisterField<JEITA_ISETC_NAME, 1, 2>;
 
-using BQ25792_NTC_CONTROL_0 = 
+using BQ25792_NTC_CONTROL_0 =
     BQ25792Register<
-        NTC_CONTROL_0_NAME, 
+        NTC_CONTROL_0_NAME,
         BQ25792_REG_NTC_CONTROL_0_ADDR,
         8,
         BQ25792_NTC_CONTROL_0_JEITA_VSET,
@@ -632,18 +603,11 @@ using BQ25792_NTC_CONTROL_0 =
 
 /**
  * Register 0x18 - NTC_CONTROL_1
- * 
+ *
  */
 
 #define BQ25792_REG_NTC_CONTROL_1_ADDR 0x18
 static const char NTC_CONTROL_1_NAME[] = "NTC_CONTROL_1";
-
-#define BQ25792_REG_NTC_CONTROL_1_BITS \
-    BQ25792_BIT(TS_COOL, 6, 2)         \
-    BQ25792_BIT(TS_WARM, 4, 2)         \
-    BQ25792_BIT(BHOT, 2, 2)            \
-    BQ25792_BIT(BCOLD, 1, 1)           \
-    BQ25792_BIT(TS_IGNORE, 0, 1)
 
 static const char TS_COOL_NAME[] = "TS_COOL";
 using BQ25792_NTC_CONTROL_1_TS_COOL = RegisterField<TS_COOL_NAME, 6, 2>;
@@ -660,9 +624,9 @@ using BQ25792_NTC_CONTROL_1_BCOLD = RegisterField<BCOLD_NAME, 1, 1>;
 static const char TS_IGNORE_NAME[] = "TS_IGNORE";
 using BQ25792_NTC_CONTROL_1_TS_IGNORE = RegisterField<TS_IGNORE_NAME, 0, 1>;
 
-using BQ25792_NTC_CONTROL_1 = 
+using BQ25792_NTC_CONTROL_1 =
     BQ25792Register<
-        NTC_CONTROL_1_NAME, 
+        NTC_CONTROL_1_NAME,
         BQ25792_REG_NTC_CONTROL_1_ADDR,
         8,
         BQ25792_NTC_CONTROL_1_TS_COOL,
@@ -673,41 +637,41 @@ using BQ25792_NTC_CONTROL_1 =
 
 /**
  * Register 0x19 - ICO_CURRENT_LIMIT
- * 
+ *
  */
 
 #define BQ25792_REG_ICO_CURRENT_LIMIT_ADDR 0x19
 static const char ICO_CURRENT_LIMIT_NAME[] = "ICO_CURRENT_LIMIT";
 
-// Per datasheet, LSB = 10mA
-#define BQ25792_REG_ICO_CURRENT_LIMIT_ICO_ILIM_SCALE 10
+class BQ25792_ICO_CURRENT_LIMIT_ICO_ILIM_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mA";
+    }
 
+    static inline uint32_t conversion(uint32_t val)
+    {
+        return val * 10;
+    }
+};
 static const char ICO_ILIM_NAME[] = "ICO_ILIM";
-using BQ25792_ICO_CURRENT_LIMIT_ICO_ILIM = RegisterField<ICO_ILIM_NAME, 0, 9>;
+using BQ25792_ICO_CURRENT_LIMIT_ICO_ILIM = RegisterField<ICO_ILIM_NAME, 0, 9, BQ25792_ICO_CURRENT_LIMIT_ICO_ILIM_UnitConversion>;
 
-using BQ25792_ICO_CURRENT_LIMIT = 
+using BQ25792_ICO_CURRENT_LIMIT =
     BQ25792Register<
-        ICO_CURRENT_LIMIT_NAME, 
+        ICO_CURRENT_LIMIT_NAME,
         BQ25792_REG_ICO_CURRENT_LIMIT_ADDR,
         16,
         BQ25792_ICO_CURRENT_LIMIT_ICO_ILIM>;
 
 /**
  * Register 0x1B - CHARGER_STATUS_0
- * 
+ *
  */
 #define BQ25792_REG_CHARGER_STATUS_0_ADDR 0x1B
 static const char CHARGER_STATUS_0_NAME[] = "CHARGER_STATUS_0";
-
-#define BQ25792_REG_CHARGER_STATUS_0_BITS \
-    BQ25792_BIT(IINDPM_STAT, 7, 1)        \
-    BQ25792_BIT(VINDPM_STAT, 6, 1)        \
-    BQ25792_BIT(WD_STAT, 5, 1)            \
-    BQ25792_BIT(POORSRC_STAT, 4, 1)       \
-    BQ25792_BIT(PG_STAT, 3, 1)            \
-    BQ25792_BIT(AC2_PRESENT_STAT, 2, 1)   \
-    BQ25792_BIT(AC1_PRESENT_STAT, 1, 1)   \
-    BQ25792_BIT(VBUS_PRESENT_STAT, 0, 1)
 
 static const char IINDPM_STAT_NAME[] = "IINDPM_STAT";
 using BQ25792_CHARGER_STATUS_0_IINDPM_STAT = RegisterField<IINDPM_STAT_NAME, 7, 1>;
@@ -733,10 +697,10 @@ using BQ25792_CHARGER_STATUS_0_AC1_PRESENT_STAT = RegisterField<AC1_PRESENT_STAT
 static const char VBUS_PRESENT_STAT_NAME[] = "VBUS_PRESENT_STAT";
 using BQ25792_CHARGER_STATUS_0_VBUS_PRESENT_STAT = RegisterField<VBUS_PRESENT_STAT_NAME, 0, 1>;
 
-using BQ25792_CHARGER_STATUS_0 = 
+using BQ25792_CHARGER_STATUS_0 =
     BQ25792Register<
-        CHARGER_STATUS_0_NAME, 
-        BQ25792_REG_CHARGER_STATUS_0_ADDR, 
+        CHARGER_STATUS_0_NAME,
+        BQ25792_REG_CHARGER_STATUS_0_ADDR,
         8,
         BQ25792_CHARGER_STATUS_0_IINDPM_STAT,
         BQ25792_CHARGER_STATUS_0_VINDPM_STAT,
@@ -749,15 +713,10 @@ using BQ25792_CHARGER_STATUS_0 =
 
 /**
  * Register 0x1C - CHARGER_STATUS_1
- * 
+ *
  */
 #define BQ25792_REG_CHARGER_STATUS_1_ADDR 0x1C
 static const char CHARGER_STATUS_1_NAME[] = "CHARGER_STATUS_1";
-
-#define BQ25792_REG_CHARGER_STATUS_1_BITS \
-    BQ25792_BIT(CHG_STAT, 5, 3)           \
-    BQ25792_BIT(VBUS_STAT, 1, 4)          \
-    BQ25792_BIT(BC1_2_DONE_STAT, 1, 1)
 
 static const char CHG_STAT_NAME[] = "CHG_STAT";
 using BQ25792_CHARGER_STATUS_1_CHG_STAT = RegisterField<CHG_STAT_NAME, 5, 3>;
@@ -768,10 +727,10 @@ using BQ25792_CHARGER_STATUS_1_VBUS_STAT = RegisterField<VBUS_STAT_NAME, 1, 4>;
 static const char BC1_2_DONE_STAT_NAME[] = "BC1_2_DONE_STAT";
 using BQ25792_CHARGER_STATUS_1_BC1_2_DONE_STAT = RegisterField<BC1_2_DONE_STAT_NAME, 1, 1>;
 
-using BQ25792_CHARGER_STATUS_1 = 
+using BQ25792_CHARGER_STATUS_1 =
     BQ25792Register<
-        CHARGER_STATUS_1_NAME, 
-        BQ25792_REG_CHARGER_STATUS_1_ADDR, 
+        CHARGER_STATUS_1_NAME,
+        BQ25792_REG_CHARGER_STATUS_1_ADDR,
         8,
         BQ25792_CHARGER_STATUS_1_CHG_STAT,
         BQ25792_CHARGER_STATUS_1_VBUS_STAT,
@@ -779,16 +738,10 @@ using BQ25792_CHARGER_STATUS_1 =
 
 /**
  * Register 0x1D - CHARGER_STATUS_2
- * 
+ *
  */
 #define BQ25792_REG_CHARGER_STATUS_2_ADDR 0x1D
 static const char CHARGER_STATUS_2_NAME[] = "CHARGER_STATUS_2";
-
-#define BQ25792_REG_CHARGER_STATUS_2_BITS \
-    BQ25792_BIT(ICO_STAT, 6, 2)           \
-    BQ25792_BIT(TREG_STAT, 2, 1)          \
-    BQ25792_BIT(DPDM_STAT, 1, 1)          \
-    BQ25792_BIT(VBAT_PRESENT_STAT, 0, 1)
 
 static const char ICO_STAT_NAME[] = "ICO_STAT";
 using BQ25792_CHARGER_STATUS_2_ICO_STAT = RegisterField<ICO_STAT_NAME, 6, 2>;
@@ -802,10 +755,10 @@ using BQ25792_CHARGER_STATUS_2_DPDM_STAT = RegisterField<DPDM_STAT_NAME, 1, 1>;
 static const char VBAT_PRESENT_STAT_NAME[] = "VBAT_PRESENT_STAT";
 using BQ25792_CHARGER_STATUS_2_VBAT_PRESENT_STAT = RegisterField<VBAT_PRESENT_STAT_NAME, 0, 1>;
 
-using BQ25792_CHARGER_STATUS_2 = 
+using BQ25792_CHARGER_STATUS_2 =
     BQ25792Register<
-        CHARGER_STATUS_2_NAME, 
-        BQ25792_REG_CHARGER_STATUS_2_ADDR, 
+        CHARGER_STATUS_2_NAME,
+        BQ25792_REG_CHARGER_STATUS_2_ADDR,
         8,
         BQ25792_CHARGER_STATUS_2_ICO_STAT,
         BQ25792_CHARGER_STATUS_2_TREG_STAT,
@@ -814,19 +767,9 @@ using BQ25792_CHARGER_STATUS_2 =
 
 /**
  * Register 0x1E - CHARGER_STATUS_3
- * 
+ *
  */
 #define BQ25792_REG_CHARGER_STATUS_3_ADDR 0x1E
-
-#define BQ25792_REG_CHARGER_STATUS_3_BITS \
-    BQ25792_BIT(ACRB2_STAT, 7, 1)         \
-    BQ25792_BIT(ACRB1_STAT, 6, 1)         \
-    BQ25792_BIT(ADC_DONE_STAT, 5, 1)      \
-    BQ25792_BIT(VSYS_STAT, 4, 1)          \
-    BQ25792_BIT(CHG_TMR_STAT, 3, 1)       \
-    BQ25792_BIT(TRICHG_TMR_STAT, 2, 1)    \
-    BQ25792_BIT(PRECHG_TMR_STAT, 1, 1)
-
 static const char CHARGER_STATUS_3_NAME[] = "CHARGER_STATUS_3";
 
 static const char ACRB2_STAT_NAME[] = "ACRB2_STAT";
@@ -850,10 +793,10 @@ using BQ25792_CHARGER_STATUS_3_TRICHG_TMR_STAT = RegisterField<TRICHG_TMR_STAT_N
 static const char PRECHG_TMR_STAT_NAME[] = "PRECHG_TMR_STAT";
 using BQ25792_CHARGER_STATUS_3_PRECHG_TMR_STAT = RegisterField<PRECHG_TMR_STAT_NAME, 1, 1>;
 
-using BQ25792_CHARGER_STATUS_3 = 
+using BQ25792_CHARGER_STATUS_3 =
     BQ25792Register<
-        CHARGER_STATUS_3_NAME, 
-        BQ25792_REG_CHARGER_STATUS_3_ADDR, 
+        CHARGER_STATUS_3_NAME,
+        BQ25792_REG_CHARGER_STATUS_3_ADDR,
         8,
         BQ25792_CHARGER_STATUS_3_ACRB2_STAT,
         BQ25792_CHARGER_STATUS_3_ACRB1_STAT,
@@ -865,17 +808,9 @@ using BQ25792_CHARGER_STATUS_3 =
 
 /**
  * Register 0x1F - CHARGER_STATUS_4
- * 
+ *
  */
 #define BQ25792_REG_CHARGER_STATUS_4_ADDR 0x1F
-
-#define BQ25792_REG_CHARGER_STATUS_4_BITS \
-    BQ25792_BIT(VBATOTG_LOW_STAT, 4, 1)   \
-    BQ25792_BIT(TS_COLD_STAT, 3, 1)       \
-    BQ25792_BIT(TS_COOL_STAT, 2, 1)       \
-    BQ25792_BIT(TS_WARM_STAT, 1, 1)       \
-    BQ25792_BIT(TS_HOT_STAT, 0, 1)
-
 static const char CHARGER_STATUS_4_NAME[] = "CHARGER_STATUS_4";
 
 static const char VBATOTG_LOW_STAT_NAME[] = "VBATOTG_LOW_STAT";
@@ -893,10 +828,10 @@ using BQ25792_CHARGER_STATUS_4_TS_WARM_STAT = RegisterField<TS_WARM_STAT_NAME, 1
 static const char TS_HOT_STAT_NAME[] = "TS_HOT_STAT";
 using BQ25792_CHARGER_STATUS_4_TS_HOT_STAT = RegisterField<TS_HOT_STAT_NAME, 0, 1>;
 
-using BQ25792_CHARGER_STATUS_4 = 
+using BQ25792_CHARGER_STATUS_4 =
     BQ25792Register<
-        CHARGER_STATUS_4_NAME, 
-        BQ25792_REG_CHARGER_STATUS_4_ADDR, 
+        CHARGER_STATUS_4_NAME,
+        BQ25792_REG_CHARGER_STATUS_4_ADDR,
         8,
         BQ25792_CHARGER_STATUS_4_VBATOTG_LOW_STAT,
         BQ25792_CHARGER_STATUS_4_TS_COLD_STAT,
@@ -906,20 +841,9 @@ using BQ25792_CHARGER_STATUS_4 =
 
 /**
  * Register 0x20 - FAULT_STATUS_0
- * 
+ *
  */
 #define BQ25792_REG_FAULT_STATUS_0_ADDR 0x20
-
-#define BQ25792_REG_FAULT_STATUS_0_BITS \
-    BQ25792_BIT(IBAT_REG_STAT, 7, 1)    \
-    BQ25792_BIT(VBUS_OVP_STAT, 6, 1)    \
-    BQ25792_BIT(VBAT_OVP_STAT, 5, 1)    \
-    BQ25792_BIT(IBUS_OCP_STAT, 4, 1)    \
-    BQ25792_BIT(IBAT_OCP_STAT, 3, 1)    \
-    BQ25792_BIT(CONV_OCP_STAT, 2, 1)    \
-    BQ25792_BIT(VAC2_OVP_STAT, 1, 1)    \
-    BQ25792_BIT(VAC1_OVP_STAT, 0, 1)
-
 static const char FAULT_STATUS_0_NAME[] = "FAULT_STATUS_0";
 
 static const char IBAT_REG_STAT_NAME[] = "IBAT_REG_STAT";
@@ -946,10 +870,10 @@ using BQ25792_FAULT_STATUS_0_VAC2_OVP_STAT = RegisterField<VAC2_OVP_STAT_NAME, 1
 static const char VAC1_OVP_STAT_NAME[] = "VAC1_OVP_STAT";
 using BQ25792_FAULT_STATUS_0_VAC1_OVP_STAT = RegisterField<VAC1_OVP_STAT_NAME, 0, 1>;
 
-using BQ25792_FAULT_STATUS_0 = 
+using BQ25792_FAULT_STATUS_0 =
     BQ25792Register<
-        FAULT_STATUS_0_NAME, 
-        BQ25792_REG_FAULT_STATUS_0_ADDR, 
+        FAULT_STATUS_0_NAME,
+        BQ25792_REG_FAULT_STATUS_0_ADDR,
         8,
         BQ25792_FAULT_STATUS_0_IBAT_REG_STAT,
         BQ25792_FAULT_STATUS_0_VBUS_OVP_STAT,
@@ -962,17 +886,9 @@ using BQ25792_FAULT_STATUS_0 =
 
 /**
  * Register 0x21 - FAULT_STATUS_1
- * 
+ *
  */
 #define BQ25792_REG_FAULT_STATUS_1_ADDR 0x21
-
-#define BQ25792_REG_FAULT_STATUS_1_BITS \
-    BQ25792_BIT(VSYS_SHORT_STAT, 7, 1)  \
-    BQ25792_BIT(VSYS_OVP_STAT, 6, 1)    \
-    BQ25792_BIT(OTG_OVP_STAT, 5, 1)     \
-    BQ25792_BIT(OTG_UVP_STAT, 4, 1)     \
-    BQ25792_BIT(TSHUT_STAT, 2, 1)
-
 static const char FAULT_STATUS_1_NAME[] = "FAULT_STATUS_1";
 
 static const char VSYS_SHORT_STAT_NAME[] = "VSYS_SHORT_STAT";
@@ -990,10 +906,10 @@ using BQ25792_FAULT_STATUS_1_OTG_UVP_STAT = RegisterField<OTG_UVP_STAT_NAME, 4, 
 static const char TSHUT_STAT_NAME[] = "TSHUT_STAT";
 using BQ25792_FAULT_STATUS_1_TSHUT_STAT = RegisterField<TSHUT_STAT_NAME, 2, 1>;
 
-using BQ25792_FAULT_STATUS_1 = 
+using BQ25792_FAULT_STATUS_1 =
     BQ25792Register<
-        FAULT_STATUS_1_NAME, 
-        BQ25792_REG_FAULT_STATUS_1_ADDR, 
+        FAULT_STATUS_1_NAME,
+        BQ25792_REG_FAULT_STATUS_1_ADDR,
         8,
         BQ25792_FAULT_STATUS_1_VSYS_SHORT_STAT,
         BQ25792_FAULT_STATUS_1_VSYS_OVP_STAT,
@@ -1001,37 +917,381 @@ using BQ25792_FAULT_STATUS_1 =
         BQ25792_FAULT_STATUS_1_OTG_UVP_STAT,
         BQ25792_FAULT_STATUS_1_TSHUT_STAT>;
 
+/**
+ * TODO: skipping a bunch of flag and masking registers because I just can't anymore with this part
+ *
+ */
 
-#define REG_LIST                       \
-    REG(BQ25792_REG_CHARGER_CONTROL_0) \
-    REG(BQ25792_REG_CHARGER_CONTROL_1) \
-    REG(BQ25792_REG_CHARGER_CONTROL_2) \
-    REG(BQ25792_REG_CHARGER_CONTROL_3) \
-    REG(BQ25792_REG_CHARGER_CONTROL_4) \
-    REG(BQ25792_REG_CHARGER_CONTROL_5) \
-    REG(BQ25792_REG_NTC_CONTROL_0)     \
-    REG(BQ25792_REG_NTC_CONTROL_1)     \
-    REG(BQ25792_REG_CHARGER_STATUS_0)  \
-    REG(BQ25792_REG_CHARGER_STATUS_1)  \
-    REG(BQ25792_REG_CHARGER_STATUS_2)  \
-    REG(BQ25792_REG_CHARGER_STATUS_3)  \
-    REG(BQ25792_REG_CHARGER_STATUS_4)  \
-    REG(BQ25792_REG_FAULT_STATUS_0)    \
-    REG(BQ25792_REG_FAULT_STATUS_1)
+/**
+ * @brief Reusable unit conversion class for all current-measurement ADC registers
+ * 
+ */
+class BQ25792_ADC_CURRENT_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mA";
+    }
 
-/* If this baby hits 88 mph... you're gonna see some serious shit */
+    static inline uint32_t conversion(uint32_t val)
+    {
+        return val * 10;
+    }
+};
 
-#define BQ25792_BIT(_name, _bitLowest, _numBits) \
-    uint8_t _name;
+class BQ25792_ADC_VOLTAGE_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mV";
+    }
 
-#define REG(_regName)       \
-    typedef struct _regName \
-    {                       \
-        uint8_t raw;        \
-        _regName##_BITS     \
-    } _regName##_t;
+    static inline uint32_t conversion(uint32_t val)
+    {
+        return val;
+    }
+};
 
-REG_LIST
+class BQ25792_ADC_TEMPERATURE_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "C";
+    }
 
-#undef REG
-#undef BQ25792_BIT
+    static inline uint32_t conversion(uint32_t val)
+    {
+        return val * 10;
+    }
+};
+
+/**
+ * Register 0x2E - ADC_CONTROL
+ *
+ */
+#define BQ25792_REG_ADC_CONTROL_ADDR 0x2E
+static const char ADC_CONTROL_NAME[] = "ADC_CONTROL";
+
+static const char ADC_EN_NAME[] = "ADC_EN";
+using BQ25792_ADC_CONTROL_ADC_EN = RegisterField<ADC_EN_NAME, 7, 1>;
+
+static const char ADC_RATE_NAME[] = "ADC_RATE";
+using BQ25792_ADC_CONTROL_ADC_RATE = RegisterField<ADC_RATE_NAME, 6, 1>;
+
+static const char ADC_SAMPLE_NAME[] = "ADC_SAMPLE";
+using BQ25792_ADC_CONTROL_ADC_SAMPLE = RegisterField<ADC_SAMPLE_NAME, 4, 2>;
+
+static const char ADC_AVG_NAME[] = "ADC_AVG";
+using BQ25792_ADC_CONTROL_ADC_AVG = RegisterField<ADC_AVG_NAME, 3, 1>;
+
+static const char ADC_AVG_INIT_NAME[] = "ADC_AVG_INIT";
+using BQ25792_ADC_CONTROL_ADC_AVG_INIT = RegisterField<ADC_AVG_INIT_NAME, 2, 1>;
+
+using BQ25792_ADC_CONTROL =
+    BQ25792Register<
+        ADC_CONTROL_NAME,
+        BQ25792_REG_ADC_CONTROL_ADDR,
+        8,
+        BQ25792_ADC_CONTROL_ADC_EN,
+        BQ25792_ADC_CONTROL_ADC_RATE,
+        BQ25792_ADC_CONTROL_ADC_SAMPLE,
+        BQ25792_ADC_CONTROL_ADC_AVG,
+        BQ25792_ADC_CONTROL_ADC_AVG_INIT>;
+
+/**
+ * Register 0x2F - ADC_FUNCTION_DISABLE_0
+ *
+ */
+#define BQ25792_REG_ADC_FUNCTION_DISABLE_0_ADDR 0x2F
+static const char ADC_FUNCTION_DISABLE_0_NAME[] = "ADC_FUNCTION_DISABLE_0";
+
+static const char IBUS_ADC_DIS_NAME[] = "IBUS_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_0_IBUS_ADC_DIS = RegisterField<IBUS_ADC_DIS_NAME, 7, 1>;
+
+static const char IBAT_ADC_DIS_NAME[] = "IBAT_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_0_IBAT_ADC_DIS = RegisterField<IBAT_ADC_DIS_NAME, 6, 1>;
+
+static const char VBUS_ADC_DIS_NAME[] = "VBUS_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_0_VBUS_ADC_DIS = RegisterField<VBUS_ADC_DIS_NAME, 5, 1>;
+
+static const char VBAT_ADC_DIS_NAME[] = "VBAT_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_0_VBAT_ADC_DIS = RegisterField<VBAT_ADC_DIS_NAME, 4, 1>;
+
+static const char VSYS_ADC_DIS_NAME[] = "VSYS_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_0_VSYS_ADC_DIS = RegisterField<VSYS_ADC_DIS_NAME, 3, 1>;
+
+static const char TS_ADC_DIS_NAME[] = "TS_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_0_TS_ADC_DIS = RegisterField<TS_ADC_DIS_NAME, 2, 1>;
+
+static const char TDIE_ADC_DIS_NAME[] = "TDIE_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_0_TDIE_ADC_DIS = RegisterField<TDIE_ADC_DIS_NAME, 1, 1>;
+
+using BQ25792_ADC_FUNCTION_DISABLE_0 =
+    BQ25792Register<
+        ADC_FUNCTION_DISABLE_0_NAME,
+        BQ25792_REG_ADC_FUNCTION_DISABLE_0_ADDR,
+        8,
+        BQ25792_ADC_FUNCTION_DISABLE_0_IBUS_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_0_IBAT_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_0_VBUS_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_0_VBAT_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_0_VSYS_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_0_TS_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_0_TDIE_ADC_DIS>;
+
+/**
+ * Register 0x30 - ADC_FUNCTION_DISABLE_1
+ *
+ */
+#define BQ25792_REG_ADC_FUNCTION_DISABLE_1_ADDR 0x30
+static const char ADC_FUNCTION_DISABLE_1_NAME[] = "ADC_FUNCTION_DISABLE_1";
+
+static const char DP_ADC_DIS_NAME[] = "DP_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_1_DP_ADC_DIS = RegisterField<DP_ADC_DIS_NAME, 7, 1>;
+
+static const char DM_ADC_DIS_NAME[] = "DM_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_1_DM_ADC_DIS = RegisterField<DM_ADC_DIS_NAME, 6, 1>;
+
+static const char VAC2_ADC_DIS_NAME[] = "VAC2_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_1_VAC2_ADC_DIS = RegisterField<VAC2_ADC_DIS_NAME, 5, 1>;
+
+static const char VAC1_ADC_DIS_NAME[] = "VAC1_ADC_DIS";
+using BQ25792_ADC_FUNCTION_DISABLE_1_VAC1_ADC_DIS = RegisterField<VAC1_ADC_DIS_NAME, 4, 1>;
+
+using BQ25792_ADC_FUNCTION_DISABLE_1 =
+    BQ25792Register<
+        ADC_FUNCTION_DISABLE_1_NAME,
+        BQ25792_REG_ADC_FUNCTION_DISABLE_1_ADDR,
+        8,
+        BQ25792_ADC_FUNCTION_DISABLE_1_DP_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_1_DM_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_1_VAC2_ADC_DIS,
+        BQ25792_ADC_FUNCTION_DISABLE_1_VAC1_ADC_DIS>;
+
+/**
+ * Register 0x31 - IBUS_ADC
+ *
+ */
+#define BQ25792_REG_IBUS_ADC_ADDR 0x31
+static const char IBUS_ADC_NAME[] = "IBUS_ADC";
+
+using BQ25792_IBUS_ADC_IBUS_ADC = RegisterField<IBUS_ADC_NAME, 0, 16>;
+
+using BQ25792_IBUS_ADC =
+    BQ25792Register<
+        IBUS_ADC_NAME,
+        BQ25792_REG_IBUS_ADC_ADDR,
+        16,
+        BQ25792_IBUS_ADC_IBUS_ADC>;
+
+/**
+ * Register 0x33 - IBAT_ADC
+ *
+ */
+#define BQ25792_REG_IBAT_ADC_ADDR 0x33
+static const char IBAT_ADC_NAME[] = "IBAT_ADC";
+
+using BQ25792_IBAT_ADC_IBAT_ADC = RegisterField<IBAT_ADC_NAME, 0, 16>;
+
+using BQ25792_IBAT_ADC =
+    BQ25792Register<
+        IBAT_ADC_NAME,
+        BQ25792_REG_IBAT_ADC_ADDR,
+        16,
+        BQ25792_IBAT_ADC_IBAT_ADC>;
+
+/**
+ * Register 0x35 - VBUS_ADC
+ *
+ */
+#define BQ25792_REG_VBUS_ADC_ADDR 0x35
+static const char VBUS_ADC_NAME[] = "VBUS_ADC";
+
+using BQ25792_VBUS_ADC_VBUS_ADC = RegisterField<VBUS_ADC_NAME, 0, 16>;
+
+using BQ25792_VBUS_ADC =
+    BQ25792Register<
+        VBUS_ADC_NAME,
+        BQ25792_REG_VBUS_ADC_ADDR,
+        16,
+        BQ25792_VBUS_ADC_VBUS_ADC>;
+
+/**
+ * Register 0x37 - VAC1_ADC
+ *
+ */
+#define BQ25792_REG_VAC1_ADC_ADDR 0x37
+static const char VAC1_ADC_NAME[] = "VAC1_ADC";
+
+using BQ25792_VAC1_ADC_VAC1_ADC = RegisterField<VAC1_ADC_NAME, 0, 16>;
+
+using BQ25792_VAC1_ADC =
+    BQ25792Register<
+        VAC1_ADC_NAME,
+        BQ25792_REG_VAC1_ADC_ADDR,
+        16,
+        BQ25792_VAC1_ADC_VAC1_ADC>;
+
+/**
+ * Register 0x39 - VAC2_ADC
+ *
+ */
+#define BQ25792_REG_VAC2_ADC_ADDR 0x39
+static const char VAC2_ADC_NAME[] = "VAC2_ADC";
+
+using BQ25792_VAC2_ADC_VAC2_ADC = RegisterField<VAC2_ADC_NAME, 0, 16>;
+
+using BQ25792_VAC2_ADC =
+    BQ25792Register<
+        VAC2_ADC_NAME,
+        BQ25792_REG_VAC2_ADC_ADDR,
+        16,
+        BQ25792_VAC2_ADC_VAC2_ADC>;
+
+/**
+ * Register 0x3B - VBAT_ADC
+ *
+ */
+#define BQ25792_REG_VBAT_ADC_ADDR 0x3B
+static const char VBAT_ADC_NAME[] = "VBAT_ADC";
+
+using BQ25792_VBAT_ADC_VBAT_ADC = RegisterField<VBAT_ADC_NAME, 0, 16>;
+
+using BQ25792_VBAT_ADC =
+    BQ25792Register<
+        VBAT_ADC_NAME,
+        BQ25792_REG_VBAT_ADC_ADDR,
+        16,
+        BQ25792_VBAT_ADC_VBAT_ADC>;
+
+/**
+ * Register 0x3D - VSYS_ADC
+ *
+ */
+#define BQ25792_REG_VSYS_ADC_ADDR 0x3D
+static const char VSYS_ADC_NAME[] = "VSYS_ADC";
+
+using BQ25792_VSYS_ADC_VSYS_ADC = RegisterField<VSYS_ADC_NAME, 0, 16>;
+
+using BQ25792_VSYS_ADC =
+    BQ25792Register<
+        VSYS_ADC_NAME,
+        BQ25792_REG_VSYS_ADC_ADDR,
+        16,
+        BQ25792_VSYS_ADC_VSYS_ADC>;
+
+/**
+ * Register 0x3F - TS_ADC
+ *
+ */
+#define BQ25792_REG_TS_ADC_ADDR 0x3F
+static const char TS_ADC_NAME[] = "TS_ADC";
+
+using BQ25792_TS_ADC_TS_ADC = RegisterField<TS_ADC_NAME, 0, 16>;
+
+using BQ25792_TS_ADC =
+    BQ25792Register<
+        TS_ADC_NAME,
+        BQ25792_REG_TS_ADC_ADDR,
+        16,
+        BQ25792_TS_ADC_TS_ADC>;
+
+/**
+ * Register 0x41 - TDIE_ADC
+ *
+ */
+#define BQ25792_REG_TDIE_ADC_ADDR 0x41
+static const char TDIE_ADC_NAME[] = "TDIE_ADC";
+
+using BQ25792_TDIE_ADC_TDIE_ADC = RegisterField<TDIE_ADC_NAME, 0, 16>;
+
+using BQ25792_TDIE_ADC =
+    BQ25792Register<
+        TDIE_ADC_NAME,
+        BQ25792_REG_TDIE_ADC_ADDR,
+        16,
+        BQ25792_TDIE_ADC_TDIE_ADC>;
+
+/**
+ * Register 0x43 - DP_ADC
+ *
+ */
+#define BQ25792_REG_DP_ADC_ADDR 0x43
+static const char DP_ADC_NAME[] = "DP_ADC";
+
+using BQ25792_DP_ADC_DP_ADC = RegisterField<DP_ADC_NAME, 0, 16>;
+
+using BQ25792_DP_ADC =
+    BQ25792Register<
+        DP_ADC_NAME,
+        BQ25792_REG_DP_ADC_ADDR,
+        16,
+        BQ25792_DP_ADC_DP_ADC>;
+
+/**
+ * Register 0x45 - DN_ADC
+ *
+ */
+#define BQ25792_REG_DN_ADC_ADDR 0x45
+static const char DN_ADC_NAME[] = "DN_ADC";
+
+using BQ25792_DN_ADC_DN_ADC = RegisterField<DN_ADC_NAME, 0, 16>;
+
+using BQ25792_DN_ADC =
+    BQ25792Register<
+        DN_ADC_NAME,
+        BQ25792_REG_DN_ADC_ADDR,
+        16,
+        BQ25792_DN_ADC_DN_ADC>;
+
+/**
+ * End of register definitions
+ *
+ */
+
+#define REG_LIST                        \
+    REG(BQ25792_MINIMAL_SYSTEM_VOLTAGE) \
+    REG(BQ25792_CHARGE_VOLTAGE_LIMIT)   \
+    REG(BQ25792_CHARGE_CURRENT_LIMIT)   \
+    REG(BQ25792_INPUT_VOLTAGE_LIMIT)    \
+    REG(BQ25792_INPUT_CURRENT_LIMIT)    \
+    REG(BQ25792_PRECHARGE_CONTROL)      \
+    REG(BQ25792_TERMINATION_CONTROL)    \
+    REG(BQ25792_RECHARGE_CONTROL)       \
+    REG(BQ25792_VOTG_REGULATION)        \
+    REG(BQ25792_IOTG_REGULATION)        \
+    REG(BQ25792_TIMER_CONTROL)          \
+    REG(BQ25792_CHARGER_CONTROL_0)      \
+    REG(BQ25792_CHARGER_CONTROL_1)      \
+    REG(BQ25792_CHARGER_CONTROL_2)      \
+    REG(BQ25792_CHARGER_CONTROL_3)      \
+    REG(BQ25792_CHARGER_CONTROL_4)      \
+    REG(BQ25792_CHARGER_CONTROL_5)      \
+    REG(BQ25792_TEMPERATURE_CONTROL)    \
+    REG(BQ25792_NTC_CONTROL_0)          \
+    REG(BQ25792_NTC_CONTROL_1)          \
+    REG(BQ25792_ICO_CURRENT_LIMIT)      \
+    REG(BQ25792_CHARGER_STATUS_0)       \
+    REG(BQ25792_CHARGER_STATUS_1)       \
+    REG(BQ25792_CHARGER_STATUS_2)       \
+    REG(BQ25792_CHARGER_STATUS_3)       \
+    REG(BQ25792_CHARGER_STATUS_4)       \
+    REG(BQ25792_FAULT_STATUS_0)         \
+    REG(BQ25792_FAULT_STATUS_1)         \
+    REG(BQ25792_ADC_CONTROL)            \
+    REG(BQ25792_ADC_FUNCTION_DISABLE_0) \
+    REG(BQ25792_ADC_FUNCTION_DISABLE_1) \
+    REG(BQ25792_IBUS_ADC)               \
+    REG(BQ25792_IBAT_ADC)               \
+    REG(BQ25792_VBUS_ADC)               \
+    REG(BQ25792_VAC1_ADC)               \
+    REG(BQ25792_VAC2_ADC)               \
+    REG(BQ25792_VBAT_ADC)               \
+    REG(BQ25792_VSYS_ADC)               \
+    REG(BQ25792_TS_ADC)                 \
+    REG(BQ25792_TDIE_ADC)               \
+    REG(BQ25792_DP_ADC)                 \
+    REG(BQ25792_DN_ADC)

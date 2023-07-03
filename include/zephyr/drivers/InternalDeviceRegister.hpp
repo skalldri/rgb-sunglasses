@@ -234,6 +234,8 @@ public:
             LOG_INF("%s: writing 0x%08x", this->getName(), this->storage_);
         }
 
+        // TODO: probably also need endian-swapping logic here
+
         int ret = i2c_burst_write_dt(
             i2c_,
             reg,
@@ -303,15 +305,17 @@ public:
      * @param flush
      */
     template <typename T>
-    void set(const uint32_t &val, bool flush = false)
+    int set(const uint32_t &val, bool flush = false)
     {
         this->template setRegFieldInStorage<T>(val);
         dirty_ = true;
 
         if (flush)
         {
-            this->flush();
+            return this->flush();
         }
+
+        return 0;
     }
 
     /**
@@ -365,7 +369,7 @@ private:
 
     template <typename Ta, typename Tb, typename... Ts>
     void dumpHelper() {
-        
+
     }
 
     template <typename T>
