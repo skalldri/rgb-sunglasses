@@ -1206,7 +1206,20 @@ using BQ25792_VSYS_ADC =
 #define BQ25792_REG_TS_ADC_ADDR 0x3F
 static const char TS_ADC_NAME[] = "TS_ADC";
 
-using BQ25792_TS_ADC_TS_ADC = RegisterField<TS_ADC_NAME, 0, 16>;
+class BQ25792_TS_ADC_TS_ADC_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "%";
+    }
+
+    static inline int64_t conversion(uint32_t val)
+    {
+        return val * 0.0976563f;
+    }
+};
+using BQ25792_TS_ADC_TS_ADC = RegisterField<TS_ADC_NAME, 0, 16, BQ25792_TS_ADC_TS_ADC_UnitConversion>;
 
 using BQ25792_TS_ADC =
     BQ25792Register<
