@@ -6,7 +6,7 @@
 #include <zephyr/drivers/bq25792/bq25792.h>
 #include "bq25792_init.h"
 
-LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_INF);
 
 // Must be included after LOG_MODULE_REGISTER() since this contains LOG_XXX statements
 // TODO: fix this!
@@ -175,9 +175,31 @@ int bq25792_dump(const struct device *dev)
     }
 
     REG_LIST
-
-    BQ25792_CHARGER_STATUS_0 chg_stat_0(cfg);
-    chg_stat_0.dump();
+    
+    {
+        BQ25792_CHARGE_VOLTAGE_LIMIT tmp(cfg);
+        tmp.dump();
+    }
+    {
+        BQ25792_CHARGER_STATUS_0 tmp(cfg);
+        tmp.dump();
+    }
+    {
+        BQ25792_CHARGER_STATUS_1 tmp(cfg);
+        tmp.dump();
+    }
+    {
+        BQ25792_CHARGER_STATUS_2 tmp(cfg);
+        tmp.dump();
+    }
+    {
+        BQ25792_CHARGER_STATUS_3 tmp(cfg);
+        tmp.dump();
+    }
+    {
+        BQ25792_CHARGER_STATUS_4 tmp(cfg);
+        tmp.dump();
+    }
 
     ret = bq25792_dump_BQ25792_REG_ICO_CURRENT_LIMIT(dev);
     if (ret) {

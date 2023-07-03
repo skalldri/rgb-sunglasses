@@ -737,7 +737,7 @@ static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8
         memcpy(&data.data[4], dataBuff, dataSize);
     }
 
-    LOG_HEXDUMP_INF(&data, data.byte_count + sizeof(data.byte_count), "Writing payload: ");
+    LOG_HEXDUMP_DBG(&data, data.byte_count + sizeof(data.byte_count), "Writing payload: ");
 
     int ret = tps25750_write_data1(dev, &data);
     if (ret)
@@ -763,7 +763,7 @@ static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8
     }
     else
     {
-        // LOG_INF("Controller accepted I2Cw command!");
+        LOG_DBG("Controller accepted I2Cw command!");
     }
 
     // Read DATA1 to see transaction status
@@ -797,6 +797,8 @@ static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_
     data.data[1] = reg;
     data.data[2] = MIN(dataSize, TPS25750_MAX_I2C_READ);
 
+    LOG_HEXDUMP_DBG(&data, data.byte_count + sizeof(data.byte_count), "Writing payload: ");
+
     int ret = tps25750_write_data1(dev, &data);
     if (ret)
     {
@@ -821,7 +823,7 @@ static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_
     }
     else
     {
-        // LOG_INF("Controller accepted " TPS25750_REG_CMD1_VAL_I2CR " command!");
+        LOG_DBG("Controller accepted " TPS25750_REG_CMD1_VAL_I2CR " command!");
     }
 
     // Read DATA1 to see transaction status
@@ -842,7 +844,8 @@ static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_
     copySize = MIN(copySize, TPS25750_MAX_I2C_READ);
     copySize = MIN(copySize, data.byte_count);
 
-    // LOG_INF("Copying %u bytes returned from peripheral", copySize);
+    LOG_DBG("Copying %u bytes returned from peripheral", copySize);
+    LOG_HEXDUMP_DBG(&data.data[1], copySize, "Read result: ");
 
     memcpy(dataBuff, &data.data[1], copySize);
 
@@ -853,7 +856,7 @@ static int i2c_tps25750_i2cm_transfer(const struct device *dev,
                                       struct i2c_msg *msgs,
                                       uint8_t num_msgs, uint16_t addr)
 {
-    // LOG_INF("Got I2C master command for address %u, num msgs %u", addr, num_msgs);
+    LOG_DBG("Got I2C master command for address %u, num msgs %u", addr, num_msgs);
 
     if (num_msgs != 2)
     {
