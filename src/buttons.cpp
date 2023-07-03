@@ -12,14 +12,73 @@ static const struct gpio_dt_spec button2 = GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios
 static const struct gpio_dt_spec button3 = GPIO_DT_SPEC_GET(DT_ALIAS(sw3), gpios);
 static const struct gpio_dt_spec button_wake = GPIO_DT_SPEC_GET(DT_ALIAS(sw_wake), gpios);
 
+static struct gpio_callback callback0;
+static struct gpio_callback callback1;
+static struct gpio_callback callback2;
+static struct gpio_callback callback3;
+static struct gpio_callback callback_wake;
+
+/*
+void button_thread_func(void* a, void* b, void* c);
+
+K_THREAD_DEFINE(
+    button_thread, 
+    2048,
+    button_thread_func,
+    NULL,
+    NULL,
+    NULL,
+    6,
+    0,
+    0
+);
+
+void button_thread_func(void* a, void* b, void* c) {
+    while(true) {
+
+        int val = gpio_pin_get_dt(&button2);
+
+        if (val != 0) {
+            LOG_INF("Button pressed!");
+        }
+
+        k_msleep(100);
+    }
+}
+*/
+
 void button_callback(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
-{
-    LOG_INF("Button ISR triggered!");
+{   
+    printk("ISR Triggered! Pins: %u\n", pins);
+
+    // Which button was pushed?
+    if ((port == button0.port) && (pins & BIT(button0.pin))) {
+        printk("Button 0 Pressed!\n");
+    }
+
+    if ((port == button1.port) && (pins & BIT(button1.pin))) {
+        printk("Button 1 Pressed!\n");
+    }
+
+    if ((port == button2.port) && (pins & BIT(button2.pin))) {
+        printk("Button 2 Pressed!\n");
+    }
+
+    if ((port == button3.port) && (pins & BIT(button3.pin))) {
+        printk("Button 3 Pressed!\n");
+    }
+
+    if ((port == button_wake.port) && (pins & BIT(button_wake.pin))) {
+        printk("Wake Button Pressed!\n");
+    }
+
     return;
 }
 
 static int button_init(const struct device *dev)
 {
+    LOG_INF("Configuring buttons");
+
     gpio_pin_configure_dt(&button0, GPIO_INPUT);
     gpio_pin_configure_dt(&button1, GPIO_INPUT);
     gpio_pin_configure_dt(&button2, GPIO_INPUT);
@@ -32,12 +91,6 @@ static int button_init(const struct device *dev)
     gpio_pin_interrupt_configure_dt(&button2, GPIO_INT_EDGE_TO_ACTIVE);
     gpio_pin_interrupt_configure_dt(&button3, GPIO_INT_EDGE_TO_ACTIVE);
     gpio_pin_interrupt_configure_dt(&button_wake, GPIO_INT_EDGE_TO_ACTIVE);
-
-    static struct gpio_callback callback0;
-    static struct gpio_callback callback1;
-    static struct gpio_callback callback2;
-    static struct gpio_callback callback3;
-    static struct gpio_callback callback_wake;
 
     gpio_init_callback(&callback0, button_callback, BIT(button0.pin));
     gpio_init_callback(&callback1, button_callback, BIT(button1.pin));
