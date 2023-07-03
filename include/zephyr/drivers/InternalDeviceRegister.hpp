@@ -15,7 +15,7 @@ public:
         return "";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
         return val;
     }
@@ -67,7 +67,7 @@ public:
         return UnitConversion::unit();
     }
 
-    static const uint32_t conversion(uint32_t val) {
+    static int64_t conversion(uint32_t val) {
         return UnitConversion::conversion(val);
     }
 };
@@ -351,7 +351,7 @@ private:
         /*static_assert(is_RegisterField<T>::value,
                       "T must be of type RegisterField");*/
 
-        LOG_INF("\t%s: %u %s", T::getName(), T::conversion(this->template getRegFieldFromStorage<T>()), T::getUnit());
+        LOG_INF("\t%s: %lld %s", T::getName(), T::conversion(this->template getRegFieldFromStorage<T>()), T::getUnit());
     }
 
 private:

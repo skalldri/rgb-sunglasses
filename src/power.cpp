@@ -76,6 +76,14 @@ static int cmd_power_bq_temp_override(const struct shell *shell,
     return 0;
 }
 
+static int cmd_power_bq_adc_enable(const struct shell *shell,
+                             size_t argc, char **argv, void *data)
+{
+    int selection = (int)data;
+    bq25792_adc_enable(bq, (bool) selection);
+    return 0;
+}
+
 static int cmd_power_pd_dump(const struct shell *shell,
                              size_t argc, char **argv, void *data)
 {
@@ -175,9 +183,14 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_temp_override, cmd_power_bq_temp_override,
                              (disable, 0, "disable temp monitor override"),
                              (enable, 1, "enable temp monitor override"));
 
+SHELL_SUBCMD_DICT_SET_CREATE(sub_adc_enable, cmd_power_bq_adc_enable,
+                             (disable, 0, "disable internal adc"),
+                             (enable, 1, "enable internal adc"));
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power_bq,
                                SHELL_CMD(dump, NULL, "Dump BQ25792 Registers to console", cmd_power_bq_dump),
                                SHELL_CMD(temp_override, &sub_temp_override, "Override BQ25792 battery temperature monitoring", NULL),
+                               SHELL_CMD(adc_enable, &sub_adc_enable, "Enable BQ25792 ADC", NULL),
                                SHELL_SUBCMD_SET_END);
 // Subcommands for "power"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,

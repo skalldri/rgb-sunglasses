@@ -51,7 +51,7 @@ public:
         return "mV";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
         return val * 10;
     }
@@ -81,7 +81,7 @@ public:
         return "mA";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
         return val * 10;
     }
@@ -130,7 +130,7 @@ public:
         return "mA";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
         return val * 10;
     }
@@ -227,7 +227,7 @@ public:
         return "mV";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
         return (val * 10) + 2800;
     }
@@ -651,7 +651,7 @@ public:
         return "mA";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
         return val * 10;
     }
@@ -934,9 +934,9 @@ public:
         return "mA";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
-        return val * 10;
+        return val;
     }
 };
 
@@ -948,9 +948,17 @@ public:
         return "mV";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
-        return val;
+        uint64_t bigVal = val;
+
+        // BQ25792 are 16-bit 2's compliment
+        // Sign-extend if needed
+        if (bigVal & (1 << 15)) {
+            bigVal |= 0xFFFFFFFFFFFF0000;
+        }
+
+        return static_cast<int64_t>(bigVal);
     }
 };
 
@@ -962,9 +970,17 @@ public:
         return "C";
     }
 
-    static inline uint32_t conversion(uint32_t val)
+    static inline int64_t conversion(uint32_t val)
     {
-        return val * 10;
+        uint64_t bigVal = val;
+
+        // BQ25792 are 16-bit 2's compliment
+        // Sign-extend if needed
+        if (bigVal & (1 << 15)) {
+            bigVal |= 0xFFFFFFFFFFFF0000;
+        }
+
+        return static_cast<int64_t>(bigVal) * 0.5f;
     }
 };
 
@@ -1078,7 +1094,7 @@ using BQ25792_ADC_FUNCTION_DISABLE_1 =
 #define BQ25792_REG_IBUS_ADC_ADDR 0x31
 static const char IBUS_ADC_NAME[] = "IBUS_ADC";
 
-using BQ25792_IBUS_ADC_IBUS_ADC = RegisterField<IBUS_ADC_NAME, 0, 16>;
+using BQ25792_IBUS_ADC_IBUS_ADC = RegisterField<IBUS_ADC_NAME, 0, 16, BQ25792_ADC_CURRENT_UnitConversion>;
 
 using BQ25792_IBUS_ADC =
     BQ25792Register<
@@ -1094,7 +1110,7 @@ using BQ25792_IBUS_ADC =
 #define BQ25792_REG_IBAT_ADC_ADDR 0x33
 static const char IBAT_ADC_NAME[] = "IBAT_ADC";
 
-using BQ25792_IBAT_ADC_IBAT_ADC = RegisterField<IBAT_ADC_NAME, 0, 16>;
+using BQ25792_IBAT_ADC_IBAT_ADC = RegisterField<IBAT_ADC_NAME, 0, 16, BQ25792_ADC_CURRENT_UnitConversion>;
 
 using BQ25792_IBAT_ADC =
     BQ25792Register<
@@ -1110,7 +1126,7 @@ using BQ25792_IBAT_ADC =
 #define BQ25792_REG_VBUS_ADC_ADDR 0x35
 static const char VBUS_ADC_NAME[] = "VBUS_ADC";
 
-using BQ25792_VBUS_ADC_VBUS_ADC = RegisterField<VBUS_ADC_NAME, 0, 16>;
+using BQ25792_VBUS_ADC_VBUS_ADC = RegisterField<VBUS_ADC_NAME, 0, 16, BQ25792_ADC_VOLTAGE_UnitConversion>;
 
 using BQ25792_VBUS_ADC =
     BQ25792Register<
@@ -1126,7 +1142,7 @@ using BQ25792_VBUS_ADC =
 #define BQ25792_REG_VAC1_ADC_ADDR 0x37
 static const char VAC1_ADC_NAME[] = "VAC1_ADC";
 
-using BQ25792_VAC1_ADC_VAC1_ADC = RegisterField<VAC1_ADC_NAME, 0, 16>;
+using BQ25792_VAC1_ADC_VAC1_ADC = RegisterField<VAC1_ADC_NAME, 0, 16, BQ25792_ADC_VOLTAGE_UnitConversion>;
 
 using BQ25792_VAC1_ADC =
     BQ25792Register<
@@ -1142,7 +1158,7 @@ using BQ25792_VAC1_ADC =
 #define BQ25792_REG_VAC2_ADC_ADDR 0x39
 static const char VAC2_ADC_NAME[] = "VAC2_ADC";
 
-using BQ25792_VAC2_ADC_VAC2_ADC = RegisterField<VAC2_ADC_NAME, 0, 16>;
+using BQ25792_VAC2_ADC_VAC2_ADC = RegisterField<VAC2_ADC_NAME, 0, 16, BQ25792_ADC_VOLTAGE_UnitConversion>;
 
 using BQ25792_VAC2_ADC =
     BQ25792Register<
@@ -1158,7 +1174,7 @@ using BQ25792_VAC2_ADC =
 #define BQ25792_REG_VBAT_ADC_ADDR 0x3B
 static const char VBAT_ADC_NAME[] = "VBAT_ADC";
 
-using BQ25792_VBAT_ADC_VBAT_ADC = RegisterField<VBAT_ADC_NAME, 0, 16>;
+using BQ25792_VBAT_ADC_VBAT_ADC = RegisterField<VBAT_ADC_NAME, 0, 16, BQ25792_ADC_VOLTAGE_UnitConversion>;
 
 using BQ25792_VBAT_ADC =
     BQ25792Register<
@@ -1174,7 +1190,7 @@ using BQ25792_VBAT_ADC =
 #define BQ25792_REG_VSYS_ADC_ADDR 0x3D
 static const char VSYS_ADC_NAME[] = "VSYS_ADC";
 
-using BQ25792_VSYS_ADC_VSYS_ADC = RegisterField<VSYS_ADC_NAME, 0, 16>;
+using BQ25792_VSYS_ADC_VSYS_ADC = RegisterField<VSYS_ADC_NAME, 0, 16, BQ25792_ADC_VOLTAGE_UnitConversion>;
 
 using BQ25792_VSYS_ADC =
     BQ25792Register<
@@ -1206,7 +1222,7 @@ using BQ25792_TS_ADC =
 #define BQ25792_REG_TDIE_ADC_ADDR 0x41
 static const char TDIE_ADC_NAME[] = "TDIE_ADC";
 
-using BQ25792_TDIE_ADC_TDIE_ADC = RegisterField<TDIE_ADC_NAME, 0, 16>;
+using BQ25792_TDIE_ADC_TDIE_ADC = RegisterField<TDIE_ADC_NAME, 0, 16, BQ25792_ADC_TEMPERATURE_UnitConversion>;
 
 using BQ25792_TDIE_ADC =
     BQ25792Register<

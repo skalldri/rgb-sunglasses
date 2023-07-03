@@ -68,7 +68,11 @@
 			"typeinfo": "c",
 			"sensor.h": "c",
 			"tps25750-config.h": "c",
-			"nrfx_twim.h": "c"
+			"nrfx_twim.h": "c",
+			"xlocale": "cpp",
+			"xlocnum": "cpp",
+			"xutility": "cpp",
+			"list": "cpp"
 		},
 		"nrf-connect.debugging.bindings": {
 			"${workspaceFolder}/build": "Launch build"

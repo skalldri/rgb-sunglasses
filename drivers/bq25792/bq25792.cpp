@@ -57,3 +57,20 @@ int bq25792_temp_override(const struct device *dev, bool enable) {
 
     return reg.set<BQ25792_NTC_CONTROL_1_TS_IGNORE>(ts_ignore, true /* flush */);
 }
+
+int bq25792_adc_enable(const struct device *dev, bool enable) {
+    if (!dev)
+    {
+        LOG_ERR("NULL-device pointer");
+        return -ENODEV;
+    }
+
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
+
+    BQ25792_ADC_CONTROL reg(cfg);
+    
+    uint32_t adc_en = enable ? 1 : 0;
+    LOG_INF("Setting ADC_EN to %u", adc_en);
+
+    return reg.set<BQ25792_ADC_CONTROL_ADC_EN>(adc_en, true /* flush */);
+}
