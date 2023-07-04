@@ -522,12 +522,8 @@ void bt_state_connected_handle_command(BtThreadContext *ctx, const BtThreadComma
             LOG_DBG("Required security level achieved");
             bt_state_change_to(ctx, BtThreadState::CONNECTED);
         } else {
-            LOG_ERR("Failed to reach required security level %d, got %d instead", REQUIRED_BT_SECURITY_LEVEL, cmd->level);
-            // Disconnect from the peer
-            int ret = bt_conn_disconnect(ctx->conn, BT_HCI_ERR_AUTH_FAIL);
-            if (ret) {
-                LOG_ERR("Failed to disconnect remote connection! %d", ret);
-            }
+            LOG_WRN("Reached security %d, must reach %d to connect", cmd->level, REQUIRED_BT_SECURITY_LEVEL);
+            // TODO: need to implement timeout to disconnect if we don't reach "CONNECTED" state within ~60s
         }
         break;
 
