@@ -17,9 +17,12 @@ target_sources(
   PRIVATE
     src/main.c
     src/led_controller.cpp
+    src/pattern_controller.cpp
     src/buttons.cpp
     src/power.cpp
     src/bluetooth.cpp
+    src/bt_animations.cpp
+    src/null_animation.cpp
     misc/tps25750/tps25750-config.c
     # misc/tps25750/tps25750-full-config.c
 )
@@ -28,6 +31,7 @@ target_include_directories(
   app 
   PRIVATE
     misc/
+    src/
 )
 
 # NORDIC SDK APP END

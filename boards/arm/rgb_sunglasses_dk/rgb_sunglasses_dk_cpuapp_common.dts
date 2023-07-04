@@ -137,7 +137,7 @@
 		mcuboot-button0 = &button1;
 		/*mcuboot-led0 = &led0;*/
 		watchdog0 = &wdt0;
-		led-strip = &led_strip;
+		led-strip-0 = &led_strip_0;
 		led-strip-1 = &led_strip_1;
 		/*spi-flash0 = &mx25r64;*/
 	};
@@ -213,14 +213,14 @@
 	status = "okay";
 };
 
-led_strip_spi: &spi1 {
+led_strip_spi_0: &spi1 {
 	status = "okay";
 	pinctrl-0 = <&spi1_default>;
 	pinctrl-1 = <&spi1_sleep>;
 	pinctrl-names = "default", "sleep";
 
 	// Attach our LED strip to SPI1
-	led_strip: ws2812@0 {
+	led_strip_0: ws2812@0 {
 		compatible = "worldsemi,ws2812-spi";
         status = "okay";
 
@@ -230,14 +230,14 @@ led_strip_spi: &spi1 {
 		frame-format = <SPI_FRAME_FORMAT_TI>;
 
 		/* WS2812 */
-		chain-length = <8>; /* arbitrary; change at will */
+		chain-length = <216>; /* arbitrary; change at will */
 		spi-one-frame = <0x70>;
 		spi-zero-frame = <0x40>;
 		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
 	};
 };
 
-led_strip_spi_2: &spi4 {
+led_strip_spi_1: &spi4 {
 	status = "okay";
 	pinctrl-0 = <&spi4_default>;
 	pinctrl-1 = <&spi4_sleep>;
@@ -254,7 +254,7 @@ led_strip_spi_2: &spi4 {
 		frame-format = <SPI_FRAME_FORMAT_TI>;
 
 		/* WS2812 */
-		chain-length = <8>; /* arbitrary; change at will */
+		chain-length = <216>; /* arbitrary; change at will */
 		spi-one-frame = <0x70>;
 		spi-zero-frame = <0x40>;
 		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;

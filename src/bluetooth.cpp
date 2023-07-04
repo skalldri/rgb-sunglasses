@@ -12,6 +12,8 @@
 
 #include <errno.h>
 
+#include <pattern_controller.h>
+
 LOG_MODULE_REGISTER(bluetooth, LOG_LEVEL_DBG);
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
@@ -341,12 +343,15 @@ int bt_state_change_to(BtThreadContext *ctx, const BtThreadState &targetState)
     case BtThreadState::ADVERTISING:
         // On entry to Advertising state, start advertising
         err = bt_start_advertising();
+        pattern_controller_request_indicator(BT_ADVERTISING);
         break;
 
     case BtThreadState::CONNECTING:
+        pattern_controller_request_indicator(BT_CONNECTING);
         break;
 
     case BtThreadState::CONNECTED:
+        pattern_controller_reset_indicator();
         break;
     }
 

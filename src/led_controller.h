@@ -1,15 +1,13 @@
 #pragma once
 
-enum class SystemIndicators {
-    BT_ADVERTISING, // We are advertising to the world and anyone can connect with us
-    BT_CONNECTING, // We are attempting to connect with a single peer
-    // Others later?
-};
+#include <led_config.h>
+#include <cstdint>
+#include <cstddef>
 
-// LED Controller has a few responsibilities:
-// - User indication: if no BT device is connected, 
+const LedConfig* get_current_led_config();
 
-// Submit a request to play an indicator pattern.
-// Indicator patterns are queued up and played in-order
+int claimBufferForRender(size_t& buffer);
 
-int led_controller_request_indication(SystemIndicators indicator);
+int releaseBufferFromRender(const size_t buffer);
+
+int set_pixel_in_framebuffer(const LedConfig* config, size_t x, size_t y, size_t bufferId, uint8_t red, uint8_t green, uint8_t blue);
