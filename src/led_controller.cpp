@@ -56,6 +56,9 @@ enum strip_state {
 #define FADE_DELAY_MS	10
 #define FADE_DELAY	K_MSEC(FADE_DELAY_MS)
 
+// TODO: get from device tree
+#define NUM_PIXELS 8
+
 void _set_all_leds(uint8_t red, uint8_t green, uint8_t blue, struct led_rgb* leds, size_t numLeds) {
     for (int i = 0; i < numLeds; i++) {
         leds[i].r = red;
@@ -85,8 +88,7 @@ void control_strip(const struct device *led_strip) {
     size_t current_rainbow_step = 0;
     const size_t rainbow_steps_per_color = (BREATH_TIME_MS / FADE_DELAY_MS);
 
-    // TODO: get from device tree
-    #define NUM_PIXELS 8
+    
     static struct led_rgb pixel_data[NUM_PIXELS];
 
     static strip_state curr_state = RAINBOW;

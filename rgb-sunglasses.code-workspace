@@ -76,7 +76,8 @@
 		},
 		"nrf-connect.debugging.bindings": {
 			"${workspaceFolder}/build": "Launch build"
-		}
+		},
+		"C_Cpp.default.compileCommands": "${workspaceFolder}\\\\build\\\\compile_commands.json"
 	},
 	"launch": {
 		"version": "0.2.0",

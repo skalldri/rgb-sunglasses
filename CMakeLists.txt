@@ -19,6 +19,7 @@ target_sources(
     src/led_controller.cpp
     src/buttons.cpp
     src/power.cpp
+    src/bluetooth.cpp
     misc/tps25750/tps25750-config.c
     # misc/tps25750/tps25750-full-config.c
 )
