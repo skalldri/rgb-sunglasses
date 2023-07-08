@@ -140,6 +140,7 @@
 		led-strip-0 = &led_strip_0;
 		led-strip-1 = &led_strip_1;
 		/*spi-flash0 = &mx25r64;*/
+		mic-control = &vm3011;
 	};
 };
 
@@ -184,6 +185,19 @@
 			status = "okay";
 		};
 	};
+
+	vm3011: vm3011@60 {
+		compatible = "vesper,vm3011";
+			reg = <0x60>;
+			irq-gpios = <&gpio0 16 (GPIO_ACTIVE_HIGH)>;
+			status = "okay";
+	};
+};
+
+&pdm0 {
+	status = "okay";
+	pinctrl-0 = <&pdm0_default>;
+	pinctrl-names = "default";
 };
 
 &uart0 {

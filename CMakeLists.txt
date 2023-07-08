@@ -26,6 +26,7 @@ target_sources(
     src/animations/zigzag_animation.cpp
     src/fonts/FontAtlas.cpp
     src/fonts/FontShell.cpp
+    src/sound/sound.cpp
     misc/tps25750/tps25750-config.c
     # misc/tps25750/tps25750-full-config.c
 )

@@ -1,0 +1,7 @@
+config VM3011
+    bool "Enable the VM3011 driver"
+    depends on I2C
+
+config VM3011_INIT_PRIORITY
+    int "BQ25792 device initialization priority"
+    default 3

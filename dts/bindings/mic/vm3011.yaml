@@ -1,0 +1,14 @@
+description: Vesper Technologies VM3011 Low-Noise PDM Digital Pizezoelectric MEMS Microphone
+
+compatible: "vesper,vm3011"
+
+include: [i2c-device.yaml]
+
+properties:
+  irq-gpios:
+      type: phandle-array
+      description: |
+        I2CS_IRQ pin
+        This pin defaults to active low when produced by the sensor.
+        The property value should ensure the flags properly describe
+        the signal that is presented to the driver.
