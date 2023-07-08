@@ -2,10 +2,14 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <functional>
 
 struct Pixel {
     uint8_t rgb[3];
 };
+
+// The callback function that the FontAtlas will execute when printing a character
+using FontPrintFunc = std::function<void(size_t x, size_t y, bool filled)>;
 
 class FontAtlas {
     public:
@@ -13,8 +17,11 @@ class FontAtlas {
 
         void DebugChar(char c);
 
+        void PrintChar(char c, FontPrintFunc func);
+
     private:
-        
+        void PrintSpace(FontPrintFunc func);
+        void PrintUnsupported(FontPrintFunc func);
         
         static constexpr size_t atlasHeight = 12;
         static constexpr size_t atlasWidth = 658;
