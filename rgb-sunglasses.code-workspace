@@ -72,12 +72,14 @@
 			"xlocale": "cpp",
 			"xlocnum": "cpp",
 			"xutility": "cpp",
-			"list": "cpp"
+			"list": "cpp",
+			"queue": "cpp"
 		},
 		"nrf-connect.debugging.bindings": {
 			"${workspaceFolder}/build": "Launch build"
 		},
-		"C_Cpp.default.compileCommands": "${workspaceFolder}\\\\build\\\\compile_commands.json"
+		"C_Cpp.default.compileCommands": "${workspaceFolder}\\\\build\\\\compile_commands.json",
+		"cortex-debug.variableUseNaturalFormat": false
 	},
 	"launch": {
 		"version": "0.2.0",

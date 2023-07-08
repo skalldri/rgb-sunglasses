@@ -141,6 +141,7 @@
 		led-strip-1 = &led_strip_1;
 		/*spi-flash0 = &mx25r64;*/
 		mic-control = &vm3011;
+		mic = &pdm0;
 	};
 };
 
@@ -179,7 +180,7 @@
 		#address-cells = <1>;
     	#size-cells = <0>;
 
-		bq25792: bq25792@107 {
+		bq25792: bq25792@6b {
 			compatible = "ti,bq25792";
 			reg = <0x6B>;
 			status = "okay";
@@ -194,10 +195,16 @@
 	};
 };
 
+&clock {
+	hfclkaudio-frequency = <12288000>;
+};
+
 &pdm0 {
 	status = "okay";
 	pinctrl-0 = <&pdm0_default>;
 	pinctrl-names = "default";
+	queue-size = < 10 >;
+	clock-source = "PCLK32M";
 };
 
 &uart0 {
