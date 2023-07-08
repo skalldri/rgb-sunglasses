@@ -225,7 +225,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,
                                SHELL_CMD(boost, NULL, "Increase NRF5340 VDD to 3.3v", cmd_power_sys_boost),
                                SHELL_SUBCMD_SET_END);
 
-/* Creating root (level 0) command "demo" */
+/* Creating root (level 0) command "power" */
 SHELL_CMD_REGISTER(power, &sub_power, "Power commands", NULL);
 
 static int init_check_and_enable_3v3(const struct device *dev)

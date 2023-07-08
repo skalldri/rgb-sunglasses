@@ -23,6 +23,9 @@ target_sources(
     src/bluetooth.cpp
     src/animations/bt_animations.cpp
     src/animations/null_animation.cpp
+    src/animations/zigzag_animation.cpp
+    src/fonts/FontAtlas.cpp
+    src/fonts/FontShell.cpp
     misc/tps25750/tps25750-config.c
     # misc/tps25750/tps25750-full-config.c
 )

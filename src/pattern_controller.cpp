@@ -7,6 +7,7 @@
 
 #include <animations/bt_animations.h>
 #include <animations/null_animation.h>
+#include <animations/zigzag_animation.h>
 
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
 
@@ -29,7 +30,16 @@ bool indicatorActive = false;
 
 BtAdvertisingAnimation btAdvAnim;
 BtConnectingAnimation btConnAnim;
+ZigZagAnimation zigZagAnim;
 NullAnimation nullAnim;
+
+// TODO: better name
+enum class ActiveAnimation {
+    None,
+    ZigZag,
+};
+
+ActiveAnimation currentAnimation = ActiveAnimation::ZigZag;
 
 Animation* getIndicatorAnimation() {
     switch (currentIndicator) {
@@ -50,6 +60,15 @@ Animation* getIndicatorAnimation() {
 Animation* getCurrentAnimation() {
     if (indicatorActive) {
         return getIndicatorAnimation();
+    }
+
+    switch (currentAnimation) {
+        case ActiveAnimation::ZigZag:
+            return &zigZagAnim;
+
+        case ActiveAnimation::None:
+            // Intentional fallthrough to the NULL case
+            break;
     }
 
     return NULL;
@@ -96,7 +115,7 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
         float updateTimeMs = updateTimeS * 1000.0f;
 
         if (updateTimeMs > kTargetRenderIntervalMs) {
-            LOG_WRN("Display update took >kTargetRenderIntervalMs, cannot keep render rate!");
+            LOG_WRN("Render update took >kTargetRenderIntervalMs, cannot keep render rate!");
         } else {
             // Sleep for however much time is left
             k_msleep(kTargetRenderIntervalMs - updateTimeMs);
