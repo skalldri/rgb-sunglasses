@@ -1,6 +1,6 @@
 #pragma once
 
-#include <animation.h>
+#include <animations/animation.h>
 
 class BtAdvertisingAnimation : public Animation
 {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <led_config.h>
+#include <led_controller.h>
 
 class Animation
 {

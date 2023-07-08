@@ -21,8 +21,8 @@ target_sources(
     src/buttons.cpp
     src/power.cpp
     src/bluetooth.cpp
-    src/bt_animations.cpp
-    src/null_animation.cpp
+    src/animations/bt_animations.cpp
+    src/animations/null_animation.cpp
     misc/tps25750/tps25750-config.c
     # misc/tps25750/tps25750-full-config.c
 )

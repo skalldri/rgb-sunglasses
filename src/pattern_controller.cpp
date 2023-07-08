@@ -5,8 +5,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include <bt_animations.h>
-#include <null_animation.h>
+#include <animations/bt_animations.h>
+#include <animations/null_animation.h>
 
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
 

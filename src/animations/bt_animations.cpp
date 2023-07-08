@@ -1,4 +1,4 @@
-#include <bt_animations.h>
+#include <animations/bt_animations.h>
 #include <led_controller.h>
 
 #include <zephyr/logging/log.h>
