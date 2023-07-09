@@ -8,11 +8,15 @@ class TextAnimation : public Animation
         void init() override;
         void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
 
-    private:
-        static constexpr size_t stepTime = 100;
+        void pickStaticMessage(size_t msgId);
 
-        size_t currentIndex = 0;
+    private:
+        static constexpr size_t stepTime = 100; // The time required to move the text over one pixel
+
+        const char* currentMessage = NULL;
 
         // Current cycle time within the animation cycle
         size_t currentCycleTimeMs = 0;
+
+        int32_t currentTextOffset = 0;
 };

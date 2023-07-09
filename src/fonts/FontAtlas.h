@@ -19,10 +19,6 @@ class FontAtlas {
 
         void PrintChar(char c, FontPrintFunc func);
 
-    private:
-        void PrintSpace(FontPrintFunc func);
-        void PrintUnsupported(FontPrintFunc func);
-        
         static constexpr size_t atlasHeight = 12;
         static constexpr size_t atlasWidth = 658;
         static constexpr size_t atlasPixels = atlasWidth * atlasHeight;
@@ -31,6 +27,10 @@ class FontAtlas {
         static constexpr char atlasLastChar = '~';
         static constexpr size_t atlasTotalChars = atlasLastChar - atlasFirstChar + 1;
         static constexpr size_t atlasPixelWidthPerChar = atlasWidth / atlasTotalChars;
+
+    private:
+        void PrintSpace(FontPrintFunc func);
+        void PrintUnsupported(FontPrintFunc func);
 
         Pixel atlasBuffer[atlasPixels];
 };

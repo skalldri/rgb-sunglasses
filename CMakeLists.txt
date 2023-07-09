@@ -24,6 +24,7 @@ target_sources(
     src/animations/bt_animations.cpp
     src/animations/null_animation.cpp
     src/animations/zigzag_animation.cpp
+    src/animations/text_animation.cpp
     src/fonts/FontAtlas.cpp
     src/fonts/FontShell.cpp
     src/sound/sound.cpp

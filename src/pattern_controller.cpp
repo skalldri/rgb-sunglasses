@@ -8,6 +8,7 @@
 #include <animations/bt_animations.h>
 #include <animations/null_animation.h>
 #include <animations/zigzag_animation.h>
+#include <animations/text_animation.h>
 
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
 
@@ -32,14 +33,16 @@ BtAdvertisingAnimation btAdvAnim;
 BtConnectingAnimation btConnAnim;
 ZigZagAnimation zigZagAnim;
 NullAnimation nullAnim;
+TextAnimation textAnimation;
 
 // TODO: better name
 enum class ActiveAnimation {
     None,
     ZigZag,
+    Text,
 };
 
-ActiveAnimation currentAnimation = ActiveAnimation::ZigZag;
+ActiveAnimation currentAnimation = ActiveAnimation::Text;
 
 Animation* getIndicatorAnimation() {
     switch (currentIndicator) {
@@ -66,6 +69,9 @@ Animation* getCurrentAnimation() {
         case ActiveAnimation::ZigZag:
             return &zigZagAnim;
 
+        case ActiveAnimation::Text:
+            return &textAnimation;
+
         case ActiveAnimation::None:
             // Intentional fallthrough to the NULL case
             break;
@@ -83,6 +89,9 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
 
     btAdvAnim.init();
     btConnAnim.init();
+    zigZagAnim.init();
+    nullAnim.init();
+    textAnimation.init();
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
