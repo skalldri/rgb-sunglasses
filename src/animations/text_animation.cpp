@@ -4,7 +4,29 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 
+#include <bluetooth/writeable_string_service.h>
+
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
+
+#define ANIM_NUM ((uint8_t)Animation::Text)
+
+ANIM_SVC_UUID(text, ANIM_NUM);
+
+// Declare a bunch of read/write string instance
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 0);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 1);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 2);
+
+// All services implement the "IsActive" service, so declare relevant BT GATT glue logic
+ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimation);
+
+BT_GATT_SERVICE_DEFINE(text_anim_service,
+    BT_GATT_PRIMARY_SERVICE(&text),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 0, "Slot 0"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 1, "Slot 1"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 2, "Slot 2"),
+    ANIM_SVC_IS_ACTIVE_CHRC_REFERENCE(TextAnimation),
+);
 
 const char* kStaticMessages[] = {
     "LIFE IS MADE OF LITTLE MOMENTS LIKE THIS",
@@ -61,7 +83,7 @@ void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTick
     const size_t currentMessageLen = strlen(currentMessage);
 
     // The total "width" of the virtual texture that would contain the entire string
-    const size_t renderedStringWidth = currentMessageLen * FontAtlas::atlasPixelWidthPerChar;
+    // const size_t renderedStringWidth = currentMessageLen * FontAtlas::atlasPixelWidthPerChar;
 
     // The size of the buffer on either side of the display where we will continue attempting to render
     // characters, which allows characters to partially slide onto the display, one pixel at a time

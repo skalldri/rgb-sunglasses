@@ -176,8 +176,8 @@ int releaseBufferFromDisplay(const size_t buffer) {
 }
 
 // Pick the default LED config
-const LedConfig* currentConfig = &kFrameLedConfig;
-// const LedConfig* currentConfig = &kDevKitLedConfig;
+// const LedConfig* currentConfig = &kFrameLedConfig;
+const LedConfig* currentConfig = &kDevKitLedConfig;
 
 const LedConfig* get_current_led_config() {
     return currentConfig;

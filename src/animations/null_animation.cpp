@@ -1,5 +1,4 @@
 #include <animations/null_animation.h>
-#include <led_controller.h>
 
 void NullAnimation::init() {
     // Nothing

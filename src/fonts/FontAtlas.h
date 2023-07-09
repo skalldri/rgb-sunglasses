@@ -13,11 +13,11 @@ using FontPrintFunc = std::function<void(size_t x, size_t y, bool filled)>;
 
 class FontAtlas {
     public:
-        FontAtlas();
-
         void DebugChar(char c);
 
         void PrintChar(char c, FontPrintFunc func);
+
+        static FontAtlas* getInstance();
 
         static constexpr size_t atlasHeight = 12;
         static constexpr size_t atlasWidth = 658;
@@ -29,6 +29,8 @@ class FontAtlas {
         static constexpr size_t atlasPixelWidthPerChar = atlasWidth / atlasTotalChars;
 
     private:
+        FontAtlas();
+
         void PrintSpace(FontPrintFunc func);
         void PrintUnsupported(FontPrintFunc func);
 

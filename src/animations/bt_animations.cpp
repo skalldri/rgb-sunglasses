@@ -1,6 +1,4 @@
 #include <animations/bt_animations.h>
-#include <led_controller.h>
-
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(bt_anim, LOG_LEVEL_INF);

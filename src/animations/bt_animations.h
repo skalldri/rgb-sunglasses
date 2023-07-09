@@ -2,7 +2,7 @@
 
 #include <animations/animation.h>
 
-class BtAdvertisingAnimation : public Animation
+class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimation, Animation::BtAdvertising>
 {
     public:
         void init() override;
@@ -21,7 +21,7 @@ class BtAdvertisingAnimation : public Animation
         size_t currentCycleTimeMs = 0;
 };
 
-class BtConnectingAnimation : public Animation
+class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation, Animation::BtConnecting>
 {
     public:
         void init() override;

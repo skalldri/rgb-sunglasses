@@ -1,9 +1,11 @@
 #pragma once
 
-enum Indicator {
-    NONE,
-    BT_ADVERTISING,
-    BT_CONNECTING
+#include <animations/animation.h>
+
+enum class Indicator {
+    None = 0,
+    BtAdvertising,
+    BtConnecting,
 };
 
 int pattern_controller_request_indicator(Indicator ind);

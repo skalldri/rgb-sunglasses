@@ -1,8 +1,6 @@
 #include <fonts/FontAtlas.h>
 #include <zephyr/shell/shell.h>
 
-FontAtlas font;
-
 static int cmd_font_print(const struct shell *shell,
                                size_t argc, char **argv, void *data)
 {
@@ -13,7 +11,7 @@ static int cmd_font_print(const struct shell *shell,
 
     char* ch = argv[1];
     
-    font.DebugChar(ch[0]);
+    FontAtlas::getInstance()->DebugChar(ch[0]);
 
     return 0;
 }

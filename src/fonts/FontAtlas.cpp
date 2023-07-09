@@ -7,6 +7,11 @@
 
 LOG_MODULE_REGISTER(FontAtlas);
 
+FontAtlas* FontAtlas::getInstance() {
+    static FontAtlas atlas;
+    return &atlas;
+}
+
 FontAtlas::FontAtlas()
 {
     static_assert(width == FontAtlas::atlasWidth);

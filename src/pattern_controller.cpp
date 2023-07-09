@@ -26,33 +26,22 @@ K_THREAD_DEFINE(
     0
 );
 
-Indicator currentIndicator = Indicator::NONE;
+Indicator currentIndicator = Indicator::None;
 bool indicatorActive = false;
 
-BtAdvertisingAnimation btAdvAnim;
-BtConnectingAnimation btConnAnim;
-ZigZagAnimation zigZagAnim;
-NullAnimation nullAnim;
-TextAnimation textAnimation;
 
-// TODO: better name
-enum class ActiveAnimation {
-    None,
-    ZigZag,
-    Text,
-};
 
-ActiveAnimation currentAnimation = ActiveAnimation::Text;
+Animation currentAnimation = Animation::ZigZag;
 
-Animation* getIndicatorAnimation() {
+BaseAnimation* getIndicatorAnimation() {
     switch (currentIndicator) {
-        case Indicator::BT_CONNECTING:
-            return &btConnAnim;
+        case Indicator::BtConnecting:
+            return BtConnectingAnimation::getInstance();
 
-        case Indicator::BT_ADVERTISING:
-            return &btAdvAnim;
+        case Indicator::BtAdvertising:
+            return BtAdvertisingAnimation::getInstance();
 
-        case Indicator::NONE:
+        case Indicator::None:
             // Explicit fallthrough to get to the NULL animation
             break; 
     }
@@ -60,21 +49,17 @@ Animation* getIndicatorAnimation() {
     return NULL;
 }
 
-Animation* getCurrentAnimation() {
+BaseAnimation* getCurrentAnimation() {
     if (indicatorActive) {
         return getIndicatorAnimation();
     }
 
     switch (currentAnimation) {
-        case ActiveAnimation::ZigZag:
-            return &zigZagAnim;
+        case Animation::ZigZag:
+            return ZigZagAnimation::getInstance();
 
-        case ActiveAnimation::Text:
-            return &textAnimation;
-
-        case ActiveAnimation::None:
-            // Intentional fallthrough to the NULL case
-            break;
+        case Animation::Text:
+            return TextAnimation::getInstance();
     }
 
     return NULL;
@@ -87,11 +72,12 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
 
     LOG_INF("Pattern control thread start!");
 
-    btAdvAnim.init();
-    btConnAnim.init();
-    zigZagAnim.init();
-    nullAnim.init();
-    textAnimation.init();
+    BtAdvertisingAnimation::getInstance()->init();
+    BtConnectingAnimation::getInstance()->init();
+
+    ZigZagAnimation::getInstance()->init();
+    NullAnimation::getInstance()->init();
+    TextAnimation::getInstance()->init();
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -102,13 +88,13 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
             LOG_ERR("Failed to acquire render buffer!");
         } else {
 
-            Animation* anim = getCurrentAnimation();
+            BaseAnimation* anim = getCurrentAnimation();
 
             if (anim) {
                 anim->tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
             } else {
                 // No animation: default to all LEDs off to save power
-                nullAnim.tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
+                NullAnimation::getInstance()->tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
             }
 
             ret = releaseBufferFromRender(bufferId);

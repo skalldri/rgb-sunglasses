@@ -2,7 +2,7 @@
 
 #include <animations/animation.h>
 
-class TextAnimation : public Animation
+class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Text>
 {
     public:
         void init() override;
