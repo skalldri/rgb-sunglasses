@@ -9,6 +9,7 @@
 #include <animations/null_animation.h>
 #include <animations/zigzag_animation.h>
 #include <animations/text_animation.h>
+#include <animations/rainbow_animation.h>
 
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
 
@@ -27,14 +28,10 @@ K_THREAD_DEFINE(
 );
 
 Indicator currentIndicator = Indicator::None;
-bool indicatorActive = false;
+Animation currentAnimation = Animation::None;
 
-
-
-Animation currentAnimation = Animation::ZigZag;
-
-BaseAnimation* getIndicatorAnimation() {
-    switch (currentIndicator) {
+BaseAnimation* getIndicator(Indicator indicator) {
+    switch (indicator) {
         case Indicator::BtConnecting:
             return BtConnectingAnimation::getInstance();
 
@@ -49,20 +46,28 @@ BaseAnimation* getIndicatorAnimation() {
     return NULL;
 }
 
-BaseAnimation* getCurrentAnimation() {
-    if (indicatorActive) {
-        return getIndicatorAnimation();
-    }
-
-    switch (currentAnimation) {
+BaseAnimation* getAnimation(Animation animation) {
+    switch (animation) {
         case Animation::ZigZag:
             return ZigZagAnimation::getInstance();
 
         case Animation::Text:
             return TextAnimation::getInstance();
+
+        case Animation::Rainbow:
+            return RainbowAnimation::getInstance();
     }
 
     return NULL;
+}
+
+BaseAnimation* getBestRenderAnimation() {
+    // Indicators have priority over other animation types
+    if (currentIndicator != Indicator::None) {
+        return getIndicator(currentIndicator);
+    }
+
+    return getAnimation(currentAnimation);
 }
 
 void pattern_controller_thread_func(void* a, void* b, void* c) {
@@ -72,12 +77,17 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
 
     LOG_INF("Pattern control thread start!");
 
+    // Initialize all animations
     BtAdvertisingAnimation::getInstance()->init();
     BtConnectingAnimation::getInstance()->init();
 
     ZigZagAnimation::getInstance()->init();
     NullAnimation::getInstance()->init();
     TextAnimation::getInstance()->init();
+    RainbowAnimation::getInstance()->init();
+
+    // Start in the ZigZag animation
+    pattern_controller_change_to_animation(Animation::ZigZag);
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -88,7 +98,7 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
             LOG_ERR("Failed to acquire render buffer!");
         } else {
 
-            BaseAnimation* anim = getCurrentAnimation();
+            BaseAnimation* anim = getBestRenderAnimation();
 
             if (anim) {
                 anim->tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
@@ -120,13 +130,37 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
 
 int pattern_controller_request_indicator(Indicator ind) {
     currentIndicator = ind;
-    indicatorActive = true;
-
     return 0;
 }
 
 int pattern_controller_reset_indicator() {
-    indicatorActive = false;
+    currentIndicator = Indicator::None;
+    return 0;
+}
+
+Animation pattern_controller_get_current_animation(void) {
+    return currentAnimation;
+}
+
+int pattern_controller_change_to_animation(Animation animation) {
+    // Try to get the next animation
+    BaseAnimation* next = getAnimation(animation);
+
+    if (!next) {
+        LOG_ERR("Cannot change to animation %d", (size_t)animation);
+        return -ENOEXEC; // Bail early: we failed to get a pointer to our next animation
+    }
+
+    // Mark the current animation as inactive, if possible
+    BaseAnimation* curr = getAnimation(currentAnimation);
+    if (curr) {
+        curr->setActive(false);
+    }
+
+    next->init();
+    next->setActive(true);
+
+    currentAnimation = animation;
 
     return 0;
 }

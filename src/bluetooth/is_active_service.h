@@ -51,18 +51,22 @@ public:
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
         }
 
-        T::getInstance()->setActive(*reinterpret_cast<const bool *>(buf));
+        // Set the active property
+        T::getInstance()->active_ = *reinterpret_cast<const bool *>(buf);
+
+        // Call the notification function letting local software know that the property was remotely changed
+        T::getInstance()->onRemoteActiveChange(T::getInstance()->active_);
 
         return len;
     }
 
-    static void setActive(bool active) {
-        T::getInstance()->active_ = active;
+    // Set the active state from a local source, triggering a remote notification if needed
+    void setIsActiveState(bool active) {
+        active_ = active;
         T::btNotifyIfEnabled();
-        T::getInstance()->onActiveChange();
     }
 
-    virtual void onActiveChange() {
+    virtual void onRemoteActiveChange(bool active) {
         // Do nothing, allows overrides
     }
 

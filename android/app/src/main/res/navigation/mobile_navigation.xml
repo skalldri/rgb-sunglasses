@@ -34,4 +34,10 @@
         android:name="dev.autom8ed.rgbsunglasses.ui.animations.TextAnimationFragment"
         android:label="@string/title_textanimation"
         tools:layout="@layout/fragment_textanimation" />
+
+    <fragment
+        android:id="@+id/navigation_rainbowanimation"
+        android:name="dev.autom8ed.rgbsunglasses.ui.animations.RainbowAnimationFragment"
+        android:label="@string/title_rainbowanimation"
+        tools:layout="@layout/fragment_rainbowanimation" />
 </navigation>
