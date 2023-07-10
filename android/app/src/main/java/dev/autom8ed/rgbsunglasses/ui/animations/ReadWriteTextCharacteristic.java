@@ -52,6 +52,12 @@ public class ReadWriteTextCharacteristic {
 
             if (characteristic.getUuid().equals(myCharacteristic.getUuid())) {
                 Log.i("ReadWriteTextCharacteristic", "write complete for " + myCharacteristic.getUuid().toString() + ": " + status);
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        button.setEnabled(true);
+                    }
+                });
             }
         }
     };
@@ -62,6 +68,9 @@ public class ReadWriteTextCharacteristic {
         button = b;
         myCharacteristic = c;
         dkInterface = i;
+
+        // Reset button state
+        button.setEnabled(true);
 
         // Register that we want callbacks for GATT reads
         dkInterface.registerForGattCallback(callback);
@@ -75,6 +84,7 @@ public class ReadWriteTextCharacteristic {
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
+                button.setEnabled(false);
                 String currentText = String.valueOf(editText.getText());
                 dkInterface.queueWriteCharacteristic(myCharacteristic, currentText.getBytes(StandardCharsets.UTF_8), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
             }
