@@ -1,6 +1,6 @@
 package dev.autom8ed.rgbsunglasses.ui.animations;
 
-public enum AnimationTypes {
+public enum AnimationType {
     None,
     ZigZag,
     Text

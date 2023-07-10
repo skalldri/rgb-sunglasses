@@ -21,5 +21,8 @@
         android:icon="@drawable/settings_input_antenna"
         android:title="@string/title_bluetoothscan" />
 
-
+    <item
+        android:id="@+id/navigation_textanimation"
+        android:icon="@drawable/keyboard"
+        android:title="@string/title_textanimation" />
 </menu>

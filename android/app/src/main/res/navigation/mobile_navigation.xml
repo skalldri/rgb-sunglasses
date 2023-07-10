@@ -28,4 +28,10 @@
         android:name="dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothScanFragment"
         android:label="@string/title_bluetoothscan"
         tools:layout="@layout/fragment_bluetoothscan" />
+
+    <fragment
+        android:id="@+id/navigation_textanimation"
+        android:name="dev.autom8ed.rgbsunglasses.ui.animations.TextAnimationFragment"
+        android:label="@string/title_textanimation"
+        tools:layout="@layout/fragment_textanimation" />
 </navigation>

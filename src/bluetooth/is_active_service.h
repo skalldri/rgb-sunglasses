@@ -51,13 +51,7 @@ public:
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
         }
 
-        T::getInstance()->active_ = *reinterpret_cast<const bool *>(buf);
-
-        // TODO: go through the pattern controller to change active animation
-
-        // TODO: should we notify if BT is the source of the change?
-        // Is there any harm?
-        T::btNotifyIfEnabled();
+        T::getInstance()->setActive(*reinterpret_cast<const bool *>(buf));
 
         return len;
     }
@@ -65,6 +59,11 @@ public:
     static void setActive(bool active) {
         T::getInstance()->active_ = active;
         T::btNotifyIfEnabled();
+        T::getInstance()->onActiveChange();
+    }
+
+    virtual void onActiveChange() {
+        // Do nothing, allows overrides
     }
 
 protected:

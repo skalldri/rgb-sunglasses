@@ -26,9 +26,8 @@ import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
 import dev.autom8ed.rgbsunglasses.databinding.FragmentBluetoothscanBinding;
-import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothScanViewModel;
 
-import dev.autom8ed.rgbsunglasses.ui.animations.AnimationTypes;
+import dev.autom8ed.rgbsunglasses.ui.animations.AnimationType;
 
 import java.util.List;
 import java.util.Objects;
@@ -42,19 +41,16 @@ public class BluetoothScanFragment extends Fragment  {
 
     private BluetoothGattCallback gattCallback = null;
 
-    public UUID getUuidForAnimationService(long animationId) {
-        UUID uuid = UUID.fromString(String.format("12345678-1234-5678-%04X-56789abcdef0", animationId));
-        return uuid;
-    }
 
-    public AnimationTypes isAnimationService(UUID uuid) {
-        for (AnimationTypes type : AnimationTypes.values()) {
-            if (uuid.equals(getUuidForAnimationService(type.ordinal()))) {
+
+    public AnimationType isAnimationService(UUID uuid) {
+        for (AnimationType type : AnimationType.values()) {
+            if (uuid.equals(BluetoothHelpers.getUuidForAnimationService(type.ordinal()))) {
                 return type;
             }
         }
 
-        return AnimationTypes.None;
+        return AnimationType.None;
     }
 
     public void createGattCallback() {
@@ -96,8 +92,8 @@ public class BluetoothScanFragment extends Fragment  {
                 List<BluetoothGattService> services = gatt.getServices();
                 for (BluetoothGattService service : services) {
                     Log.i("Bluetooth", "Service: " + service.getUuid().toString());
-                    AnimationTypes type = isAnimationService(service.getUuid());
-                    if (type != AnimationTypes.None) {
+                    AnimationType type = isAnimationService(service.getUuid());
+                    if (type != AnimationType.None) {
                         Log.i("Bluetooth", "Found matching Animation Service: " + type.toString());
                         // Pass the characteristic to the View/Model/Fragment for the relevant page?
                     }

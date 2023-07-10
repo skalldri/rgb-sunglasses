@@ -49,10 +49,14 @@
 // Special default animation service handlers
 #define ANIM_SVC_IS_ACTIVE_CHAR (ANIM_SVC_RSVD_CHAR_ID_START + 1)
 
-// Define an instance of the animation service, with a specified animation number
-#define ANIM_SVC_UUID(_name, _animation_number) \
-    static struct bt_uuid_128 _name = BT_UUID_INIT_128( \
-        BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, _animation_number, 0x56789abc0000));
+// Define the UUID for an Animation Service instance
+#define ANIM_SVC_UUID_DEFINE(_animation_class) \
+    static struct bt_uuid_128 _animation_class ## _service_uuid = BT_UUID_INIT_128( \
+        BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, _animation_class::kAnimationIdNum, 0x56789abc0000));
+
+// Reference a previously declared Animation Service instance UUID
+#define ANIM_SVC_UUID_REFERENCE(_animation_class) \
+    BT_GATT_PRIMARY_SERVICE(&_animation_class ## _service_uuid)
 
 // Define an characteristic which is part of an instance of the animation service
 #define ANIM_SVC_CHRC_DEFINE(_prefix, _animation_number, _char_num, _format) \
