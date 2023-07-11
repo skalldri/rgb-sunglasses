@@ -1,5 +1,16 @@
 #include <animations/zigzag_animation.h>
 
+ANIM_SVC_UUID_DEFINE(ZigZagAnimation);
+
+// All services implement the "IsActive" service, so declare relevant BT GATT glue logic
+ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(ZigZagAnimation);
+
+BT_GATT_SERVICE_DEFINE(zigzag_anim_service,
+    ANIM_SVC_UUID_REFERENCE(ZigZagAnimation),
+    ANIM_SVC_IS_ACTIVE_CHRC_REFERENCE(ZigZagAnimation),
+);
+
+
 void ZigZagAnimation::init() {
     currentCycleTimeMs = 0;
     currentIndex = 0;

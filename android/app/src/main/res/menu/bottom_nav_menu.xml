@@ -30,4 +30,9 @@
         android:id="@+id/navigation_rainbowanimation"
         android:icon="@drawable/gradient"
         android:title="@string/title_rainbowanimation" />
+
+    <item
+        android:id="@+id/navigation_zigzaganimation"
+        android:icon="@drawable/gradient"
+        android:title="@string/title_zigzaganimation" />
 </menu>

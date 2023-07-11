@@ -15,7 +15,7 @@
         tools:layout_editor_absoluteX="16dp">
 
         <Switch
-            android:id="@+id/is_rainbow_active_switch"
+            android:id="@+id/is_zigzag_active_switch"
             android:layout_width="150dp"
             android:layout_height="48dp"
             android:text="Is Active" />

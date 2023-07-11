@@ -40,4 +40,10 @@
         android:name="dev.autom8ed.rgbsunglasses.ui.animations.RainbowAnimationFragment"
         android:label="@string/title_rainbowanimation"
         tools:layout="@layout/fragment_rainbowanimation" />
+
+    <fragment
+        android:id="@+id/navigation_zigzaganimation"
+        android:name="dev.autom8ed.rgbsunglasses.ui.animations.ZigZagAnimationFragment"
+        android:label="@string/title_zigzaganimation"
+        tools:layout="@layout/fragment_zigzaganimation" />
 </navigation>

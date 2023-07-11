@@ -1,7 +1,6 @@
 package dev.autom8ed.rgbsunglasses.ui.animations;
 
 import android.bluetooth.BluetoothGattCharacteristic;
-import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.os.Bundle;
 import android.util.Log;
@@ -10,7 +9,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.TextView;
+import android.widget.Switch;
 
 import androidx.annotation.NonNull;
 import androidx.fragment.app.Fragment;
@@ -22,9 +21,9 @@ import java.util.UUID;
 
 
 import dev.autom8ed.rgbsunglasses.databinding.FragmentTextanimationBinding;
-import dev.autom8ed.rgbsunglasses.ui.animations.TextAnimationViewModel;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.DevKitBtInterface;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.IsActiveCharacteristic;
+import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteTextCharacteristic;
 
 public class TextAnimationFragment extends Fragment {
 
@@ -33,13 +32,14 @@ public class TextAnimationFragment extends Fragment {
     private FragmentTextanimationBinding binding;
 
     DevKitBtInterface btInterface = null;
-    BluetoothGattService gattService = null;
 
     // Number of GATT String slots we expect
     static final public long kNumSlots = 20;
     BluetoothGattCharacteristic[] stringSlot = new BluetoothGattCharacteristic[(int) kNumSlots];
 
     IsActiveCharacteristic isActiveCharacteristic = null;
+
+    Switch isActiveSw = null;
 
     EditText[] slotEditText = new EditText[(int) kNumSlots];
     Button[] slotSubmitButton = new Button[(int) kNumSlots];
@@ -66,13 +66,11 @@ public class TextAnimationFragment extends Fragment {
         public void onGattServiceFound(BluetoothGattService service) {
             super.onGattServiceFound(service);
 
-            gattService = service;
-
             for (BluetoothGattCharacteristic characteristic : service.getCharacteristics()) {
 
                 if(IsActiveCharacteristic.isIsActiveCharacteristic(characteristic.getUuid(), kAnimationType.ordinal())) {
                     Log.i("TextAnimFrag", "Found IsActive characteristic!");
-                    isActiveCharacteristic = new IsActiveCharacteristic(characteristic);
+                    isActiveCharacteristic = new IsActiveCharacteristic(characteristic, isActiveSw, btInterface);
                     continue;
                 }
                 int slotId = isStringSlotCharacteristic(characteristic.getUuid());
@@ -153,6 +151,8 @@ public class TextAnimationFragment extends Fragment {
 
         slotEditText[19] = binding.editSlot19;
         slotSubmitButton[19] = binding.submitSlot19;
+
+        isActiveSw = binding.isTextActiveSwitch;
 
         // textAnimationViewModel.getSlot0().observe(getViewLifecycleOwner(), slot0::setText);
 

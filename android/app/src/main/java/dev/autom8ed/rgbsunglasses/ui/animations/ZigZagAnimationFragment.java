@@ -16,11 +16,11 @@ import dev.autom8ed.rgbsunglasses.databinding.FragmentRainbowanimationBinding;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.DevKitBtInterface;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.IsActiveCharacteristic;
 
-public class RainbowAnimationFragment extends Fragment {
+public class ZigZagAnimationFragment extends Fragment {
 
     private FragmentRainbowanimationBinding binding;
 
-    static final public AnimationType kAnimationType = AnimationType.Rainbow;
+    static final public AnimationType kAnimationType = AnimationType.ZigZag;
 
     // Could be turned into a subclass
     IsActiveCharacteristic isActiveCharacteristic = null;
@@ -36,7 +36,7 @@ public class RainbowAnimationFragment extends Fragment {
             for (BluetoothGattCharacteristic characteristic : service.getCharacteristics()) {
 
                 if(IsActiveCharacteristic.isIsActiveCharacteristic(characteristic.getUuid(), kAnimationType.ordinal())) {
-                    Log.i("RainbowAnimation", "Found IsActive characteristic!");
+                    Log.i("ZigZagAnimation", "Found IsActive characteristic!");
                     isActiveCharacteristic = new IsActiveCharacteristic(characteristic, isActiveSw, btInterface);
                     continue;
                 }
@@ -50,7 +50,7 @@ public class RainbowAnimationFragment extends Fragment {
         binding = FragmentRainbowanimationBinding.inflate(inflater, container, false);
         View root = binding.getRoot();
 
-        Log.i("RainbowAnimFrag", "onCreateView");
+        Log.i("ZigZagAnimation", "onCreateView");
 
         isActiveSw = binding.isRainbowActiveSwitch;
 
@@ -64,6 +64,6 @@ public class RainbowAnimationFragment extends Fragment {
         super.onDestroyView();
         binding = null;
 
-        Log.i("RainbowAnimFrag", "onDestroyView");
+        Log.i("ZigZagAnimation", "onDestroyView");
     }
 }

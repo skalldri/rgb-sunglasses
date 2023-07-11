@@ -1,4 +1,4 @@
-package dev.autom8ed.rgbsunglasses.ui.animations;
+package dev.autom8ed.rgbsunglasses.ui.bluetooth;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -63,7 +63,7 @@ public class ReadWriteTextCharacteristic {
     };
 
     @SuppressLint("MissingPermission")
-    ReadWriteTextCharacteristic(EditText e, Button b, BluetoothGattCharacteristic c, DevKitBtInterface i) {
+    public ReadWriteTextCharacteristic(EditText e, Button b, BluetoothGattCharacteristic c, DevKitBtInterface i) {
         editText = e;
         button = b;
         myCharacteristic = c;

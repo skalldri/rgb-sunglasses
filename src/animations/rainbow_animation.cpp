@@ -4,6 +4,16 @@
 
 #include <cstddef>
 
+ANIM_SVC_UUID_DEFINE(RainbowAnimation);
+
+// All services implement the "IsActive" service, so declare relevant BT GATT glue logic
+ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimation);
+
+BT_GATT_SERVICE_DEFINE(rainbow_anim_service,
+    ANIM_SVC_UUID_REFERENCE(RainbowAnimation),
+    ANIM_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimation),
+);
+
 // Rainbow colors: ROYGBIV
 // NOTE: they have a scratch value!
 const struct led_rgb rainbowColors[] = {
