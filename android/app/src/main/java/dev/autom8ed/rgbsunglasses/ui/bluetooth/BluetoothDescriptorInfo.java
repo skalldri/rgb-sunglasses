@@ -6,4 +6,5 @@ import android.bluetooth.BluetoothGattDescriptor;
 public class BluetoothDescriptorInfo {
     public BluetoothGattDescriptor descriptor;
     public byte[] value;
+    boolean isProcessed = false;
 }

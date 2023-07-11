@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.LayoutInflater;
+import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -27,6 +28,44 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
 
     Handler handler = new Handler(Looper.getMainLooper());
 
+    int bytesToInt(byte[] value) {
+        if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT8) {
+            return value[0];
+        }
+        else if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT16) {
+            return (value[1] << 8) | value[0];
+        }
+        else if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT32) {
+            return (value[3] << 24) | (value[2] << 16) | (value[1] << 8) | value[0];
+        }
+        return 12345;
+    }
+
+    byte[] strToBytes(String value) {
+        byte[] v = new byte[1];
+        v[0] = 0;
+
+        if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT8) {
+            v = new byte[1];
+            v[0] = Byte.parseByte(value);
+        }
+        else if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT16) {
+            v = new byte[2];
+            long l = Long.parseLong(value);
+            v[0] = (byte) (l & 0xFF);
+            v[1] = (byte) ((l >> 8) & 0xFF);
+        }
+        else if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT32) {
+            v = new byte[4];
+            long l = Long.parseLong(value);
+            v[0] = (byte) (l & 0xFF);
+            v[1] = (byte) ((l >> 8) & 0xFF);
+            v[2] = (byte) ((l >> 16) & 0xFF);
+            v[3] = (byte) ((l >> 24) & 0xFF);
+        }
+        return v;
+    }
+
     BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override
         public void onCharacteristicRead(@NonNull BluetoothGatt gatt, @NonNull BluetoothGattCharacteristic characteristic, @NonNull byte[] value, int status) {
@@ -38,7 +77,7 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
-                        binding.editTextNumber.setText("123456");
+                        binding.editTextNumber.setText(String.valueOf(bytesToInt(value)));
                     }
                 });
             }
@@ -86,5 +125,14 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
 
         // Read the characteristic
         dkInterface.queueReadCharacteristic(myCharacteristic);
+
+        binding.button.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                binding.button.setEnabled(false);
+                String currentText = String.valueOf(binding.editTextNumber.getText());
+                dkInterface.queueWriteCharacteristic(myCharacteristic, strToBytes(currentText), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            }
+        });
     }
 }
