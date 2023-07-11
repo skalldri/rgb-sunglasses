@@ -28,15 +28,15 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
 
     Handler handler = new Handler(Looper.getMainLooper());
 
-    int bytesToInt(byte[] value) {
+    long bytesToInt(byte[] value) {
         if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT8) {
-            return value[0];
+            return ((int)value[0]) & 0xFF;
         }
         else if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT16) {
-            return (value[1] << 8) | value[0];
+            return ((value[1] << 8) | value[0]) & 0xFFFF;
         }
         else if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT32) {
-            return (value[3] << 24) | (value[2] << 16) | (value[1] << 8) | value[0];
+            return ((value[3] << 24) | (value[2] << 16) | (value[1] << 8) | value[0]) & 0xFFFFFFFF;
         }
         return 12345;
     }
