@@ -101,3 +101,5 @@
                    NULL), \
     BT_GATT_CUD(_desc, BT_GATT_PERM_READ), \
     BT_GATT_CPF(&_prefix ## _cpf)
+
+#define ANIMATION_CUSTOM_CHRC_START 100

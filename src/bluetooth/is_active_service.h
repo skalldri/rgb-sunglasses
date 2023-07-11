@@ -10,7 +10,7 @@
  * @tparam T the class which has inherited us. Must provide a getInstance() function (which is provided by anything that inherits BaseAnimationTemplate)
  */
 template <class T>
-class IsActiveService {
+class IsActiveCharacteristic {
 
 public:
     // Bluetooth callback to change the notification state of the isActive characteristic

@@ -1,16 +1,24 @@
 #include <animations/rainbow_animation.h>
 
+#include <bluetooth/read_write_variable.h>
+
 #include <zephyr/drivers/led_strip.h>
 
 #include <cstddef>
 
 ANIM_SVC_UUID_DEFINE(RainbowAnimation);
 
+using StepTimeMs = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 0, uint32_t, 100);
+
+using RainbowWidthPix = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 1, uint32_t, 5);
+
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimation);
 
 BT_GATT_SERVICE_DEFINE(rainbow_anim_service,
     ANIM_SVC_UUID_REFERENCE(RainbowAnimation),
+    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 0, "Step Time Ms"),
+    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 1, "Rainbow Width Pixels"),
     ANIM_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimation),
 );
 
@@ -36,6 +44,9 @@ void RainbowAnimation::init() {
 }
 
 void RainbowAnimation::tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) {
+    // Read BT variables
+    const uint32_t rainbowColorWidth = (uint32_t)RainbowWidthPix::getInstance();
+
     // Turn off all LEDs
     for (size_t x = 0; x < config->displayWidth; x++) {
         size_t currentRainbowColor = ((currentRainbowStep + x) / rainbowColorWidth) % numRainbowColors;
@@ -60,7 +71,7 @@ void RainbowAnimation::tick(const LedConfig* config, const size_t timeSinceLastT
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > stepTime) {
+    if (currentCycleTimeMs > (uint32_t)StepTimeMs::getInstance()) {
         currentCycleTimeMs = 0;
         currentRainbowStep++; // Move text one pixel to the left
     }

@@ -23,7 +23,7 @@ public:
 
 // All services provide the BT "IsActive" service
 template <class T, Animation A>
-class BaseAnimationTemplate : public BaseAnimation, public IsActiveService<T>
+class BaseAnimationTemplate : public BaseAnimation, public IsActiveCharacteristic<T>
 {
 public:
     static constexpr Animation kAnimationId = A;
@@ -35,7 +35,7 @@ public:
         return &anim;
     }
 
-    // Pass the active state chance down into our IsActiveService()
+    // Pass the active state chance down into our IsActiveCharacteristic()
     void setActive(bool active) override {
         T::getInstance()->setIsActiveState(active);
     }

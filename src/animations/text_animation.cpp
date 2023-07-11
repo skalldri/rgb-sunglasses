@@ -4,7 +4,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 
-#include <bluetooth/writeable_string_service.h>
+#include <bluetooth/read_write_string_service.h>
+#include <bluetooth/read_write_variable.h>
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 
@@ -12,53 +13,56 @@ ANIM_SVC_UUID_DEFINE(TextAnimation);
 
 constexpr size_t kNumStringSlots = 20;
 
+using StepTimeMs = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 0, uint32_t, 100);
+
 // Declare a bunch of read/write string instance
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 0);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 1);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 2);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 3);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 4);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 5);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 6);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 7);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 8);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 9);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 10);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 11);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 12);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 13);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 14);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 15);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 16);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 17);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 18);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 19);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 100);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 101);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 102);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 103);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 104);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 105);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 106);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 107);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 108);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 109);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 110);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 111);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 112);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 113);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 114);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 115);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 116);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 117);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 118);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 119);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimation);
 
 BT_GATT_SERVICE_DEFINE(text_anim_service,
     ANIM_SVC_UUID_REFERENCE(TextAnimation),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 0, "Slot 0"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 1, "Slot 1"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 2, "Slot 2"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 3, "Slot 3"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 4, "Slot 4"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 5, "Slot 5"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 6, "Slot 6"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 7, "Slot 7"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 8, "Slot 8"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 9, "Slot 9"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 10, "Slot 10"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 11, "Slot 11"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 12, "Slot 12"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 13, "Slot 13"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 14, "Slot 14"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 15, "Slot 15"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 16, "Slot 16"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 17, "Slot 17"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 18, "Slot 18"),
-    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 19, "Slot 19"),
+    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 0, "Step Time Ms"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 100, "Slot 0"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 101, "Slot 1"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 102, "Slot 2"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 103, "Slot 3"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 104, "Slot 4"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 105, "Slot 5"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 106, "Slot 6"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 107, "Slot 7"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 108, "Slot 8"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 109, "Slot 9"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 110, "Slot 10"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 111, "Slot 11"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 112, "Slot 12"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 113, "Slot 13"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 114, "Slot 14"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 115, "Slot 15"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 116, "Slot 16"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 117, "Slot 17"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 118, "Slot 18"),
+    ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 119, "Slot 19"),
     ANIM_SVC_IS_ACTIVE_CHRC_REFERENCE(TextAnimation),
 );
 
@@ -86,23 +90,22 @@ const char* kStaticMessages[kNumStringSlots] = {
 };
 
 template<size_t tChrcId>
-using StrSlot = BluetoothReadWriteableString<TextAnimation::kAnimationIdNum, tChrcId>;
+using StrSlot = BtReadWriteString<TextAnimation::kAnimationIdNum, tChrcId>;
 
 // Helper template to initialize everything
 template<size_t tChrcId>
 static void inline initStrSlot() {
-    StrSlot<tChrcId>::getInstance()->setValue(kStaticMessages[tChrcId]);
-
+    StrSlot<tChrcId>::getInstance()->setValue(kStaticMessages[tChrcId-100]);
     initStrSlot<tChrcId-1>();
 }
 
 template<>
-void inline initStrSlot<0>() {
-    StrSlot<0>::getInstance()->setValue(kStaticMessages[0]);
+void inline initStrSlot<100>() {
+    StrSlot<100>::getInstance()->setValue(kStaticMessages[0]);
 }
 
 TextAnimation::TextAnimation() {
-    initStrSlot<kNumStringSlots-1>();
+    initStrSlot<119>();
 }
 
 void TextAnimation::init() {

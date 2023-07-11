@@ -1,27 +1,24 @@
 package dev.autom8ed.rgbsunglasses.ui.bluetooth;
 
 import android.annotation.SuppressLint;
-import android.app.Activity;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
-import android.view.View;
-import android.widget.Button;
-import android.widget.EditText;
+import android.view.LayoutInflater;
+import android.widget.CompoundButton;
+import android.widget.LinearLayout;
 
 import androidx.annotation.NonNull;
 
-import java.nio.charset.StandardCharsets;
+import dev.autom8ed.rgbsunglasses.databinding.ReadWriteIntBinding;
+import dev.autom8ed.rgbsunglasses.databinding.ReadWriteNotifBoolBinding;
 
-import dev.autom8ed.rgbsunglasses.ui.bluetooth.DevKitBtInterface;
+public class ReadWriteBooleanCharacteristic extends DeviceGeneratedUiBase {
+    private @NonNull ReadWriteNotifBoolBinding binding;
 
-public class ReadWriteTextCharacteristic extends DeviceGeneratedUiBase {
-
-    EditText editText;
-    Button button;
     BluetoothGattCharacteristic myCharacteristic;
 
     DevKitBtInterface dkInterface;
@@ -34,13 +31,14 @@ public class ReadWriteTextCharacteristic extends DeviceGeneratedUiBase {
             super.onCharacteristicRead(gatt, characteristic, value, status);
 
             if (characteristic.getUuid().equals(myCharacteristic.getUuid())) {
-                String str = new String(value, StandardCharsets.UTF_8);
-                Log.i("ReadWriteTextCharacteristic", "read complete for " + myCharacteristic.getUuid().toString() + ": " + str);
+                // String str = new String(value, StandardCharsets.UTF_8);
+                Log.i("ReadWriteBooleanCharacteristic", "read complete for " + myCharacteristic.getUuid().toString() + ": ");
+                boolean state = value[0] == 1;
+
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
-
-                        editText.setText(str);
+                        binding.switch1.setChecked(state);
                     }
                 });
             }
@@ -55,38 +53,52 @@ public class ReadWriteTextCharacteristic extends DeviceGeneratedUiBase {
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
-                        button.setEnabled(true);
+                        binding.switch1.setEnabled(true);
                     }
                 });
             }
         }
     };
 
+    byte myCpf;
+
     @SuppressLint("MissingPermission")
-    public ReadWriteTextCharacteristic(EditText e, Button b, BluetoothGattCharacteristic c, DevKitBtInterface i) {
-        editText = e;
-        button = b;
-        myCharacteristic = c;
+    public ReadWriteBooleanCharacteristic(
+            @NonNull LayoutInflater inflater,
+            LinearLayout layout,
+            BluetoothGattCharacteristic c,
+            String cud,
+            byte cpf,
+            DevKitBtInterface i) {
+        binding = ReadWriteNotifBoolBinding.inflate(inflater, layout, true);
+
         dkInterface = i;
+        myCharacteristic = c;
+        myCpf = cpf;
 
         // Reset button state
-        button.setEnabled(true);
+        binding.switch1.setEnabled(true);
+        binding.switch1.setText(cud);
 
         // Register that we want callbacks for GATT reads
         dkInterface.registerForGattCallback(callback);
 
-        Log.i("ReadWriteTextCharacteristic","Reading characteristic " + myCharacteristic.getUuid().toString());
+        Log.i("ReadWriteIntegerCharacteristic","Reading characteristic " + myCharacteristic.getUuid().toString());
 
         // Read the characteristic
         dkInterface.queueReadCharacteristic(myCharacteristic);
 
-        // Wire up callback to button press events to write the characteristic
-        button.setOnClickListener(new View.OnClickListener() {
+        // Enable characteristic notification
+        if (!dkInterface.dkGattDevice.setCharacteristicNotification(myCharacteristic, true)) {
+            Log.e("ReadWriteBoolean", "Failed to register for characteristic notification");
+        }
+
+        binding.switch1.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
-            public void onClick(View view) {
-                button.setEnabled(false);
-                String currentText = String.valueOf(editText.getText());
-                dkInterface.queueWriteCharacteristic(myCharacteristic, currentText.getBytes(StandardCharsets.UTF_8), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            public void onCheckedChanged(CompoundButton compoundButton, boolean b) {
+                byte[] v = new byte[1];
+                v[0] = (byte) (b ? 1 : 0);
+                dkInterface.queueWriteCharacteristic(myCharacteristic, v, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
             }
         });
     }

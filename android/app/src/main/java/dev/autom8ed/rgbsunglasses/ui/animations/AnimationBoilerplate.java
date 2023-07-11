@@ -1,5 +1,4 @@
 package dev.autom8ed.rgbsunglasses.ui.animations;
-
 import static dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothHelpers.getUuidForCpfDescriptor;
 import static dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothHelpers.getUuidForCudDescriptor;
 
@@ -16,11 +15,9 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.LinearLayout;
 import android.widget.Switch;
 
 import androidx.annotation.NonNull;
-import androidx.constraintlayout.widget.ConstraintSet;
 import androidx.fragment.app.Fragment;
 
 import java.nio.charset.StandardCharsets;
@@ -29,20 +26,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import dev.autom8ed.rgbsunglasses.databinding.FragmentRainbowanimationBinding;
 import dev.autom8ed.rgbsunglasses.databinding.FragmentZigzaganimationBinding;
-import dev.autom8ed.rgbsunglasses.databinding.ReadWriteIntBinding;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothDescriptorInfo;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothHelpers;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.DevKitBtInterface;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.IsActiveCharacteristic;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteIntegerCharacteristic;
 
-public class ZigZagAnimationFragment extends Fragment {
-
-    private @NonNull FragmentZigzaganimationBinding binding;
-
-    static final public AnimationType kAnimationType = AnimationType.ZigZag;
+public class AnimationBoilerplate extends Fragment {
 
     // Could be turned into a subclass
     Handler handler = new Handler(Looper.getMainLooper());
@@ -52,8 +43,6 @@ public class ZigZagAnimationFragment extends Fragment {
     IsActiveCharacteristic isActiveCharacteristic = null;
     DevKitBtInterface dkInterface = null;
 
-    Switch isActiveSw = null;
-
     AnimationServiceInterface animServiceCallback = new AnimationServiceInterface() {
         @Override
         public void onGattServiceFound(BluetoothGattService service) {
@@ -62,7 +51,7 @@ public class ZigZagAnimationFragment extends Fragment {
             for (BluetoothGattCharacteristic characteristic : service.getCharacteristics()) {
                 if(IsActiveCharacteristic.isIsActiveCharacteristic(characteristic.getUuid(), kAnimationType.ordinal())) {
                     Log.i("ZigZagAnimation", "Found IsActive characteristic!");
-                    isActiveCharacteristic = new IsActiveCharacteristic(characteristic, isActiveSw, dkInterface);
+                    //isActiveCharacteristic = new IsActiveCharacteristic(characteristic, isActiveSw, dkInterface);
                     continue;
                 } else {
                     Log.i("ZigZagAnimation", "Got unknown char " + characteristic.getUuid().toString());
@@ -136,14 +125,14 @@ public class ZigZagAnimationFragment extends Fragment {
                     handler.post(new Runnable() {
                         @Override
                         public void run() {
-                            ReadWriteIntegerCharacteristic rwIntChrc = new ReadWriteIntegerCharacteristic(
+                            /*ReadWriteIntegerCharacteristic rwIntChrc = new ReadWriteIntegerCharacteristic(
                                     myInflater,
                                     binding.linearLayoutVertical,
                                     descriptor.getCharacteristic(),
                                     cud,
                                     cpf,
                                     dkInterface);
-                            myRwIntChrcs.add(rwIntChrc);
+                            myRwIntChrcs.add(rwIntChrc);*/
                         }
                     });
                 }
@@ -153,15 +142,15 @@ public class ZigZagAnimationFragment extends Fragment {
         }
     };
 
+    /*
     public View onCreateView(@NonNull LayoutInflater inflater,
                              ViewGroup container, Bundle savedInstanceState) {
         myInflater = inflater;
-        binding = FragmentZigzaganimationBinding.inflate(inflater, container, false);
-        View root = binding.getRoot();
+
+        // binding = FragmentZigzaganimationBinding.inflate(inflater, container, false);
+        // View root = binding.getRoot();
 
         Log.i("ZigZagAnimation", "onCreateView");
-
-        isActiveSw = binding.isZigzagActiveSwitch;
 
         dkInterface = new DevKitBtInterface(getContext(), animServiceCallback, kAnimationType);
 
@@ -173,8 +162,15 @@ public class ZigZagAnimationFragment extends Fragment {
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        binding = null;
+        //binding = null;
 
         Log.i("ZigZagAnimation", "onDestroyView");
+    }
+    */
+
+    AnimationType kAnimationType;
+
+    public AnimationBoilerplate(AnimationType a) {
+        kAnimationType = a;
     }
 }

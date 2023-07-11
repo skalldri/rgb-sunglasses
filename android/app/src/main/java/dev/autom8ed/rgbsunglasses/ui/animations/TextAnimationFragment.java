@@ -1,5 +1,7 @@
 package dev.autom8ed.rgbsunglasses.ui.animations;
 
+import static dev.autom8ed.rgbsunglasses.ui.animations.AnimationServiceConstants.kCustomChrcStart;
+
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattService;
 import android.os.Bundle;
@@ -35,6 +37,7 @@ public class TextAnimationFragment extends Fragment {
 
     // Number of GATT String slots we expect
     static final public long kNumSlots = 20;
+
     BluetoothGattCharacteristic[] stringSlot = new BluetoothGattCharacteristic[(int) kNumSlots];
 
     IsActiveCharacteristic isActiveCharacteristic = null;
@@ -47,7 +50,7 @@ public class TextAnimationFragment extends Fragment {
     List<ReadWriteTextCharacteristic> slotCharacteristics = new ArrayList<>();
 
     public static UUID getUuidForStringSlotCharacteristic(long slot) {
-        UUID uuid = UUID.fromString(String.format("12345678-1234-5678-%04X-56789abc%04X", kAnimationType.ordinal(), slot+1));
+        UUID uuid = UUID.fromString(String.format("12345678-1234-5678-%04X-56789abc%04X", kAnimationType.ordinal(), kCustomChrcStart+slot+1));
         return uuid;
     }
 

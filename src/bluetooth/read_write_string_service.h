@@ -10,12 +10,12 @@
  * @tparam chrcId 
  */
 template<size_t tAnimationId, size_t tChrcId>
-class BluetoothReadWriteableString {
+class BtReadWriteString {
 public:
     static constexpr size_t kMaxLen = 255;
 
-    static BluetoothReadWriteableString<tAnimationId, tChrcId>* getInstance() {
-        static BluetoothReadWriteableString<tAnimationId, tChrcId> inst;
+    static BtReadWriteString<tAnimationId, tChrcId>* getInstance() {
+        static BtReadWriteString<tAnimationId, tChrcId> inst;
         return &inst;
     }
 
@@ -52,7 +52,7 @@ public:
 
     protected:
         // Make constructor private so we enforce singleton usage
-        BluetoothReadWriteableString() {
+        BtReadWriteString() {
             memset(str_, 0, kMaxLen);
         }
 
@@ -60,7 +60,7 @@ public:
 };
 
 #define ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(_animation_class, _char_num) \
-    using _animation_class ## _char_num ## _ReadWriteString = BluetoothReadWriteableString<_animation_class::kAnimationIdNum, _char_num>; \
+    using _animation_class ## _char_num ## _ReadWriteString = BtReadWriteString<_animation_class::kAnimationIdNum, _char_num>; \
     ANIM_SVC_CHRC_DEFINE(read_write_string_ ## _animation_class ## _char_num, _animation_class::kAnimationIdNum, _char_num, BLE_GATT_CPF_FORMAT_UTF8S);
 
 // Reference a previously declared characteristic

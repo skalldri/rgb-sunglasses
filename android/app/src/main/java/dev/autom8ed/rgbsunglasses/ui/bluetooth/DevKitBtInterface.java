@@ -36,6 +36,19 @@ public class DevKitBtInterface {
     List<BluetoothGattCallback> extraCallbacks = new ArrayList<>();
 
     private BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+        @Override
+        public void onDescriptorRead(@NonNull BluetoothGatt gatt, @NonNull BluetoothGattDescriptor descriptor, int status, @NonNull byte[] value) {
+            super.onDescriptorRead(gatt, descriptor, status, value);
+
+            Log.i("DevKitBtInterface", "onDescriptorRead: " + descriptor.getUuid().toString() + " status = " +  status);
+
+            for (BluetoothGattCallback c : extraCallbacks) {
+                c.onDescriptorRead(gatt, descriptor, status, value);
+            }
+
+            serviceQueuedActions();
+        }
+
         @SuppressLint("MissingPermission")
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
@@ -135,6 +148,18 @@ public class DevKitBtInterface {
                 queuedCharacteristicWrites.remove();
             } else {
                 Log.i("DevKitBtInterface", "Re-queuing write for " + c.characteristic.getUuid().toString());
+            }
+        }
+
+        if (queuedDescriptorReads.size() != 0) {
+            BluetoothGattDescriptor d = queuedDescriptorReads.peek();
+
+            if (dkGattDevice.readDescriptor(d)) {
+                // Only remove from the queue if we successfully scheduled a read
+                Log.i("DevKitBtInterface", "Successfully started next queued descriptor read for " + d.getUuid().toString());
+                queuedDescriptorReads.remove();
+            } else {
+                Log.i("DevKitBtInterface", "Re-queuing read for " + d.getUuid().toString());
             }
         }
 
@@ -238,5 +263,19 @@ public class DevKitBtInterface {
         }
 
         return BluetoothStatusCodes.SUCCESS;
+    }
+
+    private ConcurrentLinkedQueue<BluetoothGattDescriptor> queuedDescriptorReads = new ConcurrentLinkedQueue<>();
+
+    @SuppressLint("MissingPermission")
+    public void queueReadDescriptor(BluetoothGattDescriptor d) {
+        // Try and immediately service the request
+        if (!dkGattDevice.readDescriptor(d)) {
+            // Could not start the characteristic read: add it to the queue
+            Log.i("DevKitBtInterface", "Queued desc read for " + d.getUuid().toString());
+            queuedDescriptorReads.add(d);
+        } else {
+            Log.i("DevKitBtInterface", "Sent desc read for " + d.getUuid().toString());
+        }
     }
 }
