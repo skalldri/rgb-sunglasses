@@ -15,6 +15,7 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.LinearLayout;
 import android.widget.Switch;
 
 import androidx.annotation.NonNull;
@@ -28,9 +29,12 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import dev.autom8ed.rgbsunglasses.databinding.FragmentZigzaganimationBinding;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothDescriptorInfo;
+import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothGattCharacteristicInfo;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothHelpers;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.DevKitBtInterface;
+import dev.autom8ed.rgbsunglasses.ui.bluetooth.DeviceGeneratedUiBase;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.IsActiveCharacteristic;
+import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteBooleanCharacteristic;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteIntegerCharacteristic;
 
 public class AnimationBoilerplate extends Fragment {
@@ -40,7 +44,6 @@ public class AnimationBoilerplate extends Fragment {
 
     LayoutInflater myInflater;
 
-    IsActiveCharacteristic isActiveCharacteristic = null;
     DevKitBtInterface dkInterface = null;
 
     AnimationServiceInterface animServiceCallback = new AnimationServiceInterface() {
@@ -48,41 +51,36 @@ public class AnimationBoilerplate extends Fragment {
         public void onGattServiceFound(BluetoothGattService service) {
             super.onGattServiceFound(service);
 
+            Log.i("AnimationBoilerplate", "onGattServiceFound");
+
             for (BluetoothGattCharacteristic characteristic : service.getCharacteristics()) {
-                if(IsActiveCharacteristic.isIsActiveCharacteristic(characteristic.getUuid(), kAnimationType.ordinal())) {
-                    Log.i("ZigZagAnimation", "Found IsActive characteristic!");
-                    //isActiveCharacteristic = new IsActiveCharacteristic(characteristic, isActiveSw, dkInterface);
-                    continue;
-                } else {
-                    Log.i("ZigZagAnimation", "Got unknown char " + characteristic.getUuid().toString());
+                Log.i("AnimationBoilerplate", "Got unknown char " + characteristic.getUuid().toString());
 
-                    // Lets figure out more about this characteristic
-                    for (BluetoothGattDescriptor d : characteristic.getDescriptors()) {
-                        Log.i("ZigZagAnimation", "Reading descriptor: " + d.getUuid().toString());
-                        dkInterface.queueReadDescriptor(d);
-                    }
+                // Lets figure out more about this characteristic
+                for (BluetoothGattDescriptor d : characteristic.getDescriptors()) {
+                    Log.i("AnimationBoilerplate", "Reading descriptor: " + d.getUuid().toString());
+                    dkInterface.queueReadDescriptor(d);
                 }
-
             }
         }
     };
 
-    Map<BluetoothGattCharacteristic, List<BluetoothDescriptorInfo>> chrcToDescMap = new ConcurrentHashMap<>();
+    Map<BluetoothGattCharacteristic, BluetoothGattCharacteristicInfo> chrcToDescMap = new ConcurrentHashMap<>();
 
-    List<ReadWriteIntegerCharacteristic> myRwIntChrcs = new ArrayList<>();
+    List<DeviceGeneratedUiBase> myDevGeneratedUiElems = new ArrayList<>();
 
     BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override
         public void onDescriptorRead(@NonNull BluetoothGatt gatt, @NonNull BluetoothGattDescriptor descriptor, int status, @NonNull byte[] value) {
             super.onDescriptorRead(gatt, descriptor, status, value);
 
-            Log.i("ZigZagAnim", "onDescriptorRead: " + descriptor.getUuid().toString() + " status = " +  status);
+            Log.i("AnimationBoilerplate", "onDescriptorRead: " + descriptor.getUuid().toString() + " status = " +  status);
 
             if (status == BluetoothStatusCodes.SUCCESS) {
                 if (!chrcToDescMap.containsKey(descriptor.getCharacteristic())) {
                     // We have not seen this characteristic yet, insert an empty arraylist into the map
-                    chrcToDescMap.put(descriptor.getCharacteristic(), new ArrayList<BluetoothDescriptorInfo>());
-                    Log.i("ZigZagAnim", "Creating new map list");
+                    chrcToDescMap.put(descriptor.getCharacteristic(), new BluetoothGattCharacteristicInfo());
+                    Log.i("AnimationBoilerplate", "Creating new map list");
                 }
 
                 BluetoothDescriptorInfo info = new BluetoothDescriptorInfo();
@@ -90,29 +88,36 @@ public class AnimationBoilerplate extends Fragment {
                 info.value = value;
 
                 // Add descriptor to the list
-                Log.i("ZigZagAnim", "Adding");
-                chrcToDescMap.get(descriptor.getCharacteristic()).add(info);
+                Log.i("AnimationBoilerplate", "Adding");
+                chrcToDescMap.get(descriptor.getCharacteristic()).infos.add(info);
             }
 
-            Log.i("ZigZagAnim", "List Len: " + chrcToDescMap.get(descriptor.getCharacteristic()).size());
+            Log.i("ZigZagAnim", "List Len: " + chrcToDescMap.get(descriptor.getCharacteristic()).infos.size());
+
+            if (chrcToDescMap.get(descriptor.getCharacteristic()).addedToUi) {
+                return;
+            }
 
             BluetoothDescriptorInfo haveCpf = null;
             BluetoothDescriptorInfo haveCud = null;
-            for (BluetoothDescriptorInfo i : chrcToDescMap.get(descriptor.getCharacteristic())) {
-                Log.i("ZigZagAnim", "Testing descriptor " + i.descriptor.getUuid().toString());
+
+            for (BluetoothDescriptorInfo i : chrcToDescMap.get(descriptor.getCharacteristic()).infos) {
+                Log.i("AnimationBoilerplate", "Testing descriptor " + i.descriptor.getUuid().toString());
                 if (i.descriptor.getUuid().equals(getUuidForCpfDescriptor())) {
-                    Log.i("ZigZagAnim", "Have CPF!");
+                    Log.i("AnimationBoilerplate", "Have CPF!");
                     haveCpf = i;
                 } else if (i.descriptor.getUuid().equals(getUuidForCudDescriptor())) {
-                    Log.i("ZigZagAnim", "Have CUD!");
+                    Log.i("AnimationBoilerplate", "Have CUD!");
                     haveCud = i;
                 }
             }
 
             if (haveCpf != null && haveCud != null) {
-                Log.i("ZigZagAnim",  "Format: " + haveCpf.value[0]);
+                Log.i("AnimationBoilerplate",  "Format: " + haveCpf.value[0]);
                 String cud = new String(haveCud.value, StandardCharsets.UTF_8);
-                Log.i("ZigZagAnim",  "Description: " + cud);
+                Log.i("AnimationBoilerplate",  "Description: " + cud);
+
+                chrcToDescMap.get(descriptor.getCharacteristic()).addedToUi = true;
 
                 byte cpf = haveCpf.value[0];
                 if (cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT8 ||
@@ -125,52 +130,49 @@ public class AnimationBoilerplate extends Fragment {
                     handler.post(new Runnable() {
                         @Override
                         public void run() {
-                            /*ReadWriteIntegerCharacteristic rwIntChrc = new ReadWriteIntegerCharacteristic(
+                            ReadWriteIntegerCharacteristic rwIntChrc = new ReadWriteIntegerCharacteristic(
                                     myInflater,
-                                    binding.linearLayoutVertical,
+                                    myLayout,
                                     descriptor.getCharacteristic(),
                                     cud,
                                     cpf,
                                     dkInterface);
-                            myRwIntChrcs.add(rwIntChrc);*/
+                            myDevGeneratedUiElems.add(rwIntChrc);
+                        }
+                    });
+                } else if (cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_BOOLEAN) {
+                    handler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            ReadWriteBooleanCharacteristic rwBoolChrc = new ReadWriteBooleanCharacteristic(
+                                    myInflater,
+                                    myLayout,
+                                    descriptor.getCharacteristic(),
+                                    cud,
+                                    cpf,
+                                    dkInterface);
+                            myDevGeneratedUiElems.add(rwBoolChrc);
                         }
                     });
                 }
-
-
             }
         }
     };
 
-    /*
-    public View onCreateView(@NonNull LayoutInflater inflater,
-                             ViewGroup container, Bundle savedInstanceState) {
+    LinearLayout myLayout;
+
+    AnimationType myAnimationType;
+
+    public void onAnimCreateView(@NonNull LayoutInflater inflater, LinearLayout layout, AnimationType a) {
         myInflater = inflater;
+        myAnimationType = a;
+        myLayout = layout;
 
-        // binding = FragmentZigzaganimationBinding.inflate(inflater, container, false);
-        // View root = binding.getRoot();
+        Log.i("AnimationBoilerplate", "onAnimCreateView");
 
-        Log.i("ZigZagAnimation", "onCreateView");
-
-        dkInterface = new DevKitBtInterface(getContext(), animServiceCallback, kAnimationType);
-
+        dkInterface = new DevKitBtInterface(getContext(), animServiceCallback, myAnimationType);
         dkInterface.registerForGattCallback(callback);
-
-        return root;
     }
 
-    @Override
-    public void onDestroyView() {
-        super.onDestroyView();
-        //binding = null;
 
-        Log.i("ZigZagAnimation", "onDestroyView");
-    }
-    */
-
-    AnimationType kAnimationType;
-
-    public AnimationBoilerplate(AnimationType a) {
-        kAnimationType = a;
-    }
 }
