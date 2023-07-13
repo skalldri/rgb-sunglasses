@@ -9,4 +9,5 @@ enum class Animation
     BtAdvertising = 3,
     BtConnecting = 4,
     Rainbow = 5,
+    BtPairing = 6,
 };

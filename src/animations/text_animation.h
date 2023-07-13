@@ -5,17 +5,19 @@
 class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Text>
 {
     public:
+        static constexpr size_t kMaxMsgLen = 255;
+
         TextAnimation();
 
         void init() override;
         void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
 
-        void pickStaticMessage(size_t msgId);
-
     private:
-        static constexpr size_t stepTime = 100; // The time required to move the text over one pixel
+        const char* getStringFromSlot(size_t slot);
 
-        const char* currentMessage = NULL;
+        size_t getUpNext();
+
+        char currentMessage[kMaxMsgLen]; 
 
         // Current cycle time within the animation cycle
         size_t currentCycleTimeMs = 0;

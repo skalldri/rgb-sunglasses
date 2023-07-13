@@ -49,6 +49,17 @@ public class DevKitBtInterface {
             serviceQueuedActions();
         }
 
+        @Override
+        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+            super.onDescriptorWrite(gatt, descriptor, status);
+
+            for (BluetoothGattCallback c : extraCallbacks) {
+                c.onDescriptorWrite(gatt, descriptor, status);
+            }
+
+            serviceQueuedActions();
+        }
+
         @SuppressLint("MissingPermission")
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
@@ -125,6 +136,8 @@ public class DevKitBtInterface {
             for (BluetoothGattCallback c : extraCallbacks) {
                 c.onCharacteristicChanged(gatt, characteristic, value);
             }
+
+            serviceQueuedActions();
         }
     };
 
@@ -147,7 +160,19 @@ public class DevKitBtInterface {
                 Log.i("DevKitBtInterface", "Successfully started next queued characteristic write for " + c.characteristic.getUuid().toString());
                 queuedCharacteristicWrites.remove();
             } else {
-                Log.i("DevKitBtInterface", "Re-queuing write for " + c.characteristic.getUuid().toString());
+                Log.i("DevKitBtInterface", "Re-queuing write for characteristic " + c.characteristic.getUuid().toString());
+            }
+        }
+
+        if (queuedDescriptorWrites.size() != 0) {
+            BluetoothDescriptorWriteQueueEntry c = queuedDescriptorWrites.peek();
+
+            if (dkGattDevice.writeDescriptor(c.descriptor, c.value) == BluetoothStatusCodes.SUCCESS) {
+                // Only remove from the queue if we successfully scheduled a read
+                Log.i("DevKitBtInterface", "Successfully started next queued descriptor write for " + c.descriptor.getUuid().toString());
+                queuedDescriptorWrites.remove();
+            } else {
+                Log.i("DevKitBtInterface", "Re-queuing write for descriptor " + c.descriptor.getUuid().toString());
             }
         }
 
@@ -159,7 +184,7 @@ public class DevKitBtInterface {
                 Log.i("DevKitBtInterface", "Successfully started next queued descriptor read for " + d.getUuid().toString());
                 queuedDescriptorReads.remove();
             } else {
-                Log.i("DevKitBtInterface", "Re-queuing read for " + d.getUuid().toString());
+                Log.i("DevKitBtInterface", "Re-queuing read for descriptor " + d.getUuid().toString());
             }
         }
 
@@ -171,7 +196,7 @@ public class DevKitBtInterface {
                 Log.i("DevKitBtInterface", "Successfully started next queued characteristic read for " + c.getUuid().toString());
                 queuedCharacteristicReads.remove();
             } else {
-                Log.i("DevKitBtInterface", "Re-queuing read for " + c.getUuid().toString());
+                Log.i("DevKitBtInterface", "Re-queuing read for characteristic " + c.getUuid().toString());
             }
         }
     }
@@ -252,7 +277,7 @@ public class DevKitBtInterface {
         // Try and immediately service the request
         if (res != BluetoothStatusCodes.SUCCESS) {
             // Could not start the characteristic write: add it to the queue
-            Log.i("DevKitBtInterface", "Queued char read for " + c.getUuid().toString());
+            Log.i("DevKitBtInterface", "Queued char write for " + c.getUuid().toString());
             BluetoothCharacteristicWriteQueueEntry e = new BluetoothCharacteristicWriteQueueEntry();
             e.characteristic = c;
             e.value = value;
@@ -260,6 +285,27 @@ public class DevKitBtInterface {
             queuedCharacteristicWrites.add(e);
         } else {
             Log.i("DevKitBtInterface", "Sent char write for " + c.getUuid().toString());
+        }
+
+        return BluetoothStatusCodes.SUCCESS;
+    }
+
+    private ConcurrentLinkedQueue<BluetoothDescriptorWriteQueueEntry> queuedDescriptorWrites = new ConcurrentLinkedQueue<>();
+
+    @SuppressLint("MissingPermission")
+    public int queueWriteDescriptor(BluetoothGattDescriptor d, byte[] value) {
+        int res = dkGattDevice.writeDescriptor(d, value);
+
+        // Try and immediately service the request
+        if (res != BluetoothStatusCodes.SUCCESS) {
+            // Could not start the characteristic write: add it to the queue
+            Log.i("DevKitBtInterface", "Queued desc write for " + d.getUuid().toString());
+            BluetoothDescriptorWriteQueueEntry e = new BluetoothDescriptorWriteQueueEntry();
+            e.descriptor = d;
+            e.value = value;
+            queuedDescriptorWrites.add(e);
+        } else {
+            Log.i("DevKitBtInterface", "Sent char write for " + d.getUuid().toString());
         }
 
         return BluetoothStatusCodes.SUCCESS;

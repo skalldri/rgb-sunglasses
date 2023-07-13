@@ -40,3 +40,22 @@ class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation
         // Current cycle time within the animation cycle
         size_t currentCycleTimeMs = 0;
 };
+
+class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Animation::BtPairing>
+{
+    public:
+        void init() override;
+        void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+        void setPairingCode(unsigned int code);
+
+    private:
+        unsigned int pairingCode = 0;
+
+        // The time spent flashing on each pulse type
+        static constexpr size_t kStepTimeMs = 100;
+
+        // Current cycle time within the animation cycle
+        size_t currentCycleTimeMs = 0;
+
+        int32_t currentTextOffset = 0;
+};

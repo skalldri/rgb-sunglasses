@@ -49,6 +49,10 @@ public class BluetoothHelpers {
         return UUID.fromString("00002901-0000-1000-8000-00805f9b34fb");
     }
 
+    public static UUID getUuidForCccDescriptor() {
+        return UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+    }
+
     public static AnimationType isAnimationService(UUID uuid) {
         for (AnimationType type : AnimationType.values()) {
             if (uuid.equals(BluetoothHelpers.getUuidForAnimationService(type.ordinal()))) {

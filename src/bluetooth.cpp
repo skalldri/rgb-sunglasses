@@ -14,6 +14,7 @@
 #include <errno.h>
 
 #include <pattern_controller.h>
+#include <animations/bt_animations.h>
 
 LOG_MODULE_REGISTER(bluetooth, LOG_LEVEL_DBG);
 
@@ -123,6 +124,7 @@ struct BtThreadCommand
     struct bt_conn* conn; // Connection associated with the event
     bt_security_t level; // Security level, if event == SECURITY_CHANGED
     uint8_t reason; // Disconnection reason
+    unsigned int pairingKey;
 };
 static_assert(sizeof(BtThreadCommand) % BT_THREAD_MSGQ_ALIGNMENT == 0, "BtThreadCommand must be a multiple of BT_THREAD_MSGQ_ALIGNMENT");
 
@@ -251,6 +253,19 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 #if IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED)
 static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
 {
+    BtThreadCommand cmd;
+    cmd.event = BtThreadEvent::PAIRING_NEEDED;
+
+    // Do not decref the conn yet, we will do that in the BT thread. We want the conn object
+    // to remain valid while this event sits in the msgq
+    cmd.conn = conn;
+    cmd.pairingKey = passkey;
+
+    int ret = k_msgq_put(&bt_thread_command_msgq, &cmd, K_NO_WAIT);
+    if (ret) {
+        LOG_ERR("Failed to put Bluetooth disconnection event on thread msgq!");
+    }
+
     char addr[BT_ADDR_LE_STR_LEN];
 
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
@@ -537,6 +552,9 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
     case BtThreadEvent::PAIRING_NEEDED:
         // Peer needs to enter a pin code to pair with us
         LOG_INF("Peer needs to enter a pin code to pair");
+        BtPairingAnimation::getInstance()->init();
+        BtPairingAnimation::getInstance()->setPairingCode(cmd->pairingKey);
+        pattern_controller_request_indicator(Indicator::BtPairing);
         break;
 
         // No default here: we want the compiler kicking and screaming if we forget one of these
@@ -567,7 +585,7 @@ void bt_state_connected_handle_command(BtThreadContext *ctx, const BtThreadComma
         break;
 
     case BtThreadEvent::DISCONNECTION:
-        LOG_WRN("Peer left before we could complete a connection. Return to advertising");
+        LOG_WRN("Peer left. Return to advertising");
         bt_conn_unref(ctx->conn); // Decref the conn so we don't have a leak
         ctx->conn = NULL;
         bt_state_change_to(ctx, BtThreadState::ADVERTISING);

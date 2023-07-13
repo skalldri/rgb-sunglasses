@@ -1,4 +1,5 @@
 package dev.autom8ed.rgbsunglasses.ui.animations;
+import static dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothHelpers.getUuidForCccDescriptor;
 import static dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothHelpers.getUuidForCpfDescriptor;
 import static dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothHelpers.getUuidForCudDescriptor;
 
@@ -27,15 +28,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import dev.autom8ed.rgbsunglasses.databinding.FragmentZigzaganimationBinding;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothDescriptorInfo;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothGattCharacteristicInfo;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.BluetoothHelpers;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.DevKitBtInterface;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.DeviceGeneratedUiBase;
-import dev.autom8ed.rgbsunglasses.ui.bluetooth.IsActiveCharacteristic;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteBooleanCharacteristic;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteIntegerCharacteristic;
+import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteTextCharacteristic;
 
 public class AnimationBoilerplate extends Fragment {
 
@@ -88,11 +88,11 @@ public class AnimationBoilerplate extends Fragment {
                 info.value = value;
 
                 // Add descriptor to the list
-                Log.i("AnimationBoilerplate", "Adding");
+                Log.i("AnimationBoilerplate", "Adding " + descriptor.getUuid().toString());
                 chrcToDescMap.get(descriptor.getCharacteristic()).infos.add(info);
             }
 
-            Log.i("ZigZagAnim", "List Len: " + chrcToDescMap.get(descriptor.getCharacteristic()).infos.size());
+            Log.i("AnimationBoilerplate", "List Len: " + chrcToDescMap.get(descriptor.getCharacteristic()).infos.size());
 
             if (chrcToDescMap.get(descriptor.getCharacteristic()).addedToUi) {
                 return;
@@ -100,6 +100,7 @@ public class AnimationBoilerplate extends Fragment {
 
             BluetoothDescriptorInfo haveCpf = null;
             BluetoothDescriptorInfo haveCud = null;
+            BluetoothDescriptorInfo haveCcc = null;
 
             for (BluetoothDescriptorInfo i : chrcToDescMap.get(descriptor.getCharacteristic()).infos) {
                 Log.i("AnimationBoilerplate", "Testing descriptor " + i.descriptor.getUuid().toString());
@@ -109,10 +110,13 @@ public class AnimationBoilerplate extends Fragment {
                 } else if (i.descriptor.getUuid().equals(getUuidForCudDescriptor())) {
                     Log.i("AnimationBoilerplate", "Have CUD!");
                     haveCud = i;
+                } else if (i.descriptor.getUuid().equals(getUuidForCccDescriptor())) {
+                    Log.i("AnimationBoilerplate", "Have CCC!");
+                    haveCcc = i;
                 }
             }
 
-            if (haveCpf != null && haveCud != null) {
+            if (haveCpf != null && haveCud != null && haveCcc != null) {
                 Log.i("AnimationBoilerplate",  "Format: " + haveCpf.value[0]);
                 String cud = new String(haveCud.value, StandardCharsets.UTF_8);
                 Log.i("AnimationBoilerplate",  "Description: " + cud);
@@ -127,6 +131,7 @@ public class AnimationBoilerplate extends Fragment {
                         cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_SINT16 ||
                         cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_SINT32) {
                     // Create a new ReadWriteIntegerCharacteristic and add it to the display
+                    BluetoothDescriptorInfo finalHaveCcc2 = haveCcc;
                     handler.post(new Runnable() {
                         @Override
                         public void run() {
@@ -136,11 +141,13 @@ public class AnimationBoilerplate extends Fragment {
                                     descriptor.getCharacteristic(),
                                     cud,
                                     cpf,
+                                    finalHaveCcc2.descriptor,
                                     dkInterface);
                             myDevGeneratedUiElems.add(rwIntChrc);
                         }
                     });
                 } else if (cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_BOOLEAN) {
+                    BluetoothDescriptorInfo finalHaveCcc1 = haveCcc;
                     handler.post(new Runnable() {
                         @Override
                         public void run() {
@@ -150,8 +157,25 @@ public class AnimationBoilerplate extends Fragment {
                                     descriptor.getCharacteristic(),
                                     cud,
                                     cpf,
+                                    finalHaveCcc1.descriptor,
                                     dkInterface);
                             myDevGeneratedUiElems.add(rwBoolChrc);
+                        }
+                    });
+                } else if (cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UTF8S) {
+                    BluetoothDescriptorInfo finalHaveCcc = haveCcc;
+                    handler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            ReadWriteTextCharacteristic rwStrChrc = new ReadWriteTextCharacteristic(
+                                    myInflater,
+                                    myLayout,
+                                    descriptor.getCharacteristic(),
+                                    cud,
+                                    cpf,
+                                    finalHaveCcc.descriptor,
+                                    dkInterface);
+                            myDevGeneratedUiElems.add(rwStrChrc);
                         }
                     });
                 }
@@ -173,6 +197,4 @@ public class AnimationBoilerplate extends Fragment {
         dkInterface = new DevKitBtInterface(getContext(), animServiceCallback, myAnimationType);
         dkInterface.registerForGattCallback(callback);
     }
-
-
 }

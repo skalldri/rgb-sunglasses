@@ -38,6 +38,9 @@ BaseAnimation* getIndicator(Indicator indicator) {
         case Indicator::BtAdvertising:
             return BtAdvertisingAnimation::getInstance();
 
+        case Indicator::BtPairing:
+            return BtPairingAnimation::getInstance();
+
         case Indicator::None:
             // Explicit fallthrough to get to the NULL animation
             break; 
@@ -80,6 +83,7 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
     // Initialize all animations
     BtAdvertisingAnimation::getInstance()->init();
     BtConnectingAnimation::getInstance()->init();
+    BtPairingAnimation::getInstance()->init();
 
     ZigZagAnimation::getInstance()->init();
     NullAnimation::getInstance()->init();

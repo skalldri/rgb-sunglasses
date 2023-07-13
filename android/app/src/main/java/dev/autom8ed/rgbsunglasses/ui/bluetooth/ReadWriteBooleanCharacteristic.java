@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -49,7 +50,7 @@ public class ReadWriteBooleanCharacteristic extends DeviceGeneratedUiBase {
             super.onCharacteristicWrite(gatt, characteristic, status);
 
             if (characteristic.getUuid().equals(myCharacteristic.getUuid())) {
-                Log.i("ReadWriteTextCharacteristic", "write complete for " + myCharacteristic.getUuid().toString() + ": " + status);
+                Log.i("ReadWriteBooleanCharacteristic", "write complete for " + myCharacteristic.getUuid().toString() + ": " + status);
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
@@ -58,9 +59,30 @@ public class ReadWriteBooleanCharacteristic extends DeviceGeneratedUiBase {
                 });
             }
         }
+
+        @Override
+        public void onCharacteristicChanged(@NonNull BluetoothGatt gatt, @NonNull BluetoothGattCharacteristic characteristic, @NonNull byte[] value) {
+            super.onCharacteristicChanged(gatt, characteristic, value);
+            Log.i("ReadWriteBooleanCharacteristic", "onCharacteristicChanged");
+
+            if (characteristic.getUuid().equals(myCharacteristic.getUuid())) {
+                // String str = new String(value, StandardCharsets.UTF_8);
+                Log.i("ReadWriteBooleanCharacteristic", "read complete for " + myCharacteristic.getUuid().toString() + ": ");
+                boolean state = value[0] == 1;
+
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        binding.switch1.setChecked(state);
+                    }
+                });
+            }
+        }
     };
 
     byte myCpf;
+
+    BluetoothGattDescriptor myCcc;
 
     @SuppressLint("MissingPermission")
     public ReadWriteBooleanCharacteristic(
@@ -69,12 +91,14 @@ public class ReadWriteBooleanCharacteristic extends DeviceGeneratedUiBase {
             BluetoothGattCharacteristic c,
             String cud,
             byte cpf,
+            BluetoothGattDescriptor ccc,
             DevKitBtInterface i) {
         binding = ReadWriteNotifBoolBinding.inflate(inflater, layout, true);
 
         dkInterface = i;
         myCharacteristic = c;
         myCpf = cpf;
+        myCcc = ccc;
 
         // Reset button state
         binding.switch1.setEnabled(true);
@@ -91,6 +115,8 @@ public class ReadWriteBooleanCharacteristic extends DeviceGeneratedUiBase {
         // Enable characteristic notification
         if (!dkInterface.dkGattDevice.setCharacteristicNotification(myCharacteristic, true)) {
             Log.e("ReadWriteBoolean", "Failed to register for characteristic notification");
+        } else {
+            dkInterface.queueWriteDescriptor(ccc, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
         }
 
         binding.switch1.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {

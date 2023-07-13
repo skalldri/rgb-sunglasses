@@ -6,6 +6,7 @@ enum class Indicator {
     None = 0,
     BtAdvertising,
     BtConnecting,
+    BtPairing,
 };
 
 int pattern_controller_request_indicator(Indicator ind);

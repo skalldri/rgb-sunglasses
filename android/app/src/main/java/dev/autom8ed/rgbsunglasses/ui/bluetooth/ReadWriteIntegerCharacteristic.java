@@ -1,5 +1,6 @@
 package dev.autom8ed.rgbsunglasses.ui.bluetooth;
 
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
@@ -33,10 +34,10 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
             return ((int)value[0]) & 0xFF;
         }
         else if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT16) {
-            return ((value[1] << 8) | value[0]) & 0xFFFF;
+            return (((value[1] & 0xFF) << 8) | (value[0] & 0xFF)) & 0xFFFF;
         }
         else if (myCpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_UINT32) {
-            return ((value[3] << 24) | (value[2] << 16) | (value[1] << 8) | value[0]) & 0xFFFFFFFF;
+            return (((value[3] & 0xFF) << 24) | ((value[2] & 0xFF) << 16) | ((value[1] &0xFF) << 8) | (value[0] & 0xFF)) & 0xFFFFFFFF;
         }
         return 12345;
     }
@@ -73,7 +74,7 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
 
             if (characteristic.getUuid().equals(myCharacteristic.getUuid())) {
                 // String str = new String(value, StandardCharsets.UTF_8);
-                Log.i("ReadWriteTextCharacteristic", "read complete for " + myCharacteristic.getUuid().toString() + ": ");
+                Log.i("ReadWriteIntegerCharacteristic", "read complete for " + myCharacteristic.getUuid().toString() + ": ");
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
@@ -88,7 +89,7 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
             super.onCharacteristicWrite(gatt, characteristic, status);
 
             if (characteristic.getUuid().equals(myCharacteristic.getUuid())) {
-                Log.i("ReadWriteTextCharacteristic", "write complete for " + myCharacteristic.getUuid().toString() + ": " + status);
+                Log.i("ReadWriteIntegerCharacteristic", "write complete for " + myCharacteristic.getUuid().toString() + ": " + status);
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
@@ -97,22 +98,43 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
                 });
             }
         }
+
+        @Override
+        public void onCharacteristicChanged(@NonNull BluetoothGatt gatt, @NonNull BluetoothGattCharacteristic characteristic, @NonNull byte[] value) {
+            super.onCharacteristicChanged(gatt, characteristic, value);
+            Log.i("ReadWriteIntegerCharacteristic", "onCharacteristicChanged");
+
+            if (characteristic.getUuid().equals(myCharacteristic.getUuid())) {
+                // String str = new String(value, StandardCharsets.UTF_8);
+                Log.i("ReadWriteIntegerCharacteristic", "read complete for " + myCharacteristic.getUuid().toString() + ": ");
+                handler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        binding.editTextNumber.setText(String.valueOf(bytesToInt(value)));
+                    }
+                });
+            }
+        }
     };
 
     byte myCpf;
+    BluetoothGattDescriptor myCcc;
 
+    @SuppressLint("MissingPermission")
     public ReadWriteIntegerCharacteristic(
             @NonNull LayoutInflater inflater,
             LinearLayout layout,
             BluetoothGattCharacteristic c,
             String cud,
             byte cpf,
+            BluetoothGattDescriptor ccc,
             DevKitBtInterface i) {
         binding = ReadWriteIntBinding.inflate(inflater, layout, true);
 
         dkInterface = i;
         myCharacteristic = c;
         myCpf = cpf;
+        myCcc = ccc;
 
         // Reset button state
         binding.button.setEnabled(true);
@@ -125,6 +147,13 @@ public class ReadWriteIntegerCharacteristic extends DeviceGeneratedUiBase {
 
         // Read the characteristic
         dkInterface.queueReadCharacteristic(myCharacteristic);
+
+        // Enable characteristic notification
+        if (!dkInterface.dkGattDevice.setCharacteristicNotification(myCharacteristic, true)) {
+            Log.e("ReadWriteIntegerCharacteristic", "Failed to register for characteristic notification");
+        } else {
+            dkInterface.queueWriteDescriptor(ccc, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+        }
 
         binding.button.setOnClickListener(new View.OnClickListener() {
             @Override

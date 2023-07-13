@@ -87,9 +87,9 @@
                    _read_func, \
                    _write_func, \
                    NULL), \
+    BT_GATT_CCC(_ccc_cfg_changed_func, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), \
     BT_GATT_CUD(_desc, BT_GATT_PERM_READ), \
-    BT_GATT_CPF(&_prefix ## _cpf), \
-    BT_GATT_CCC(_ccc_cfg_changed_func, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE)
+    BT_GATT_CPF(&_prefix ## _cpf)
 
 // Reference a string characteristic, and indicate to the peer it has read/write capabilities
 #define ANIM_SVC_READ_WRITE_CHRC_REFERENCE(_prefix, _desc, _read_func, _write_func) \

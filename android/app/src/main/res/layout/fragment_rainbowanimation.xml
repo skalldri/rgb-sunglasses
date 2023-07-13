@@ -7,19 +7,13 @@
     tools:context=".ui.notifications.NotificationsFragment">
 
     <LinearLayout
+        android:id="@+id/linearLayoutVertical"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_marginHorizontal="16dp"
         android:layout_marginVertical="16dp"
         android:orientation="vertical"
-        tools:layout_editor_absoluteX="16dp">
-
-        <Switch
-            android:id="@+id/is_rainbow_active_switch"
-            android:layout_width="150dp"
-            android:layout_height="48dp"
-            android:text="Is Active" />
-
-    </LinearLayout>
+        tools:layout_editor_absoluteX="16dp"
+        tools:layout_editor_absoluteY="16dp" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

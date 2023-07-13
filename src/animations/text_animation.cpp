@@ -13,29 +13,32 @@ ANIM_SVC_UUID_DEFINE(TextAnimation);
 
 constexpr size_t kNumStringSlots = 20;
 
-using StepTimeMs = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 0, uint32_t, 100);
+using StepTimeMs = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 0, uint32_t, 50);
+
+using UpNext = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 2, uint32_t, 0);
 
 // Declare a bunch of read/write string instance
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 100);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 101);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 102);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 103);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 104);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 105);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 106);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 107);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 108);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 109);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 110);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 111);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 112);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 113);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 114);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 115);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 116);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 117);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 118);
-ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 119);
+constexpr size_t kStringSlotStartChrc = 100;
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 100, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 101, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 102, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 103, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 104, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 105, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 106, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 107, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 108, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 109, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 110, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 111, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 112, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 113, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 114, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 115, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 116, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 117, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 118, TextAnimation::kMaxMsgLen);
+ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 119, TextAnimation::kMaxMsgLen);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimation);
@@ -43,6 +46,7 @@ ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimation);
 BT_GATT_SERVICE_DEFINE(text_anim_service,
     ANIM_SVC_UUID_REFERENCE(TextAnimation),
     ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 0, "Step Time Ms"),
+    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 2, "Up Next"),
     ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 100, "Slot 0"),
     ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 101, "Slot 1"),
     ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 102, "Slot 2"),
@@ -90,36 +94,81 @@ const char* kStaticMessages[kNumStringSlots] = {
 };
 
 template<size_t tChrcId>
-using StrSlot = BtReadWriteString<TextAnimation::kAnimationIdNum, tChrcId>;
+using StrSlot = BtReadWriteString<TextAnimation::kAnimationIdNum, tChrcId, TextAnimation::kMaxMsgLen>;
 
 // Helper template to initialize everything
 template<size_t tChrcId>
 static void inline initStrSlot() {
-    StrSlot<tChrcId>::getInstance()->setValue(kStaticMessages[tChrcId-100]);
+    StrSlot<tChrcId>::getInstance().setValue(kStaticMessages[tChrcId-kStringSlotStartChrc]);
     initStrSlot<tChrcId-1>();
 }
 
 template<>
-void inline initStrSlot<100>() {
-    StrSlot<100>::getInstance()->setValue(kStaticMessages[0]);
+void inline initStrSlot<kStringSlotStartChrc>() {
+    StrSlot<kStringSlotStartChrc>::getInstance().setValue(kStaticMessages[0]);
 }
 
 TextAnimation::TextAnimation() {
     initStrSlot<119>();
 }
 
+size_t TextAnimation::getUpNext() {
+    uint32_t currUpNext = UpNext::getInstance();
+    uint32_t nextUpNext = currUpNext + 1;
+    if (nextUpNext >= kNumStringSlots) {
+        nextUpNext = 0; // Wraparound
+    }
+
+    LOG_INF("Playing %u now, %u up next", currUpNext, nextUpNext);
+    
+    // Update the variable which will get reflected on the BT remote app, allowing the user
+    // to change the next phrase if needed
+    UpNext::getInstance() = nextUpNext;
+
+    return currUpNext;
+}
+
+// Helper template to initialize everything
+template<size_t tChrcId>
+inline const char* getStringFromSlotTemplate(size_t slot) {
+    if ((slot + kStringSlotStartChrc) == tChrcId) {
+        return StrSlot<tChrcId>::getInstance();
+    }
+
+    return getStringFromSlotTemplate<tChrcId-1>(slot);
+}
+
+template<>
+inline const char* getStringFromSlotTemplate<kStringSlotStartChrc>(size_t slot) {
+    if ((slot + kStringSlotStartChrc) == kStringSlotStartChrc) {
+        return StrSlot<kStringSlotStartChrc>::getInstance();
+    }
+
+    return "INVALID STRING SLOT";
+}
+
+const char* TextAnimation::getStringFromSlot(size_t slot) {
+    if (slot >= kNumStringSlots) {
+        return "INVALID STRING SLOT";
+    }
+
+    return getStringFromSlotTemplate<119>(slot);
+}
+
 void TextAnimation::init() {
     currentCycleTimeMs = 0;
     currentTextOffset = 0;
-    currentMessage = kStaticMessages[0];
-}
-
-void TextAnimation::pickStaticMessage(size_t msgId) {
-    currentTextOffset = 0;
-    currentMessage = kStaticMessages[msgId % ARRAY_SIZE(kStaticMessages)];
+    strncpy(currentMessage, kStaticMessages[getUpNext()], kMaxMsgLen);
 }
 
 void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) {
+    // Turn off all LEDs
+    for (size_t x = 0; x < config->displayWidth; x++) {
+        for (size_t y = 0; y < config->displayHeight; y++) {
+            set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
+        }
+    }
+
     // We want to scroll arbitrarily long messages across the LED panel
     // we also want to do this as efficiently as possible.
     //
@@ -175,8 +224,10 @@ void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTick
         }
     }
 
+    // If we have finished scrolling the current message, pick the next message
     if (firstChar >= currentMessageLen) {
         currentTextOffset = 0;
+        strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
         return;
     }
 
@@ -186,15 +237,13 @@ void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTick
     auto lambda = [&](size_t x, size_t y, bool filled) {
         int32_t realX =  x + charWindowPos;
 
-        if (realX < 0 || realX >= config->displayWidth) {
+        if (realX < 0 || realX >= (int32_t)config->displayWidth) {
             // Bail early if this pixel is not on the display
             return;
         }
 
         if (filled) {
             set_pixel_in_framebuffer(config, realX, y, bufferId, 10, 10, 10);
-        } else {
-            set_pixel_in_framebuffer(config, realX, y, bufferId, 0, 0, 0);
         }
     };
 
@@ -223,7 +272,7 @@ void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTick
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > stepTime) {
+    if (currentCycleTimeMs > StepTimeMs::getInstance()) {
         currentCycleTimeMs = 0;
         currentTextOffset--; // Move text one pixel to the left
     }

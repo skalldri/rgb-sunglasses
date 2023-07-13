@@ -5,28 +5,32 @@ import android.app.Activity;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 
 import androidx.annotation.NonNull;
 
 import java.nio.charset.StandardCharsets;
 
+import dev.autom8ed.rgbsunglasses.databinding.ReadWriteStringBinding;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.DevKitBtInterface;
 
 public class ReadWriteTextCharacteristic extends DeviceGeneratedUiBase {
 
-    EditText editText;
-    Button button;
     BluetoothGattCharacteristic myCharacteristic;
 
     DevKitBtInterface dkInterface;
 
     Handler handler = new Handler(Looper.getMainLooper());
+
+    ReadWriteStringBinding binding;
 
     BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override
@@ -40,7 +44,7 @@ public class ReadWriteTextCharacteristic extends DeviceGeneratedUiBase {
                     @Override
                     public void run() {
 
-                        editText.setText(str);
+                        binding.editSlot0.setText(str);
                     }
                 });
             }
@@ -55,22 +59,32 @@ public class ReadWriteTextCharacteristic extends DeviceGeneratedUiBase {
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
-                        button.setEnabled(true);
+                        binding.submitSlot0.setEnabled(true);
                     }
                 });
             }
         }
     };
 
+    BluetoothGattDescriptor myCcc;
+
     @SuppressLint("MissingPermission")
-    public ReadWriteTextCharacteristic(EditText e, Button b, BluetoothGattCharacteristic c, DevKitBtInterface i) {
-        editText = e;
-        button = b;
+    public ReadWriteTextCharacteristic(@NonNull LayoutInflater inflater,
+                                       LinearLayout layout,
+                                       BluetoothGattCharacteristic c,
+                                       String cud,
+                                       byte cpf,
+                                       BluetoothGattDescriptor ccc,
+                                       DevKitBtInterface i) {
+
+        binding = ReadWriteStringBinding.inflate(inflater, layout, true);
+
         myCharacteristic = c;
         dkInterface = i;
 
         // Reset button state
-        button.setEnabled(true);
+        binding.submitSlot0.setEnabled(true);
+        binding.textView3.setText(cud);
 
         // Register that we want callbacks for GATT reads
         dkInterface.registerForGattCallback(callback);
@@ -81,11 +95,11 @@ public class ReadWriteTextCharacteristic extends DeviceGeneratedUiBase {
         dkInterface.queueReadCharacteristic(myCharacteristic);
 
         // Wire up callback to button press events to write the characteristic
-        button.setOnClickListener(new View.OnClickListener() {
+        binding.submitSlot0.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                button.setEnabled(false);
-                String currentText = String.valueOf(editText.getText());
+                binding.submitSlot0.setEnabled(false);
+                String currentText = String.valueOf(binding.editSlot0.getText());
                 dkInterface.queueWriteCharacteristic(myCharacteristic, currentText.getBytes(StandardCharsets.UTF_8), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
             }
         });
