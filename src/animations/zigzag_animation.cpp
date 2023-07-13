@@ -3,10 +3,10 @@
 
 ANIM_SVC_UUID_DEFINE(ZigZagAnimation);
 
-using StepTimeMs = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 0, uint32_t, 100);
-using ColorRed = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 1, uint8_t, 255);
-using ColorGreen = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 2, uint8_t, 255);
-using ColorBlue = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 3, uint8_t, 255);
+using StepTimeMs = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 0, uint32_t, 200);
+using ColorRed = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 1, uint8_t, 10);
+using ColorGreen = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 2, uint8_t, 10);
+using ColorBlue = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 3, uint8_t, 10);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(ZigZagAnimation);

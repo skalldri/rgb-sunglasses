@@ -9,8 +9,8 @@ class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimati
         void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
 
     private:
-        static constexpr size_t kMinFade = 10;
-        static constexpr size_t kMaxFade = 100;
+        static constexpr size_t kMinFade = 5;
+        static constexpr size_t kMaxFade = 10;
         static constexpr size_t kFadeDistance = kMaxFade - kMinFade;
 
         // The time required to fade up and then back down
@@ -28,8 +28,8 @@ class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation
         void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
 
     private:
-        static constexpr size_t kMinFlash = 10;
-        static constexpr size_t kMaxFlash = 100;
+        static constexpr size_t kMinFlash = 5;
+        static constexpr size_t kMaxFlash = 10;
 
         // The time spent flashing on each pulse type
         static constexpr size_t kFlashSpeedMs = 300;

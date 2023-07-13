@@ -180,17 +180,37 @@ void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTick
         return;
     }
 
+    int32_t charWindowPos;
+
+    // This function gets called repeatedly to render to the display
+    auto lambda = [&](size_t x, size_t y, bool filled) {
+        int32_t realX =  x + charWindowPos;
+
+        if (realX < 0 || realX >= config->displayWidth) {
+            // Bail early if this pixel is not on the display
+            return;
+        }
+
+        if (filled) {
+            set_pixel_in_framebuffer(config, realX, y, bufferId, 10, 10, 10);
+        } else {
+            set_pixel_in_framebuffer(config, realX, y, bufferId, 0, 0, 0);
+        }
+    };
+
     for (size_t i = firstChar; i < currentMessageLen; i++) {
         // Calculate the position of the current character within the virtual texture buffer
         const int32_t currentCharPos = i * FontAtlas::atlasPixelWidthPerChar;
 
         // Calculate where we would be rendering this character within the display window
-        int32_t charWindowPos = currentTextOffsetRelativeToDisplay + currentCharPos;
+        charWindowPos = currentTextOffsetRelativeToDisplay + currentCharPos;
 
         // If the character is within the virtual display buffer, lets render it
         if (charWindowPos >= displayWindowLeftSide && charWindowPos < displayWindowRightSide) {
-            // TODO: font atlas rendering
-            printk("%c", currentMessage[i]);
+            FontAtlas::getInstance()->PrintChar(currentMessage[i], lambda);
+
+            // Debugging
+            // printk("%c", currentMessage[i]);
         } else if (charWindowPos > displayWindowRightSide) {
             // Early optimization: if we have found a character which is off the edge of the right side of the display window,
             // we can stop iterating since no more chars will ever need to be rendered
@@ -198,7 +218,7 @@ void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTick
         }
     }
 
-    printk("\n");
+    // printk("\n");
 
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;

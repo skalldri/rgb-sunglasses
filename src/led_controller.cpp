@@ -176,8 +176,8 @@ int releaseBufferFromDisplay(const size_t buffer) {
 }
 
 // Pick the default LED config
-// const LedConfig* currentConfig = &kFrameLedConfig;
-const LedConfig* currentConfig = &kDevKitLedConfig;
+const LedConfig* currentConfig = &kFrameLedConfig;
+// const LedConfig* currentConfig = &kDevKitLedConfig;
 
 const LedConfig* get_current_led_config() {
     return currentConfig;
@@ -269,8 +269,8 @@ int set_pixel_in_framebuffer(const LedConfig* config, size_t x, size_t y, size_t
             // to always be > missingLeds by the above logic. We must subtract missingLeds from
             // the result to avoid indexing too far into the row
             
-            ledIndex = rowStartIndex + (((ledsOnRow - 1) - xWithinBank) - missingLeds);
-            LOG_DBG("ledIndex = %u + (((%u - 1) - %u) - %u)", rowStartIndex, xWithinBank, missingLeds);
+            ledIndex = rowStartIndex + ((ledsOnRow - 1) - xWithinBank);
+            LOG_DBG("ledIndex = %u + ((%u - 1) - %u)", rowStartIndex, xWithinBank);
         }
     } else {
         // In Bank1, LEDs on the left side of the panel are missing
@@ -487,6 +487,32 @@ static int cmd_led_test(const struct shell *shell,
 
     if (led_1[0][LED_STRIP_1_NUM_PIXELS-1].r != 255) {
         shell_error(shell, "Bank 1 Index %u has wrong color!", LED_STRIP_1_NUM_PIXELS-1);
+        return -EFAULT;
+    }
+
+    // Set the last LED in Bank0, which is 0,11
+    ret = set_pixel_in_framebuffer(&kFrameLedConfig, 0, 11, 0 /* buffer */, 255, 0, 0);
+
+    if (ret) {
+        shell_error(shell, "Unexpected return code setting last Bank0 LED! %d", ret);
+        return -EFAULT;
+    }
+
+    if (led_0[0][LED_STRIP_0_NUM_PIXELS-1].r != 255) {
+        shell_error(shell, "Bank 0 Index %u has wrong color!", LED_STRIP_0_NUM_PIXELS-1);
+        return -EFAULT;
+    }
+
+    // Set the last LED in the last row of bank0, which is 14,11
+    ret = set_pixel_in_framebuffer(&kFrameLedConfig, 14, 11, 0 /* buffer */, 255, 0, 0);
+
+    if (ret) {
+        shell_error(shell, "Unexpected return code setting last Bank0 LED! %d", ret);
+        return -EFAULT;
+    }
+
+    if (led_0[0][201].r != 255) {
+        shell_error(shell, "Bank 0 Index %u has wrong color!", 201);
         return -EFAULT;
     }
 
