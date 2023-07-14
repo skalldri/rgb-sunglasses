@@ -8,4 +8,7 @@ class Singleton {
             static T inst;
             return inst;
         }
+    
+    protected:
+        Singleton() = default; // Make constructors private :D
 };

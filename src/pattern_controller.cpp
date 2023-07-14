@@ -2,6 +2,8 @@
 
 #include <led_controller.h>
 
+#include <core_config.h>
+
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -29,6 +31,8 @@ K_THREAD_DEFINE(
 
 Indicator currentIndicator = Indicator::None;
 Animation currentAnimation = Animation::None;
+
+float sBrightnessForFrame = 0.1f;
 
 BaseAnimation* getIndicator(Indicator indicator) {
     switch (indicator) {
@@ -75,7 +79,7 @@ BaseAnimation* getBestRenderAnimation() {
 
 void pattern_controller_thread_func(void* a, void* b, void* c) {
 
-    constexpr float kTargetRenderIntervalMs = 66.6f;
+    
     int ret;
 
     LOG_INF("Pattern control thread start!");
@@ -96,6 +100,8 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
     while (true) {
         int64_t startTicks = k_uptime_ticks();
 
+        float kTargetRenderIntervalMs = CoreConfig::getInstance().getRenderRateMs();
+
         size_t bufferId = 0;
         ret = claimBufferForRender(bufferId);
         if (ret) {
@@ -103,6 +109,9 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
         } else {
 
             BaseAnimation* anim = getBestRenderAnimation();
+
+            // Latch current brightness value from the core config
+            sBrightnessForFrame = CoreConfig::getInstance().getBrightnessFactor();
 
             if (anim) {
                 anim->tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
@@ -167,4 +176,9 @@ int pattern_controller_change_to_animation(Animation animation) {
     currentAnimation = animation;
 
     return 0;
+}
+
+int pattern_controller_set_pixel_in_framebuffer(const LedConfig* config, size_t x, size_t y, size_t bufferId, uint8_t red, uint8_t green, uint8_t blue) {
+    // Scale colors by the current brightness before submitting to the LED controller
+    return set_pixel_in_framebuffer(config, x, y, bufferId, ((float)red) * sBrightnessForFrame, ((float)green) * sBrightnessForFrame, ((float)blue) * sBrightnessForFrame);
 }

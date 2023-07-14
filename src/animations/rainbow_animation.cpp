@@ -64,7 +64,7 @@ void RainbowAnimation::tick(const LedConfig* config, const size_t timeSinceLastT
         float blue = ((1.0f - blendPercent) * ((float)rainbowColors[currentRainbowColor].b)) + (blendPercent * ((float)rainbowColors[nextRainbowColor].b));
 
         for (size_t y = 0; y < config->displayHeight; y++) {
-            set_pixel_in_framebuffer(config, x, y, bufferId, red, green, blue);
+            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, red, green, blue);
         }
     }
 

@@ -31,7 +31,7 @@ void BtAdvertisingAnimation::tick(const LedConfig* config, const size_t timeSinc
 
     for (size_t x = 0; x < config->displayWidth; x++) {
         for (size_t y = 0; y < config->displayHeight; y++) {
-            set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, currentBrightness);
+            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, currentBrightness);
         }
     }
 }
@@ -64,7 +64,7 @@ void BtConnectingAnimation::tick(const LedConfig* config, const size_t timeSince
 
     for (size_t x = 0; x < config->displayWidth; x++) {
         for (size_t y = 0; y < config->displayHeight; y++) {
-            set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, currentBrightness);
+            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, currentBrightness);
         }
     }
 }
@@ -82,7 +82,7 @@ void BtPairingAnimation::tick(const LedConfig* config, const size_t timeSinceLas
     // Turn off all LEDs
     for (size_t x = 0; x < config->displayWidth; x++) {
         for (size_t y = 0; y < config->displayHeight; y++) {
-            set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
+            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
         }
     }
 
@@ -161,7 +161,7 @@ void BtPairingAnimation::tick(const LedConfig* config, const size_t timeSinceLas
         }
 
         if (filled) {
-            set_pixel_in_framebuffer(config, realX, y, bufferId, 0, 0, 10);
+            pattern_controller_set_pixel_in_framebuffer(config, realX, y, bufferId, 0, 0, kLetterBrightness);
         }
     };
 

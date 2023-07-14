@@ -10,11 +10,10 @@ import androidx.annotation.NonNull;
 
 import dev.autom8ed.rgbsunglasses.databinding.FragmentGenericbtserviceBinding;
 
-public class RainbowAnimationFragment extends AnimationBoilerplate {
-
+public class CoreConfigFragment extends AnimationBoilerplate {
     private FragmentGenericbtserviceBinding binding;
 
-    static final public BtServiceType K_BT_SERVICE_TYPE = BtServiceType.Rainbow;
+    static final public BtServiceType K_BT_SERVICE_TYPE = BtServiceType.CoreConfig;
 
     public View onCreateView(@NonNull LayoutInflater inflater,
                              ViewGroup container, Bundle savedInstanceState) {
@@ -24,7 +23,7 @@ public class RainbowAnimationFragment extends AnimationBoilerplate {
 
         View root = binding.getRoot();
 
-        Log.i("RainbowAnimFrag", "onCreateView");
+        Log.i("CoreConfigFrag", "onCreateView");
 
         return root;
     }
@@ -34,6 +33,6 @@ public class RainbowAnimationFragment extends AnimationBoilerplate {
         super.onDestroyView();
         binding = null;
 
-        Log.i("RainbowAnimFrag", "onDestroyView");
+        Log.i("CoreConfigFrag", "onDestroyView");
     }
 }

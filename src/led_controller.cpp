@@ -1,5 +1,7 @@
 #include <led_controller.h>
 
+#include <core_config.h>
+
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
 
@@ -356,7 +358,6 @@ void led_display_thread_func(void* a, void* b, void* c) {
 
     LOG_INF("Starting LED display controller");
 
-    constexpr float kTargetFrameIntervalMs = 33.3f;
     int ret;
 
     while (true) {
@@ -365,6 +366,8 @@ void led_display_thread_func(void* a, void* b, void* c) {
         // Monitor how long updating takes
         // Sleep appropriate amount to maintain target framerate
         int64_t startTicks = k_uptime_ticks();
+
+        float kTargetFrameIntervalMs = CoreConfig::getInstance().getDisplayRateMs();
         
         size_t bufferId = 0;
         ret = claimBufferForDisplay(bufferId);

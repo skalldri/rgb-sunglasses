@@ -7,6 +7,7 @@
     <string name="title_textanimation">Text Anim</string>
     <string name="title_rainbowanimation">Rainbow Anim</string>
     <string name="title_zigzaganimation">ZigZag Anim</string>
+    <string name="title_coreconfig">Core Config</string>
     <string name="nav_header_desc">RGB Sunglasses App</string>
     <string name="nav_header_title">RGB Sunglasses 1</string>
     <string name="nav_header_subtitle">RGB Sunglasses 2</string>

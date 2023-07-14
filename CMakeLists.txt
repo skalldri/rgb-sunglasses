@@ -21,6 +21,7 @@ target_sources(
     src/buttons.cpp
     src/power.cpp
     src/bluetooth.cpp
+    src/core_config.cpp
     src/animations/bt_animations.cpp
     src/animations/null_animation.cpp
     src/animations/zigzag_animation.cpp

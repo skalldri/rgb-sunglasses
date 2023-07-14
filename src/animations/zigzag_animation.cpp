@@ -4,9 +4,9 @@
 BT_SVC_UUID_DEFINE(ZigZagAnimation);
 
 using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 0, uint32_t, 200);
-using ColorRed = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 1, uint8_t, 10);
-using ColorGreen = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 2, uint8_t, 10);
-using ColorBlue = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 3, uint8_t, 10);
+using ColorRed = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 1, uint8_t, 255);
+using ColorGreen = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 2, uint8_t, 255);
+using ColorBlue = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 3, uint8_t, 255);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 BT_SVC_IS_ACTIVE_CHRC_DEFINE(ZigZagAnimation);
@@ -41,7 +41,7 @@ void ZigZagAnimation::tick(const LedConfig* config, const size_t timeSinceLastTi
     // Turn off all LEDs
     for (size_t x = 0; x < config->displayWidth; x++) {
         for (size_t y = 0; y < config->displayHeight; y++) {
-            set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
+            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
         }
     }
 
@@ -49,5 +49,5 @@ void ZigZagAnimation::tick(const LedConfig* config, const size_t timeSinceLastTi
     size_t x = currentIndex % config->displayWidth;
 
     // Turn on just one
-    set_pixel_in_framebuffer(config, x, y, bufferId, ColorRed::getInstance(), ColorGreen::getInstance(), ColorBlue::getInstance());
+    pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, ColorRed::getInstance(), ColorGreen::getInstance(), ColorBlue::getInstance());
 }

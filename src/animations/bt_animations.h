@@ -10,8 +10,8 @@ class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimati
         void setActive(bool active) override {};
 
     private:
-        static constexpr size_t kMinFade = 5;
-        static constexpr size_t kMaxFade = 10;
+        static constexpr size_t kMinFade = 50;
+        static constexpr size_t kMaxFade = 255;
         static constexpr size_t kFadeDistance = kMaxFade - kMinFade;
 
         // The time required to fade up and then back down
@@ -30,8 +30,8 @@ class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation
         void setActive(bool active) override {};
 
     private:
-        static constexpr size_t kMinFlash = 5;
-        static constexpr size_t kMaxFlash = 10;
+        static constexpr size_t kMinFlash = 50;
+        static constexpr size_t kMaxFlash = 255;
 
         // The time spent flashing on each pulse type
         static constexpr size_t kFlashSpeedMs = 300;
@@ -54,6 +54,8 @@ class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Anim
 
     private:
         unsigned int pairingCode = 0;
+
+        static constexpr size_t kLetterBrightness = 255;
 
         // The time spent flashing on each pulse type
         static constexpr size_t kStepTimeMs = 100;

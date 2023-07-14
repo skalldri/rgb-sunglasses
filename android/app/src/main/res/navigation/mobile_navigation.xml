@@ -3,25 +3,13 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/mobile_navigation"
-    app:startDestination="@+id/navigation_home">
+    app:startDestination="@+id/navigation_bluetoothscan">
 
     <fragment
-        android:id="@+id/navigation_home"
-        android:name="dev.autom8ed.rgbsunglasses.ui.home.HomeFragment"
-        android:label="@string/title_home"
-        tools:layout="@layout/fragment_home" />
-
-    <fragment
-        android:id="@+id/navigation_dashboard"
-        android:name="dev.autom8ed.rgbsunglasses.ui.dashboard.DashboardFragment"
-        android:label="@string/title_dashboard"
-        tools:layout="@layout/fragment_dashboard" />
-
-    <fragment
-        android:id="@+id/navigation_notifications"
-        android:name="dev.autom8ed.rgbsunglasses.ui.notifications.NotificationsFragment"
-        android:label="@string/title_notifications"
-        tools:layout="@layout/fragment_notifications" />
+        android:id="@+id/navigation_coreconfig"
+        android:name="dev.autom8ed.rgbsunglasses.ui.animations.CoreConfigFragment"
+        android:label="@string/title_coreconfig"
+        tools:layout="@layout/fragment_genericbtservice" />
 
     <fragment
         android:id="@+id/navigation_bluetoothscan"
@@ -39,7 +27,7 @@
         android:id="@+id/navigation_rainbowanimation"
         android:name="dev.autom8ed.rgbsunglasses.ui.animations.RainbowAnimationFragment"
         android:label="@string/title_rainbowanimation"
-        tools:layout="@layout/fragment_rainbowanimation" />
+        tools:layout="@layout/fragment_genericbtservice" />
 
     <fragment
         android:id="@+id/navigation_zigzaganimation"
