@@ -9,15 +9,11 @@ import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothStatusCodes;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.LayoutInflater;
-import android.view.View;
-import android.view.ViewGroup;
 import android.widget.LinearLayout;
-import android.widget.Switch;
 
 import androidx.annotation.NonNull;
 import androidx.fragment.app.Fragment;
@@ -185,16 +181,16 @@ public class AnimationBoilerplate extends Fragment {
 
     LinearLayout myLayout;
 
-    AnimationType myAnimationType;
+    BtServiceType myBtServiceType;
 
-    public void onAnimCreateView(@NonNull LayoutInflater inflater, LinearLayout layout, AnimationType a) {
+    public void onAnimCreateView(@NonNull LayoutInflater inflater, LinearLayout layout, BtServiceType a) {
         myInflater = inflater;
-        myAnimationType = a;
+        myBtServiceType = a;
         myLayout = layout;
 
         Log.i("AnimationBoilerplate", "onAnimCreateView");
 
-        dkInterface = new DevKitBtInterface(getContext(), animServiceCallback, myAnimationType);
+        dkInterface = new DevKitBtInterface(getContext(), animServiceCallback, myBtServiceType);
         dkInterface.registerForGattCallback(callback);
     }
 }

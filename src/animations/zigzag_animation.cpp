@@ -1,23 +1,23 @@
 #include <animations/zigzag_animation.h>
 #include <bluetooth/read_write_variable.h>
 
-ANIM_SVC_UUID_DEFINE(ZigZagAnimation);
+BT_SVC_UUID_DEFINE(ZigZagAnimation);
 
-using StepTimeMs = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 0, uint32_t, 200);
-using ColorRed = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 1, uint8_t, 10);
-using ColorGreen = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 2, uint8_t, 10);
-using ColorBlue = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 3, uint8_t, 10);
+using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 0, uint32_t, 200);
+using ColorRed = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 1, uint8_t, 10);
+using ColorGreen = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 2, uint8_t, 10);
+using ColorBlue = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 3, uint8_t, 10);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(ZigZagAnimation);
+BT_SVC_IS_ACTIVE_CHRC_DEFINE(ZigZagAnimation);
 
 BT_GATT_SERVICE_DEFINE(zigzag_anim_service,
-    ANIM_SVC_UUID_REFERENCE(ZigZagAnimation),
-    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 0, "Step Time Ms"),
-    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 1, "Red"),
-    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 2, "Green"),
-    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 3, "Blue"),
-    ANIM_SVC_IS_ACTIVE_CHRC_REFERENCE(ZigZagAnimation),
+    BT_SVC_UUID_REFERENCE(ZigZagAnimation),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 0, "Step Time Ms"),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 1, "Red"),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 2, "Green"),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 3, "Blue"),
+    BT_SVC_IS_ACTIVE_CHRC_REFERENCE(ZigZagAnimation),
 );
 
 

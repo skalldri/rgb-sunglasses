@@ -2,7 +2,7 @@ package dev.autom8ed.rgbsunglasses.ui.bluetooth;
 
 import java.util.UUID;
 
-import dev.autom8ed.rgbsunglasses.ui.animations.AnimationType;
+import dev.autom8ed.rgbsunglasses.ui.animations.BtServiceType;
 
 public class BluetoothHelpers {
 
@@ -53,13 +53,13 @@ public class BluetoothHelpers {
         return UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     }
 
-    public static AnimationType isAnimationService(UUID uuid) {
-        for (AnimationType type : AnimationType.values()) {
+    public static BtServiceType isAnimationService(UUID uuid) {
+        for (BtServiceType type : BtServiceType.values()) {
             if (uuid.equals(BluetoothHelpers.getUuidForAnimationService(type.ordinal()))) {
                 return type;
             }
         }
 
-        return AnimationType.None;
+        return BtServiceType.None;
     }
 }

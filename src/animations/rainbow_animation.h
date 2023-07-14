@@ -2,7 +2,7 @@
 
 #include <animations/animation.h>
 
-class RainbowAnimation : public BaseAnimationTemplate<RainbowAnimation, Animation::Rainbow>
+class RainbowAnimation : public BaseAnimationTemplate<RainbowAnimation, Animation::Rainbow, BtServiceId::Rainbow>
 {
     public:
         void init() override;

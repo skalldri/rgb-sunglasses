@@ -2,7 +2,7 @@
 
 #include <animations/animation.h>
 
-class ZigZagAnimation : public BaseAnimationTemplate<ZigZagAnimation, Animation::ZigZag>
+class ZigZagAnimation : public BaseAnimationTemplate<ZigZagAnimation, Animation::ZigZag, BtServiceId::ZigZag>
 {
     public:
         void init() override;

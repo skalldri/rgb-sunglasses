@@ -15,13 +15,13 @@ public class ZigZagAnimationFragment extends AnimationBoilerplate {
 
     private @NonNull FragmentZigzaganimationBinding binding;
 
-    static final public AnimationType kAnimationType = AnimationType.ZigZag;
+    static final public BtServiceType K_BT_SERVICE_TYPE = BtServiceType.ZigZag;
 
     public View onCreateView(@NonNull LayoutInflater inflater,
                              ViewGroup container, Bundle savedInstanceState) {
         binding = FragmentZigzaganimationBinding.inflate(inflater, container, false);
 
-        onAnimCreateView(inflater, binding.linearLayoutVertical, kAnimationType);
+        onAnimCreateView(inflater, binding.linearLayoutVertical, K_BT_SERVICE_TYPE);
 
         View root = binding.getRoot();
 

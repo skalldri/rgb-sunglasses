@@ -1,7 +1,7 @@
 #pragma once
 
 #include <zephyr/bluetooth/gatt.h>
-#include <bluetooth/animation_service.h>
+#include <bluetooth/bt_service.h>
 
 /**
  * @brief A CRTP class which can be inherited by other classes to provide an "IsActive" Bluetooth Characteristic,
@@ -17,7 +17,7 @@ public:
     static void isActiveCccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
     {
         T::getInstance()->sendActiveNotifications_ = (value == BT_GATT_CCC_NOTIFY);
-        printk("Anim %d isActive notification state: %d\n", T::kAnimationIdNum, T::getInstance()->sendActiveNotifications_);
+        printk("Anim %d isActive notification state: %d\n", T::kBtServiceIdNum, T::getInstance()->sendActiveNotifications_);
 
         if (T::getInstance()->sendActiveNotifications_) {
             T::getInstance()->activeAttr_ = attr;
@@ -41,13 +41,13 @@ public:
     {
         if (offset)
         {
-            printk("Err in anim %d\n", T::kAnimationIdNum);
+            printk("Err in bt service %d\n", T::kBtServiceIdNum);
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
         }
 
         if (len > sizeof(active_))
         {
-            printk("Err in anim %d, incorrect len %d\n", T::kAnimationIdNum, len);
+            printk("Err in bt service %d, incorrect len %d\n", T::kBtServiceIdNum, len);
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
         }
 
@@ -83,10 +83,10 @@ protected:
 };
 
 // Used to define that a class as supports the IsActive<> service, and register the relevant bluetooth GATT glue
-#define ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(_animation_class) \
-    __ANIM_SVC_CHRC_DEFINE(is_active_ ## _animation_class, _animation_class::kAnimationIdNum, ANIM_SVC_IS_ACTIVE_CHAR, BLE_GATT_CPF_FORMAT_BOOLEAN)
+#define BT_SVC_IS_ACTIVE_CHRC_DEFINE(_bt_service_class) \
+    __BT_SVC_CHRC_DEFINE(is_active_ ## _bt_service_class, _bt_service_class::kBtServiceIdNum, BT_SVC_IS_ACTIVE_CHAR, BLE_GATT_CPF_FORMAT_BOOLEAN)
 
 // Used to reference pre-defined glue that indicates a class supports the IsActive<> service
-#define ANIM_SVC_IS_ACTIVE_CHRC_REFERENCE(_animation_class) \
-    ANIM_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE(is_active_ ## _animation_class, "Is Active", _animation_class::readIsActive, _animation_class::writeIsActive, _animation_class::isActiveCccCfgChanged)
+#define BT_SVC_IS_ACTIVE_CHRC_REFERENCE(_bt_service_class) \
+    BT_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE(is_active_ ## _bt_service_class, "Is Active", _bt_service_class::readIsActive, _bt_service_class::writeIsActive, _bt_service_class::isActiveCccCfgChanged)
 

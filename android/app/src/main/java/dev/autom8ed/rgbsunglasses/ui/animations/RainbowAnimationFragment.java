@@ -14,13 +14,13 @@ public class RainbowAnimationFragment extends AnimationBoilerplate {
 
     private FragmentRainbowanimationBinding binding;
 
-    static final public AnimationType kAnimationType = AnimationType.Rainbow;
+    static final public BtServiceType K_BT_SERVICE_TYPE = BtServiceType.Rainbow;
 
     public View onCreateView(@NonNull LayoutInflater inflater,
                              ViewGroup container, Bundle savedInstanceState) {
         binding = FragmentRainbowanimationBinding.inflate(inflater, container, false);
 
-        onAnimCreateView(inflater, binding.linearLayoutVertical, kAnimationType);
+        onAnimCreateView(inflater, binding.linearLayoutVertical, K_BT_SERVICE_TYPE);
 
         View root = binding.getRoot();
 

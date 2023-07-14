@@ -1,10 +1,9 @@
 package dev.autom8ed.rgbsunglasses.ui.animations;
 
-public enum AnimationType {
+public enum BtServiceType {
     None,
+    CoreConfig,
     ZigZag,
     Text,
-    BtAdvertising,
-    BtConnecting,
     Rainbow,
 }

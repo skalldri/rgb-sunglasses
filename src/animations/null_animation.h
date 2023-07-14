@@ -2,7 +2,7 @@
 
 #include <animations/animation.h>
 
-class NullAnimation : public BaseAnimationTemplate<NullAnimation, Animation::None>
+class NullAnimation : public BaseAnimationTemplate<NullAnimation, Animation::None, BtServiceId::Invalid>
 {
     public:
         void init() override;

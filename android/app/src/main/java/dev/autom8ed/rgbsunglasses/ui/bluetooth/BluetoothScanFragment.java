@@ -27,7 +27,7 @@ import androidx.lifecycle.ViewModelProvider;
 
 import dev.autom8ed.rgbsunglasses.databinding.FragmentBluetoothscanBinding;
 
-import dev.autom8ed.rgbsunglasses.ui.animations.AnimationType;
+import dev.autom8ed.rgbsunglasses.ui.animations.BtServiceType;
 
 import java.util.List;
 import java.util.Objects;
@@ -43,14 +43,14 @@ public class BluetoothScanFragment extends Fragment  {
 
 
 
-    public AnimationType isAnimationService(UUID uuid) {
-        for (AnimationType type : AnimationType.values()) {
+    public BtServiceType isAnimationService(UUID uuid) {
+        for (BtServiceType type : BtServiceType.values()) {
             if (uuid.equals(BluetoothHelpers.getUuidForAnimationService(type.ordinal()))) {
                 return type;
             }
         }
 
-        return AnimationType.None;
+        return BtServiceType.None;
     }
 
     public void createGattCallback() {
@@ -92,8 +92,8 @@ public class BluetoothScanFragment extends Fragment  {
                 List<BluetoothGattService> services = gatt.getServices();
                 for (BluetoothGattService service : services) {
                     Log.i("Bluetooth", "Service: " + service.getUuid().toString());
-                    AnimationType type = isAnimationService(service.getUuid());
-                    if (type != AnimationType.None) {
+                    BtServiceType type = isAnimationService(service.getUuid());
+                    if (type != BtServiceType.None) {
                         Log.i("Bluetooth", "Found matching Animation Service: " + type.toString());
                         // Pass the characteristic to the View/Model/Fragment for the relevant page?
                     }

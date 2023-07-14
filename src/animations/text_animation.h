@@ -2,7 +2,7 @@
 
 #include <animations/animation.h>
 
-class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Text>
+class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Text, BtServiceId::Text>
 {
     public:
         static constexpr size_t kMaxMsgLen = 255;

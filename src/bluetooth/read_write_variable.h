@@ -1,7 +1,7 @@
 #pragma once
 
 #include <bluetooth/gatt_cpf.h>
-#include <bluetooth/animation_service.h>
+#include <bluetooth/bt_service.h>
 
 template <typename T, size_t tAnimationId, size_t tChrcId, uint8_t format, T def>
 class BtReadWriteVariable
@@ -104,16 +104,16 @@ template <size_t tAnimationId, size_t tChrcId, int32_t def = 0>
 using BtReadWrite_int32_t = BtReadWriteVariable<int32_t, tAnimationId, tChrcId, BLE_GATT_CPF_FORMAT_SINT32, def>;
 
 
-#define ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(_animation_class, _char_num, _type, _initial_value) \
-    BtReadWrite_ ## _type<_animation_class::kAnimationIdNum, _char_num, _initial_value>; \
-    using _animation_class ## _char_num ## _ReadWrite = BtReadWrite_ ## _type<_animation_class::kAnimationIdNum, _char_num, _initial_value>; \
-    ANIM_SVC_CHRC_DEFINE(read_write_ ## _animation_class ## _char_num, _animation_class::kAnimationIdNum, _char_num, _animation_class ## _char_num ## _ReadWrite::kCpfFormat);
+#define BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(_bt_service_class, _char_num, _type, _initial_value) \
+    BtReadWrite_ ## _type<_bt_service_class::kBtServiceIdNum, _char_num, _initial_value>; \
+    using _bt_service_class ## _char_num ## _ReadWrite = BtReadWrite_ ## _type<_bt_service_class::kBtServiceIdNum, _char_num, _initial_value>; \
+    BT_SVC_CHRC_DEFINE(read_write_ ## _bt_service_class ## _char_num, _bt_service_class::kBtServiceIdNum, _char_num, _bt_service_class ## _char_num ## _ReadWrite::kCpfFormat);
 
 // Reference a previously declared characteristic
-#define ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(_animation_class, _char_num, _desc) \
-    ANIM_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE( \
-        read_write_ ## _animation_class ## _char_num, \
+#define BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(_bt_service_class, _char_num, _desc) \
+    BT_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE( \
+        read_write_ ## _bt_service_class ## _char_num, \
         _desc, \
-        _animation_class ## _char_num ## _ReadWrite::read, \
-        _animation_class ## _char_num ## _ReadWrite::write, \
-        _animation_class ## _char_num ## _ReadWrite::isActiveCccCfgChanged)
+        _bt_service_class ## _char_num ## _ReadWrite::read, \
+        _bt_service_class ## _char_num ## _ReadWrite::write, \
+        _bt_service_class ## _char_num ## _ReadWrite::isActiveCccCfgChanged)

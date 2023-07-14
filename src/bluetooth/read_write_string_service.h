@@ -1,6 +1,6 @@
 #pragma once
 
-#include <bluetooth/animation_service.h>
+#include <bluetooth/bt_service.h>
 #include <zephyr/bluetooth/gatt.h>
 
 /**
@@ -78,15 +78,15 @@ public:
         const struct bt_gatt_attr *activeAttr_ = NULL;
 };
 
-#define ANIM_SVC_READ_WRITE_STRING_CHRC_DEFINE(_animation_class, _char_num, _max_len) \
-    using _animation_class ## _char_num ## _ReadWriteString = BtReadWriteString<_animation_class::kAnimationIdNum, _char_num, _max_len>; \
-    ANIM_SVC_CHRC_DEFINE(read_write_string_ ## _animation_class ## _char_num, _animation_class::kAnimationIdNum, _char_num, BLE_GATT_CPF_FORMAT_UTF8S);
+#define BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(_bt_service_class, _char_num, _max_len) \
+    using _bt_service_class ## _char_num ## _ReadWriteString = BtReadWriteString<_bt_service_class::kBtServiceIdNum, _char_num, _max_len>; \
+    BT_SVC_CHRC_DEFINE(read_write_string_ ## _bt_service_class ## _char_num, _bt_service_class::kBtServiceIdNum, _char_num, BLE_GATT_CPF_FORMAT_UTF8S);
 
 // Reference a previously declared characteristic
-#define ANIM_SVC_READ_WRITE_STRING_CHRC_REFERENCE(_animation_class, _char_num, _desc) \
-    ANIM_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE( \
-        read_write_string_ ## _animation_class ## _char_num, \
+#define BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(_bt_service_class, _char_num, _desc) \
+    BT_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE( \
+        read_write_string_ ## _bt_service_class ## _char_num, \
         _desc, \
-        _animation_class ## _char_num ## _ReadWriteString::readString, \
-        _animation_class ## _char_num ## _ReadWriteString::writeString, \
-        _animation_class ## _char_num ## _ReadWriteString::isActiveCccCfgChanged)
+        _bt_service_class ## _char_num ## _ReadWriteString::readString, \
+        _bt_service_class ## _char_num ## _ReadWriteString::writeString, \
+        _bt_service_class ## _char_num ## _ReadWriteString::isActiveCccCfgChanged)

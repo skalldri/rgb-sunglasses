@@ -12,7 +12,7 @@ import dev.autom8ed.rgbsunglasses.databinding.FragmentTextanimationBinding;
 
 public class TextAnimationFragment extends AnimationBoilerplate {
 
-    static final public AnimationType kAnimationType = AnimationType.Text;
+    static final public BtServiceType K_BT_SERVICE_TYPE = BtServiceType.Text;
 
     private FragmentTextanimationBinding binding;
 
@@ -22,7 +22,7 @@ public class TextAnimationFragment extends AnimationBoilerplate {
 
         binding = FragmentTextanimationBinding.inflate(inflater, container, false);
 
-        onAnimCreateView(inflater, binding.linearLayoutVertical, kAnimationType);
+        onAnimCreateView(inflater, binding.linearLayoutVertical, K_BT_SERVICE_TYPE);
 
         View root = binding.getRoot();
 

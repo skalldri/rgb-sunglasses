@@ -6,20 +6,20 @@
 
 #include <cstddef>
 
-ANIM_SVC_UUID_DEFINE(RainbowAnimation);
+BT_SVC_UUID_DEFINE(RainbowAnimation);
 
-using StepTimeMs = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 0, uint32_t, 100);
+using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 0, uint32_t, 100);
 
-using RainbowWidthPix = ANIM_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 1, uint32_t, 5);
+using RainbowWidthPix = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 1, uint32_t, 5);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-ANIM_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimation);
+BT_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimation);
 
 BT_GATT_SERVICE_DEFINE(rainbow_anim_service,
-    ANIM_SVC_UUID_REFERENCE(RainbowAnimation),
-    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 0, "Step Time Ms"),
-    ANIM_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 1, "Rainbow Width Pixels"),
-    ANIM_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimation),
+    BT_SVC_UUID_REFERENCE(RainbowAnimation),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 0, "Step Time Ms"),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 1, "Rainbow Width Pixels"),
+    BT_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimation),
 );
 
 // Rainbow colors: ROYGBIV

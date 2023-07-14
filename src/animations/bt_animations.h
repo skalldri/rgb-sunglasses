@@ -2,11 +2,12 @@
 
 #include <animations/animation.h>
 
-class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimation, Animation::BtAdvertising>
+class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimation, Animation::BtAdvertising, BtServiceId::Invalid>
 {
     public:
         void init() override;
         void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+        void setActive(bool active) override {};
 
     private:
         static constexpr size_t kMinFade = 5;
@@ -21,11 +22,12 @@ class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimati
         size_t currentCycleTimeMs = 0;
 };
 
-class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation, Animation::BtConnecting>
+class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation, Animation::BtConnecting, BtServiceId::Invalid>
 {
     public:
         void init() override;
         void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+        void setActive(bool active) override {};
 
     private:
         static constexpr size_t kMinFlash = 5;
@@ -41,11 +43,13 @@ class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation
         size_t currentCycleTimeMs = 0;
 };
 
-class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Animation::BtPairing>
+class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Animation::BtPairing, BtServiceId::Invalid>
 {
     public:
         void init() override;
         void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+        void setActive(bool active) override {};
+
         void setPairingCode(unsigned int code);
 
     private:

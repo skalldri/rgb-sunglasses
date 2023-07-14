@@ -25,7 +25,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import dev.autom8ed.rgbsunglasses.ui.animations.AnimationServiceInterface;
-import dev.autom8ed.rgbsunglasses.ui.animations.AnimationType;
+import dev.autom8ed.rgbsunglasses.ui.animations.BtServiceType;
 
 
 
@@ -85,7 +85,7 @@ public class DevKitBtInterface {
             dkGattServices = gatt.getServices();
             for (BluetoothGattService service : dkGattServices) {
                 Log.d("DevKitBtInterface", "Service: " + service.getUuid().toString());
-                AnimationType type = BluetoothHelpers.isAnimationService(service.getUuid());
+                BtServiceType type = BluetoothHelpers.isAnimationService(service.getUuid());
                 if (type == animType) {
                     Log.i("DevKitBtInterface", "Found matching Animation Service: " + type.toString());
                     animServiceCallback.onGattServiceFound(service);
@@ -148,7 +148,7 @@ public class DevKitBtInterface {
 
     AnimationServiceInterface animServiceCallback = null;
 
-    AnimationType animType;
+    BtServiceType animType;
 
     @SuppressLint("MissingPermission")
     private void serviceQueuedActions() {
@@ -201,7 +201,7 @@ public class DevKitBtInterface {
         }
     }
 
-    public DevKitBtInterface(android.content.Context c, AnimationServiceInterface a, AnimationType t) {
+    public DevKitBtInterface(android.content.Context c, AnimationServiceInterface a, BtServiceType t) {
         context = c;
         animServiceCallback = a;
         animType = t;
@@ -237,13 +237,13 @@ public class DevKitBtInterface {
         extraCallbacks.add(c);
     }
 
-    public BluetoothGattService findAnimationService(AnimationType t) {
+    public BluetoothGattService findAnimationService(BtServiceType t) {
         if (dkGattServices == null) {
             return null;
         }
 
         for (BluetoothGattService service : dkGattServices) {
-            AnimationType type = BluetoothHelpers.isAnimationService(service.getUuid());
+            BtServiceType type = BluetoothHelpers.isAnimationService(service.getUuid());
             if (type == t) {
                 Log.i("DevKitBtInterface", "Found matching Animation Service for " + t.toString());
                 return service;

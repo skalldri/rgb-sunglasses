@@ -2,25 +2,40 @@
 
 #include <zephyr/bluetooth/gatt.h>
 
+enum class BtServiceId {
+    Invalid = 0,
+    CoreConfig = 1, // Configuration of the entire HMD
+    ZigZag = 2,
+    Text = 3,
+    Rainbow = 4,
+};
+
+template<BtServiceId tBtServiceId>
+class BtService {
+    public:
+        static constexpr BtServiceId kBtServiceId = tBtServiceId;
+        static constexpr size_t kBtServiceIdNum = (size_t)tBtServiceId;
+};
+
 // Don't use __* macros externally of this file
 
 // Define a UUID for a Characteristic that is part of an animation service instance that can later be referenced
-#define __ANIM_SVC_CHRC_UUID(_name, _animation_number, _char_num) \
+#define __BT_SVC_CHRC_UUID(_name, _animation_number, _char_num) \
     static struct bt_uuid_128 _name = BT_UUID_INIT_128( \
         BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, _animation_number, (0x56789abc0001 + _char_num)));
 
 // Define a Characteristic Presentation Format structure that can later be referenced
-#define __ANIM_SVC_CHRC_CPF(_name, _format) \
+#define __BT_SVC_CHRC_CPF(_name, _format) \
     static const struct bt_gatt_cpf _name = { \
         .format = _format, \
     };
 
-#define __ANIM_SVC_CHRC_DEFINE(_prefix, _animation_number, _char_num, _format) \
-    __ANIM_SVC_CHRC_UUID(_prefix ## _uuid, _animation_number, _char_num); \
-    __ANIM_SVC_CHRC_CPF(_prefix ## _cpf, _format);
+#define __BT_SVC_CHRC_DEFINE(_prefix, _animation_number, _char_num, _format) \
+    __BT_SVC_CHRC_UUID(_prefix ## _uuid, _animation_number, _char_num); \
+    __BT_SVC_CHRC_CPF(_prefix ## _cpf, _format);
 
 
-#define __ANIM_SVC_STRING_CHRC_DEFINE_WRITE_FUNC(_func_name, _var_name, _var_size) \
+#define __BT_SVC_STRING_CHRC_DEFINE_WRITE_FUNC(_func_name, _var_name, _var_size) \
     static ssize_t _func_name(struct bt_conn *conn, const struct bt_gatt_attr *attr, \
               const void *buf, uint16_t len, uint16_t offset, \
               uint8_t flags) \
@@ -36,7 +51,7 @@
             return len;\
     }
 
-#define __ANIM_SVC_BOOL_CHRC_DEFINE_READ_FUNC(_func_name, _var_name) \
+#define __BT_SVC_BOOL_CHRC_DEFINE_READ_FUNC(_func_name, _var_name) \
     static ssize_t _func_name(struct bt_conn *conn, const struct bt_gatt_attr *attr, \
              void *buf, uint16_t len, uint16_t offset) \
     { \
@@ -44,32 +59,32 @@
     }
 
 // Special reserved characteristic IDs
-#define ANIM_SVC_RSVD_CHAR_ID_START 0xf000
+#define BT_SVC_RSVD_CHAR_ID_START 0xf000
 
 // Special default animation service handlers
-#define ANIM_SVC_IS_ACTIVE_CHAR (ANIM_SVC_RSVD_CHAR_ID_START + 1)
+#define BT_SVC_IS_ACTIVE_CHAR (BT_SVC_RSVD_CHAR_ID_START + 1)
 
 // Define the UUID for an Animation Service instance
-#define ANIM_SVC_UUID_DEFINE(_animation_class) \
-    static struct bt_uuid_128 _animation_class ## _service_uuid = BT_UUID_INIT_128( \
-        BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, _animation_class::kAnimationIdNum, 0x56789abc0000));
+#define BT_SVC_UUID_DEFINE(_bt_service_class) \
+    static struct bt_uuid_128 _bt_service_class ## _service_uuid = BT_UUID_INIT_128( \
+        BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, _bt_service_class::kBtServiceIdNum, 0x56789abc0000));
 
-// Reference a previously declared Animation Service instance UUID
-#define ANIM_SVC_UUID_REFERENCE(_animation_class) \
-    BT_GATT_PRIMARY_SERVICE(&_animation_class ## _service_uuid)
+// Reference a previously declared BT Service instance UUID
+#define BT_SVC_UUID_REFERENCE(_bt_service_class) \
+    BT_GATT_PRIMARY_SERVICE(&_bt_service_class ## _service_uuid)
 
 // Define an characteristic which is part of an instance of the animation service
-#define ANIM_SVC_CHRC_DEFINE(_prefix, _animation_number, _char_num, _format) \
-    static_assert(_char_num < ANIM_SVC_RSVD_CHAR_ID_START); \
-    __ANIM_SVC_CHRC_DEFINE(_prefix, _animation_number, _char_num, _format);
+#define BT_SVC_CHRC_DEFINE(_prefix, _bt_service_id, _char_num, _format) \
+    static_assert(_char_num < BT_SVC_RSVD_CHAR_ID_START); \
+    __BT_SVC_CHRC_DEFINE(_prefix, _bt_service_id, _char_num, _format);
 
-#define ANIM_SVC_WRITEABLE_STRING_CHRC_DEFINE(_prefix, _animation_number, _char_num, _str_len) \
+#define BT_SVC_WRITEABLE_STRING_CHRC_DEFINE(_prefix, _bt_service_id, _char_num, _str_len) \
     static char _prefix ## _storage[_str_len]; \
-    __ANIM_SVC_STRING_CHRC_DEFINE_WRITE_FUNC(_prefix ## _write, _prefix ## _storage, _str_len); \
-    ANIM_SVC_CHRC_DEFINE(_prefix, _animation_number, _char_num, BLE_GATT_CPF_FORMAT_UTF8S);
+    __BT_SVC_STRING_CHRC_DEFINE_WRITE_FUNC(_prefix ## _write, _prefix ## _storage, _str_len); \
+    BT_SVC_CHRC_DEFINE(_prefix, _bt_service_id, _char_num, BLE_GATT_CPF_FORMAT_UTF8S);
 
 // Reference a previously declared writeable string characteristic
-#define ANIM_SVC_WRITEABLE_STRING_CHRC_REFERENCE(_prefix, _desc) \
+#define BT_SVC_WRITEABLE_STRING_CHRC_REFERENCE(_prefix, _desc) \
     BT_GATT_CHARACTERISTIC(&_prefix ## _uuid.uuid, \
                    BT_GATT_CHRC_WRITE, \
                    BT_GATT_PERM_WRITE_ENCRYPT, \
@@ -80,7 +95,7 @@
     BT_GATT_CPF(&_prefix ## _cpf)
 
 // Reference a boolean characteristic, and indicate to the peer it has read/write/notify capabilities
-#define ANIM_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE(_prefix, _desc, _read_func, _write_func, _ccc_cfg_changed_func) \
+#define BT_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE(_prefix, _desc, _read_func, _write_func, _ccc_cfg_changed_func) \
     BT_GATT_CHARACTERISTIC(&_prefix ## _uuid.uuid, \
                    BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY, \
                    BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT, \
@@ -92,7 +107,7 @@
     BT_GATT_CPF(&_prefix ## _cpf)
 
 // Reference a string characteristic, and indicate to the peer it has read/write capabilities
-#define ANIM_SVC_READ_WRITE_CHRC_REFERENCE(_prefix, _desc, _read_func, _write_func) \
+#define BT_SVC_READ_WRITE_CHRC_REFERENCE(_prefix, _desc, _read_func, _write_func) \
     BT_GATT_CHARACTERISTIC(&_prefix ## _uuid.uuid, \
                    BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE, \
                    BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT, \
@@ -102,4 +117,3 @@
     BT_GATT_CUD(_desc, BT_GATT_PERM_READ), \
     BT_GATT_CPF(&_prefix ## _cpf)
 
-#define ANIMATION_CUSTOM_CHRC_START 100
