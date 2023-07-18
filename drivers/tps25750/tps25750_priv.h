@@ -233,6 +233,9 @@ typedef struct __packed tps25750_data1 {
 
 struct tps25750_dev_data
 {
+    struct k_work_delayable work;
+    struct gpio_callback callback;
+    const struct device *dev;
 };
 
 struct tps25750_dev_config
@@ -242,4 +245,5 @@ struct tps25750_dev_config
     uint8_t patch_address;
     uint32_t patch_chunk_size;
     uint8_t* patch_buffer;
+    gpio_callback_handler_t irq_callback;
 };

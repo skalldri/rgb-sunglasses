@@ -675,16 +675,89 @@ extern const char tps25750x_lowRegion_i2c_array[];
 extern int gSizeLowRegionArray;
 #endif // CONFIG_TPS25750_PATCH_ON_STARTUP
 
+#define TPS25750_WORKQ_STACK_SIZE 1024
+#define TPS25750_WORKQ_PRIORITY 5
+
+K_THREAD_STACK_DEFINE(tps25750_workq_stack_area, TPS25750_WORKQ_STACK_SIZE);
+
+struct k_work_q tps25750_work_q;
+
+void tps25750_patch_work(struct k_work* item)
+{
+    struct k_work_delayable *dwork = k_work_delayable_from_work(item);
+    struct tps25750_dev_data *data = CONTAINER_OF(dwork, struct tps25750_dev_data, work);
+    const struct device *dev = data->dev;
+    const struct tps25750_dev_config *cfg = dev->config;
+
+    LOG_INF("dev: %p", dev);
+    LOG_INF("cfg: %p", cfg);
+    LOG_INF("data: %p", data);
+
+    // Read the current mode
+    tps25750_mode_t mode;
+    int ret = tps25750_read_mode(data->dev, &mode);
+    if (ret)
+    {
+        LOG_ERR("tps25750_read_mode: %d", ret);
+        return;
+    }
+    LOG_INF("MODE: %.*s", sizeof(mode.mode), mode.mode);
+
+    // If we are in mode == PTCH, we can proceed
+    if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode) != 0))
+    {
+        // Check if we are in APP mode
+        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode) == 0))
+        {
+            LOG_INF("Patch already loaded!");
+            return;
+        }
+        else
+        {
+            LOG_ERR("MODE is not PTCH (got %.*s) Cannot download patch!", sizeof(mode.mode), mode.mode);
+            return;
+        }
+    }
+
+    ret = tps25750_download_patch(data->dev, tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
+
+    if (ret)
+    {
+        LOG_ERR("Patch download failed! %d", ret);
+    }
+    else
+    {
+        LOG_INF("Patch download success!");
+    }
+}
+
+void tps25750_irq(const struct device *dev, const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
+{
+    const struct tps25750_dev_config *cfg = dev->config;
+    struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
+
+    k_work_schedule_for_queue(&tps25750_work_q, &data->work, K_MSEC(3000));
+
+    LOG_INF("Got a TPS25750 callback!");
+}
+
 static int tps25750_init(const struct device *dev)
 {
     const struct tps25750_dev_config *cfg = dev->config;
+    struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
+    data->dev = dev;
 
-    LOG_INF("Patch address: 0x%X", cfg->patch_address);
+    LOG_INF("dev: %p", dev);
+    LOG_INF("cfg: %p", cfg);
+    LOG_INF("data: %p", data);
 
-    if (cfg->int_gpio.port)
-    {
-        LOG_INF("TPS25750 interrupt pin configured! Port %s, pin %d", cfg->int_gpio.port->name, cfg->int_gpio.pin);
-    }
+    k_work_queue_init(&tps25750_work_q);
+
+    k_work_queue_start(&tps25750_work_q, tps25750_workq_stack_area,
+                       K_THREAD_STACK_SIZEOF(tps25750_workq_stack_area), TPS25750_WORKQ_PRIORITY,
+                       NULL);
+
+    k_work_init_delayable(&data->work, tps25750_patch_work);
 
     if (!device_is_ready(cfg->i2c.bus))
     {
@@ -693,6 +766,8 @@ static int tps25750_init(const struct device *dev)
     }
 
 #if defined(CONFIG_TPS25750_PATCH_ON_STARTUP)
+    LOG_INF("Patch address: 0x%X", cfg->patch_address);
+
     int ret = tps25750_download_patch(dev, tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
 
     if (ret)
@@ -704,6 +779,16 @@ static int tps25750_init(const struct device *dev)
         LOG_INF("Patch download success!");
     }
 #endif // CONFIG_TPS25750_PATCH_ON_STARTUP
+
+    if (cfg->int_gpio.port)
+    {
+        gpio_pin_configure_dt(&cfg->int_gpio, GPIO_INPUT);
+        gpio_pin_interrupt_configure_dt(&cfg->int_gpio, GPIO_INT_EDGE_TO_ACTIVE);
+        gpio_init_callback(&data->callback, cfg->irq_callback, BIT(cfg->int_gpio.pin));
+        gpio_add_callback(cfg->int_gpio.port, &data->callback);
+
+        LOG_INF("TPS25750 interrupt pin configured! Port %s, pin %d", cfg->int_gpio.port->name, cfg->int_gpio.pin);
+    }
 
     return 0;
 }
@@ -728,7 +813,7 @@ static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8
     // Even though this is a register-write command.
     // And there's no way to ommit the payload address.
     // And that isn't mentioned anywhere in the docs, just this forum thread: https://e2e.ti.com/support/power-management-group/power-management/f/power-management-forum/1097140/bq25792-i2cw-task-can-not-work/4065201?focus=true
-    data.data[1] = dataSize + 1; 
+    data.data[1] = dataSize + 1;
     // Byte 2: reserved
     data.data[3] = reg;
 
@@ -911,6 +996,13 @@ static const struct i2c_driver_api i2c_tps25750_i2cm_driver_api = {
 };
 
 #define TPS25750_DEFINE(inst)                                                          \
+    void tps25750_irq_##inst(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins) \
+    {                                                                                  \
+        const struct device *dev = DEVICE_DT_GET(DT_DRV_INST(inst));                   \
+        LOG_INF("Got a callback, device %p", dev);                                     \
+        tps25750_irq(dev, port, cb, pins);                                             \
+    }                                                                                  \
+                                                                                       \
     static struct tps25750_dev_data tps25750_data_##inst;                              \
                                                                                        \
     static uint8_t tps25750_patch_buffer_##inst[DT_INST_PROP(inst, patch_chunk_size)]; \
@@ -921,7 +1013,8 @@ static const struct i2c_driver_api i2c_tps25750_i2cm_driver_api = {
             .int_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, irq_gpios, {0}),                \
             .patch_buffer = tps25750_patch_buffer_##inst,                              \
             .patch_address = DT_INST_PROP(inst, patch_address),                        \
-            .patch_chunk_size = DT_INST_PROP(inst, patch_chunk_size)};                 \
+            .patch_chunk_size = DT_INST_PROP(inst, patch_chunk_size),                  \
+            .irq_callback = tps25750_irq_##inst};                                      \
                                                                                        \
     I2C_DEVICE_DT_INST_DEFINE(inst, tps25750_init, NULL,                               \
                               &tps25750_data_##inst, &tps25750_config_##inst,          \

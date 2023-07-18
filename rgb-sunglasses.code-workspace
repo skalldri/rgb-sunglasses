@@ -73,7 +73,9 @@
 			"xlocnum": "cpp",
 			"xutility": "cpp",
 			"list": "cpp",
-			"queue": "cpp"
+			"queue": "cpp",
+			"span": "c",
+			"xstring": "c"
 		},
 		"nrf-connect.debugging.bindings": {
 			"${workspaceFolder}/build": "Launch build"
