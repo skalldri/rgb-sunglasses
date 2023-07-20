@@ -57,7 +57,8 @@ public class MainActivity extends AppCompatActivity {
                 R.id.navigation_bluetoothscan,
                 R.id.navigation_textanimation,
                 R.id.navigation_rainbowanimation,
-                R.id.navigation_zigzaganimation)
+                R.id.navigation_zigzaganimation,
+                R.id.navigation_myeyesanimation)
                 .setOpenableLayout(drawer)
                 .build();
         NavController navController = Navigation.findNavController(this, R.id.nav_host_fragment_content_main);

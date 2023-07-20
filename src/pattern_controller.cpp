@@ -12,6 +12,7 @@
 #include <animations/zigzag_animation.h>
 #include <animations/text_animation.h>
 #include <animations/rainbow_animation.h>
+#include <animations/my_eyes_animation.h>
 
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
 
@@ -63,6 +64,9 @@ BaseAnimation* getAnimation(Animation animation) {
 
         case Animation::Rainbow:
             return RainbowAnimation::getInstance();
+
+        case Animation::MyEyes:
+            return MyEyesAnimation::getInstance();
     }
 
     return NULL;
@@ -93,6 +97,7 @@ void pattern_controller_thread_func(void* a, void* b, void* c) {
     NullAnimation::getInstance()->init();
     TextAnimation::getInstance()->init();
     RainbowAnimation::getInstance()->init();
+    MyEyesAnimation::getInstance()->init();
 
     // Start in the ZigZag animation
     pattern_controller_change_to_animation(Animation::ZigZag);

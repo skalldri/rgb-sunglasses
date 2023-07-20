@@ -10,4 +10,5 @@ enum class Animation
     BtConnecting = 4,
     Rainbow = 5,
     BtPairing = 6,
+    MyEyes = 7,
 };

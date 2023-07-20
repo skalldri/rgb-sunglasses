@@ -6,4 +6,5 @@ public enum BtServiceType {
     ZigZag,
     Text,
     Rainbow,
+    MyEyes,
 }

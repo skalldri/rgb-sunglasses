@@ -4,7 +4,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 
-#include <bluetooth/read_write_string_service.h>
+#include <bluetooth/read_write_string.h>
 #include <bluetooth/read_write_variable.h>
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
@@ -231,7 +231,7 @@ void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTick
         return;
     }
 
-    int32_t charWindowPos;
+    int32_t charWindowPos = 0;
 
     // This function gets called repeatedly to render to the display
     auto lambda = [&](size_t x, size_t y, bool filled) {

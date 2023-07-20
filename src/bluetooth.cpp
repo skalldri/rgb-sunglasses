@@ -541,11 +541,12 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
             bt_state_change_to(ctx, BtThreadState::CONNECTED);
         } else {
             LOG_ERR("Failed to reach required security level %d, got %d instead", REQUIRED_BT_SECURITY_LEVEL, cmd->level);
+
             // Disconnect from the peer
-            int ret = bt_conn_disconnect(ctx->conn, BT_HCI_ERR_AUTH_FAIL);
-            if (ret) {
-                LOG_ERR("Failed to disconnect remote connection! %d", ret);
-            }
+            // int ret = bt_conn_disconnect(ctx->conn, BT_HCI_ERR_AUTH_FAIL);
+            // if (ret) {
+            //     LOG_ERR("Failed to disconnect remote connection! %d", ret);
+            // }
         }
         break;
 

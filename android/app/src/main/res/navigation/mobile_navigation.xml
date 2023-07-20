@@ -34,4 +34,10 @@
         android:name="dev.autom8ed.rgbsunglasses.ui.animations.ZigZagAnimationFragment"
         android:label="@string/title_zigzaganimation"
         tools:layout="@layout/fragment_zigzaganimation" />
+
+    <fragment
+        android:id="@+id/navigation_myeyesanimation"
+        android:name="dev.autom8ed.rgbsunglasses.ui.animations.MyEyesFragment"
+        android:label="@string/title_myeyesanimation"
+        tools:layout="@layout/fragment_genericbtservice" />
 </navigation>

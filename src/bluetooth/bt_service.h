@@ -8,6 +8,7 @@ enum class BtServiceId {
     ZigZag = 2,
     Text = 3,
     Rainbow = 4,
+    MyEyes = 5,
 };
 
 template<BtServiceId tBtServiceId>
