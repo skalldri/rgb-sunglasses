@@ -52,9 +52,9 @@ void RainbowAnimation::tick(const LedConfig* config, const size_t timeSinceLastT
         size_t currentRainbowColor = ((currentRainbowStep + x) / rainbowColorWidth) % numRainbowColors;
         size_t nextRainbowColor = (currentRainbowColor + 1) % numRainbowColors;
 
-            // Figure out the blend percentage
+        // Figure out the blend percentage
         // First: how far are we through the current color, in rainbow steps
-        float blendPercent = (currentRainbowStep % rainbowColorWidth);
+        float blendPercent = ((currentRainbowStep + x) % rainbowColorWidth);
 
         // How far is that as a percentage?
         blendPercent /= (float)rainbowColorWidth;
