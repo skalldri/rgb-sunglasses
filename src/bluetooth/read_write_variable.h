@@ -40,7 +40,7 @@ class BtReadWriteVariable
             } 
             memcpy(&(getInstance().storage_), buf, len);
 
-            printk("Animation %d, Chrc %d: value updated over BT to '%d'\n", tAnimationId, tChrcId, getInstance().storage_);
+            printk("Animation %d, Chrc %d: value updated over BT to '%x'\n", tAnimationId, tChrcId, getInstance().storage_);
 
             return len;
     }

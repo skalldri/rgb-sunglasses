@@ -14,7 +14,7 @@ BT_SVC_UUID_DEFINE(TextAnimation);
 constexpr size_t kNumStringSlots = 20;
 
 using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 0, uint32_t, 50);
-
+using Color = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 1, uint32_t, 0xFFFFFFFF);
 using UpNext = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 2, uint32_t, 0);
 
 // Declare a bunch of read/write string instance
@@ -46,6 +46,7 @@ BT_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimation);
 BT_GATT_SERVICE_DEFINE(text_anim_service,
     BT_SVC_UUID_REFERENCE(TextAnimation),
     BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 0, "Step Time Ms"),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 1, "Color"),
     BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 2, "Up Next"),
     BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 100, "Slot 0"),
     BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 101, "Slot 1"),
@@ -243,7 +244,11 @@ void TextAnimation::tick(const LedConfig* config, const size_t timeSinceLastTick
         }
 
         if (filled) {
-            pattern_controller_set_pixel_in_framebuffer(config, realX, y, bufferId, 255, 255, 255);
+            uint32_t color = Color::getInstance();
+            uint8_t red = (color >> 16) & 0xFF;
+            uint8_t green = (color >> 8) & 0xFF;
+            uint8_t blue = (color >> 0) & 0xFF;
+            pattern_controller_set_pixel_in_framebuffer(config, realX, y, bufferId, red, green, blue);
         }
     };
 

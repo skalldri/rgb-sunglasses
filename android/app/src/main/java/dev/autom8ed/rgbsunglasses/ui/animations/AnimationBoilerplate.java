@@ -31,6 +31,7 @@ import dev.autom8ed.rgbsunglasses.ui.bluetooth.DevKitBtInterface;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.DeviceGeneratedUiBase;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteBooleanCharacteristic;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteIntegerCharacteristic;
+import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteIntegerColorCharacteristic;
 import dev.autom8ed.rgbsunglasses.ui.bluetooth.ReadWriteTextCharacteristic;
 
 public class AnimationBoilerplate extends Fragment {
@@ -126,22 +127,41 @@ public class AnimationBoilerplate extends Fragment {
                         cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_SINT8 ||
                         cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_SINT16 ||
                         cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_SINT32) {
-                    // Create a new ReadWriteIntegerCharacteristic and add it to the display
-                    BluetoothDescriptorInfo finalHaveCcc2 = haveCcc;
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            ReadWriteIntegerCharacteristic rwIntChrc = new ReadWriteIntegerCharacteristic(
-                                    myInflater,
-                                    myLayout,
-                                    descriptor.getCharacteristic(),
-                                    cud,
-                                    cpf,
-                                    finalHaveCcc2.descriptor,
-                                    dkInterface);
-                            myDevGeneratedUiElems.add(rwIntChrc);
-                        }
-                    });
+                    if (cud.equals("Color")) {
+                        // Create a new ReadWriteIntegerCharacteristic and add it to the display
+                        BluetoothDescriptorInfo finalHaveCcc2 = haveCcc;
+                        handler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                ReadWriteIntegerColorCharacteristic rwIntChrc = new ReadWriteIntegerColorCharacteristic(
+                                        myInflater,
+                                        myLayout,
+                                        descriptor.getCharacteristic(),
+                                        cud,
+                                        cpf,
+                                        finalHaveCcc2.descriptor,
+                                        dkInterface);
+                                myDevGeneratedUiElems.add(rwIntChrc);
+                            }
+                        });
+                    } else {
+                        // Create a new ReadWriteIntegerCharacteristic and add it to the display
+                        BluetoothDescriptorInfo finalHaveCcc2 = haveCcc;
+                        handler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                ReadWriteIntegerCharacteristic rwIntChrc = new ReadWriteIntegerCharacteristic(
+                                        myInflater,
+                                        myLayout,
+                                        descriptor.getCharacteristic(),
+                                        cud,
+                                        cpf,
+                                        finalHaveCcc2.descriptor,
+                                        dkInterface);
+                                myDevGeneratedUiElems.add(rwIntChrc);
+                            }
+                        });
+                    }
                 } else if (cpf == BluetoothHelpers.BLE_GATT_CPF_FORMAT_BOOLEAN) {
                     BluetoothDescriptorInfo finalHaveCcc1 = haveCcc;
                     handler.post(new Runnable() {

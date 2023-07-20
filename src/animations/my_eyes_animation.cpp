@@ -9,6 +9,8 @@ BT_SVC_UUID_DEFINE(MyEyesAnimation);
 BT_SVC_IS_ACTIVE_CHRC_DEFINE(MyEyesAnimation);
 
 using BlinkSpeedMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 0, uint32_t, 100);
+using Color = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 1, uint32_t, 0xFFFFFFFF);
+using UpNext = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 2, uint32_t, 0);
 
 constexpr size_t kNumStringSlots = 20;
 
@@ -37,6 +39,8 @@ BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 119, MyEyesAnimation::kMax
 BT_GATT_SERVICE_DEFINE(myeyes_anim_service,
     BT_SVC_UUID_REFERENCE(MyEyesAnimation),
     BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(MyEyesAnimation, 0, "Blink Speed Ms"),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(MyEyesAnimation, 1, "Color"),
+    BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(MyEyesAnimation, 2, "Up Next"),
     BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 100, "Slot 0"),
     BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 101, "Slot 1"),
     BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 102, "Slot 2"),
@@ -154,7 +158,11 @@ void MyEyesAnimation::tick(const LedConfig* config, const size_t timeSinceLastTi
 
         // If pixel is filled, fill with white
         if (filled) {
-            pattern_controller_set_pixel_in_framebuffer(config, realX, y, bufferId, 255, 255, 255);
+            uint32_t color = Color::getInstance();
+            uint8_t red = (color >> 16) & 0xFF;
+            uint8_t green = (color >> 8) & 0xFF;
+            uint8_t blue = (color >> 0) & 0xFF;
+            pattern_controller_set_pixel_in_framebuffer(config, realX, y, bufferId, red, green, blue);
         }
     };
 
@@ -166,6 +174,9 @@ void MyEyesAnimation::tick(const LedConfig* config, const size_t timeSinceLastTi
 
             charWindowPos = kRightEyePos;
             FontAtlas::getInstance()->PrintChar(currentEyes[1], lambda);
+            break;
+
+        case EyeState::OpenInBlinkCycle:
             break;
 
         case EyeState::BlinkClosing:
