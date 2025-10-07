@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include "rgb_sunglasses_dk_cpuapp_common-pinctrl.dtsi"
+#include "rgb_sunglasses_dk_nrf5340_cpuapp_common-pinctrl.dtsi"
 
 #include <freq.h>
 #include <zephyr/dt-bindings/led/led.h>
@@ -74,43 +74,43 @@
 	};
 
 	// arduino_header: connector {
-	// 	compatible = "arduino-header-r3";
-	// 	#gpio-cells = <2>;
-	// 	gpio-map-mask = <0xffffffff 0xffffffc0>;
-	// 	gpio-map-pass-thru = <0 0x3f>;
-	// 	gpio-map = <0 0 &gpio0 4 0>,	/* A0 */
-	// 		   <1 0 &gpio0 5 0>,	/* A1 */
-	// 		   <2 0 &gpio0 6 0>,	/* A2 */
-	// 		   <3 0 &gpio0 7 0>,	/* A3 */
-	// 		   <4 0 &gpio0 25 0>,	/* A4 */
-	// 		   <5 0 &gpio0 26 0>,	/* A5 */
-	// 		   <6 0 &gpio1 0 0>,	/* D0 */
-	// 		   <7 0 &gpio1 1 0>,	/* D1 */
-	// 		   <8 0 &gpio1 4 0>,	/* D2 */
-	// 		   <9 0 &gpio1 5 0>,	/* D3 */
-	// 		   <10 0 &gpio1 6 0>,	/* D4 */
-	// 		   <11 0 &gpio1 7 0>,	/* D5 */
-	// 		   <12 0 &gpio1 8 0>,	/* D6 */
-	// 		   <13 0 &gpio1 9 0>,	/* D7 */
-	// 		   <14 0 &gpio1 10 0>,	/* D8 */
-	// 		   <15 0 &gpio1 11 0>,	/* D9 */
-	// 		   <16 0 &gpio1 12 0>,	/* D10 */
-	// 		   <17 0 &gpio1 13 0>,	/* D11 */
-	// 		   <18 0 &gpio1 14 0>,	/* D12 */
-	// 		   <19 0 &gpio1 15 0>,	/* D13 */
-	// 		   <20 0 &gpio1 2 0>,	/* D14 */
-	// 		   <21 0 &gpio1 3 0>;	/* D15 */
+		//     compatible = "arduino-header-r3";
+		//     #gpio-cells = <2>;
+		//     gpio-map-mask = <0xffffffff 0xffffffc0>;
+		//     gpio-map-pass-thru = <0 0x3f>;
+		//     gpio-map = <0 0 &gpio0 4 0>,    /* A0 */
+		//            <1 0 &gpio0 5 0>,    /* A1 */
+		//            <2 0 &gpio0 6 0>,    /* A2 */
+		//            <3 0 &gpio0 7 0>,    /* A3 */
+		//            <4 0 &gpio0 25 0>,    /* A4 */
+		//            <5 0 &gpio0 26 0>,    /* A5 */
+		//            <6 0 &gpio1 0 0>,    /* D0 */
+		//            <7 0 &gpio1 1 0>,    /* D1 */
+		//            <8 0 &gpio1 4 0>,    /* D2 */
+		//            <9 0 &gpio1 5 0>,    /* D3 */
+		//            <10 0 &gpio1 6 0>,    /* D4 */
+		//            <11 0 &gpio1 7 0>,    /* D5 */
+		//            <12 0 &gpio1 8 0>,    /* D6 */
+		//            <13 0 &gpio1 9 0>,    /* D7 */
+		//            <14 0 &gpio1 10 0>,    /* D8 */
+		//            <15 0 &gpio1 11 0>,    /* D9 */
+		//            <16 0 &gpio1 12 0>,    /* D10 */
+		//            <17 0 &gpio1 13 0>,    /* D11 */
+		//            <18 0 &gpio1 14 0>,    /* D12 */
+		//            <19 0 &gpio1 15 0>,    /* D13 */
+		//            <20 0 &gpio1 2 0>,    /* D14 */
+		//            <21 0 &gpio1 3 0>;    /* D15 */
 	// };
 
 	// arduino_adc: analog-connector {
-	// 	compatible = "arduino,uno-adc";
-	// 	#io-channel-cells = <1>;
-	// 	io-channel-map = <0 &adc 0>,	/* A0 = P0.4 = AIN0 */
-	// 			 <1 &adc 1>,	/* A1 = P0.5 = AIN1 */
-	// 			 <2 &adc 2>,	/* A2 = P0.6 = AIN2 */
-	// 			 <3 &adc 3>,	/* A3 = P0.7 = AIN3 */
-	// 			 <4 &adc 4>,	/* A4 = P0.25 = AIN4 */
-	// 			 <5 &adc 5>;	/* A5 = P0.26 = AIN5 */
+		//     compatible = "arduino,uno-adc";
+		//     #io-channel-cells = <1>;
+		//     io-channel-map = <0 &adc 0>,    /* A0 = P0.4 = AIN0 */
+		//              <1 &adc 1>,    /* A1 = P0.5 = AIN1 */
+		//              <2 &adc 2>,    /* A2 = P0.6 = AIN2 */
+		//              <3 &adc 3>,    /* A3 = P0.7 = AIN3 */
+		//              <4 &adc 4>,    /* A4 = P0.25 = AIN4 */
+		//              <5 &adc 5>;    /* A5 = P0.26 = AIN5 */
 	// };
 
 	gpio_fwd: nrf-gpio-forwarder {
@@ -178,7 +178,7 @@
 
 		/* TPS25750 is also an I2C master. Define required properties */
 		#address-cells = <1>;
-    	#size-cells = <0>;
+		#size-cells = <0>;
 
 		bq25792: bq25792@6b {
 			compatible = "ti,bq25792";
@@ -189,9 +189,9 @@
 
 	vm3011: vm3011@60 {
 		compatible = "vesper,vm3011";
-			reg = <0x60>;
-			irq-gpios = <&gpio0 16 (GPIO_ACTIVE_HIGH)>;
-			status = "okay";
+		reg = <0x60>;
+		irq-gpios = <&gpio0 16 (GPIO_ACTIVE_HIGH)>;
+		status = "okay";
 	};
 };
 
@@ -203,7 +203,7 @@
 	status = "okay";
 	pinctrl-0 = <&pdm0_default>;
 	pinctrl-names = "default";
-	queue-size = < 10 >;
+	queue-size = <10>;
 	clock-source = "PCLK32M";
 };
 
@@ -243,7 +243,7 @@ led_strip_spi_0: &spi1 {
 	// Attach our LED strip to SPI1
 	led_strip_0: ws2812@0 {
 		compatible = "worldsemi,ws2812-spi";
-        status = "okay";
+		status = "okay";
 
 		/* SPI */
 		reg = <0>; /* ignored, but necessary for SPI bindings */
@@ -267,7 +267,7 @@ led_strip_spi_1: &spi4 {
 	// Attach our LED strip to SPI1
 	led_strip_1: ws2812_1@0 {
 		compatible = "worldsemi,ws2812-spi";
-        status = "okay";
+		status = "okay";
 
 		/* SPI */
 		reg = <0>; /* ignored, but necessary for SPI bindings */
@@ -350,4 +350,4 @@ zephyr_udc0: &usbd {
 };
 
 /* Include partition configuration file */
-#include "rgb_sunglasses_dk_cpuapp_partition_conf.dts"
+#include "rgb_sunglasses_dk_nrf5340_cpuapp_partition_conf.dts"

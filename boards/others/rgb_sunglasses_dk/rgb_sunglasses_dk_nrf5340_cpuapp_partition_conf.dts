@@ -8,28 +8,28 @@
  * Default Flash planning for nrf5340dk_nrf5340 CPUAPP (Application MCU).
  *
  * Zephyr build for nRF5340 with ARM TrustZone-M support,
- * implies building Secure and Non-Secure Zephyr images.
- *
- * Secure image will be placed, by default, in flash0
- * (or in slot0, if MCUboot is present).
- * Secure image will use sram0 for system memory.
- *
- * Non-Secure image will be placed in slot0_ns, and use
- * sram0_ns for system memory.
- *
- * Note that the Secure image only requires knowledge of
- * the beginning of the Non-Secure image (not its size).
- */
+  * implies building Secure and Non-Secure Zephyr images.
+  *
+  * Secure image will be placed, by default, in flash0
+  * (or in slot0, if MCUboot is present).
+  * Secure image will use sram0 for system memory.
+  *
+  * Non-Secure image will be placed in slot0_ns, and use
+  * sram0_ns for system memory.
+  *
+  * Note that the Secure image only requires knowledge of
+  * the beginning of the Non-Secure image (not its size).
+  */
 
-&slot0_partition {
-	reg = <0x00030000 0x60000>;
+ &slot0_partition {
+	 reg = <0x00030000 0x60000>;
 };
 
 /*
 &slot0_ns_partition {
 	reg = <0x00050000 0x30000>;
 };
-*/
+ */
 
 &slot1_partition {
 	reg = <0x00090000 0x60000>;
@@ -39,7 +39,7 @@
 &slot1_ns_partition {
 	reg = <0x000c0000 0x30000>;
 };
-*/
+ */
 
 /* Default SRAM planning when building for nRF5340 with
  * ARM TrustZone-M support
@@ -61,4 +61,4 @@
 };
 
 /* Include shared RAM configuration file */
-#include "rgb_sunglasses_dk_shared_sram_planning_conf.dts"
+#include "rgb_sunglasses_dk_nrf5340_shared_sram_planning_conf.dts"
