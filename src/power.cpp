@@ -50,14 +50,14 @@ bool check_and_enable_3v3(void)
     uint32_t newVreghvoutValue = (NRF_UICR_S->VREGHVOUT & ~UICR_VREGHVOUT_VREGHVOUT_Msk) | UICR_VREGHVOUT_VREGHVOUT_3V3;
 
     // Write the change using the flash APIs
-    int ret = flash_write(flash, (uint32_t) & (NRF_UICR_S->VREGHVOUT), &newVreghvoutValue, sizeof(newVreghvoutValue));
+    int ret = flash_write(flash, (uint32_t)&(NRF_UICR_S->VREGHVOUT), &newVreghvoutValue, sizeof(newVreghvoutValue));
 
     if (ret)
     {
         LOG_ERR("Failed to write UICR->VREGHVOUT: %d", ret);
         return false;
     }
-    
+
     return true;
 }
 
@@ -69,34 +69,34 @@ static int cmd_power_bq_dump(const struct shell *shell,
 }
 
 static int cmd_power_bq_temp_override(const struct shell *shell,
-                             size_t argc, char **argv, void *data)
+                                      size_t argc, char **argv, void *data)
 {
     int selection = (int)data;
-    bq25792_temp_override(bq, (bool) selection);
+    bq25792_temp_override(bq, (bool)selection);
     return 0;
 }
 
 static int cmd_power_bq_adc_enable(const struct shell *shell,
-                             size_t argc, char **argv, void *data)
+                                   size_t argc, char **argv, void *data)
 {
     int selection = (int)data;
-    bq25792_adc_enable(bq, (bool) selection);
+    bq25792_adc_enable(bq, (bool)selection);
     return 0;
 }
 
 static int cmd_power_bq_pfm_enable(const struct shell *shell,
-                             size_t argc, char **argv, void *data)
+                                   size_t argc, char **argv, void *data)
 {
     int selection = (int)data;
-    bq25792_pfm_enable(bq, (bool) selection);
+    bq25792_pfm_enable(bq, (bool)selection);
     return 0;
 }
 
 static int cmd_power_bq_freq_change(const struct shell *shell,
-                             size_t argc, char **argv, void *data)
+                                    size_t argc, char **argv, void *data)
 {
     int selection = (int)data;
-    bq25792_set_charge_frequency(bq, (bq25792_charge_frequency_t) selection);
+    bq25792_set_charge_frequency(bq, (bq25792_charge_frequency_t)selection);
     return 0;
 }
 
@@ -168,7 +168,7 @@ static int cmd_power_sys_boost(const struct shell *shell,
     uint32_t newVreghvoutValue = (NRF_UICR_S->VREGHVOUT & ~UICR_VREGHVOUT_VREGHVOUT_Msk) | UICR_VREGHVOUT_VREGHVOUT_3V3;
 
     // Write the change using the flash APIs
-    int ret = flash_write(flash, (uint32_t) & (NRF_UICR_S->VREGHVOUT), &newVreghvoutValue, sizeof(newVreghvoutValue));
+    int ret = flash_write(flash, (uint32_t)&(NRF_UICR_S->VREGHVOUT), &newVreghvoutValue, sizeof(newVreghvoutValue));
 
     if (ret)
     {
@@ -228,9 +228,10 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,
 /* Creating root (level 0) command "power" */
 SHELL_CMD_REGISTER(power, &sub_power, "Power commands", NULL);
 
-static int init_check_and_enable_3v3(const struct device *dev)
+static int init_check_and_enable_3v3(void)
 {
-    if (check_and_enable_3v3()) {
+    if (check_and_enable_3v3())
+    {
         sys_reboot(SYS_REBOOT_WARM);
 
         // Does not return

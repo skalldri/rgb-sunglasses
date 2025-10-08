@@ -10,10 +10,11 @@
 
 LOG_MODULE_DECLARE(vm3011);
 
-static int vm3011_init(const struct device *dev) {
+static int vm3011_init(const struct device *dev)
+{
 
-    const struct vm3011_dev_config *cfg = (struct vm3011_dev_config*)dev->config;
-    struct vm3011_dev_data* data = (struct vm3011_dev_data*)dev->data;
+    const struct vm3011_dev_config *cfg = (struct vm3011_dev_config *)dev->config;
+    struct vm3011_dev_data *data = (struct vm3011_dev_data *)dev->data;
 
     if (cfg->int_gpio.port)
     {
@@ -28,19 +29,16 @@ static int vm3011_init(const struct device *dev) {
     return 0;
 }
 
-#define VM3011_DEFINE(inst)                                                             \
-    static struct vm3011_dev_data vm3011_data_##inst;                                   \
-                                                                                        \
-                                                                                        \
-    static const struct vm3011_dev_config vm3011_config_##inst =                        \
-        {                                                                               \
-            .i2c = I2C_DT_SPEC_INST_GET(inst),                                          \
-            .int_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, irq_gpios, {0})                  \
-        };                                                                              \
-                                                                                        \
-    DEVICE_DT_INST_DEFINE(inst, vm3011_init, NULL,                                      \
-                      &vm3011_data_##inst, &vm3011_config_##inst,                       \
-                      APPLICATION, CONFIG_VM3011_INIT_PRIORITY, NULL);
-    
+#define VM3011_DEFINE(inst)                                              \
+    static struct vm3011_dev_data vm3011_data_##inst;                    \
+                                                                         \
+    static const struct vm3011_dev_config vm3011_config_##inst =         \
+        {                                                                \
+            .i2c = I2C_DT_SPEC_INST_GET(inst),                           \
+            .int_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, irq_gpios, {0})}; \
+                                                                         \
+    DEVICE_DT_INST_DEFINE(inst, vm3011_init, NULL,                       \
+                          &vm3011_data_##inst, &vm3011_config_##inst,    \
+                          POST_KERNEL, CONFIG_VM3011_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(VM3011_DEFINE)

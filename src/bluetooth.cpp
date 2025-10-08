@@ -35,25 +35,27 @@ static const struct bt_data sd[] = {
 };
 
 static ssize_t read_name(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-             void *buf, uint16_t len, uint16_t offset)
+                         void *buf, uint16_t len, uint16_t offset)
 {
     const char *value = bt_get_name();
 
     return bt_gatt_attr_read(conn, attr, buf, len, offset, value,
-                 strlen(value));
+                             strlen(value));
 }
 
 static ssize_t write_name(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-              const void *buf, uint16_t len, uint16_t offset,
-              uint8_t flags)
+                          const void *buf, uint16_t len, uint16_t offset,
+                          uint8_t flags)
 {
     char name[255];
 
-    if (offset) {
+    if (offset)
+    {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
     }
 
-    if (len >= 255) {
+    if (len >= 255)
+    {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
 
@@ -77,15 +79,14 @@ static const struct bt_gatt_cpf name_cpf = {
 
 /* Vendor Primary Service Declaration */
 BT_GATT_SERVICE_DEFINE(name_svc,
-    /* Vendor Primary Service Declaration */
-    BT_GATT_PRIMARY_SERVICE(&name_uuid),
-    BT_GATT_CHARACTERISTIC(&name_enc_uuid.uuid,
-                   BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
-                   BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT,
-                   read_name, write_name, NULL),
-    BT_GATT_CUD("Badge Name", BT_GATT_PERM_READ),
-    BT_GATT_CPF(&name_cpf),
-);
+                       /* Vendor Primary Service Declaration */
+                       BT_GATT_PRIMARY_SERVICE(&name_uuid),
+                       BT_GATT_CHARACTERISTIC(&name_enc_uuid.uuid,
+                                              BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+                                              BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT,
+                                              read_name, write_name, NULL),
+                       BT_GATT_CUD("Badge Name", BT_GATT_PERM_READ),
+                       BT_GATT_CPF(&name_cpf), );
 
 // We cannot simply use BT_LE_ADV_CONN directly here, because C++ and C have slightly different semantics about
 // taking the address of a temporary.
@@ -120,18 +121,18 @@ enum class BtThreadEvent
 
 struct BtThreadCommand
 {
-    BtThreadEvent event; // Event that happened
-    struct bt_conn* conn; // Connection associated with the event
-    bt_security_t level; // Security level, if event == SECURITY_CHANGED
-    uint8_t reason; // Disconnection reason
+    BtThreadEvent event;  // Event that happened
+    struct bt_conn *conn; // Connection associated with the event
+    bt_security_t level;  // Security level, if event == SECURITY_CHANGED
+    uint8_t reason;       // Disconnection reason
     unsigned int pairingKey;
 };
 static_assert(sizeof(BtThreadCommand) % BT_THREAD_MSGQ_ALIGNMENT == 0, "BtThreadCommand must be a multiple of BT_THREAD_MSGQ_ALIGNMENT");
 
 struct BtThreadContext
 {
-    BtThreadState state; // Current state
-    struct bt_conn* conn; // Current connection info, reference counted with bt_conn_ref/bt_conn_unref
+    BtThreadState state;  // Current state
+    struct bt_conn *conn; // Current connection info, reference counted with bt_conn_ref/bt_conn_unref
 };
 
 K_MSGQ_DEFINE(
@@ -140,10 +141,10 @@ K_MSGQ_DEFINE(
     BT_THREAD_MSGQ_MAX_DEPTH /* max msgs */,
     BT_THREAD_MSGQ_ALIGNMENT /* alignment */);
 
-void bt_thread_func(void* a, void* b, void* c);
+void bt_thread_func(void *a, void *b, void *c);
 
 K_THREAD_DEFINE(
-    bt_thread, 
+    bt_thread,
     8096,
     bt_thread_func,
     NULL,
@@ -151,8 +152,7 @@ K_THREAD_DEFINE(
     NULL,
     6,
     0,
-    0
-);
+    0);
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -173,18 +173,20 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
     // We are about to take a long-term reference to this BT connection, so we must increase
     // the refcount to ensure it stays valid.
-    // We do this before sending to the thread to ensure the connection object remains valid 
+    // We do this before sending to the thread to ensure the connection object remains valid
     // while it's sitting in the msgq
 
     cmd.conn = bt_conn_ref(conn);
 
-    if (cmd.conn == NULL) {
+    if (cmd.conn == NULL)
+    {
         LOG_ERR("Failed to refcount the Bluetooth connection!");
         return;
     }
 
     int ret = k_msgq_put(&bt_thread_command_msgq, &cmd, K_NO_WAIT);
-    if (ret) {
+    if (ret)
+    {
         LOG_ERR("Failed to put Bluetooth connection event on thread msgq!");
         // Need to un-ref the BT Conn to avoid leaks
         bt_conn_unref(cmd.conn);
@@ -194,7 +196,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
     LOG_INF("Disconnected (reason %u)", reason);
-    
+
     BtThreadCommand cmd;
     cmd.event = BtThreadEvent::DISCONNECTION;
 
@@ -204,7 +206,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     cmd.reason = reason;
 
     int ret = k_msgq_put(&bt_thread_command_msgq, &cmd, K_NO_WAIT);
-    if (ret) {
+    if (ret)
+    {
         LOG_ERR("Failed to put Bluetooth disconnection event on thread msgq!");
     }
 }
@@ -236,7 +239,8 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
     cmd.level = level;
 
     int ret = k_msgq_put(&bt_thread_command_msgq, &cmd, K_NO_WAIT);
-    if (ret) {
+    if (ret)
+    {
         LOG_ERR("Failed to put Bluetooth security change event on thread msgq!");
     }
 }
@@ -262,7 +266,8 @@ static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
     cmd.pairingKey = passkey;
 
     int ret = k_msgq_put(&bt_thread_command_msgq, &cmd, K_NO_WAIT);
-    if (ret) {
+    if (ret)
+    {
         LOG_ERR("Failed to put Bluetooth disconnection event on thread msgq!");
     }
 
@@ -472,7 +477,7 @@ void bt_state_advertising_handle_command(BtThreadContext *ctx, const BtThreadCom
 
         // Indicate that this connection requires L4 security
         bt_conn_set_security(ctx->conn, REQUIRED_BT_SECURITY_LEVEL);
-        
+
         // Change to the connecting state
         bt_state_change_to(ctx, BtThreadState::CONNECTING);
         break;
@@ -507,7 +512,8 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
     char addrConnecting[BT_ADDR_LE_STR_LEN];
     char addrNew[BT_ADDR_LE_STR_LEN];
 
-    if (ctx->conn != cmd->conn) {
+    if (ctx->conn != cmd->conn)
+    {
         bt_addr_le_to_str(bt_conn_get_dst(cmd->conn), addrNew, sizeof(addrNew));
         bt_addr_le_to_str(bt_conn_get_dst(ctx->conn), addrConnecting, sizeof(addrConnecting));
         LOG_ERR("Got a command for a different connection: in-progress connection with '%s', new connection to '%s'", addrConnecting, addrNew);
@@ -536,10 +542,13 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
         // What level of security did the peer upgrade to?
         LOG_INF("Peer security level changed to %d", cmd->level);
 
-        if (cmd->level == REQUIRED_BT_SECURITY_LEVEL) {
+        if (cmd->level == REQUIRED_BT_SECURITY_LEVEL)
+        {
             LOG_DBG("Required security level achieved");
             bt_state_change_to(ctx, BtThreadState::CONNECTED);
-        } else {
+        }
+        else
+        {
             LOG_ERR("Failed to reach required security level %d, got %d instead", REQUIRED_BT_SECURITY_LEVEL, cmd->level);
 
             // Disconnect from the peer
@@ -567,7 +576,8 @@ void bt_state_connected_handle_command(BtThreadContext *ctx, const BtThreadComma
     char addrConnecting[BT_ADDR_LE_STR_LEN];
     char addrNew[BT_ADDR_LE_STR_LEN];
 
-    if (ctx->conn != cmd->conn) {
+    if (ctx->conn != cmd->conn)
+    {
         bt_addr_le_to_str(bt_conn_get_dst(cmd->conn), addrNew, sizeof(addrNew));
         bt_addr_le_to_str(bt_conn_get_dst(ctx->conn), addrConnecting, sizeof(addrConnecting));
         LOG_ERR("Got a command for a different connection: in-progress connection with '%s', new connection to '%s'", addrConnecting, addrNew);
@@ -596,10 +606,13 @@ void bt_state_connected_handle_command(BtThreadContext *ctx, const BtThreadComma
         // What level of security did the peer upgrade to?
         LOG_INF("Peer security level changed to %d", cmd->level);
 
-        if (cmd->level == REQUIRED_BT_SECURITY_LEVEL) {
+        if (cmd->level == REQUIRED_BT_SECURITY_LEVEL)
+        {
             LOG_DBG("Required security level achieved");
             bt_state_change_to(ctx, BtThreadState::CONNECTED);
-        } else {
+        }
+        else
+        {
             LOG_WRN("Reached security %d, must reach %d to connect", cmd->level, REQUIRED_BT_SECURITY_LEVEL);
             // TODO: need to implement timeout to disconnect if we don't reach "CONNECTED" state within ~60s
         }
@@ -635,7 +648,8 @@ void bt_thread_func(void *a, void *b, void *c)
 
     int err = bt_state_change_to(&ctx, BtThreadState::ADVERTISING);
 
-    if (err) {
+    if (err)
+    {
         LOG_ERR("Failed to initially start bluetooth advertising! %d", err);
         return;
     }
@@ -646,7 +660,8 @@ void bt_thread_func(void *a, void *b, void *c)
         BtThreadCommand command;
         int ret = k_msgq_get(&bt_thread_command_msgq, &command, K_FOREVER);
 
-        if (ret != 0) {
+        if (ret != 0)
+        {
             LOG_ERR("Unexpected return code from k_msgq_get(): %d", ret);
             continue;
         }
@@ -675,9 +690,7 @@ void bt_thread_func(void *a, void *b, void *c)
     }
 }
 
-
-
-static int bluetooth_init(const struct device *dev)
+static int bluetooth_init(void)
 {
     int err = 0;
     if (IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED))
@@ -713,7 +726,6 @@ static int bluetooth_init(const struct device *dev)
     }
 
     LOG_INF("Settings loaded");
-
 
     return 0;
 }
