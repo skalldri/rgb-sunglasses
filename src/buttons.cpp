@@ -22,7 +22,7 @@ static struct gpio_callback callback_wake;
 void button_thread_func(void* a, void* b, void* c);
 
 K_THREAD_DEFINE(
-    button_thread, 
+    button_thread,
     2048,
     button_thread_func,
     NULL,
@@ -48,34 +48,39 @@ void button_thread_func(void* a, void* b, void* c) {
 */
 
 void button_callback(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
-{   
+{
     printk("ISR Triggered! Pins: %u\n", pins);
 
     // Which button was pushed?
-    if ((port == button0.port) && (pins & BIT(button0.pin))) {
+    if ((port == button0.port) && (pins & BIT(button0.pin)))
+    {
         printk("Button 0 Pressed!\n");
     }
 
-    if ((port == button1.port) && (pins & BIT(button1.pin))) {
+    if ((port == button1.port) && (pins & BIT(button1.pin)))
+    {
         printk("Button 1 Pressed!\n");
     }
 
-    if ((port == button2.port) && (pins & BIT(button2.pin))) {
+    if ((port == button2.port) && (pins & BIT(button2.pin)))
+    {
         printk("Button 2 Pressed!\n");
     }
 
-    if ((port == button3.port) && (pins & BIT(button3.pin))) {
+    if ((port == button3.port) && (pins & BIT(button3.pin)))
+    {
         printk("Button 3 Pressed!\n");
     }
 
-    if ((port == button_wake.port) && (pins & BIT(button_wake.pin))) {
+    if ((port == button_wake.port) && (pins & BIT(button_wake.pin)))
+    {
         printk("Wake Button Pressed!\n");
     }
 
     return;
 }
 
-static int button_init(const struct device *dev)
+static int button_init(void)
 {
     LOG_INF("Configuring buttons");
 

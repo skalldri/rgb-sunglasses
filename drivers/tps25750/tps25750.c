@@ -682,7 +682,7 @@ K_THREAD_STACK_DEFINE(tps25750_workq_stack_area, TPS25750_WORKQ_STACK_SIZE);
 
 struct k_work_q tps25750_work_q;
 
-void tps25750_patch_work(struct k_work* item)
+void tps25750_patch_work(struct k_work *item)
 {
     struct k_work_delayable *dwork = k_work_delayable_from_work(item);
     struct tps25750_dev_data *data = CONTAINER_OF(dwork, struct tps25750_dev_data, work);
@@ -995,30 +995,30 @@ static const struct i2c_driver_api i2c_tps25750_i2cm_driver_api = {
     .transfer = i2c_tps25750_i2cm_transfer,
 };
 
-#define TPS25750_DEFINE(inst)                                                          \
+#define TPS25750_DEFINE(inst)                                                                            \
     void tps25750_irq_##inst(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins) \
-    {                                                                                  \
-        const struct device *dev = DEVICE_DT_GET(DT_DRV_INST(inst));                   \
-        LOG_INF("Got a callback, device %p", dev);                                     \
-        tps25750_irq(dev, port, cb, pins);                                             \
-    }                                                                                  \
-                                                                                       \
-    static struct tps25750_dev_data tps25750_data_##inst;                              \
-                                                                                       \
-    static uint8_t tps25750_patch_buffer_##inst[DT_INST_PROP(inst, patch_chunk_size)]; \
-                                                                                       \
-    static const struct tps25750_dev_config tps25750_config_##inst =                   \
-        {                                                                              \
-            .i2c = I2C_DT_SPEC_INST_GET(inst),                                         \
-            .int_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, irq_gpios, {0}),                \
-            .patch_buffer = tps25750_patch_buffer_##inst,                              \
-            .patch_address = DT_INST_PROP(inst, patch_address),                        \
-            .patch_chunk_size = DT_INST_PROP(inst, patch_chunk_size),                  \
-            .irq_callback = tps25750_irq_##inst};                                      \
-                                                                                       \
-    I2C_DEVICE_DT_INST_DEFINE(inst, tps25750_init, NULL,                               \
-                              &tps25750_data_##inst, &tps25750_config_##inst,          \
-                              APPLICATION, CONFIG_TPS25750_INIT_PRIORITY,              \
+    {                                                                                                    \
+        const struct device *dev = DEVICE_DT_GET(DT_DRV_INST(inst));                                     \
+        LOG_INF("Got a callback, device %p", dev);                                                       \
+        tps25750_irq(dev, port, cb, pins);                                                               \
+    }                                                                                                    \
+                                                                                                         \
+    static struct tps25750_dev_data tps25750_data_##inst;                                                \
+                                                                                                         \
+    static uint8_t tps25750_patch_buffer_##inst[DT_INST_PROP(inst, patch_chunk_size)];                   \
+                                                                                                         \
+    static const struct tps25750_dev_config tps25750_config_##inst =                                     \
+        {                                                                                                \
+            .i2c = I2C_DT_SPEC_INST_GET(inst),                                                           \
+            .int_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, irq_gpios, {0}),                                  \
+            .patch_buffer = tps25750_patch_buffer_##inst,                                                \
+            .patch_address = DT_INST_PROP(inst, patch_address),                                          \
+            .patch_chunk_size = DT_INST_PROP(inst, patch_chunk_size),                                    \
+            .irq_callback = tps25750_irq_##inst};                                                        \
+                                                                                                         \
+    I2C_DEVICE_DT_INST_DEFINE(inst, tps25750_init, NULL,                                                 \
+                              &tps25750_data_##inst, &tps25750_config_##inst,                            \
+                              POST_KERNEL, CONFIG_TPS25750_INIT_PRIORITY,                                \
                               &i2c_tps25750_i2cm_driver_api);
 
 #if 0
