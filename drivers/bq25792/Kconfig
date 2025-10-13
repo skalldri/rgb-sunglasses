@@ -4,4 +4,4 @@ config BQ25792
 
 config BQ25792_INIT_PRIORITY
     int "BQ25792 device initialization priority"
-    default 3
+    default 52
