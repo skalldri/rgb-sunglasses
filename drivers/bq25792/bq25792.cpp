@@ -13,10 +13,10 @@ LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_INF);
 #include "bq25792_priv.h"
 
 /* X-Macro Definition for bq25792_dump() function */
-#define REG(_regName) \
-    { \
+#define REG(_regName)      \
+    {                      \
         _regName tmp(cfg); \
-        tmp.dump(); \
+        tmp.dump();        \
     }
 
 int bq25792_dump(const struct device *dev)
@@ -27,7 +27,7 @@ int bq25792_dump(const struct device *dev)
         return -ENODEV;
     }
 
-    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
 
     if (!device_is_ready(cfg->i2c.bus))
     {
@@ -35,79 +35,88 @@ int bq25792_dump(const struct device *dev)
         return -ENODEV;
     }
 
+#if defined(CONFIG_DUMP_DEVICE_REGISTERS)
+
     REG_LIST
+
+#endif
 
     return 0;
 }
 #undef REG
 
-int bq25792_temp_override(const struct device *dev, bool enable) {
+int bq25792_temp_override(const struct device *dev, bool enable)
+{
     if (!dev)
     {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
 
-    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
 
     BQ25792_NTC_CONTROL_1 reg(cfg);
-    
+
     uint32_t ts_ignore = enable ? 1 : 0;
     LOG_INF("Setting TS_IGNORE to %u", ts_ignore);
 
     return reg.set<BQ25792_NTC_CONTROL_1_TS_IGNORE>(ts_ignore, true /* flush */);
 }
 
-int bq25792_adc_enable(const struct device *dev, bool enable) {
+int bq25792_adc_enable(const struct device *dev, bool enable)
+{
     if (!dev)
     {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
 
-    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
 
     BQ25792_ADC_CONTROL reg(cfg);
-    
+
     uint32_t adc_en = enable ? 1 : 0;
     LOG_INF("Setting ADC_EN to %u", adc_en);
 
     return reg.set<BQ25792_ADC_CONTROL_ADC_EN>(adc_en, true /* flush */);
 }
 
-int bq25792_pfm_enable(const struct device *dev, bool enable) {
+int bq25792_pfm_enable(const struct device *dev, bool enable)
+{
     if (!dev)
     {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
 
-    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
 
     BQ25792_CHARGER_CONTROL_3 reg(cfg);
-    
+
     uint32_t pfm_fwd_dis = enable ? 0 : 1;
     LOG_INF("Setting PFM_FWD_DIS to %u", pfm_fwd_dis);
 
     return reg.set<BQ25792_CHARGER_CONTROL_3_PFM_FWD_DIS>(pfm_fwd_dis, true /* flush */);
 }
 
-int bq25792_set_charge_frequency(const struct device *dev, bq25792_charge_frequency_t freq) {
+int bq25792_set_charge_frequency(const struct device *dev, bq25792_charge_frequency_t freq)
+{
     if (!dev)
     {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
 
-    if (freq > NUM_CHARGE_FREQUENCY) {
+    if (freq > NUM_CHARGE_FREQUENCY)
+    {
         LOG_ERR("Invalid frequency setting %u", freq);
         return -EINVAL;
     }
 
-    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config*)dev->config;
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
 
     BQ25792_CHARGER_CONTROL_4 reg(cfg);
-    
+
     uint32_t pwm_freq = (freq == bq25792_charge_frequency_t::LOW) ? 1 : 0;
     LOG_INF("Setting PWM_FREQ to %u", pwm_freq);
 

@@ -25,4 +25,10 @@ config BT_STATUS_SECURITY_ENABLED
 
 endmenu
 
+config DUMP_DEVICE_REGISTERS
+	bool "Enable dump device registers"
+	default n
+	help
+	  Enable dumping of device registers.
+
 rsource "drivers/Kconfig"

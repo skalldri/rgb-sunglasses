@@ -27,7 +27,8 @@ target_sources(
     src/animations/zigzag_animation.cpp
     src/animations/text_animation.cpp
     src/animations/rainbow_animation.cpp
-    src/animations/my_eyes_animation.cpp
+    # Save memory for now
+    # src/animations/my_eyes_animation.cpp
     src/fonts/FontAtlas.cpp
     src/fonts/FontShell.cpp
     src/sound/sound.cpp

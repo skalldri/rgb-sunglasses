@@ -63,11 +63,13 @@ public:
         return name;
     }
 
-    static const char* getUnit() {
+    static const char *getUnit()
+    {
         return UnitConversion::unit();
     }
 
-    static int64_t conversion(uint32_t val) {
+    static int64_t conversion(uint32_t val)
+    {
         return UnitConversion::conversion(val);
     }
 };
@@ -204,6 +206,7 @@ public:
      */
     void dump(bool read = false)
     {
+#if defined(CONFIG_DUMP_DEVICE_REGISTERS)
         if (read)
         {
             this->read();
@@ -212,6 +215,7 @@ public:
         LOG_INF("%s", this->getName());
 
         dumpHelper<U, Us...>();
+#endif
     }
 
     /**
@@ -270,16 +274,19 @@ public:
             LOG_ERR("I2C Read failed: %d", ret);
             return ret;
         }
-        
+
         // TODO: might need to make this logic configurable...?
         // Handle big/little endian conversion
-        if (this->regWidth_ == 16) {
-            uint8_t* storage = reinterpret_cast<uint8_t*>(&this->storage_);
+        if (this->regWidth_ == 16)
+        {
+            uint8_t *storage = reinterpret_cast<uint8_t *>(&this->storage_);
             uint8_t tmp = storage[0];
             storage[0] = storage[1];
             storage[1] = tmp;
-        } else if (this->regWidth_ == 32) {
-            uint8_t* storage = reinterpret_cast<uint8_t*>(&this->storage_);
+        }
+        else if (this->regWidth_ == 32)
+        {
+            uint8_t *storage = reinterpret_cast<uint8_t *>(&this->storage_);
 
             // Swap first and last byte
             uint8_t tmp = storage[0];
@@ -359,19 +366,23 @@ private:
     bool dirty_ = false; // Indicates if a write is needed
 };
 
+/*
 template <typename U, typename... Us>
-class DumpableDevice {
-public: 
-    void dump() {
+class DumpableDevice
+{
+public:
+    void dump()
+    {
         dumpHelper<U, Us...>();
     }
+
 private:
-
     template <typename Ta, typename Tb, typename... Ts>
-    void dumpHelper() {
-
+    void dumpHelper()
+    {
     }
 
     template <typename T>
     inline void dumpHelper() {}
 };
+*/

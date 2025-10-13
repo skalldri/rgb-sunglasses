@@ -105,9 +105,9 @@ void configure_pdm()
         PDM_CHAN_RIGHT);
 
     // Calculate the total recording buffer time
-    LOG_INF("DMIC Configuration: sample rate: %u hz, sample bit width: %u", SAMPLE_RATE_HZ, SAMPLE_BIT_WIDTH);
-    LOG_INF("DMIC Configuration: block size: %u bytes, num blocks: %u", BLOCK_SIZE, BLOCK_COUNT);
-    LOG_INF("DMIC Configuration: total recording buffer %u ms", BLOCK_COUNT * BLOCK_CAPTURE_TIME_MS);
+    // LOG_INF("DMIC Configuration: sample rate: %u hz, sample bit width: %u", SAMPLE_RATE_HZ, SAMPLE_BIT_WIDTH);
+    // LOG_INF("DMIC Configuration: block size: %u bytes, num blocks: %u", BLOCK_SIZE, BLOCK_COUNT);
+    // LOG_INF("DMIC Configuration: total recording buffer %u ms", BLOCK_COUNT * BLOCK_CAPTURE_TIME_MS);
 }
 
 static int cmd_sound_mic_record(const struct shell *shell,

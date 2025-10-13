@@ -23,7 +23,7 @@ void main(void)
     LOG_INF("RGB Sunglasses DK - Main");
 
     for (;;) {
-        LOG_INF("App is alive");
+        // LOG_INF("App is alive");
         k_msleep(10000);
     }
 }

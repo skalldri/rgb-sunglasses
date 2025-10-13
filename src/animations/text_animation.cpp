@@ -120,7 +120,7 @@ size_t TextAnimation::getUpNext() {
         nextUpNext = 0; // Wraparound
     }
 
-    LOG_INF("Playing %u now, %u up next", currUpNext, nextUpNext);
+    // LOG_INF("Playing %u now, %u up next", currUpNext, nextUpNext);
     
     // Update the variable which will get reflected on the BT remote app, allowing the user
     // to change the next phrase if needed

@@ -7,7 +7,8 @@
 
 LOG_MODULE_REGISTER(FontAtlas);
 
-FontAtlas* FontAtlas::getInstance() {
+FontAtlas *FontAtlas::getInstance()
+{
     static FontAtlas atlas;
     return &atlas;
 }
@@ -17,7 +18,7 @@ FontAtlas::FontAtlas()
     static_assert(width == FontAtlas::atlasWidth);
     static_assert(height == FontAtlas::atlasHeight);
 
-    unsigned char *data = header_data;
+    const unsigned char *data = header_data;
 
     // Load the font atlas into RAM
     for (size_t i = 0; i < atlasPixels; i++)
@@ -81,16 +82,20 @@ void FontAtlas::PrintChar(char c, FontPrintFunc func)
 
 void FontAtlas::DebugChar(char c)
 {
+    /*
     size_t currentRow = 0;
-    auto lambda = [&](size_t x, size_t y, bool filled) {
-        if (y > currentRow) {
+    auto lambda = [&](size_t x, size_t y, bool filled)
+    {
+        if (y > currentRow)
+        {
             printk("\n");
             currentRow = y;
         }
 
         printk("%s", filled ? "*" : " ");
     };
-   
+
     PrintChar(c, lambda);
     printk("\n");
+    */
 }
