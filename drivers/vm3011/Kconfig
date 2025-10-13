@@ -4,4 +4,4 @@ config VM3011
 
 config VM3011_INIT_PRIORITY
     int "BQ25792 device initialization priority"
-    default 3
+    default 51
