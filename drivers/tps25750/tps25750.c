@@ -337,6 +337,8 @@ int tps25750_dump(const struct device *dev)
         return -ENODEV;
     }
 
+#if defined(CONFIG_DUMP_DEVICE_REGISTERS)
+
     tps25750_mode_t mode;
     ret = tps25750_read_mode(dev, &mode);
     if (ret)
@@ -403,6 +405,8 @@ int tps25750_dump(const struct device *dev)
     LOG_INF("PD Controller Revision: %u", status.revision_id);
 
     LOG_INF("Dump complete!");
+
+#endif
 
     return 0;
 }

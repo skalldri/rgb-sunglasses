@@ -17,7 +17,7 @@ public:
     static void isActiveCccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
     {
         T::getInstance()->sendActiveNotifications_ = (value == BT_GATT_CCC_NOTIFY);
-        printk("Anim %d isActive notification state: %d\n", T::kBtServiceIdNum, T::getInstance()->sendActiveNotifications_);
+        //printk("Anim %d isActive notification state: %d\n", T::kBtServiceIdNum, T::getInstance()->sendActiveNotifications_);
 
         if (T::getInstance()->sendActiveNotifications_) {
             T::getInstance()->activeAttr_ = attr;
@@ -41,13 +41,13 @@ public:
     {
         if (offset)
         {
-            printk("Err in bt service %d\n", T::kBtServiceIdNum);
+            //printk("Err in bt service %d\n", T::kBtServiceIdNum);
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
         }
 
         if (len > sizeof(active_))
         {
-            printk("Err in bt service %d, incorrect len %d\n", T::kBtServiceIdNum, len);
+            //printk("Err in bt service %d, incorrect len %d\n", T::kBtServiceIdNum, len);
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
         }
 

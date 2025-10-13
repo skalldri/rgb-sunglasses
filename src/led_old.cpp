@@ -145,7 +145,7 @@ void control_strip(const struct device *led_strip) {
 void led_strip_control_thread(void* a, void* b, void* c) {
     const struct device *led_strip = DEVICE_DT_GET(LED_STRIP_0_NODE_ID);
     if (!device_is_ready(led_strip)) {
-        printk("Device %s is not ready\n", led_strip->name);
+        //printk("Device %s is not ready\n", led_strip->name);
         return;
     }
 
@@ -157,7 +157,7 @@ void led_strip_control_thread(void* a, void* b, void* c) {
 void led_strip_1_control_thread(void* a, void* b, void* c) {
     const struct device *led_strip = DEVICE_DT_GET(LED_STRIP_1_NODE_ID);
     if (!device_is_ready(led_strip)) {
-        printk("Device %s is not ready\n", led_strip->name);
+        //printk("Device %s is not ready\n", led_strip->name);
         return;
     }
 

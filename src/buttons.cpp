@@ -49,32 +49,32 @@ void button_thread_func(void* a, void* b, void* c) {
 
 void button_callback(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
 {
-    printk("ISR Triggered! Pins: %u\n", pins);
+    //printk("ISR Triggered! Pins: %u\n", pins);
 
     // Which button was pushed?
     if ((port == button0.port) && (pins & BIT(button0.pin)))
     {
-        printk("Button 0 Pressed!\n");
+        //printk("Button 0 Pressed!\n");
     }
 
     if ((port == button1.port) && (pins & BIT(button1.pin)))
     {
-        printk("Button 1 Pressed!\n");
+        //printk("Button 1 Pressed!\n");
     }
 
     if ((port == button2.port) && (pins & BIT(button2.pin)))
     {
-        printk("Button 2 Pressed!\n");
+        //printk("Button 2 Pressed!\n");
     }
 
     if ((port == button3.port) && (pins & BIT(button3.pin)))
     {
-        printk("Button 3 Pressed!\n");
+        //printk("Button 3 Pressed!\n");
     }
 
     if ((port == button_wake.port) && (pins & BIT(button_wake.pin)))
     {
-        printk("Wake Button Pressed!\n");
+        //printk("Wake Button Pressed!\n");
     }
 
     return;

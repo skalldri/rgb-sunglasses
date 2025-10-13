@@ -62,7 +62,7 @@ static ssize_t write_name(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     memcpy(name, buf, len);
     name[len] = '\0';
 
-    printk("Got string %s", name);
+    //printk("Got string %s", name);
 
     return len;
 }

@@ -31,16 +31,16 @@ class BtReadWriteVariable
             uint8_t flags) 
     { 
             if (offset) { 
-                printk("Animation %d, Chrc %d: error, offset\n", tAnimationId, tChrcId);
+                //printk("Animation %d, Chrc %d: error, offset\n", tAnimationId, tChrcId);
                 return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET); 
             } 
             if (len > sizeof(T)) {
-                printk("Animation %d, Chrc %d: error, too long: %d > %d\n", tAnimationId, tChrcId, len, sizeof(T));
+                //printk("Animation %d, Chrc %d: error, too long: %d > %d\n", tAnimationId, tChrcId, len, sizeof(T));
                 return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN); 
             } 
             memcpy(&(getInstance().storage_), buf, len);
 
-            printk("Animation %d, Chrc %d: value updated over BT to '%x'\n", tAnimationId, tChrcId, getInstance().storage_);
+            //printk("Animation %d, Chrc %d: value updated over BT to '%x'\n", tAnimationId, tChrcId, getInstance().storage_);
 
             return len;
     }
@@ -48,14 +48,14 @@ class BtReadWriteVariable
     static ssize_t read(struct bt_conn *conn, const struct bt_gatt_attr *attr, 
              void *buf, uint16_t len, uint16_t offset) 
     { 
-        printk("Animation %d, Chrc %d: Reading value '%d'\n", tAnimationId, tChrcId, getInstance().storage_);
+        //printk("Animation %d, Chrc %d: Reading value '%d'\n", tAnimationId, tChrcId, getInstance().storage_);
         return bt_gatt_attr_read(conn, attr, buf, len, offset, &(getInstance().storage_), sizeof(getInstance().storage_)); 
     }
 
     static void isActiveCccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
     {
         getInstance().sendActiveNotifications_ = (value == BT_GATT_CCC_NOTIFY);
-        printk("Anim %d chrc %d notification state: %d\n", tAnimationId, tChrcId, getInstance().sendActiveNotifications_);
+        //printk("Anim %d chrc %d notification state: %d\n", tAnimationId, tChrcId, getInstance().sendActiveNotifications_);
 
         if (getInstance().sendActiveNotifications_) {
             getInstance().activeAttr_ = attr;
@@ -67,9 +67,9 @@ class BtReadWriteVariable
     protected:
         static void btNotifyIfEnabled() {
             if (getInstance().activeAttr_) {
-                printk("Anim %d chrc %d notifying on value change\n", tAnimationId, tChrcId);
+                //printk("Anim %d chrc %d notifying on value change\n", tAnimationId, tChrcId);
                 if (bt_gatt_notify(NULL, getInstance().activeAttr_, &getInstance().storage_, sizeof(getInstance().storage_)) != 0) {
-                    printk("Anim %d chrc %d notify failed\n", tAnimationId, tChrcId);
+                    //printk("Anim %d chrc %d notify failed\n", tAnimationId, tChrcId);
                 }
             }
         }
