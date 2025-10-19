@@ -6,7 +6,8 @@
     "customizations": {
         "vscode": {
             "extensions": [
-                "nordic-semiconductor.nrf-connect-extension-pack"
+                "nordic-semiconductor.nrf-connect-extension-pack",
+                "ms-vscode.live-server"
             ]
         }
     },
