@@ -1,0 +1,4 @@
+{
+    "name": "RGB Sunglasses Dev Container",
+    "image": "ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.1.1"
+}
