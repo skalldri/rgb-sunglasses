@@ -1,4 +1,19 @@
 {
     "name": "RGB Sunglasses Dev Container",
-    "image": "ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.1.1"
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "nordic-semiconductor.nrf-connect-extension-pack"
+            ]
+        }
+    },
+    "containerEnv": {
+        "ACCEPT_JLINK_LICENSE": "1"
+    },
+    "runArgs": [
+        "--privileged"
+    ],
 }
