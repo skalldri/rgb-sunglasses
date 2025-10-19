@@ -4,3 +4,6 @@
 
 # build
 /build*/
+
+# Test output
+/twister-out*/
