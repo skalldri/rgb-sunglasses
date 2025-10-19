@@ -6,3 +6,8 @@ project(integration)
 
 FILE(GLOB app_sources src/*.c)
 target_sources(app PRIVATE ${app_sources})
+
+# Include the original patch
+target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../misc/tps25750/tps25750-config.c)
+
+# Include the compressed patch

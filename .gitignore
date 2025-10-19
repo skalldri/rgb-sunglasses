@@ -7,3 +7,6 @@
 
 # Test output
 /twister-out*/
+
+# Pycache
+__pycache__/
