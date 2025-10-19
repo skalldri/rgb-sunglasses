@@ -31,4 +31,22 @@ config DUMP_DEVICE_REGISTERS
 	help
 	  Enable dumping of device registers.
 
+config ANIMATION_MY_EYES
+	bool "Enable My Eyes animation"
+	default y
+	help
+	  Enable the My Eyes animation for the sunglasses.
+
+config ANIMATION_RAINBOW
+	bool "Enable Rainbow animation"
+	default y
+	help
+	  Enable the Rainbow animation for the sunglasses.
+
+config ANIMATION_ZIGZAG
+	bool "Enable Zigzag animation"
+	default y
+	help
+	  Enable the Zigzag animation for the sunglasses.
+
 rsource "drivers/Kconfig"

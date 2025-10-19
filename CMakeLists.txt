@@ -24,17 +24,18 @@ target_sources(
     src/core_config.cpp
     src/animations/bt_animations.cpp
     src/animations/null_animation.cpp
-    src/animations/zigzag_animation.cpp
     src/animations/text_animation.cpp
-    src/animations/rainbow_animation.cpp
-    # Save memory for now
-    # src/animations/my_eyes_animation.cpp
     src/fonts/FontAtlas.cpp
     src/fonts/FontShell.cpp
-    src/sound/sound.cpp
     misc/tps25750/tps25750-config.c
     # misc/tps25750/tps25750-full-config.c
 )
+
+target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/sound.cpp)
+
+target_sources_ifdef(CONFIG_ANIMATION_MY_EYES app PRIVATE src/animations/my_eyes_animation.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/animations/rainbow_animation.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG app PRIVATE src/animations/zigzag_animation.cpp)
 
 target_include_directories(
   app 

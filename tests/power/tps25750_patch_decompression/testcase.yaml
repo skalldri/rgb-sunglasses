@@ -1,0 +1,3 @@
+tests:
+  sample.testing.ztest.framework_tests:
+    type: unit
