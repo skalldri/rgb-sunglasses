@@ -1,3 +1,6 @@
 tests:
   sample.testing.ztest.framework_tests:
-    type: unit
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
