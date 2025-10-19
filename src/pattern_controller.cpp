@@ -59,18 +59,23 @@ BaseAnimation *getAnimation(Animation animation)
 {
     switch (animation)
     {
+#if defined(CONFIG_ANIMATION_ZIGZAG)
     case Animation::ZigZag:
         return ZigZagAnimation::getInstance();
+#endif
 
     case Animation::Text:
         return TextAnimation::getInstance();
 
+#if defined(CONFIG_ANIMATION_RAINBOW)
     case Animation::Rainbow:
         return RainbowAnimation::getInstance();
+#endif
 
-        // Save memory yee gods
-        // case Animation::MyEyes:
-        //    return MyEyesAnimation::getInstance();
+#if defined(CONFIG_ANIMATION_MY_EYES)
+    case Animation::MyEyes:
+        return MyEyesAnimation::getInstance();
+#endif
     }
 
     return NULL;
@@ -99,13 +104,20 @@ void pattern_controller_thread_func(void *a, void *b, void *c)
     BtConnectingAnimation::getInstance()->init();
     BtPairingAnimation::getInstance()->init();
 
-    ZigZagAnimation::getInstance()->init();
     NullAnimation::getInstance()->init();
     TextAnimation::getInstance()->init();
-    RainbowAnimation::getInstance()->init();
 
-    // Save memory!
-    // MyEyesAnimation::getInstance()->init();
+#if defined(CONFIG_ANIMATION_ZIGZAG)
+    ZigZagAnimation::getInstance()->init();
+#endif
+
+#if defined(CONFIG_ANIMATION_RAINBOW)
+    RainbowAnimation::getInstance()->init();
+#endif
+
+#if defined(CONFIG_ANIMATION_MY_EYES)
+    MyEyesAnimation::getInstance()->init();
+#endif
 
     // Start in the ZigZag animation
     pattern_controller_change_to_animation(Animation::ZigZag);
