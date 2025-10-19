@@ -16,4 +16,5 @@
     "runArgs": [
         "--privileged"
     ],
+    "postCreateCommand": "dpkg -i /jlink/JLink_Linux.deb"
 }
