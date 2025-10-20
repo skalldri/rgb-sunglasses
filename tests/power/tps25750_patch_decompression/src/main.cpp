@@ -6,33 +6,56 @@
 
 #include <zephyr/ztest.h>
 #include "power.h"
-#include "tps25750-config.h"
-#include "tps25750-config-compressed.h"
+#include "tps25750/tps25750-config.h"
+#include "tps25750/tps25750-config-compressed.h"
 
-ZTEST_SUITE(framework_tests, NULL, NULL, NULL, NULL, NULL);
+#include "lz4.h"
 
-/**
- * @brief Test Asserts
- *
- * This test verifies various assert macros provided by ztest.
- *
- */
-ZTEST(framework_tests, test_assert)
+#include <zephyr/random/random.h>
+
+ZTEST_SUITE(tps25750_patch_decompression_tests, NULL, NULL, NULL, NULL, NULL);
+
+ZTEST(tps25750_patch_decompression_tests, test_decompression_valid_patch)
 {
-    zassert_true(1, "1 was false");
-    zassert_false(0, "0 was true");
-    zassert_is_null(NULL, "NULL was not NULL");
-    zassert_not_null("foo", "\"foo\" was NULL");
-    zassert_equal(1, 1, "1 was not equal to 1");
-    zassert_equal_ptr(NULL, NULL, "NULL was not equal to NULL");
+    static char decompressed_data[15 * 1024];
+    std::span<char> output = std::span<char>(decompressed_data, sizeof(decompressed_data));
+
+    std::span<const char> compressed_patch = std::span<const char>(tps25750x_lowRegion_i2c_array_lz4, gtps25750x_lowRegion_i2c_array_lz4Size);
+    std::span<const char> original_patch = std::span<const char>(tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
+
+    int ret = power::decompress_tps25750_patch(compressed_patch, output);
+    zassert_true(ret > 0, "Decompression failed: %d", ret);
+    zassert_equal(ret, gSizeLowRegionArray, "Decompressed size does not match expected size: %d != %d", ret, gSizeLowRegionArray);
+    zassert_mem_equal(output.data(), original_patch.data(), ret, "Decompressed data does not match expected data");
 }
 
-ZTEST(framework_tests, test_decompression)
+ZTEST(tps25750_patch_decompression_tests, test_decompression_buffer_too_small)
 {
-    static uint8_t decompressed_data[15 * 1024];
-    std::span<uint8_t> output = std::span<uint8_t>(decompressed_data, sizeof(decompressed_data));
-    const std::span<uint8_t> input = std::span<uint8_t>(tps25750x_lowRegion_i2c_array_lz4, sizeof(tps25750x_lowRegion_i2c_array_lz4));
-    power::decompress_tps25750_patch();
+    static char decompressed_data[1 * 1024];
+    std::span<char> output = std::span<char>(decompressed_data, sizeof(decompressed_data));
 
-    const std::span<uint8_t> expected = std::span<uint8_t>(tps25750x_lowRegion_i2c_array, sizeof(tps25750x_lowRegion_i2c_array));
+    std::span<const char> compressed_patch = std::span<const char>(tps25750x_lowRegion_i2c_array_lz4, gtps25750x_lowRegion_i2c_array_lz4Size);
+    std::span<const char> original_patch = std::span<const char>(tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
+
+    int ret = power::decompress_tps25750_patch(compressed_patch, output);
+    zassert_false(ret > 0, "Decompression succeeded unexpectedly: %d", ret);
+}
+
+ZTEST(tps25750_patch_decompression_tests, test_decompression_junk_data)
+{
+    static char decompressed_data[15 * 1024];
+    std::span<char> output = std::span<char>(decompressed_data, sizeof(decompressed_data));
+
+    static char junk_data[15 * 1024];
+    // Fill junk_data with random bytes
+    for (size_t i = 0; i < sizeof(junk_data); i++)
+    {
+        junk_data[i] = sys_rand8_get();
+    }
+    std::span<const char> compressed_patch = std::span<const char>(junk_data, gtps25750x_lowRegion_i2c_array_lz4Size);
+
+    std::span<const char> original_patch = std::span<const char>(tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
+
+    int ret = power::decompress_tps25750_patch(compressed_patch, output);
+    zassert_false(ret > 0, "Decompression succeeded unexpectedly: %d", ret);
 }

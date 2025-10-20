@@ -1,3 +1,5 @@
+#include "power.h"
+
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/sys/reboot.h>
@@ -39,11 +41,13 @@ const struct device *flash = nullptr;
 
 namespace power
 {
-    int decompress_tps25750_patch(const std::span<uint8_t> input_buffer,
-                                  std::span<uint8_t> output_buffer)
+    int decompress_tps25750_patch(std::span<const char> input_buffer,
+                                  std::span<char> output_buffer)
     {
+        LOG_INF("Decompressing %d bytes into output buffer size %d", input_buffer.size(), output_buffer.size());
+
         // Decompress using LZ4
-        size_t decompressed_size = LZ4_decompress_safe(
+        int decompressed_size = LZ4_decompress_safe(
             reinterpret_cast<const char *>(input_buffer.data()),
             reinterpret_cast<char *>(output_buffer.data()),
             input_buffer.size(),
@@ -51,14 +55,17 @@ namespace power
 
         if (decompressed_size < 0)
         {
-            LOG_ERR("LZ4 Decompression failed with error code %d", (int)decompressed_size);
-            return -EIO;
+            LOG_ERR("LZ4 Decompression failed with error code %d", decompressed_size);
+            return decompressed_size;
         }
 
-        return (int)decompressed_size;
+        LOG_INF("LZ4 Decompression complete!");
+
+        return decompressed_size;
     }
 };
 
+#if defined(CONFIG_SOC_NRF5340_CPUAPP)
 /**
  * @brief Check if we are in 3.3v mode. If not, enable it and return true. Else return false if we are already in 3.3v mode.
  *
@@ -97,6 +104,21 @@ bool check_and_enable_3v3(void)
 
     return true;
 }
+
+static int init_check_and_enable_3v3(void)
+{
+    if (check_and_enable_3v3())
+    {
+        sys_reboot(SYS_REBOOT_WARM);
+
+        // Does not return
+    }
+
+    return 0;
+}
+
+SYS_INIT(init_check_and_enable_3v3, APPLICATION, 0);
+#endif // CONFIG_SOC_NRF5340_CPUAPP
 
 #if defined(CONFIG_SHELL)
 #include <zephyr/shell/shell.h>
@@ -269,17 +291,3 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,
 SHELL_CMD_REGISTER(power, &sub_power, "Power commands", NULL);
 
 #endif
-
-static int init_check_and_enable_3v3(void)
-{
-    if (check_and_enable_3v3())
-    {
-        sys_reboot(SYS_REBOOT_WARM);
-
-        // Does not return
-    }
-
-    return 0;
-}
-
-SYS_INIT(init_check_and_enable_3v3, APPLICATION, 0);

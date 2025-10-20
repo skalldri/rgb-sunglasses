@@ -5,7 +5,7 @@ import os
 import sys
 import tempfile
 import re
-import lz4.frame
+import lz4.block
 from pathlib import Path
 
 # Add the current directory to the path so we can import the compression module
@@ -64,7 +64,7 @@ def test_compression_round_trip():
         assert read_compressed_data == compressed_data, "Written compressed data doesn't match original compressed data"
         
         # Decompress the data
-        decompressed_data = lz4.frame.decompress(read_compressed_data)
+        decompressed_data = lz4.block.decompress(read_compressed_data)
         
         # Verify the decompressed data matches the original
         assert decompressed_data == original_data, "Decompressed data doesn't match original data"
