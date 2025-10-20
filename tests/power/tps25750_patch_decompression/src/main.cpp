@@ -5,6 +5,9 @@
  */
 
 #include <zephyr/ztest.h>
+#include "power.h"
+#include "tps25750-config.h"
+#include "tps25750-config-compressed.h"
 
 ZTEST_SUITE(framework_tests, NULL, NULL, NULL, NULL, NULL);
 
@@ -22,4 +25,14 @@ ZTEST(framework_tests, test_assert)
     zassert_not_null("foo", "\"foo\" was NULL");
     zassert_equal(1, 1, "1 was not equal to 1");
     zassert_equal_ptr(NULL, NULL, "NULL was not equal to NULL");
+}
+
+ZTEST(framework_tests, test_decompression)
+{
+    static uint8_t decompressed_data[15 * 1024];
+    std::span<uint8_t> output = std::span<uint8_t>(decompressed_data, sizeof(decompressed_data));
+    const std::span<uint8_t> input = std::span<uint8_t>(tps25750x_lowRegion_i2c_array_lz4, sizeof(tps25750x_lowRegion_i2c_array_lz4));
+    power::decompress_tps25750_patch();
+
+    const std::span<uint8_t> expected = std::span<uint8_t>(tps25750x_lowRegion_i2c_array, sizeof(tps25750x_lowRegion_i2c_array));
 }
