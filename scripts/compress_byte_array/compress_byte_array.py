@@ -2,7 +2,7 @@
 
 import argparse
 import re
-import lz4.frame
+import lz4.block
 import os
 import sys
 
@@ -44,7 +44,7 @@ def extract_byte_array(file_path, variable_name):
 def compress_data(data):
     """Compress data using LZ4."""
     try:
-        compressed = lz4.frame.compress(data)
+        compressed = lz4.block.compress(data, store_size=False)
         print(f"Compressed {len(data)} bytes to {len(compressed)} bytes (ratio: {len(compressed)/len(data):.2%})")
         return compressed
     except Exception as e:
@@ -54,6 +54,9 @@ def compress_data(data):
 def write_compressed_array(compressed_data, output_file, output_variable_name):
     """Write compressed data to a C file in the same format."""
     try:
+        # Generate the size variable name by prepending "g" and appending "Size"
+        size_variable_name = f"g{output_variable_name}Size"
+
         with open(output_file, 'w') as file:
             # Write the array declaration
             file.write(f"const char {output_variable_name}[] = {{\n")
@@ -70,10 +73,14 @@ def write_compressed_array(compressed_data, output_file, output_variable_name):
                 
                 file.write(f"{line}\n")
             
-            file.write("};\n")
+            file.write("};\n\n")
+            
+            # Write the size variable
+            file.write(f"const unsigned int {size_variable_name} = {len(compressed_data)};\n")
             
         print(f"Written compressed array '{output_variable_name}' to '{output_file}'")
         print(f"Array size: {len(compressed_data)} bytes")
+        print(f"Size variable: '{size_variable_name}'")
         
     except Exception as e:
         print(f"Error writing output file: {e}")

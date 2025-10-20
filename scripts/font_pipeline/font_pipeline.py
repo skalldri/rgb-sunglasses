@@ -11,7 +11,7 @@ import sys
 from PIL import Image, ImageDraw, ImageFont
 
 
-def generate_font_atlas(font_path, output_path, char_height):
+def generate_font_atlas(font_path, output_path, char_height, image_mode='1'):
     """
     Generate a font atlas image from a font file.
     
@@ -19,6 +19,7 @@ def generate_font_atlas(font_path, output_path, char_height):
         font_path (str): Path to the font file
         output_path (str): Path where the output image will be saved
         char_height (int): Height of characters in pixels
+        image_mode (str): Image mode - '1' for 1-bit, 'L' for grayscale
     """
     # ASCII characters from 33 (!) to 126 (~)
     characters = [chr(i) for i in range(33, 127)]
@@ -31,7 +32,7 @@ def generate_font_atlas(font_path, output_path, char_height):
         sys.exit(1)
     
     # Create a temporary image to measure text dimensions
-    temp_img = Image.new('RGB', (1, 1), color='black')
+    temp_img = Image.new(image_mode, (1, 1), color=0)  # 0 = black in both modes
     temp_draw = ImageDraw.Draw(temp_img)
     
     # Calculate the total width needed for all characters
@@ -63,14 +64,22 @@ def generate_font_atlas(font_path, output_path, char_height):
     print(f"Font validation passed: All characters are {char_width} pixels wide")
     
     # Create the final image with calculated dimensions
-    atlas_img = Image.new('RGB', (total_width, max_height), color='black')
+    # Set colors based on image mode
+    if image_mode == '1':
+        bg_color = 0    # Black
+        fg_color = 1    # White
+    else:  # 'L' mode
+        bg_color = 0    # Black
+        fg_color = 255  # White
+    
+    atlas_img = Image.new(image_mode, (total_width, max_height), color=bg_color)
     draw = ImageDraw.Draw(atlas_img)
     
     # Draw each character
     x_offset = 0
     for i, char in enumerate(characters):
         # Draw the character in white
-        draw.text((x_offset, 0), char, font=font, fill='white', spacing=0)
+        draw.text((x_offset, -1), char, font=font, fill=fg_color, spacing=0)
         x_offset += char_widths[i]
     
     # Save the atlas image
@@ -177,6 +186,12 @@ def main():
         required=True,
         help='Height of characters in pixels'
     )
+    generate_parser.add_argument(
+        '--image-mode',
+        choices=['1', 'L'],
+        default='1',
+        help='Image mode: "1" for 1-bit black/white, "L" for 8-bit grayscale (default: 1)'
+    )
     
     # Analyze mode
     analyze_parser = subparsers.add_parser(
@@ -198,7 +213,7 @@ def main():
             sys.exit(1)
         
         # Generate the font atlas
-        generate_font_atlas(args.font_path, args.output_path, args.char_height)
+        generate_font_atlas(args.font_path, args.output_path, args.char_height, args.image_mode)
     
     elif args.mode == 'analyze':
         # Analyze the font for monospaced sizes

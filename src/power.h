@@ -5,6 +5,13 @@
 
 namespace power
 {
-    int decompress_tps25750_patch(const std::span<uint8_t> input_buffer,
-                                  std::span<uint8_t> output_buffer);
+    /**
+     * @brief
+     *
+     * @param input_buffer
+     * @param output_buffer
+     * @return int
+     */
+    int decompress_tps25750_patch(std::span<const char> input_buffer,
+                                  std::span<char> output_buffer);
 };

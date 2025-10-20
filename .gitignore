@@ -10,3 +10,7 @@
 
 # Pycache
 __pycache__/
+
+.coverage
+
+.pytest_cache/
