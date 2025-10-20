@@ -1,26 +1,63 @@
-#include <zephyr/shell/shell.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/sys/reboot.h>
 
+#if defined(CONFIG_TPS25750)
 #include <zephyr/drivers/tps25750/tps25750.h>
+#endif
+
+#if defined(CONFIG_BQ25792)
 #include <zephyr/drivers/bq25792/bq25792.h>
+#endif
+
+#if defined(CONFIG_FLASH)
 #include <zephyr/drivers/flash.h>
+#endif
 
 #include <tps25750/tps25750-config.h>
 
-#include <zephyr/sys/reboot.h>
-
-#include <zephyr/logging/log.h>
-
 // Needed to modify VDD voltage
+#if defined(CONFIG_SOC_NRF5340_CPUAPP)
 #include <nrf5340_application.h>
 #include <nrf5340_application_bitfields.h>
+#endif
 
+#include "lz4.h"
+
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(power);
 
+#if !defined(CONFIG_ZTEST)
 const struct device *pd = DEVICE_DT_GET(DT_NODELABEL(tps25750));
 const struct device *bq = DEVICE_DT_GET(DT_NODELABEL(bq25792));
 const struct device *flash = DEVICE_DT_GET(DT_NODELABEL(flash_controller));
+#else
+const struct device *pd = nullptr;
+const struct device *bq = nullptr;
+const struct device *flash = nullptr;
+#endif
+
+namespace power
+{
+    int decompress_tps25750_patch(const std::span<uint8_t> input_buffer,
+                                  std::span<uint8_t> output_buffer)
+    {
+        // Decompress using LZ4
+        size_t decompressed_size = LZ4_decompress_safe(
+            reinterpret_cast<const char *>(input_buffer.data()),
+            reinterpret_cast<char *>(output_buffer.data()),
+            input_buffer.size(),
+            output_buffer.size());
+
+        if (decompressed_size < 0)
+        {
+            LOG_ERR("LZ4 Decompression failed with error code %d", (int)decompressed_size);
+            return -EIO;
+        }
+
+        return (int)decompressed_size;
+    }
+};
 
 /**
  * @brief Check if we are in 3.3v mode. If not, enable it and return true. Else return false if we are already in 3.3v mode.
@@ -60,6 +97,9 @@ bool check_and_enable_3v3(void)
 
     return true;
 }
+
+#if defined(CONFIG_SHELL)
+#include <zephyr/shell/shell.h>
 
 static int cmd_power_bq_dump(const struct shell *shell,
                              size_t argc, char **argv, void *data)
@@ -227,6 +267,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,
 
 /* Creating root (level 0) command "power" */
 SHELL_CMD_REGISTER(power, &sub_power, "Power commands", NULL);
+
+#endif
 
 static int init_check_and_enable_3v3(void)
 {
