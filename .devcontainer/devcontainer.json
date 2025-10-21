@@ -18,8 +18,8 @@
     "runArgs": [
         "--privileged"
     ],
-    "postCreateCommand": [
-        "dpkg -i /jlink/JLink_Linux.deb",
-        "pip install lz4 yaspin tqdm Pillow"
-    ]
+    "postCreateCommand": {
+        "jlink": "dpkg -i /jlink/JLink_Linux.deb",
+        "python": "pip install lz4 yaspin tqdm Pillow"
+    }
 }
