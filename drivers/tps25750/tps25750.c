@@ -6,6 +6,16 @@
 #include <zephyr/drivers/tps25750/tps25750.h>
 #include "tps25750_priv.h"
 
+#if defined(CONFIG_TPS25750_INTERNAL_PATCH)
+
+#include CONFIG_TPS25750_PATCH_HEADER_FILE
+
+#endif
+
+#if defined(CONFIG_TPS25750_COMPRESSED_PATCH)
+#include "lz4.h"
+#endif
+
 #include <string.h>
 
 #define DT_DRV_COMPAT ti_tps25750
@@ -42,6 +52,50 @@ void _bytes_to_tps25750_int(const uint8_t *bytes, tps25750_int_t *i)
     TPS25750_INT_BIT_LIST
 #undef TPS25750_INT_BIT
 }
+
+#if defined(CONFIG_TPS25750_INTERNAL_PATCH)
+
+int tps25750_get_patch(const char **patch, size_t *patch_size)
+{
+    if (!patch || !patch_size)
+    {
+        LOG_ERR("NULL pointer");
+        return -EINVAL;
+    }
+
+#if defined(CONFIG_TPS25750_COMPRESSED_PATCH)
+    static char decompressed_patch[TPS25750_PATCH_UNCOMPRESSED_SIZE];
+    static bool is_decompressed = false;
+
+    if (!is_decompressed)
+    {
+        // Decompress using LZ4
+        int decompressed_size = LZ4_decompress_safe(
+            tps25750_patch,
+            decompressed_patch,
+            TPS25750_PATCH_COMPRESSED_SIZE,
+            TPS25750_PATCH_UNCOMPRESSED_SIZE);
+
+        if (decompressed_size < 0)
+        {
+            LOG_ERR("LZ4 decompression failed with error code %d", decompressed_size);
+            return decompressed_size;
+        }
+
+        LOG_INF("LZ4 Decompression complete!");
+    }
+
+    *patch = decompressed_patch;
+    *patch_size = TPS25750_PATCH_UNCOMPRESSED_SIZE;
+#else
+    *patch = tps25750_patch;
+    *patch_size = TPS25750_PATCH_UNCOMPRESSED_SIZE;
+#endif
+
+    return 0;
+}
+
+#endif
 
 int tps25750_read_int_event1(const struct device *dev, tps25750_int_t *i)
 {
@@ -671,67 +725,84 @@ int tps25750_clear_dead_battery(const struct device *dev)
     return 0;
 }
 
-#if defined(CONFIG_TPS25750_PATCH_ON_STARTUP)
-// This is the default name of the patch array that ships from the TI generator tool
-extern const char tps25750x_lowRegion_i2c_array[];
-
-// This is the default name of the array size variable that ships from the TI generator tool
-extern int gSizeLowRegionArray;
-#endif // CONFIG_TPS25750_PATCH_ON_STARTUP
-
 #define TPS25750_WORKQ_STACK_SIZE 1024
 #define TPS25750_WORKQ_PRIORITY 5
 
 K_THREAD_STACK_DEFINE(tps25750_workq_stack_area, TPS25750_WORKQ_STACK_SIZE);
-
 struct k_work_q tps25750_work_q;
 
-void tps25750_patch_work(struct k_work *item)
+void tps25750_irq_work(struct k_work *item)
 {
     struct k_work_delayable *dwork = k_work_delayable_from_work(item);
     struct tps25750_dev_data *data = CONTAINER_OF(dwork, struct tps25750_dev_data, work);
     const struct device *dev = data->dev;
     const struct tps25750_dev_config *cfg = dev->config;
+    int ret = 0;
 
     LOG_INF("dev: %p", dev);
     LOG_INF("cfg: %p", cfg);
     LOG_INF("data: %p", data);
 
-    // Read the current mode
-    tps25750_mode_t mode;
-    int ret = tps25750_read_mode(data->dev, &mode);
+    // Figure out what caused the interrupt
+    tps25750_int_t interrupt;
+    ret = tps25750_read_int_event1(dev, &interrupt);
     if (ret)
     {
-        LOG_ERR("tps25750_read_mode: %d", ret);
+        LOG_ERR("tps25750_read_int_event1: %d", ret);
         return;
     }
-    LOG_INF("MODE: %.*s", sizeof(mode.mode), mode.mode);
 
-    // If we are in mode == PTCH, we can proceed
-    if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode) != 0))
+    // TODO: need to refactor this to handle other kinds of interrupts
+    if (interrupt.ReadyForPatch)
     {
-        // Check if we are in APP mode
-        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode) == 0))
+        LOG_INF("TPS25750 IRQ: ReadyForPatch!");
+
+#if defined(CONFIG_TPS25750_INTERNAL_PATCH)
+        // Read the current mode
+        tps25750_mode_t mode;
+        int ret = tps25750_read_mode(data->dev, &mode);
+        if (ret)
         {
-            LOG_INF("Patch already loaded!");
+            LOG_ERR("tps25750_read_mode: %d", ret);
             return;
+        }
+        LOG_INF("MODE: %.*s", sizeof(mode.mode), mode.mode);
+
+        // If we are in mode == PTCH, we can proceed
+        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode) != 0))
+        {
+            // Check if we are in APP mode
+            if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode) == 0))
+            {
+                LOG_INF("Patch already loaded!");
+                return;
+            }
+            else
+            {
+                LOG_ERR("MODE is not PTCH (got %.*s) Cannot download patch!", sizeof(mode.mode), mode.mode);
+                return;
+            }
+        }
+
+        char *patch;
+        size_t size;
+        ret = tps25750_get_patch(&patch, &size);
+        if (ret)
+        {
+            LOG_ERR("tps25750_get_patch: %d", ret);
+            return;
+        }
+
+        ret = tps25750_download_patch(data->dev, patch, size);
+        if (ret)
+        {
+            LOG_ERR("Patch download failed! %d", ret);
         }
         else
         {
-            LOG_ERR("MODE is not PTCH (got %.*s) Cannot download patch!", sizeof(mode.mode), mode.mode);
-            return;
+            LOG_INF("Patch download success!");
         }
-    }
-
-    ret = tps25750_download_patch(data->dev, tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
-
-    if (ret)
-    {
-        LOG_ERR("Patch download failed! %d", ret);
-    }
-    else
-    {
-        LOG_INF("Patch download success!");
+#endif // CONFIG_TPS25750_INTERNAL_PATCH
     }
 }
 
@@ -749,6 +820,7 @@ static int tps25750_init(const struct device *dev)
 {
     const struct tps25750_dev_config *cfg = dev->config;
     struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
+    int ret = 0;
     data->dev = dev;
 
     LOG_INF("dev: %p", dev);
@@ -756,12 +828,11 @@ static int tps25750_init(const struct device *dev)
     LOG_INF("data: %p", data);
 
     k_work_queue_init(&tps25750_work_q);
-
     k_work_queue_start(&tps25750_work_q, tps25750_workq_stack_area,
                        K_THREAD_STACK_SIZEOF(tps25750_workq_stack_area), TPS25750_WORKQ_PRIORITY,
                        NULL);
 
-    k_work_init_delayable(&data->work, tps25750_patch_work);
+    k_work_init_delayable(&data->work, tps25750_irq_work);
 
     if (!device_is_ready(cfg->i2c.bus))
     {
@@ -769,11 +840,21 @@ static int tps25750_init(const struct device *dev)
         return -ENODEV;
     }
 
-#if defined(CONFIG_TPS25750_PATCH_ON_STARTUP)
+#if defined(CONFIG_TPS25750_COMPRESSED_PATCH_PRELOAD) || defined(CONFIG_TPS25750_INTERNAL_PATCH)
+    char *patch;
+    size_t size;
+    ret = tps25750_get_patch(&patch, &size);
+    if (ret)
+    {
+        LOG_ERR("tps25750_get_patch: %d", ret);
+        return ret;
+    }
+#endif
+
+#if defined(CONFIG_TPS25750_INTERNAL_PATCH)
     LOG_INF("Patch address: 0x%X", cfg->patch_address);
 
-    int ret = tps25750_download_patch(dev, tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
-
+    ret = tps25750_download_patch(dev, patch, size);
     if (ret)
     {
         LOG_ERR("Patch download failed! %d", ret);
@@ -782,7 +863,7 @@ static int tps25750_init(const struct device *dev)
     {
         LOG_INF("Patch download success!");
     }
-#endif // CONFIG_TPS25750_PATCH_ON_STARTUP
+#endif // CONFIG_TPS25750_INTERNAL_PATCH
 
     if (cfg->int_gpio.port)
     {

@@ -6,6 +6,34 @@ config TPS25750_INIT_PRIORITY
     int "TPS25750 device initialization priority"
     default 51
 
-config TPS25750_PATCH_ON_STARTUP
-    bool "Download the TPS25750 patch file on startup"
+config TPS25750_INTERNAL_PATCH
+    bool "Manage TPS25750 firmware patching inside the driver. Requires TPS25750_PATCH_HEADER_FILE to be set."
+    default n
+
+if TPS25750_INTERNAL_PATCH
+
+config TPS25750_PATCH_HEADER_FILE
+    string "Patch header file path"
+    help
+       Must contain several definitions:
+       - #define TPS25750_PATCH_UNCOMPRESSED_SIZE (always)
+       - #define TPS25750_PATCH_COMPRESSED_SIZE (if CONFIG_TPS25750_COMPRESSED_PATCH=y)
+       - extern const char tps25750_patch[];
+
+config TPS25750_COMPRESSED_PATCH
+    bool "The TPS25750 patch file is compressed with LZ4 compression"
     default y
+    depends on LZ4
+    help
+         If enabled, the driver will expect an LZ4-compressed patch, and decompress the patch one-time
+         into RAM. The patch can be accessed via tps25750_get_patch().
+
+config TPS25750_COMPRESSED_PATCH_PRELOAD
+    bool "Decompress the TPS25750 patch during driver initialization"
+    default n
+    depends on TPS25750_COMPRESSED_PATCH
+    help
+         If enabled, the driver will decompress the patch during initialization. This increases
+         initialization time, but ensures the patch is ready when needed.
+
+endif

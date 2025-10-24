@@ -16,8 +16,6 @@
 #include <zephyr/drivers/flash.h>
 #endif
 
-#include <tps25750/tps25750-config.h>
-
 // Needed to modify VDD voltage
 #if defined(CONFIG_SOC_NRF5340_CPUAPP)
 #include <nrf5340_application.h>
@@ -25,6 +23,8 @@
 #endif
 
 #include "lz4.h"
+
+#include <array>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(power);
@@ -38,32 +38,6 @@ const struct device *pd = nullptr;
 const struct device *bq = nullptr;
 const struct device *flash = nullptr;
 #endif
-
-namespace power
-{
-    int decompress_tps25750_patch(std::span<const char> input_buffer,
-                                  std::span<char> output_buffer)
-    {
-        LOG_INF("Decompressing %d bytes into output buffer size %d", input_buffer.size(), output_buffer.size());
-
-        // Decompress using LZ4
-        int decompressed_size = LZ4_decompress_safe(
-            reinterpret_cast<const char *>(input_buffer.data()),
-            reinterpret_cast<char *>(output_buffer.data()),
-            input_buffer.size(),
-            output_buffer.size());
-
-        if (decompressed_size < 0)
-        {
-            LOG_ERR("LZ4 Decompression failed with error code %d", decompressed_size);
-            return decompressed_size;
-        }
-
-        LOG_INF("LZ4 Decompression complete!");
-
-        return decompressed_size;
-    }
-};
 
 #if defined(CONFIG_SOC_NRF5340_CPUAPP)
 /**
@@ -184,7 +158,10 @@ static int cmd_power_pd_patch(const struct shell *shell,
     int selection = (int)data;
     if (selection == 1)
     {
-        tps25750_download_patch(pd, tps25750x_lowRegion_i2c_array, gSizeLowRegionArray);
+        const char *patch;
+        size_t patch_size;
+        tps25750_get_patch(&patch, &patch_size);
+        tps25750_download_patch(pd, patch, patch_size);
     }
     else if (selection == 2)
     {

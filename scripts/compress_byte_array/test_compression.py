@@ -35,21 +35,24 @@ def test_compression_round_trip():
     assert len(compressed_data) > 0, "Compression failed"
     assert len(compressed_data) < len(original_data), "Compressed data should be smaller than original"
     
-    # Create a temporary file for the compressed output
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.c', delete=False) as temp_file:
-        temp_output_path = temp_file.name
-    
-    try:
-        # Write compressed data to temporary file
+    # Create a temporary directory and base name for the compressed output
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_output_base = os.path.join(temp_dir, "test_output")
+        temp_c_file = f"{temp_output_base}.c"
+        temp_h_file = f"{temp_output_base}.h"
+        
+        # Write compressed data to temporary files
         output_variable_name = "test_compressed_data"
-        write_compressed_array(compressed_data, temp_output_path, output_variable_name)
+        write_compressed_array(compressed_data, temp_output_base, output_variable_name, len(original_data))
         
-        # Verify the output file was created and has content
-        assert os.path.exists(temp_output_path), "Output file was not created"
-        assert os.path.getsize(temp_output_path) > 0, "Output file is empty"
+        # Verify both output files were created and have content
+        assert os.path.exists(temp_c_file), "Output .c file was not created"
+        assert os.path.exists(temp_h_file), "Output .h file was not created"
+        assert os.path.getsize(temp_c_file) > 0, "Output .c file is empty"
+        assert os.path.getsize(temp_h_file) > 0, "Output .h file is empty"
         
-        # Read the compressed data back from the file
-        with open(temp_output_path, 'r') as f:
+        # Read the compressed data back from the .c file
+        with open(temp_c_file, 'r') as f:
             compressed_content = f.read()
         
         # Extract hex values from the output file
@@ -64,7 +67,7 @@ def test_compression_round_trip():
         assert read_compressed_data == compressed_data, "Written compressed data doesn't match original compressed data"
         
         # Decompress the data
-        decompressed_data = lz4.block.decompress(read_compressed_data)
+        decompressed_data = lz4.block.decompress(read_compressed_data, len(original_data))
         
         # Verify the decompressed data matches the original
         assert decompressed_data == original_data, "Decompressed data doesn't match original data"
@@ -78,11 +81,6 @@ def test_compression_round_trip():
         print(f"Compressed size: {len(compressed_data)} bytes")
         print(f"Compression ratio: {compression_ratio:.2%}")
         print(f"Space savings: {(1 - compression_ratio):.2%}")
-        
-    finally:
-        # Clean up the temporary file
-        if os.path.exists(temp_output_path):
-            os.unlink(temp_output_path)
 
 
 def test_extract_byte_array_invalid_file():

@@ -51,14 +51,20 @@ def compress_data(data):
         print(f"Error compressing data: {e}")
         sys.exit(1)
 
-def write_compressed_array(compressed_data, output_file, output_variable_name):
-    """Write compressed data to a C file in the same format."""
+def write_compressed_array(compressed_data, output_base, output_variable_name, original_size):
+    """Write compressed data to both .c and .h files."""
     try:
-        # Generate the size variable name by prepending "g" and appending "Size"
-        size_variable_name = f"g{output_variable_name}Size"
+        # Generate file names from base name
+        c_file = f"{output_base}.c"
+        h_file = f"{output_base}.h"
+        
+        # Generate variable names with new naming convention
+        compressed_size_variable = f"g_{output_variable_name}_CompressedSize"
+        uncompressed_size_variable = f"g_{output_variable_name}_UncompressedSize"
 
-        with open(output_file, 'w') as file:
-            # Write the array declaration
+        # Write the .c file with definitions
+        with open(c_file, 'w') as file:
+            # Write the array definition
             file.write(f"const char {output_variable_name}[] = {{\n")
             
             # Write the compressed data as hex values, 16 per line
@@ -75,25 +81,48 @@ def write_compressed_array(compressed_data, output_file, output_variable_name):
             
             file.write("};\n\n")
             
-            # Write the size variable
-            file.write(f"const unsigned int {size_variable_name} = {len(compressed_data)};\n")
+            # Write the size variables
+            file.write(f"const unsigned int {compressed_size_variable} = {len(compressed_data)};\n")
+            file.write(f"const unsigned int {uncompressed_size_variable} = {original_size};\n")
+
+        # Write the .h file with declarations
+        with open(h_file, 'w') as file:
+            # Write header guard
+            guard_name = f"{output_variable_name.upper()}_H"
+            file.write(f"#ifndef {guard_name}\n")
+            file.write(f"#define {guard_name}\n\n")
             
-        print(f"Written compressed array '{output_variable_name}' to '{output_file}'")
+            # Write #define constants for the sizes
+            compressed_size_define = f"{output_variable_name.upper()}_COMPRESSED_SIZE"
+            uncompressed_size_define = f"{output_variable_name.upper()}_UNCOMPRESSED_SIZE"
+            file.write(f"#define {compressed_size_define} {len(compressed_data)}\n")
+            file.write(f"#define {uncompressed_size_define} {original_size}\n\n")
+            
+            # Write extern declarations
+            file.write(f"extern const char {output_variable_name}[];\n")
+            file.write(f"extern const unsigned int {compressed_size_variable};\n")
+            file.write(f"extern const unsigned int {uncompressed_size_variable};\n\n")
+            
+            # Close header guard
+            file.write(f"#endif // {guard_name}\n")
+            
+        print(f"Written compressed array '{output_variable_name}' to '{c_file}' and '{h_file}'")
         print(f"Array size: {len(compressed_data)} bytes")
-        print(f"Size variable: '{size_variable_name}'")
+        print(f"Compressed size variable: '{compressed_size_variable}'")
+        print(f"Uncompressed size variable: '{uncompressed_size_variable}'")
         
     except Exception as e:
-        print(f"Error writing output file: {e}")
+        print(f"Error writing output files: {e}")
         sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract a byte array from a C file, compress it with LZ4, and write it back to a new C file.",
+        description="Extract a byte array from a C file, compress it with LZ4, and write it to .c and .h files.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s -i input.c -v input_array -o output.c -n compressed_array
-  %(prog)s --input config.c --variable tps25750x_lowRegion_i2c_array --output compressed_config.c --name compressed_data
+  %(prog)s -i input.c -v input_array -o output -n compressed_array
+  %(prog)s --input config.c --variable tps25750x_lowRegion_i2c_array --output compressed_config --name compressed_data
         """
     )
     
@@ -112,7 +141,7 @@ Examples:
     parser.add_argument(
         '-o', '--output',
         required=True,
-        help='Output C file to write the compressed array'
+        help='Output base name for .c and .h files (extensions will be added automatically)'
     )
     
     parser.add_argument(
@@ -141,9 +170,9 @@ Examples:
     print("Compressing data with LZ4...")
     compressed_data = compress_data(original_data)
     
-    # Write compressed data to output file
-    print(f"Writing compressed array to '{args.output}'...")
-    write_compressed_array(compressed_data, args.output, args.name)
+    # Write compressed data to output files
+    print(f"Writing compressed array to '{args.output}.c' and '{args.output}.h'...")
+    write_compressed_array(compressed_data, args.output, args.name, len(original_data))
     
     print("Compression complete!")
 

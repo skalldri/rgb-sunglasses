@@ -27,8 +27,7 @@ target_sources(
     src/animations/text_animation.cpp
     src/fonts/FontAtlas.cpp
     src/fonts/FontShell.cpp
-    misc/tps25750/tps25750-config.c
-    # misc/tps25750/tps25750-full-config.c
+    misc/tps25750/tps25750-config-compressed.c
 )
 
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/sound.cpp)
@@ -43,5 +42,8 @@ target_include_directories(
     misc/
     src/
 )
+
+# Needs to be accessible to drivers so that the TPS25750 can access the patch file
+zephyr_include_directories(misc)
 
 # NORDIC SDK APP END

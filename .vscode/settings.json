@@ -26,6 +26,8 @@
     "new": "cpp",
     "numbers": "cpp",
     "tuple": "cpp",
-    "typeinfo": "cpp"
+    "typeinfo": "cpp",
+    "string": "c",
+    "string_view": "c"
   }
 }
