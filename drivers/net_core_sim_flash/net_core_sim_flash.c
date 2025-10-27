@@ -55,13 +55,9 @@ static int net_core_sim_flash_read(const struct device *dev, const off_t offset,
     ARG_UNUSED(dev);
 
     // Here we should communicate with the network core to read the image info.
-    // For now, return a bogus value.
+    // For now, return bogus value.
 
-    // TODO:
-    // - Check that the request is within the expected partition
-    // - Check the offset is the expected value
-
-    LOG_ERR("Simulated read at offset 0x%lx of length %zu", (long)offset, len);
+    LOG_DBG("Simulated read at offset 0x%lx of length %zu", (long)offset, len);
 
     const off_t tlv_info_offset = PM_MCUBOOT_PAD_SIZE + PM_CPUNET_APP_SIZE;
     const off_t tlv_sha_offset = tlv_info_offset + sizeof(struct image_tlv_info);
