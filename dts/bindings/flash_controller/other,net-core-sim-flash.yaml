@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: NRF5340 Simulated flash memory for Network Core Primary Image state queries
+
+compatible: "other,net-core-sim-flash"
+
+include: base.yaml
+
+properties:
+  erase-value:
+    type: int
+    enum: [0xff, 0x00]
+    description: Value of erased flash cell

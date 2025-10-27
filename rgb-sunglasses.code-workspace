@@ -1,104 +1,48 @@
 {
 	"folders": [
 		{
-			"path": "./"
+			"path": "."
 		},
 		{
-			"path": "../../../../../ncs/v3.1.1"
+			"path": "../../root/ncs/v3.1.1"
 		}
 	],
 	"settings": {
-		"nrf-connect.topdir": "${nrf-connect.sdk:2.3.0}",
-		"nrf-connect.toolchain.path": "${nrf-connect.toolchain:2.3.0}",
 		"nrf-connect.applications": [
 			"."
 		],
-		"nrf-connect.boardRoots": [
-			"${workspaceFolder}"
-		],
 		"files.associations": {
-			"kernel.h": "c",
-			"kernel_includes.h": "c",
-			"debug.h": "c",
-			"array": "c",
-			"atomic": "c",
-			"bit": "c",
-			"*.tcc": "c",
-			"cctype": "c",
-			"clocale": "c",
-			"cmath": "c",
-			"compare": "c",
-			"concepts": "c",
-			"cstdarg": "c",
-			"cstddef": "c",
-			"cstdint": "c",
-			"cstdio": "c",
-			"cstdlib": "c",
-			"ctime": "c",
-			"cwchar": "c",
-			"cwctype": "c",
-			"deque": "c",
+			"span": "cpp",
+			"array": "cpp",
+			"cmath": "cpp",
+			"compare": "cpp",
+			"concepts": "cpp",
+			"cstdarg": "cpp",
+			"cstddef": "cpp",
+			"cstdint": "cpp",
+			"cstdio": "cpp",
+			"cstdlib": "cpp",
+			"unordered_map": "cpp",
+			"vector": "cpp",
+			"exception": "cpp",
+			"type_traits": "cpp",
+			"utility": "cpp",
+			"functional": "cpp",
+			"initializer_list": "cpp",
+			"limits": "cpp",
+			"new": "cpp",
+			"numbers": "cpp",
+			"tuple": "cpp",
+			"typeinfo": "cpp",
 			"string": "c",
-			"unordered_map": "c",
-			"vector": "c",
-			"exception": "c",
-			"algorithm": "c",
-			"functional": "c",
-			"iterator": "c",
-			"memory": "c",
-			"memory_resource": "c",
-			"netfwd": "c",
-			"numeric": "c",
-			"random": "c",
-			"ratio": "c",
 			"string_view": "c",
-			"system_error": "c",
-			"tuple": "c",
-			"type_traits": "c",
-			"utility": "c",
-			"initializer_list": "c",
-			"iosfwd": "c",
-			"limits": "c",
-			"new": "c",
-			"numbers": "c",
-			"ostream": "c",
-			"stdexcept": "c",
-			"streambuf": "c",
-			"cinttypes": "c",
-			"typeinfo": "c",
-			"sensor.h": "c",
-			"tps25750-config.h": "c",
-			"nrfx_twim.h": "c",
-			"xlocale": "cpp",
-			"xlocnum": "cpp",
-			"xutility": "cpp",
-			"list": "cpp",
-			"queue": "cpp",
-			"span": "c",
-			"xstring": "c"
-		},
-		"nrf-connect.debugging.bindings": {
-			"${workspaceFolder}/build": "Launch build"
-		},
-		"C_Cpp.default.compileCommands": "${workspaceFolder}\\\\build\\\\compile_commands.json",
-		"cortex-debug.variableUseNaturalFormat": false
-	},
-	"launch": {
-		"version": "0.2.0",
-		"configurations": [
-			{
-				"type": "nrf-connect",
-				"request": "launch",
-				"name": "Launch build",
-				"config": "${workspaceFolder}/build",
-				"runToEntryPoint": "main"
-			},
-			{
-				"type": "nrf-connect",
-				"request": "attach",
-				"name": "Attach build",
-				"config": "${workspaceFolder}/build"
-			}
-		]
+			"bootutil_priv.h": "c",
+			"flash.h": "c",
+			"flash_map_backend.h": "c",
+			"image.h": "c",
+			"bootutil.h": "c",
+			"img_mgmt.h": "c",
+			"img_mgmt_priv.h": "c"
+		}
 	}
 }

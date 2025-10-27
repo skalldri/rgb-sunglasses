@@ -2,3 +2,4 @@
 rsource "tps25750/Kconfig"
 rsource "bq25792/Kconfig"
 rsource "vm3011/Kconfig"
+rsource "net_core_sim_flash/Kconfig"
