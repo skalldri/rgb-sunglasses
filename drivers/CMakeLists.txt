@@ -1,3 +1,4 @@
 add_subdirectory_ifdef(CONFIG_TPS25750 tps25750)
 add_subdirectory_ifdef(CONFIG_BQ25792 bq25792)
 add_subdirectory_ifdef(CONFIG_VM3011 vm3011)
+add_subdirectory_ifdef(CONFIG_NET_CORE_SIM_FLASH net_core_sim_flash)

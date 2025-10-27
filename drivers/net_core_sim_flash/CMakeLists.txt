@@ -1,0 +1,1 @@
+zephyr_sources(net_core_sim_flash.c)
