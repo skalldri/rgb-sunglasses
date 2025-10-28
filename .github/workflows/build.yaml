@@ -20,3 +20,6 @@ jobs:
         uses: devcontainers/ci@v0.3
         with:
           runCmd: west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses"
+      
+      - name: Check HDD space after build
+        run: df -h
