@@ -1,0 +1,17 @@
+name: 'build' 
+on:
+  pull_request:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      
+      - name: Checkout (GitHub)
+        uses: actions/checkout@v3
+
+      - name: Build and run dev container task
+        uses: devcontainers/ci@v0.3
+        with:
+          runCmd: west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses"
