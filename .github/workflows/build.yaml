@@ -34,3 +34,8 @@ jobs:
           cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           push: always
           runCmd: west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dfu_application.zip
+          path: ${{ github.workspace }}/build/dfu_application.zip
