@@ -18,12 +18,13 @@ jobs:
           remove-android: true
           remove-haskell: true
           remove-codeql: true
-
-      - name: Checkout (GitHub)
-        uses: actions/checkout@v3
+          root-reserve-mb: 15360  # Reserve 15 GB for root
 
       - name: Check HDD space
         run: df -h
+
+      - name: Checkout (GitHub)
+        uses: actions/checkout@v3
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2 
