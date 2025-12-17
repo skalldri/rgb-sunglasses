@@ -21,17 +21,9 @@ LOG_MODULE_REGISTER(bluetooth, LOG_LEVEL_DBG);
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
 
-/* Implementation of two status characteristics */
-BT_NSMS_DEF(nsms_btn1, "Button 1", false, "Unknown", 20);
-BT_NSMS_DEF(nsms_btn2, "Button 2", IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED), "Unknown", 20);
-
 static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
     BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
-};
-
-static const struct bt_data sd[] = {
-    BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_NSMS_VAL),
 };
 
 static ssize_t read_name(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -62,7 +54,7 @@ static ssize_t write_name(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     memcpy(name, buf, len);
     name[len] = '\0';
 
-    //printk("Got string %s", name);
+    // printk("Got string %s", name);
 
     return len;
 }
@@ -93,7 +85,7 @@ BT_GATT_SERVICE_DEFINE(name_svc,
 // We will reconstruct the same values as BT_LE_ADV_CONN and use this const instead
 static const struct bt_le_adv_param adv_param =
     BT_LE_ADV_PARAM_INIT(
-        BT_LE_ADV_OPT_CONNECTABLE,
+        BT_LE_ADV_OPT_CONN,
         BT_GAP_ADV_FAST_INT_MIN_2,
         BT_GAP_ADV_FAST_INT_MAX_2,
         NULL);
@@ -347,7 +339,7 @@ static int init_button(void)
 // Helper function to start BT advertising
 int bt_start_advertising()
 {
-    return bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+    return bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), NULL /* scan response contents array */, 0 /* scan response contents array length */);
 }
 
 int bt_stop_advertising()
