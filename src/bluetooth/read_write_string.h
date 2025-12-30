@@ -30,18 +30,31 @@ public:
                                const void *buf, uint16_t len, uint16_t offset,
                                uint8_t flags)
     {
-        if (offset)
+        printk("WR STR! l=%d, o=%d, f=%d\n", len, offset, flags);
+
+        if (flags & BT_GATT_WRITE_FLAG_PREPARE)
         {
-            // printk("Animation %d, Chrc %d: error, offset\n", tAnimationId, tChrcId);
-            return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+            printk("Anim %d, Chrc %d: write prepare\n", tAnimationId, tChrcId);
+            /* Return 0 to allow long writes */
+            return 0;
         }
+
         if (len >= maxLen)
         {
-            // printk("Animation %d, Chrc %d: error, too long\n", tAnimationId, tChrcId);
+            printk("Anim %d, Chrc %d, l %d, ml %d: error, too long\n", tAnimationId, tChrcId, len, maxLen);
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
         }
-        memcpy(getInstance().str_, buf, len);
-        getInstance().str_[len] = '\0';
+
+        // Should this be >= ?
+        // Do we need to reserve a byte for the null terminator?
+        if (offset + len > maxLen)
+        {
+            printk("Anim %d, Chrc %d: error, o %d, l %d, ml %d\n", tAnimationId, tChrcId, offset, len, maxLen);
+            return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+        }
+
+        memcpy(getInstance().str_ + offset, buf, len);
+        getInstance().str_[len] = '\0'; // Ensure string is always null terminated
 
         // printk("Animation %d, Chrc %d: string updated from BT to '%s'\n", tAnimationId, tChrcId, getInstance().str_);
 
