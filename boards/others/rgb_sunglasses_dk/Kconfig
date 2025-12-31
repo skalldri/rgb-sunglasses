@@ -5,23 +5,6 @@
 
 if BOARD_RGB_SUNGLASSES_DK_NRF5340_CPUAPP || BOARD_RGB_SUNGLASSES_DK_NRF5340_CPUAPP_NS
 
-config BOARD_ENABLE_DCDC_APP
-	bool "Application MCU DCDC converter"
-	select SOC_DCDC_NRF53X_APP
-	default y
-
-config BOARD_ENABLE_DCDC_NET
-	bool "Network MCU DCDC converter"
-	select SOC_DCDC_NRF53X_NET
-	default y
-
-config BOARD_ENABLE_DCDC_HV
-	bool "High Voltage DCDC converter"
-	select SOC_DCDC_NRF53X_HV
-	#default y
-	# @salldritt: mistake in the devkit. Didn't populate DCCH. Cannot use DCDC mode for the HV regulator
-	default n
-
 config BOARD_ENABLE_UICR_ACCESS
 	bool "Enable application writes to the UICR flash"
 	select SOC_FLASH_NRF_UICR

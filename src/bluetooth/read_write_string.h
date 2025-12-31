@@ -3,13 +3,48 @@
 #include <bluetooth/bt_service.h>
 #include <zephyr/bluetooth/gatt.h>
 
+static ssize_t _writeString(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                            const void *buf, uint16_t len, uint16_t offset,
+                            uint8_t flags, size_t animationId, size_t characteristicId, char *str, size_t maxLen)
+{
+    printk("WR STR! l=%d, o=%d, f=%d\n", len, offset, flags);
+
+    if (flags & BT_GATT_WRITE_FLAG_PREPARE)
+    {
+        printk("Anim %d, Chrc %d: write prepare\n", animationId, characteristicId);
+        /* Return 0 to allow long writes */
+        return 0;
+    }
+
+    if (len >= maxLen)
+    {
+        printk("Anim %d, Chrc %d, l %d, ml %d: error, too long\n", animationId, characteristicId, len, maxLen);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    // Should this be >= ?
+    // Do we need to reserve a byte for the null terminator?
+    if (offset + len > maxLen)
+    {
+        printk("Anim %d, Chrc %d: error, o %d, l %d, ml %d\n", animationId, characteristicId, offset, len, maxLen);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+
+    memcpy(str + offset, buf, len);
+    str[len] = '\0'; // Ensure string is always null terminated
+
+    // printk("Animation %d, Chrc %d: string updated from BT to '%s'\n", tAnimationId, tChrcId, getInstance().str_);
+
+    return len;
+}
+
 /**
  * @brief
  *
  * @tparam animationId
  * @tparam chrcId
  */
-template <size_t tAnimationId, size_t tChrcId, size_t maxLen>
+template <size_t tAnimationId, size_t tChrcId, size_t tMaxLen>
 class BtReadWriteString
 {
 public:
@@ -20,9 +55,9 @@ public:
         return getInstance().str_;
     }
 
-    static BtReadWriteString<tAnimationId, tChrcId, maxLen> &getInstance()
+    static BtReadWriteString<tAnimationId, tChrcId, tMaxLen> &getInstance()
     {
-        static BtReadWriteString<tAnimationId, tChrcId, maxLen> inst;
+        static BtReadWriteString<tAnimationId, tChrcId, tMaxLen> inst;
         return inst;
     }
 
@@ -30,35 +65,7 @@ public:
                                const void *buf, uint16_t len, uint16_t offset,
                                uint8_t flags)
     {
-        printk("WR STR! l=%d, o=%d, f=%d\n", len, offset, flags);
-
-        if (flags & BT_GATT_WRITE_FLAG_PREPARE)
-        {
-            printk("Anim %d, Chrc %d: write prepare\n", tAnimationId, tChrcId);
-            /* Return 0 to allow long writes */
-            return 0;
-        }
-
-        if (len >= maxLen)
-        {
-            printk("Anim %d, Chrc %d, l %d, ml %d: error, too long\n", tAnimationId, tChrcId, len, maxLen);
-            return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-        }
-
-        // Should this be >= ?
-        // Do we need to reserve a byte for the null terminator?
-        if (offset + len > maxLen)
-        {
-            printk("Anim %d, Chrc %d: error, o %d, l %d, ml %d\n", tAnimationId, tChrcId, offset, len, maxLen);
-            return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-        }
-
-        memcpy(getInstance().str_ + offset, buf, len);
-        getInstance().str_[len] = '\0'; // Ensure string is always null terminated
-
-        // printk("Animation %d, Chrc %d: string updated from BT to '%s'\n", tAnimationId, tChrcId, getInstance().str_);
-
-        return len;
+        return _writeString(conn, attr, buf, len, offset, flags, tAnimationId, tChrcId, getInstance().str_, tMaxLen);
     }
 
     static ssize_t readString(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -70,7 +77,7 @@ public:
 
     void setValue(const char *val)
     {
-        strncpy(str_, val, maxLen);
+        strncpy(str_, val, tMaxLen);
     }
 
     static void isActiveCccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
@@ -92,10 +99,10 @@ protected:
     // Make constructor private so we enforce singleton usage
     BtReadWriteString()
     {
-        memset(str_, 0, maxLen);
+        memset(str_, 0, tMaxLen);
     }
 
-    char str_[maxLen];
+    char str_[tMaxLen];
 
     bool sendActiveNotifications_ = false;
     const struct bt_gatt_attr *activeAttr_ = NULL;

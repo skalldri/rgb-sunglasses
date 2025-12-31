@@ -145,6 +145,21 @@
 	};
 };
 
+/* configure VREGMAIN in DC/DC mode */
+&vregmain {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+/* configure VREGRADIO in DC/DC mode */
+&vregradio {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+/* mistake in the devkit. Didn't populate DCCH. Cannot use DCDC mode for the HV regulator */
+&vregh {
+	status = "disabled";
+};
+
 &adc {
 	status = "okay";
 };
