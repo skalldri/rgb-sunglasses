@@ -15,7 +15,7 @@ constexpr bt_gatt_cpf kMyCharacteristicCpf = {
     .format = BLE_GATT_CPF_FORMAT_UINT32,
 };
 
-BtGattReadWriteCharacteristic<kMyCharacteristicUuid, "My New Special Characteristic", kMyCharacteristicCpf, uint32_t, 0> characteristicA;
+BtGattReadWriteCharacteristic<kMyCharacteristicUuid, "My New Special Characteristic", kMyCharacteristicCpf, true, uint32_t, 0> characteristicA;
 BtGattServer server(primaryService, characteristicA);
 BT_GATT_SERVER_REGISTER(serverStatic, server);
 

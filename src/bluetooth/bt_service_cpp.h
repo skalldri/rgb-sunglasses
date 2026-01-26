@@ -32,6 +32,17 @@ concept BtGattAttributeProvider = requires(T &t) {
             std::tuple_size_v<decltype(t.getAttrsTuple())>>{});
 };
 
+// Base class for providers that need back-references to the server's attribute array
+class BtGattAttrProviderBase
+{
+public:
+    void bind(bt_gatt_attr *base) { attrBase_ = base; }
+    bt_gatt_attr *getAttr(size_t idx = 0) const { return attrBase_ + idx; }
+
+protected:
+    bt_gatt_attr *attrBase_ = nullptr;
+};
+
 // Helper to get the attribute count from a BtGattAttributeProvider
 template <BtGattAttributeProvider T>
 constexpr size_t attrCount()
@@ -53,6 +64,44 @@ constexpr auto tupleToArray(const Tuple &tuple, std::index_sequence<Is...>)
     return std::array<bt_gatt_attr, sizeof...(Is)>{{std::get<Is>(tuple)...}};
 }
 
+// Helper to calculate offset of provider N in the parameter pack
+template <size_t N, typename... Providers>
+constexpr size_t offsetOfProvider()
+{
+    if constexpr (N == 0)
+    {
+        return 0;
+    }
+    else
+    {
+        constexpr size_t counts[] = {
+            std::tuple_size_v<decltype(std::declval<Providers>().getAttrsTuple())>...};
+        size_t offset = 0;
+        for (size_t i = 0; i < N; ++i)
+        {
+            offset += counts[i];
+        }
+        return offset;
+    }
+}
+
+// Helper to bind all providers to their offsets in the array
+template <size_t... Is, typename... Providers>
+void bindProviders(bt_gatt_attr *base,
+                   std::index_sequence<Is...>,
+                   Providers &...providers)
+{
+    auto bindIfPossible = [&]<typename P>(P &provider, size_t offset)
+    {
+        if constexpr (std::is_base_of_v<BtGattAttrProviderBase, P>)
+        {
+            provider.bind(base + offset);
+        }
+    };
+
+    (bindIfPossible(providers, offsetOfProvider<Is, Providers...>()), ...);
+}
+
 // A complete GATT server that accepts a variadic list of BtGattAttributeProvider types
 // as input, and constructs a flat array of all attributes provided by them at compile-time.
 // This is then registered as a
@@ -66,9 +115,15 @@ public:
              decltype(std::declval<Providers>().getAttrsTuple())> +
          ...);
 
-    constexpr BtGattServer(Providers &...providers)
+    BtGattServer(Providers &...providers)
         : attrs_(tupleToArray(concatenateAttrTuples(providers...),
-                              std::make_index_sequence<kTotalAttrCount>{})) {}
+                              std::make_index_sequence<kTotalAttrCount>{}))
+    {
+        // Bind providers that inherit from BtGattAttrProviderBase
+        bindProviders(attrs_.data(),
+                      std::index_sequence_for<Providers...>{},
+                      providers...);
+    }
 
     // Provide access to the attribute array for external registration
     constexpr bt_gatt_attr *data() { return attrs_.data(); }
@@ -107,6 +162,8 @@ private:
     bt_uuid_128 service_uuid_ = ServiceUuid;
 };
 
+// Helper function to encapsulate the common write logic for read/write characteristics
+// Used to avoid exploding the binary size as the template class methods are instantiated multiple times.
 static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                       const void *buf, uint16_t len, uint16_t offset,
                       uint8_t flags, std::byte *out, size_t maxLen)
@@ -153,16 +210,16 @@ StringLiteral(const char (&)[N]) -> StringLiteral<N>;
 
 // A class to represent a GATT primary service, that conforms to the BtGattAttributeProvider concept.
 // Primary Services are represented by a single GATT attribute, with relatively well understood UUIDs.
-template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bt_gatt_cpf CharacteristicCpf, typename T, T Default>
-class BtGattReadWriteCharacteristic
+template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bt_gatt_cpf CharacteristicCpf, bool Notify, typename T, T Default>
+class BtGattReadWriteCharacteristic : public BtGattAttrProviderBase
 {
 public:
     // Type alias for this class to use in static methods
-    using Self = BtGattReadWriteCharacteristic<CharacteristicUuid, Description, CharacteristicCpf, T, Default>;
+    using Self = BtGattReadWriteCharacteristic<CharacteristicUuid, Description, CharacteristicCpf, Notify, T, Default>;
 
     constexpr auto getAttrsTuple()
     {
-        return std::make_tuple(
+        auto baseAttrs = std::make_tuple(
             // A characteristic has a minimum of two attributes.
             // First, we have the GATT Characteristic attribute. This declares that we are about to
             // start defining a new characteristic.
@@ -202,6 +259,66 @@ public:
                 .handle = 0,
                 .perm = BT_GATT_PERM_READ,
             });
+
+        if constexpr (Notify)
+        {
+            // BT_GATT_CCC(_ccc_cfg_changed_func, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE)
+            // Add notification support - CCC descriptor and related attributes
+            auto notifyAttrs = std::make_tuple(
+                // TODO: First notification attribute
+                bt_gatt_attr{
+                    .uuid = &kGattCccUuid.uuid,
+                    .read = bt_gatt_attr_read_ccc,
+                    .write = bt_gatt_attr_write_ccc,
+                    .user_data = &ccc_data_,
+                    .handle = 0,
+                    .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                });
+
+            return std::tuple_cat(baseAttrs, notifyAttrs);
+        }
+        else
+        {
+            return baseAttrs;
+        }
+    }
+
+    void notify()
+    {
+        if constexpr (Notify)
+        {
+            if (!sendNotifications_)
+            {
+                printk("NOTIFY: Notifications not enabled, skipping\n");
+                return;
+            }
+
+            bt_gatt_attr *attr = getAttr(1); // Characteristic Value Attribute is always at index 1 relative to our first attribute
+            printk("NOTIFY: %p\n", attr);
+            int ret = bt_gatt_notify(NULL, attr, &storage_, sizeof(storage_));
+            if (ret != 0)
+            {
+                printk("Notify failed: %d\n", ret);
+            }
+            else
+            {
+                printk("Notify succeeded\n");
+            }
+        }
+        else
+        {
+            printk("NOTIFY: Notifications not enabled for this characteristic\n");
+        }
+    }
+
+    // Bluetooth callback to change the notification state of the isActive characteristic
+    static void isActiveCccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
+    {
+        // Get a mutable `this` pointer
+        Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+
+        instance->sendNotifications_ = (value == BT_GATT_CCC_NOTIFY);
+        printk("%p Notification state: %d\n", attr, instance->sendNotifications_);
     }
 
     static ssize_t read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -225,9 +342,12 @@ private:
     static constexpr bt_uuid_16 kGattChrcUuid = BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
     static constexpr bt_uuid_16 kGattCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
     static constexpr bt_uuid_16 kGattCpfUuid = BT_UUID_INIT_16(BT_UUID_GATT_CPF_VAL);
+    static constexpr bt_uuid_16 kGattCccUuid = BT_UUID_INIT_16(BT_UUID_GATT_CCC_VAL);
 
     T storage_ = Default;
+    bool sendNotifications_ = false;
     bt_uuid_128 characteristic_uuid_ = CharacteristicUuid;
     bt_gatt_cpf characteristic_cpf_ = CharacteristicCpf;
-    bt_gatt_chrc characteristic_ = BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE);
+    bt_gatt_chrc characteristic_ = BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, Notify ? (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY) : (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE));
+    bt_gatt_ccc_managed_user_data ccc_data_ = BT_GATT_CCC_MANAGED_USER_DATA_INIT(isActiveCccCfgChanged, NULL, NULL);
 };
