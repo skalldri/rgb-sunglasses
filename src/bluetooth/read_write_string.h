@@ -78,12 +78,15 @@ public:
     void setValue(const char *val)
     {
         strncpy(str_, val, tMaxLen);
+
+        // TODO: should notify over BT if enabled
     }
 
     static void isActiveCccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
     {
         getInstance().sendActiveNotifications_ = (value == BT_GATT_CCC_NOTIFY);
-        // printk("Anim %d chrc %d notification state: %d\n", tAnimationId, tChrcId, getInstance().sendActiveNotifications_);
+        printk("Anim %d chrc %d attr %p ccc %u\n", tAnimationId, tChrcId, attr, value);
+        printk("Anim %d chrc %d notification state: %d\n", tAnimationId, tChrcId, getInstance().sendActiveNotifications_);
 
         if (getInstance().sendActiveNotifications_)
         {
@@ -114,9 +117,8 @@ protected:
 
 // Reference a previously declared characteristic
 #define BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(_bt_service_class, _char_num, _desc) \
-    BT_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE(                                         \
+    BT_SVC_READ_WRITE_CHRC_REFERENCE(                                                \
         read_write_string_##_bt_service_class##_char_num,                            \
         _desc,                                                                       \
         _bt_service_class##_char_num##_ReadWriteString::readString,                  \
-        _bt_service_class##_char_num##_ReadWriteString::writeString,                 \
-        _bt_service_class##_char_num##_ReadWriteString::isActiveCccCfgChanged)
+        _bt_service_class##_char_num##_ReadWriteString::writeString)

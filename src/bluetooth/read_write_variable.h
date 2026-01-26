@@ -124,9 +124,8 @@ using BtReadWrite_Color = BtReadWriteVariable<uint32_t, tAnimationId, tChrcId, B
 
 // Reference a previously declared characteristic
 #define BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(_bt_service_class, _char_num, _desc) \
-    BT_SVC_READ_WRITE_NOTIFY_CHRC_REFERENCE(                                      \
+    BT_SVC_READ_WRITE_CHRC_REFERENCE(                                             \
         read_write_##_bt_service_class##_char_num,                                \
         _desc,                                                                    \
         _bt_service_class##_char_num##_ReadWrite::read,                           \
-        _bt_service_class##_char_num##_ReadWrite::write,                          \
-        _bt_service_class##_char_num##_ReadWrite::isActiveCccCfgChanged)
+        _bt_service_class##_char_num##_ReadWrite::write)
