@@ -208,6 +208,20 @@ struct StringLiteral
 template <size_t N>
 StringLiteral(const char (&)[N]) -> StringLiteral<N>;
 
+// Extremely cursed struct to hold both managed CCC data and user data
+// We need this because the CCC bt_gatt_attr requires that the `user_data` pointer be a bt_gatt_ccc_managed_user_data.
+// However, we also need to store our own user data, since we need to recover `this` from inside the static `ccc_changed` callback.
+// So we create a new struct which contains both, and use that as the `user_data` pointer.
+// Since bt_gatt_ccc_managed_user_data is the first element in the struct, from the Zephyr Bluetooth code's perspective they
+// are effectively the same thing.
+//
+// So cursed....
+struct bt_gatt_ccc_managed_user_data_with_app_user_data
+{
+    bt_gatt_ccc_managed_user_data ccc_managed; // !!! MUST BE THE FIRST ELEMENT IN THIS STRUCT !!!
+    void *app_user_data;
+};
+
 // A class to represent a GATT primary service, that conforms to the BtGattAttributeProvider concept.
 // Primary Services are represented by a single GATT attribute, with relatively well understood UUIDs.
 template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bt_gatt_cpf CharacteristicCpf, bool Notify, typename T, T Default>
@@ -287,13 +301,14 @@ public:
     {
         if constexpr (Notify)
         {
+            bt_gatt_attr *attr = getAttr(1); // Characteristic Value Attribute is always at index 1 relative to our first attribute
+
             if (!sendNotifications_)
             {
-                printk("NOTIFY: Notifications not enabled, skipping\n");
+                printk("%p Notifications not enabled, skipping\n", attr);
                 return;
             }
 
-            bt_gatt_attr *attr = getAttr(1); // Characteristic Value Attribute is always at index 1 relative to our first attribute
             printk("NOTIFY: %p\n", attr);
             int ret = bt_gatt_notify(NULL, attr, &storage_, sizeof(storage_));
             if (ret != 0)
@@ -315,7 +330,9 @@ public:
     static void isActiveCccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
     {
         // Get a mutable `this` pointer
-        Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+        // NOTE: this is different from our read/write functions, since the CCC bt_gatt_attr user_data is pointing at our ccc_data_ member, rather than `this` directly.
+        bt_gatt_ccc_managed_user_data_with_app_user_data *managed_user_data = reinterpret_cast<bt_gatt_ccc_managed_user_data_with_app_user_data *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+        Self *instance = reinterpret_cast<Self *>(managed_user_data->app_user_data);
 
         instance->sendNotifications_ = (value == BT_GATT_CCC_NOTIFY);
         printk("%p Notification state: %d\n", attr, instance->sendNotifications_);
@@ -338,6 +355,26 @@ public:
         return _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
     }
 
+    // Allow variable assignment
+    T &operator=(const T &other)
+    {
+        // Check that the value is updated to avoid spamming BT client
+        if (storage_ != other)
+        {
+            // Update storage first so the notification contains the updated value
+            storage_ = other;
+            notify();
+        }
+
+        return storage_;
+    }
+
+    // Allow casting to our underlying instance
+    operator T()
+    {
+        return storage_;
+    }
+
 private:
     static constexpr bt_uuid_16 kGattChrcUuid = BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
     static constexpr bt_uuid_16 kGattCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
@@ -349,5 +386,8 @@ private:
     bt_uuid_128 characteristic_uuid_ = CharacteristicUuid;
     bt_gatt_cpf characteristic_cpf_ = CharacteristicCpf;
     bt_gatt_chrc characteristic_ = BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, Notify ? (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY) : (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE));
-    bt_gatt_ccc_managed_user_data ccc_data_ = BT_GATT_CCC_MANAGED_USER_DATA_INIT(isActiveCccCfgChanged, NULL, NULL);
+    bt_gatt_ccc_managed_user_data_with_app_user_data ccc_data_ = {
+        .ccc_managed = BT_GATT_CCC_MANAGED_USER_DATA_INIT(isActiveCccCfgChanged, NULL, NULL),
+        .app_user_data = this,
+    };
 };

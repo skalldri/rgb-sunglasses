@@ -1,23 +1,10 @@
 #include <animations/my_eyes_animation.h>
 #include <bluetooth/read_write_variable.h>
 #include <bluetooth/read_write_string.h>
-#include <bluetooth/bt_service_cpp.h>
 #include <fonts/FontAtlas.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(my_eyes_animation, LOG_LEVEL_INF);
-
-constexpr bt_uuid_128 kMyServiceUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x1234, 0x5678, 0x1234, 0x56789abcdef0));
-BtGattPrimaryService<kMyServiceUuid> primaryService;
-
-constexpr bt_uuid_128 kMyCharacteristicUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x4321, 0x8765, 0x4321, 0x0fedcba98765));
-constexpr bt_gatt_cpf kMyCharacteristicCpf = {
-    .format = BLE_GATT_CPF_FORMAT_UINT32,
-};
-
-BtGattReadWriteCharacteristic<kMyCharacteristicUuid, "My New Special Characteristic", kMyCharacteristicCpf, true, uint32_t, 0> characteristicA;
-BtGattServer server(primaryService, characteristicA);
-BT_GATT_SERVER_REGISTER(serverStatic, server);
 
 BT_SVC_UUID_DEFINE(MyEyesAnimation);
 

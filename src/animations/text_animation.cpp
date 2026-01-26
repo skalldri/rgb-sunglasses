@@ -9,6 +9,21 @@
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 
+//////////////////
+#include <bluetooth/bt_service_cpp.h>
+constexpr bt_uuid_128 kMyServiceUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x1234, 0x5678, 0x1234, 0x56789abcdef0));
+BtGattPrimaryService<kMyServiceUuid> primaryService;
+
+constexpr bt_uuid_128 kMyCharacteristicUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x4321, 0x8765, 0x4321, 0x0fedcba98765));
+constexpr bt_gatt_cpf kMyCharacteristicCpf = {
+    .format = BLE_GATT_CPF_FORMAT_UINT32,
+};
+
+BtGattReadWriteCharacteristic<kMyCharacteristicUuid, "Now Playing", kMyCharacteristicCpf, true, uint32_t, 0> characteristicA;
+BtGattServer server(primaryService, characteristicA);
+BT_GATT_SERVER_REGISTER(serverStatic, server);
+///////////////////
+
 BT_SVC_UUID_DEFINE(TextAnimation);
 
 constexpr size_t kNumStringSlots = 20;
@@ -129,6 +144,9 @@ size_t TextAnimation::getUpNext()
     // Update the variable which will get reflected on the BT remote app, allowing the user
     // to change the next phrase if needed
     UpNext::getInstance() = nextUpNext;
+
+    // Write the var which triggers a BT update (if different)
+    characteristicA = currUpNext;
 
     return currUpNext;
 }
