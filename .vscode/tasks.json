@@ -3,10 +3,11 @@
 	"tasks": [
 		{
 			"type": "nrf-connect-build",
-			"config": "${workspaceFolder:rgb-sunglasses}\\build",
+			"config": "${workspaceFolder:rgb-sunglasses}/build",
 			"runCmake": false,
 			"clean": false,
 			"problemMatcher": [
+				"$gcc",
 				"$cmake",
 				"$kconfig",
 				"$kconfig_syntax",
@@ -18,7 +19,7 @@
 				"kind": "build",
 				"isDefault": true
 			},
-			"label": "nRF Connect: Build: rgb-sunglasses/build (active)"
+			"label": "nRF Connect: Build [incremental]: rgb-sunglasses/build"
 		}
 	]
 }

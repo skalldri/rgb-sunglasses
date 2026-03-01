@@ -15,11 +15,7 @@ constexpr bt_uuid_128 kMyServiceUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdea
 BtGattPrimaryService<kMyServiceUuid> primaryService;
 
 constexpr bt_uuid_128 kMyCharacteristicUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x4321, 0x8765, 0x4321, 0x0fedcba98765));
-constexpr bt_gatt_cpf kMyCharacteristicCpf = {
-    .format = BLE_GATT_CPF_FORMAT_UINT32,
-};
-
-BtGattReadNotifyCharacteristic<kMyCharacteristicUuid, "Now Playing", kMyCharacteristicCpf, uint32_t, 0> characteristicA;
+BtGattReadNotifyCharacteristic<kMyCharacteristicUuid, "Now Playing", uint32_t, 0> characteristicA;
 
 BtGattServer server(primaryService, characteristicA);
 BT_GATT_SERVER_REGISTER(serverStatic, server);

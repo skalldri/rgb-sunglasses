@@ -1,9 +1,11 @@
 #pragma once
 
 #include <zephyr/bluetooth/gatt.h>
+#include <bluetooth/bt_gatt_traits.h>
 #include <array>
 #include <tuple>
 #include <algorithm>
+#include <type_traits>
 
 // Helper to check if all tuple elements are bt_gatt_attr
 template <typename Tuple, size_t... Is>
@@ -223,12 +225,16 @@ struct bt_gatt_ccc_managed_user_data_with_app_user_data
 };
 
 // A class to represent a GATT Characteristic that supports read, write, and notify, and conforms to the BtGattAttributeProvider concept.
-template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bt_gatt_cpf CharacteristicCpf, bool Notify, bool ReadOnly, typename T, T Default>
+template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
 class BtGattCharacteristic : public BtGattAttrProviderBase
 {
 public:
     // Type alias for this class to use in static methods
-    using Self = BtGattCharacteristic<CharacteristicUuid, Description, CharacteristicCpf, Notify, ReadOnly, T, Default>;
+    using Self = BtGattCharacteristic<CharacteristicUuid, Description, Notify, ReadOnly, T, Default>;
+
+    static_assert(BtGattCpfTraits<T>::kSupported,
+                  "Unsupported type for BtGattCharacteristic CPF deduction. "
+                  "Add a BtGattCpfTraits<T> specialization with a static constexpr bt_gatt_cpf kValue.");
 
     constexpr auto getAttrsTuple()
     {
@@ -387,7 +393,7 @@ private:
     T storage_ = Default;
     bool sendNotifications_ = false;
     bt_uuid_128 characteristic_uuid_ = CharacteristicUuid;
-    bt_gatt_cpf characteristic_cpf_ = CharacteristicCpf;
+    bt_gatt_cpf characteristic_cpf_ = BtGattCpfTraits<T>::kValue;
     bt_gatt_chrc characteristic_ = BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, Notify ? (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY) : (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE));
     bt_gatt_ccc_managed_user_data_with_app_user_data ccc_data_ = {
         .ccc_managed = BT_GATT_CCC_MANAGED_USER_DATA_INIT(cccCfgChanged, NULL, NULL),
@@ -395,19 +401,16 @@ private:
     };
 };
 
-template <size_t N>
-using BtGattString = std::array<char, N>;
-
 // Specialized version of BtGattCharacteristic for combinations of read-only/read-write, notify/no-notify characteristics
 
-template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bt_gatt_cpf CharacteristicCpf, typename T, T Default>
-using BtGattReadWriteCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, CharacteristicCpf, false /* Notify */, false /* ReadOnly */, T, Default>;
+template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, typename T, T Default>
+using BtGattReadWriteCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, false /* Notify */, false /* ReadOnly */, T, Default>;
 
-template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bt_gatt_cpf CharacteristicCpf, typename T, T Default>
-using BtGattReadWriteNotifyCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, CharacteristicCpf, true /* Notify */, false /* ReadOnly */, T, Default>;
+template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, typename T, T Default>
+using BtGattReadWriteNotifyCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, true /* Notify */, false /* ReadOnly */, T, Default>;
 
-template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bt_gatt_cpf CharacteristicCpf, typename T, T Default>
-using BtGattReadNotifyCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, CharacteristicCpf, true /* Notify */, true /* ReadOnly */, T, Default>;
+template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, typename T, T Default>
+using BtGattReadNotifyCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, true /* Notify */, true /* ReadOnly */, T, Default>;
 
-template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bt_gatt_cpf CharacteristicCpf, typename T, T Default>
-using BtGattReadOnlyCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, CharacteristicCpf, false /* Notify */, true /* ReadOnly */, T, Default>;
+template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, typename T, T Default>
+using BtGattReadOnlyCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, false /* Notify */, true /* ReadOnly */, T, Default>;
