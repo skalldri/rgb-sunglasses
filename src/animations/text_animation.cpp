@@ -19,7 +19,8 @@ constexpr bt_gatt_cpf kMyCharacteristicCpf = {
     .format = BLE_GATT_CPF_FORMAT_UINT32,
 };
 
-BtGattReadWriteCharacteristic<kMyCharacteristicUuid, "Now Playing", kMyCharacteristicCpf, true, uint32_t, 0> characteristicA;
+BtGattReadNotifyCharacteristic<kMyCharacteristicUuid, "Now Playing", kMyCharacteristicCpf, uint32_t, 0> characteristicA;
+
 BtGattServer server(primaryService, characteristicA);
 BT_GATT_SERVER_REGISTER(serverStatic, server);
 ///////////////////
