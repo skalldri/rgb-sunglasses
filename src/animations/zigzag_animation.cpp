@@ -1,11 +1,21 @@
 #include <animations/zigzag_animation.h>
 #include <animations/animation_is_active_binding.h>
-#include <bluetooth/read_write_variable.h>
+#include <bluetooth/bt_service_cpp.h>
 
-BT_SVC_UUID_DEFINE(ZigZagAnimation);
+#include <zephyr/bluetooth/uuid.h>
 
-using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 0, uint32_t, 200);
-using Color = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(ZigZagAnimation, 1, Color, 0xFFFFFFFF);
+constexpr bt_uuid_128 kZigZagConfigServiceUuid = BT_UUID_INIT_128(
+    BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x0200, 0x56789abd0000));
+
+BtGattPrimaryService<kZigZagConfigServiceUuid> zigzagPrimaryService;
+BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 200> zigzagStepTimeMs;
+BtGattAutoReadWriteNotifyCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> zigzagColor;
+
+BtGattServer zigzagConfigServer(
+    zigzagPrimaryService,
+    zigzagStepTimeMs,
+    zigzagColor);
+BT_GATT_SERVER_REGISTER(zigzagConfigServerStatic, zigzagConfigServer);
 
 namespace
 {
@@ -14,7 +24,7 @@ namespace
     public:
         uint32_t get() const override
         {
-            return (uint32_t)StepTimeMs::getInstance();
+            return zigzagStepTimeMs;
         }
     };
 
@@ -23,7 +33,7 @@ namespace
     public:
         uint32_t get() const override
         {
-            return (uint32_t)Color::getInstance();
+            return static_cast<BtGattColor>(zigzagColor);
         }
     };
 
@@ -34,12 +44,11 @@ namespace
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag, BtServiceId::ZigZag>;
+BT_SVC_UUID_DEFINE(ZigZagAnimationIsActive);
 BT_SVC_IS_ACTIVE_CHRC_DEFINE(ZigZagAnimationIsActive);
 
-BT_GATT_SERVICE_DEFINE(zigzag_anim_service,
-                       BT_SVC_UUID_REFERENCE(ZigZagAnimation),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 0, "Step Time Ms"),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(ZigZagAnimation, 1, "Color"),
+BT_GATT_SERVICE_DEFINE(zigzag_active_service,
+                       BT_SVC_UUID_REFERENCE(ZigZagAnimationIsActive),
                        BT_SVC_IS_ACTIVE_CHRC_REFERENCE(ZigZagAnimationIsActive), );
 
 void zigzag_animation_bind_default_dependencies()

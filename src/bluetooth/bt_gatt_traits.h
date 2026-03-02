@@ -10,6 +10,22 @@
 template <size_t N>
 using BtGattString = std::array<char, N>;
 
+struct BtGattColor
+{
+    constexpr BtGattColor() = default;
+    constexpr BtGattColor(uint32_t raw)
+        : value(raw)
+    {
+    }
+
+    constexpr operator uint32_t() const
+    {
+        return value;
+    }
+
+    uint32_t value = 0;
+};
+
 template <typename T>
 struct BtGattCpfTraits
 {
@@ -131,5 +147,14 @@ struct BtGattCpfTraits<BtGattString<N>>
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_UTF8S,
+    };
+};
+
+template <>
+struct BtGattCpfTraits<BtGattColor>
+{
+    static constexpr bool kSupported = true;
+    static constexpr bt_gatt_cpf kValue = {
+        .format = BLE_GATT_CPF_FORMAT_RGB888,
     };
 };
