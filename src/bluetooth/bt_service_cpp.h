@@ -358,221 +358,13 @@ struct bt_gatt_ccc_managed_user_data_with_app_user_data
     void *app_user_data;
 };
 
-/**
- * @brief Explicit-UUID GATT characteristic provider for server assembly.
- *
- * Participates in the provider concept via @ref getAttrsTuple and contributes a
- * characteristic attribute set to @ref BtGattServer. The characteristic UUID comes
- * from the template parameter and is not rewritten by server auto-assignment.
- */
-template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
-class BtGattCharacteristic : public BtGattAttrProviderBase
+template <typename Self, StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
+class BtGattCharacteristicCommon : public BtGattAttrProviderBase
 {
 public:
-    // Type alias for this class to use in static methods
-    using Self = BtGattCharacteristic<CharacteristicUuid, Description, Notify, ReadOnly, T, Default>;
-
     static_assert(BtGattCpfTraits<T>::kSupported,
                   "Unsupported type for BtGattCharacteristic CPF deduction. "
                   "Add a BtGattCpfTraits<T> specialization with a static constexpr bt_gatt_cpf kValue.");
-
-    constexpr auto getAttrsTuple()
-    {
-        auto baseAttrs = std::make_tuple(
-            // A characteristic has a minimum of two attributes.
-            // First, we have the GATT Characteristic attribute. This declares that we are about to
-            // start defining a new characteristic.
-            bt_gatt_attr{
-                .uuid = &kGattChrcUuid.uuid,
-                .read = bt_gatt_attr_read_chrc,
-                .write = NULL,
-                .user_data = &characteristic_,
-                .handle = 0,
-                .perm = BT_GATT_PERM_READ,
-            },
-            // Next, we declare information about the actual characteristic value itself.
-            // This includes read / write function pointers for the characteristic.
-            bt_gatt_attr{
-                .uuid = &characteristic_uuid_.uuid,
-                .read = read,
-                .write = ReadOnly ? nullptr : write,
-                .user_data = this,
-                .handle = 0,
-                .perm = BT_GATT_PERM_READ_ENCRYPT | (ReadOnly ? 0 : BT_GATT_PERM_WRITE_ENCRYPT | BT_GATT_PERM_PREPARE_WRITE),
-            },
-            // We follow up with a Characteristic User Descripton Descriptor (CUD)
-            bt_gatt_attr{
-                .uuid = &kGattCudUuid.uuid,
-                .read = bt_gatt_attr_read_cud,
-                .write = NULL,
-                .user_data = const_cast<void *>(static_cast<const void *>(&Description.value)),
-                .handle = 0,
-                .perm = BT_GATT_PERM_READ,
-            },
-            // And finally a Characteristic Presentation Format Descriptor (CPF)
-            bt_gatt_attr{
-                .uuid = &kGattCpfUuid.uuid,
-                .read = bt_gatt_attr_read_cpf,
-                .write = NULL,
-                .user_data = &characteristic_cpf_,
-                .handle = 0,
-                .perm = BT_GATT_PERM_READ,
-            });
-
-        if constexpr (Notify)
-        {
-            // BT_GATT_CCC(_ccc_cfg_changed_func, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE)
-            // Add notification support - CCC descriptor and related attributes
-            auto notifyAttrs = std::make_tuple(
-                // TODO: First notification attribute
-                bt_gatt_attr{
-                    .uuid = &kGattCccUuid.uuid,
-                    .read = bt_gatt_attr_read_ccc,
-                    .write = bt_gatt_attr_write_ccc,
-                    .user_data = &ccc_data_,
-                    .handle = 0,
-                    .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
-                });
-
-            return std::tuple_cat(baseAttrs, notifyAttrs);
-        }
-        else
-        {
-            return baseAttrs;
-        }
-    }
-
-    void notify()
-    {
-        if constexpr (Notify)
-        {
-            bt_gatt_attr *attr = getAttr(1); // Characteristic Value Attribute is always at index 1 relative to our first attribute
-
-            if (!sendNotifications_)
-            {
-                printk("%p Notifications not enabled, skipping\n", attr);
-                return;
-            }
-
-            printk("NOTIFY: %p\n", attr);
-            int ret = bt_gatt_notify(NULL, attr, &storage_, sizeof(storage_));
-            if (ret != 0)
-            {
-                printk("Notify failed: %d\n", ret);
-            }
-            else
-            {
-                printk("Notify succeeded\n");
-            }
-        }
-        else
-        {
-            printk("NOTIFY: Notifications not enabled for this characteristic\n");
-        }
-    }
-
-    // Bluetooth callback to change the notification state of this characteristic
-    static void cccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
-    {
-        // Get a mutable `this` pointer
-        // NOTE: this is different from our read/write functions, since the CCC bt_gatt_attr user_data is pointing at our ccc_data_ member, rather than `this` directly.
-        bt_gatt_ccc_managed_user_data_with_app_user_data *managed_user_data = reinterpret_cast<bt_gatt_ccc_managed_user_data_with_app_user_data *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
-        Self *instance = reinterpret_cast<Self *>(managed_user_data->app_user_data);
-
-        instance->sendNotifications_ = (value == BT_GATT_CCC_NOTIFY);
-        printk("%p Notification state: %d\n", attr, instance->sendNotifications_);
-    }
-
-    static ssize_t read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-                        void *buf, uint16_t len, uint16_t offset)
-    {
-        // Get a mutable `this` pointer
-        Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
-
-        if constexpr (BtGattStringTraits<T>::kIsString)
-        {
-            const size_t stringLen = strnlen(instance->storage_.data(), BtGattStringTraits<T>::kMaxLen);
-            return bt_gatt_attr_read(conn, attr, buf, len, offset, instance->storage_.data(), stringLen);
-        }
-
-        // TODO: I think we need to protect this read in the same way that we protect _write().
-        // Ex: we need to add bounds checking and offset handling, to support long reads and prevent buffer overflows.
-        // Otherwise a malicious client could cause us to read out of bounds memory.
-        return bt_gatt_attr_read(conn, attr, buf, len, offset, &instance->storage_, sizeof(instance->storage_));
-    }
-
-    static ssize_t write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-                         const void *buf, uint16_t len, uint16_t offset,
-                         uint8_t flags)
-    {
-        // Get a mutable `this` pointer
-        Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
-        return _write(conn, attr, buf, len, offset, flags, instance, instance->storage_);
-    }
-
-    // Allow variable assignment
-    T &operator=(const T &other)
-    {
-        // Check that the value is updated to avoid spamming BT client
-        if (storage_ != other)
-        {
-            // Update storage first so the notification contains the updated value
-            storage_ = other;
-            notify();
-        }
-
-        return storage_;
-    }
-
-    // Allow casting to our underlying instance
-    operator T()
-    {
-        return storage_;
-    }
-
-    const T &value() const
-    {
-        return storage_;
-    }
-
-private:
-    static constexpr bt_uuid_16 kGattChrcUuid = BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
-    static constexpr bt_uuid_16 kGattCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
-    static constexpr bt_uuid_16 kGattCpfUuid = BT_UUID_INIT_16(BT_UUID_GATT_CPF_VAL);
-    static constexpr bt_uuid_16 kGattCccUuid = BT_UUID_INIT_16(BT_UUID_GATT_CCC_VAL);
-
-    T storage_ = Default;
-    bool sendNotifications_ = false;
-    bt_uuid_128 characteristic_uuid_ = CharacteristicUuid;
-    bt_gatt_cpf characteristic_cpf_ = BtGattCpfTraits<T>::kValue;
-    bt_gatt_chrc characteristic_ = BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, Notify ? (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY) : (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE));
-    bt_gatt_ccc_managed_user_data_with_app_user_data ccc_data_ = {
-        .ccc_managed = BT_GATT_CCC_MANAGED_USER_DATA_INIT(cccCfgChanged, NULL, NULL),
-        .app_user_data = this,
-    };
-};
-
-/**
- * @brief Auto-UUID GATT characteristic provider for server assembly.
- *
- * Participates in the provider concept via @ref getAttrsTuple and receives its
- * characteristic UUID from @ref BtGattServer through @ref assignAutoUuid using the
- * primary service UUID plus provider-order characteristic index.
- */
-template <StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
-class BtGattAutoCharacteristic : public BtGattAttrProviderBase
-{
-public:
-    using Self = BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>;
-
-    static_assert(BtGattCpfTraits<T>::kSupported,
-                  "Unsupported type for BtGattCharacteristic CPF deduction. "
-                  "Add a BtGattCpfTraits<T> specialization with a static constexpr bt_gatt_cpf kValue.");
-
-    void assignAutoUuid(const bt_uuid_128 &serviceUuid, uint16_t characteristicId)
-    {
-        characteristic_uuid_ = composeAutoCharacteristicUuid(serviceUuid, characteristicId);
-    }
 
     constexpr auto getAttrsTuple()
     {
@@ -711,6 +503,9 @@ public:
         return storage_;
     }
 
+protected:
+    bt_uuid_128 characteristic_uuid_{};
+
 private:
     static constexpr bt_uuid_16 kGattChrcUuid = BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
     static constexpr bt_uuid_16 kGattCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
@@ -719,13 +514,44 @@ private:
 
     T storage_ = Default;
     bool sendNotifications_ = false;
-    bt_uuid_128 characteristic_uuid_{};
     bt_gatt_cpf characteristic_cpf_ = BtGattCpfTraits<T>::kValue;
     bt_gatt_chrc characteristic_ = BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, Notify ? (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY) : (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE));
     bt_gatt_ccc_managed_user_data_with_app_user_data ccc_data_ = {
         .ccc_managed = BT_GATT_CCC_MANAGED_USER_DATA_INIT(cccCfgChanged, NULL, NULL),
         .app_user_data = this,
     };
+};
+
+/**
+ * @brief Explicit-UUID GATT characteristic provider for server assembly.
+ */
+template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
+class BtGattCharacteristic : public BtGattCharacteristicCommon<BtGattCharacteristic<CharacteristicUuid, Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>
+{
+public:
+    using Base = BtGattCharacteristicCommon<BtGattCharacteristic<CharacteristicUuid, Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>;
+    using Base::operator=;
+
+    BtGattCharacteristic()
+    {
+        this->characteristic_uuid_ = CharacteristicUuid;
+    }
+};
+
+/**
+ * @brief Auto-UUID GATT characteristic provider for server assembly.
+ */
+template <StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
+class BtGattAutoCharacteristic : public BtGattCharacteristicCommon<BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>
+{
+public:
+    using Base = BtGattCharacteristicCommon<BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>;
+    using Base::operator=;
+
+    void assignAutoUuid(const bt_uuid_128 &serviceUuid, uint16_t characteristicId)
+    {
+        this->characteristic_uuid_ = composeAutoCharacteristicUuid(serviceUuid, characteristicId);
+    }
 };
 
 // Specialized version of BtGattCharacteristic for combinations of read-only/read-write, notify/no-notify characteristics
