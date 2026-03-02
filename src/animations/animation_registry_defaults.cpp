@@ -90,6 +90,8 @@ int animation_registry_register_defaults()
     {
         return ret;
     }
+
+    zigzag_animation_bind_default_dependencies();
 #endif
 
 #if defined(CONFIG_ANIMATION_RAINBOW)
