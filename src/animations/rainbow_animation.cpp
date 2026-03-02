@@ -13,6 +13,31 @@ using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 0, uint32
 
 using RainbowWidthPix = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 1, uint32_t, 5);
 
+namespace
+{
+    class RainbowStepTimeSource : public AnimationUint32ParameterSource
+    {
+    public:
+        uint32_t get() const override
+        {
+            return (uint32_t)StepTimeMs::getInstance();
+        }
+    };
+
+    class RainbowWidthSource : public AnimationUint32ParameterSource
+    {
+    public:
+        uint32_t get() const override
+        {
+            return (uint32_t)RainbowWidthPix::getInstance();
+        }
+    };
+
+    RainbowStepTimeSource sDefaultStepTimeSource;
+    RainbowWidthSource sDefaultWidthSource;
+    RainbowAnimationDependencies sDefaultDeps(sDefaultStepTimeSource, sDefaultWidthSource);
+}
+
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow, BtServiceId::Rainbow>;
 BT_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimationIsActive);
@@ -22,6 +47,16 @@ BT_GATT_SERVICE_DEFINE(rainbow_anim_service,
                        BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 0, "Step Time Ms"),
                        BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 1, "Rainbow Width Pixels"),
                        BT_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimationIsActive), );
+
+void rainbow_animation_bind_default_dependencies()
+{
+    RainbowAnimation::getInstance()->setDependencies(sDefaultDeps);
+}
+
+void RainbowAnimation::setDependencies(const RainbowAnimationDependencies &deps)
+{
+    deps_ = &deps;
+}
 
 #if defined(CONFIG_LED_STRIP_RGB_SCRATCH)
 #define LED_RGB(r, g, b) {0, r, g, b}
@@ -53,8 +88,13 @@ void RainbowAnimation::init()
 
 void RainbowAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
 {
+    if (!deps_)
+    {
+        setDependencies(sDefaultDeps);
+    }
+
     // Read BT variables
-    const uint32_t rainbowColorWidth = (uint32_t)RainbowWidthPix::getInstance();
+    const uint32_t rainbowColorWidth = deps_->rainbowWidthPix.get();
 
     // Turn off all LEDs
     for (size_t x = 0; x < config->displayWidth; x++)
@@ -82,7 +122,7 @@ void RainbowAnimation::tick(const LedConfig *config, const size_t timeSinceLastT
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > (uint32_t)StepTimeMs::getInstance())
+    if (currentCycleTimeMs > deps_->stepTimeMs.get())
     {
         currentCycleTimeMs = 0;
         currentRainbowStep++; // Move text one pixel to the left

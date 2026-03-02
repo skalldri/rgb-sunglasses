@@ -106,6 +106,8 @@ int animation_registry_register_defaults()
     {
         return ret;
     }
+
+    rainbow_animation_bind_default_dependencies();
 #endif
 
 #if defined(CONFIG_ANIMATION_MY_EYES)
