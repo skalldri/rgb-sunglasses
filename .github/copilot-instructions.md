@@ -19,8 +19,15 @@
 
 - After code changes, run the default incremental build task above.
 - Treat successful `west build` completion as validation.
+- After code changes, run all tests with Twister:
+  - `twister -T /workspaces/rgb-sunglasses/tests -p native_sim`
 - Known pre-existing warning (currently non-blocking):
   - `multi-line comment [-Wcomment]` in `src/bluetooth/bt_service.h`.
+
+## Unit test policy for new features
+
+- All new features should include unit tests going forward, preferably as ztest suites under `tests/`.
+- PRs are incomplete without corresponding tests unless explicitly agreed.
 
 ## Scope reminder
 
