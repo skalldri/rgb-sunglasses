@@ -1,7 +1,6 @@
 #pragma once
 
-#include <led_config.h>
-#include <led_controller.h>
+#include <animations/animation_base.h>
 
 #include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/gatt_cpf.h>
@@ -11,14 +10,6 @@
 #include <animations/animation_types.h>
 
 #include <zephyr/kernel.h>
-
-class BaseAnimation
-{
-public:
-    virtual void init() = 0;
-    virtual void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) = 0;
-    virtual void setActive(bool active) = 0;
-};
 
 // All services provide the BT "IsActive" service
 template <class T, Animation A, BtServiceId B>
