@@ -83,6 +83,7 @@ int tps25750_get_patch(const char **patch, size_t *patch_size)
         }
 
         LOG_INF("LZ4 Decompression complete!");
+        is_decompressed = true;
     }
 
     *patch = decompressed_patch;
@@ -383,7 +384,6 @@ int tps25750_dump(const struct device *dev)
     }
 
     const struct tps25750_dev_config *cfg = dev->config;
-    int ret;
 
     if (!device_is_ready(cfg->i2c.bus))
     {
@@ -394,7 +394,7 @@ int tps25750_dump(const struct device *dev)
 #if defined(CONFIG_DUMP_DEVICE_REGISTERS)
 
     tps25750_mode_t mode;
-    ret = tps25750_read_mode(dev, &mode);
+    int ret = tps25750_read_mode(dev, &mode);
     if (ret)
     {
         LOG_ERR("tps25750_read_mode: %d", ret);
@@ -784,7 +784,7 @@ void tps25750_irq_work(struct k_work *item)
             }
         }
 
-        char *patch;
+        const char *patch;
         size_t size;
         ret = tps25750_get_patch(&patch, &size);
         if (ret)
@@ -808,13 +808,14 @@ void tps25750_irq_work(struct k_work *item)
 
 void tps25750_irq(const struct device *dev, const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
 {
-    const struct tps25750_dev_config *cfg = dev->config;
     struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
 
     k_work_schedule_for_queue(&tps25750_work_q, &data->work, K_MSEC(3000));
 
     LOG_INF("Got a TPS25750 callback!");
 }
+
+#if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
 static int tps25750_init(const struct device *dev)
 {
@@ -841,7 +842,7 @@ static int tps25750_init(const struct device *dev)
     }
 
 #if defined(CONFIG_TPS25750_COMPRESSED_PATCH_PRELOAD) || defined(CONFIG_TPS25750_INTERNAL_PATCH)
-    char *patch;
+    const char *patch;
     size_t size;
     ret = tps25750_get_patch(&patch, &size);
     if (ret)
@@ -1075,12 +1076,12 @@ static int i2c_tps25750_i2cm_transfer(const struct device *dev,
 
     return tps25750_i2cm_write_reg(dev, addr, reg_addr, msgs[1].buf, msgs[1].len);
 }
-
-static const struct i2c_driver_api i2c_tps25750_i2cm_driver_api = {
-    .transfer = i2c_tps25750_i2cm_transfer,
-};
+#endif // DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
 
 #define TPS25750_DEFINE(inst)                                                                            \
+    static const struct i2c_driver_api i2c_tps25750_i2cm_driver_api_##inst = {                           \
+        .transfer = i2c_tps25750_i2cm_transfer,                                                          \
+    };                                                                                                   \
     void tps25750_irq_##inst(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins) \
     {                                                                                                    \
         const struct device *dev = DEVICE_DT_GET(DT_DRV_INST(inst));                                     \
@@ -1104,12 +1105,6 @@ static const struct i2c_driver_api i2c_tps25750_i2cm_driver_api = {
     I2C_DEVICE_DT_INST_DEFINE(inst, tps25750_init, NULL,                                                 \
                               &tps25750_data_##inst, &tps25750_config_##inst,                            \
                               POST_KERNEL, CONFIG_TPS25750_INIT_PRIORITY,                                \
-                              &i2c_tps25750_i2cm_driver_api);
-
-#if 0
-    DEVICE_DT_INST_DEFINE(inst, tps25750_init, NULL,                                  
-                          &tps25750_data_##inst, &tps25750_config_##inst,             
-                          APPLICATION, CONFIG_TPS25750_INIT_PRIORITY, NULL);
-#endif
+                              &i2c_tps25750_i2cm_driver_api_##inst);
 
 DT_INST_FOREACH_STATUS_OKAY(TPS25750_DEFINE)
