@@ -17,17 +17,17 @@ public:
 
 class ZigZagAnimation : public BaseAnimationTemplate<ZigZagAnimation, Animation::ZigZag>
 {
-    public:
-        void setDependencies(const ZigZagAnimationDependencies &deps);
-        void init() override;
-        void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+public:
+    void setDependencies(const ZigZagAnimationDependencies &deps);
+    void init() override;
+    void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
 
-    private:
-        const ZigZagAnimationDependencies *deps_ = nullptr;
-        size_t currentIndex = 0;
+private:
+    const ZigZagAnimationDependencies *deps_ = nullptr;
+    size_t currentIndex = 0;
 
-        // Current cycle time within the animation cycle
-        size_t currentCycleTimeMs = 0;
+    // Current cycle time within the animation cycle
+    size_t currentCycleTimeMs = 0;
 };
 
 void zigzag_animation_bind_default_dependencies();

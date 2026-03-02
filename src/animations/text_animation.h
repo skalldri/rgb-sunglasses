@@ -40,29 +40,29 @@ public:
 
 class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Text>
 {
-    public:
-        static constexpr size_t kMaxMsgLen = 255;
+public:
+    static constexpr size_t kMaxMsgLen = 255;
 
-        TextAnimation();
+    TextAnimation();
 
-        void setDependencies(const TextAnimationDependencies &deps);
+    void setDependencies(const TextAnimationDependencies &deps);
 
-        void init() override;
-        void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+    void init() override;
+    void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
 
-    private:
-        const char* getStringFromSlot(size_t slot);
+private:
+    const char *getStringFromSlot(size_t slot);
 
-        size_t getUpNext();
+    size_t getUpNext();
 
-        const TextAnimationDependencies *deps_ = nullptr;
+    const TextAnimationDependencies *deps_ = nullptr;
 
-        char currentMessage[kMaxMsgLen]; 
+    char currentMessage[kMaxMsgLen];
 
-        // Current cycle time within the animation cycle
-        size_t currentCycleTimeMs = 0;
+    // Current cycle time within the animation cycle
+    size_t currentCycleTimeMs = 0;
 
-        int32_t currentTextOffset = 0;
+    int32_t currentTextOffset = 0;
 };
 
-    void text_animation_bind_default_dependencies();
+void text_animation_bind_default_dependencies();
