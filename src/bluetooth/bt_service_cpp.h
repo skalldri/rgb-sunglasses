@@ -571,21 +571,35 @@ public:
 };
 
 /**
- * @brief Auto-UUID characteristic wrapper over @ref BtGattCharacteristicCommon.
+ * @brief CRTP-extensible auto-UUID characteristic wrapper.
  *
- * UUID is assigned by @ref BtGattServer via @ref assignAutoUuid.
+ * Lets external characteristic types provide their own `Self` type while
+ * retaining auto UUID assignment support.
  */
-template <StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
-class BtGattAutoCharacteristic : public BtGattCharacteristicCommon<BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>
+template <typename Self, StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
+class BtGattAutoCharacteristicExt : public BtGattCharacteristicCommon<Self, Description, Notify, ReadOnly, T, Default>
 {
 public:
-    using Base = BtGattCharacteristicCommon<BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>;
+    using Base = BtGattCharacteristicCommon<Self, Description, Notify, ReadOnly, T, Default>;
     using Base::operator=;
 
     void assignAutoUuid(const bt_uuid_128 &serviceUuid, uint16_t characteristicId)
     {
         this->characteristic_uuid_ = composeAutoCharacteristicUuid(serviceUuid, characteristicId);
     }
+};
+
+/**
+ * @brief Auto-UUID characteristic wrapper over @ref BtGattCharacteristicCommon.
+ *
+ * UUID is assigned by @ref BtGattServer via @ref assignAutoUuid.
+ */
+template <StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
+class BtGattAutoCharacteristic : public BtGattAutoCharacteristicExt<BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>
+{
+public:
+    using Base = BtGattAutoCharacteristicExt<BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>;
+    using Base::operator=;
 };
 
 // Specialized version of BtGattCharacteristic for combinations of read-only/read-write, notify/no-notify characteristics

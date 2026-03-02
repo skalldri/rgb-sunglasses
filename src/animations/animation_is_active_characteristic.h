@@ -11,10 +11,10 @@
  * remote writes into @ref AnimationIsActiveBinding for the selected animation.
  */
 template <Animation tAnimationId>
-class IsActiveCharacteristic : public BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>
+class IsActiveCharacteristic : public BtGattAutoCharacteristicExt<IsActiveCharacteristic<tAnimationId>, "Is Active", true, false, bool, false>
 {
 public:
-    using Base = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
+    using Base = BtGattAutoCharacteristicExt<IsActiveCharacteristic<tAnimationId>, "Is Active", true, false, bool, false>;
     using Base::operator=;
 
     /**
@@ -24,6 +24,7 @@ public:
      */
     void setActive(bool active)
     {
+        printk("LOCAL ON ACTIVE CHANGE: %d\n", active);
         this->operator=(active);
     }
 
@@ -34,6 +35,7 @@ public:
      */
     void onWrite(const bool &active)
     {
+        printk("REMOTE ON ACTIVE CHANGE: %d\n", active);
         AnimationIsActiveBinding<tAnimationId>::onRemoteActiveChange(active);
     }
 };
