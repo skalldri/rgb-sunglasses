@@ -43,6 +43,9 @@
 			"bootutil.h": "c",
 			"img_mgmt.h": "c",
 			"img_mgmt_priv.h": "c"
+		},
+		"chat.tools.terminal.autoApprove": {
+			"twister": true
 		}
 	}
 }
