@@ -124,6 +124,8 @@ int animation_registry_register_defaults()
     {
         return ret;
     }
+
+    my_eyes_animation_bind_default_dependencies();
 #endif
 
     return 0;

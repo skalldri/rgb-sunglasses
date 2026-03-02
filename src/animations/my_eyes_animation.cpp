@@ -17,6 +17,27 @@ using BlinkSpeedMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 0, uint3
 using Color = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 1, Color, 0xFFFFFFFF);
 using UpNext = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 2, uint32_t, 0);
 
+namespace
+{
+    class MyEyesBlinkSpeedSource : public AnimationUint32ParameterSource
+    {
+    public:
+        uint32_t get() const override
+        {
+            return (uint32_t)BlinkSpeedMs::getInstance();
+        }
+    };
+
+    class MyEyesColorSource : public AnimationUint32ParameterSource
+    {
+    public:
+        uint32_t get() const override
+        {
+            return (uint32_t)Color::getInstance();
+        }
+    };
+}
+
 constexpr size_t kNumStringSlots = 20;
 
 constexpr size_t kStringSlotStartChrc = 100;
@@ -94,6 +115,90 @@ const char *kStaticEyes[kNumStringSlots] = {
 template <size_t tChrcId>
 using StrSlot = BtReadWriteString<MyEyesAnimation::kBtServiceIdNum, tChrcId, MyEyesAnimation::kMaxEyeLen>;
 
+namespace
+{
+    class MyEyesSlotSource : public MyEyesAnimationSlotSource
+    {
+    public:
+        const char *getStringFromSlot(size_t slot) const override
+        {
+            switch (slot)
+            {
+            case 0:
+                return StrSlot<100>::getInstance();
+            case 1:
+                return StrSlot<101>::getInstance();
+            case 2:
+                return StrSlot<102>::getInstance();
+            case 3:
+                return StrSlot<103>::getInstance();
+            case 4:
+                return StrSlot<104>::getInstance();
+            case 5:
+                return StrSlot<105>::getInstance();
+            case 6:
+                return StrSlot<106>::getInstance();
+            case 7:
+                return StrSlot<107>::getInstance();
+            case 8:
+                return StrSlot<108>::getInstance();
+            case 9:
+                return StrSlot<109>::getInstance();
+            case 10:
+                return StrSlot<110>::getInstance();
+            case 11:
+                return StrSlot<111>::getInstance();
+            case 12:
+                return StrSlot<112>::getInstance();
+            case 13:
+                return StrSlot<113>::getInstance();
+            case 14:
+                return StrSlot<114>::getInstance();
+            case 15:
+                return StrSlot<115>::getInstance();
+            case 16:
+                return StrSlot<116>::getInstance();
+            case 17:
+                return StrSlot<117>::getInstance();
+            case 18:
+                return StrSlot<118>::getInstance();
+            case 19:
+                return StrSlot<119>::getInstance();
+            default:
+                return "00";
+            }
+        }
+    };
+
+    class MyEyesUpNextSource : public MyEyesAnimationUpNextSource
+    {
+    public:
+        size_t consumeCurrentAndAdvance(size_t numSlots) override
+        {
+            uint32_t currUpNext = UpNext::getInstance();
+            uint32_t nextUpNext = currUpNext + 1;
+            if (nextUpNext >= numSlots)
+            {
+                nextUpNext = 0;
+            }
+
+            UpNext::getInstance() = nextUpNext;
+            return currUpNext;
+        }
+    };
+
+    MyEyesBlinkSpeedSource sDefaultBlinkSpeedSource;
+    MyEyesColorSource sDefaultColorSource;
+    MyEyesSlotSource sDefaultSlotSource;
+    MyEyesUpNextSource sDefaultUpNextSource;
+
+    MyEyesAnimationDependencies sDefaultMyEyesDeps(
+        sDefaultBlinkSpeedSource,
+        sDefaultColorSource,
+        sDefaultSlotSource,
+        sDefaultUpNextSource);
+}
+
 // Helper template to initialize everything
 template <size_t tChrcId>
 static void inline initStrSlot()
@@ -133,12 +238,22 @@ inline const char *getStringFromSlotTemplate<kStringSlotStartChrc>(size_t slot)
 
 const char *MyEyesAnimation::getStringFromSlot(size_t slot)
 {
-    if (slot >= kNumStringSlots)
+    if (!deps_)
     {
-        return "00";
+        setDependencies(sDefaultMyEyesDeps);
     }
 
-    return getStringFromSlotTemplate<119>(slot);
+    return deps_->slotSource.getStringFromSlot(slot);
+}
+
+size_t MyEyesAnimation::getUpNext()
+{
+    if (!deps_)
+    {
+        setDependencies(sDefaultMyEyesDeps);
+    }
+
+    return deps_->upNextSource.consumeCurrentAndAdvance(kNumStringSlots);
 }
 
 MyEyesAnimation::MyEyesAnimation()
@@ -155,15 +270,33 @@ MyEyesAnimation::MyEyesAnimation()
     LOG_INF("MyEyesAnimation isActive init complete");
 
     initStrSlot<119>();
+    setDependencies(sDefaultMyEyesDeps);
+}
+
+void my_eyes_animation_bind_default_dependencies()
+{
+    MyEyesAnimation::getInstance()->setDependencies(sDefaultMyEyesDeps);
+}
+
+void MyEyesAnimation::setDependencies(const MyEyesAnimationDependencies &deps)
+{
+    deps_ = &deps;
 }
 
 void MyEyesAnimation::init()
 {
-    strncpy(currentEyes, kStaticEyes[2], kMaxEyeLen);
+    strncpy(currentEyes, getStringFromSlot(getUpNext()), kMaxEyeLen);
 }
 
 void MyEyesAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
 {
+    if (!deps_)
+    {
+        setDependencies(sDefaultMyEyesDeps);
+    }
+
+    ARG_UNUSED(deps_->blinkSpeedMs);
+
     // Turn off all LEDs
     for (size_t x = 0; x < config->displayWidth; x++)
     {
@@ -189,7 +322,7 @@ void MyEyesAnimation::tick(const LedConfig *config, const size_t timeSinceLastTi
         // If pixel is filled, fill with white
         if (filled)
         {
-            uint32_t color = Color::getInstance();
+            uint32_t color = deps_->color.get();
             uint8_t red = (color >> 16) & 0xFF;
             uint8_t green = (color >> 8) & 0xFF;
             uint8_t blue = (color >> 0) & 0xFF;
