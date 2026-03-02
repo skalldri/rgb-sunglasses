@@ -1,21 +1,31 @@
 #include <animations/my_eyes_animation.h>
 #include <animations/animation_is_active_binding.h>
-#include <bluetooth/read_write_variable.h>
+#include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/read_write_string.h>
 #include <fonts/FontAtlas.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(my_eyes_animation, LOG_LEVEL_INF);
 
-BT_SVC_UUID_DEFINE(MyEyesAnimation);
+constexpr bt_uuid_128 kMyEyesConfigServiceUuid = BT_UUID_INIT_128(
+    BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x0500, 0x56789abd0000));
+
+BtGattPrimaryService<kMyEyesConfigServiceUuid> myEyesPrimaryService;
+BtGattAutoReadWriteNotifyCharacteristic<"Blink Speed Ms", uint32_t, 100> myEyesBlinkSpeedMs;
+BtGattAutoReadWriteNotifyCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> myEyesColor;
+BtGattAutoReadWriteNotifyCharacteristic<"Up Next", uint32_t, 0> myEyesUpNext;
+
+BtGattServer myEyesConfigServer(
+    myEyesPrimaryService,
+    myEyesBlinkSpeedMs,
+    myEyesColor,
+    myEyesUpNext);
+BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes, BtServiceId::MyEyes>;
+BT_SVC_UUID_DEFINE(MyEyesAnimationIsActive);
 BT_SVC_IS_ACTIVE_CHRC_DEFINE(MyEyesAnimationIsActive);
-
-using BlinkSpeedMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 0, uint32_t, 100);
-using Color = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 1, Color, 0xFFFFFFFF);
-using UpNext = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 2, uint32_t, 0);
 
 namespace
 {
@@ -24,7 +34,7 @@ namespace
     public:
         uint32_t get() const override
         {
-            return (uint32_t)BlinkSpeedMs::getInstance();
+            return myEyesBlinkSpeedMs;
         }
     };
 
@@ -33,7 +43,7 @@ namespace
     public:
         uint32_t get() const override
         {
-            return (uint32_t)Color::getInstance();
+            return static_cast<BtGattColor>(myEyesColor);
         }
     };
 }
@@ -63,11 +73,8 @@ BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 118, MyEyesAnimation::kMax
 BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 119, MyEyesAnimation::kMaxEyeLen);
 
 BT_GATT_SERVICE_DEFINE(myeyes_anim_service,
-                       BT_SVC_UUID_REFERENCE(MyEyesAnimation),                                     // Attr 0
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(MyEyesAnimation, 0, "Blink Speed Ms"), // Attr 1, 2
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(MyEyesAnimation, 1, "Color"),          // Attr 3, 4
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(MyEyesAnimation, 2, "Up Next"),        // Attr 5, 6
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 100, "Slot 0"),    // Attr 7, 8
+                       BT_SVC_UUID_REFERENCE(MyEyesAnimationIsActive),
+                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 100, "Slot 0"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 101, "Slot 1"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 102, "Slot 2"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 103, "Slot 3"),
@@ -175,14 +182,14 @@ namespace
     public:
         size_t consumeCurrentAndAdvance(size_t numSlots) override
         {
-            uint32_t currUpNext = UpNext::getInstance();
+            uint32_t currUpNext = myEyesUpNext;
             uint32_t nextUpNext = currUpNext + 1;
             if (nextUpNext >= numSlots)
             {
                 nextUpNext = 0;
             }
 
-            UpNext::getInstance() = nextUpNext;
+            myEyesUpNext = nextUpNext;
             return currUpNext;
         }
     };
