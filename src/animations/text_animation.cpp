@@ -1,4 +1,5 @@
 #include <animations/text_animation.h>
+#include <animations/animation_is_active_binding.h>
 #include <fonts/FontAtlas.h>
 
 #include <zephyr/logging/log.h>
@@ -52,7 +53,8 @@ BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 118, TextAnimation::kMaxMsgL
 BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 119, TextAnimation::kMaxMsgLen);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimation);
+using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text, BtServiceId::Text>;
+BT_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimationIsActive);
 
 BT_GATT_SERVICE_DEFINE(text_anim_service,
                        BT_SVC_UUID_REFERENCE(TextAnimation),
@@ -79,7 +81,7 @@ BT_GATT_SERVICE_DEFINE(text_anim_service,
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 117, "Slot 17"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 118, "Slot 18"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 119, "Slot 19"),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(TextAnimation), );
+                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(TextAnimationIsActive), );
 
 const char *kStaticMessages[kNumStringSlots] = {
     "LIFE IS MADE OF LITTLE MOMENTS LIKE THIS",

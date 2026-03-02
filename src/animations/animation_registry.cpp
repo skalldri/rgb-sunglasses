@@ -10,6 +10,7 @@ namespace
     {
         Animation id;
         AnimationInstanceFactory factory;
+        AnimationIsActiveSetter activeSetter;
     };
 
     static constexpr size_t kMaxRegistryEntries = 16;
@@ -52,8 +53,26 @@ int animation_registry_register(Animation id, AnimationInstanceFactory factory)
     sRegistry[sRegistryCount] = {
         .id = id,
         .factory = factory,
+        .activeSetter = NULL,
     };
     sRegistryCount++;
+    return 0;
+}
+
+int animation_registry_register_is_active(Animation id, AnimationIsActiveSetter setter)
+{
+    if (!setter)
+    {
+        return -EINVAL;
+    }
+
+    ssize_t idx = findRegistryIndex(id);
+    if (idx < 0)
+    {
+        return -ENOENT;
+    }
+
+    sRegistry[idx].activeSetter = setter;
     return 0;
 }
 
@@ -88,4 +107,20 @@ void animation_registry_init_registered()
             animation->init();
         }
     }
+}
+
+void animation_registry_set_is_active(Animation id, bool active)
+{
+    ssize_t idx = findRegistryIndex(id);
+    if (idx < 0)
+    {
+        return;
+    }
+
+    if (!sRegistry[idx].activeSetter)
+    {
+        return;
+    }
+
+    sRegistry[idx].activeSetter(active);
 }

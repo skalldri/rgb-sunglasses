@@ -2,6 +2,8 @@
 
 #include <animations/animation_registry.h>
 
+#include <errno.h>
+
 namespace
 {
     class FakeAnimation : public BaseAnimation
@@ -29,6 +31,8 @@ namespace
 
     FakeAnimation sFirstAnimation;
     FakeAnimation sSecondAnimation;
+    bool sLastActiveState = false;
+    size_t sSetActiveCallCount = 0;
 
     BaseAnimation *first_factory()
     {
@@ -40,11 +44,19 @@ namespace
         return &sSecondAnimation;
     }
 
+    void record_active_state(bool active)
+    {
+        sLastActiveState = active;
+        sSetActiveCallCount++;
+    }
+
     void reset_test_state(void)
     {
         animation_registry_reset();
         sFirstAnimation.initCount = 0;
         sSecondAnimation.initCount = 0;
+        sLastActiveState = false;
+        sSetActiveCallCount = 0;
     }
 }
 
@@ -95,4 +107,26 @@ ZTEST(animation_registry_tests, test_init_registered_calls_init_for_each_entry)
 
     zassert_equal(sFirstAnimation.initCount, 1, "Expected first animation init to be called once");
     zassert_equal(sSecondAnimation.initCount, 1, "Expected second animation init to be called once");
+}
+
+ZTEST(animation_registry_tests, test_register_is_active_and_dispatch)
+{
+    reset_test_state();
+    int ret = animation_registry_register(Animation::Text, first_factory);
+    zassert_equal(ret, 0, "Failed to register animation: %d", ret);
+
+    ret = animation_registry_register_is_active(Animation::Text, record_active_state);
+    zassert_equal(ret, 0, "Failed to register IsActive callback: %d", ret);
+
+    animation_registry_set_is_active(Animation::Text, true);
+
+    zassert_equal(sSetActiveCallCount, 1, "Expected one IsActive dispatch");
+    zassert_true(sLastActiveState, "Expected active state to be true");
+}
+
+ZTEST(animation_registry_tests, test_register_is_active_requires_animation_registration)
+{
+    reset_test_state();
+    int ret = animation_registry_register_is_active(Animation::Text, record_active_state);
+    zassert_equal(ret, -ENOENT, "Expected -ENOENT for unregistered animation, got %d", ret);
 }

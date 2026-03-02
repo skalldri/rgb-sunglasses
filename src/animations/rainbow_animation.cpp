@@ -1,4 +1,5 @@
 #include <animations/rainbow_animation.h>
+#include <animations/animation_is_active_binding.h>
 
 #include <bluetooth/read_write_variable.h>
 
@@ -13,13 +14,14 @@ using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 0, uint32
 using RainbowWidthPix = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 1, uint32_t, 5);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimation);
+using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow, BtServiceId::Rainbow>;
+BT_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimationIsActive);
 
 BT_GATT_SERVICE_DEFINE(rainbow_anim_service,
                        BT_SVC_UUID_REFERENCE(RainbowAnimation),
                        BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 0, "Step Time Ms"),
                        BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 1, "Rainbow Width Pixels"),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimation), );
+                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimationIsActive), );
 
 #if defined(CONFIG_LED_STRIP_RGB_SCRATCH)
 #define LED_RGB(r, g, b) {0, r, g, b}

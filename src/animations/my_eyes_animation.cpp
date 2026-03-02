@@ -1,4 +1,5 @@
 #include <animations/my_eyes_animation.h>
+#include <animations/animation_is_active_binding.h>
 #include <bluetooth/read_write_variable.h>
 #include <bluetooth/read_write_string.h>
 #include <fonts/FontAtlas.h>
@@ -9,7 +10,8 @@ LOG_MODULE_REGISTER(my_eyes_animation, LOG_LEVEL_INF);
 BT_SVC_UUID_DEFINE(MyEyesAnimation);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(MyEyesAnimation);
+using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes, BtServiceId::MyEyes>;
+BT_SVC_IS_ACTIVE_CHRC_DEFINE(MyEyesAnimationIsActive);
 
 using BlinkSpeedMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 0, uint32_t, 100);
 using Color = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(MyEyesAnimation, 1, Color, 0xFFFFFFFF);
@@ -64,7 +66,7 @@ BT_GATT_SERVICE_DEFINE(myeyes_anim_service,
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 117, "Slot 17"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 118, "Slot 18"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 119, "Slot 19"),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(MyEyesAnimation));
+                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(MyEyesAnimationIsActive));
 
 const char *kStaticEyes[kNumStringSlots] = {
     "^^",
@@ -143,7 +145,7 @@ MyEyesAnimation::MyEyesAnimation()
 {
     for (size_t i = 0; i < myeyes_anim_service.attr_count; i++)
     {
-        if (myeyes_anim_service.attrs[i].uuid == &is_active_MyEyesAnimation_uuid.uuid)
+        if (myeyes_anim_service.attrs[i].uuid == &is_active_MyEyesAnimationIsActive_uuid.uuid)
         {
             LOG_INF("MyEyesAnimation isActive attr found at index %d", i);
             break;

@@ -1,5 +1,7 @@
 #include <animations/animation_registry.h>
 
+#include <animations/animation_is_active_binding.h>
+
 #include <animations/null_animation.h>
 #include <animations/text_animation.h>
 #include <animations/zigzag_animation.h>
@@ -8,6 +10,20 @@
 
 namespace
 {
+    using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text, BtServiceId::Text>;
+
+#if defined(CONFIG_ANIMATION_ZIGZAG)
+    using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag, BtServiceId::ZigZag>;
+#endif
+
+#if defined(CONFIG_ANIMATION_RAINBOW)
+    using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow, BtServiceId::Rainbow>;
+#endif
+
+#if defined(CONFIG_ANIMATION_MY_EYES)
+    using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes, BtServiceId::MyEyes>;
+#endif
+
     BaseAnimation *null_animation_factory()
     {
         return NullAnimation::getInstance();
@@ -56,8 +72,20 @@ int animation_registry_register_defaults()
         return ret;
     }
 
+    ret = animation_registry_register_is_active(Animation::Text, TextAnimationIsActive::setLocalActiveState);
+    if (ret)
+    {
+        return ret;
+    }
+
 #if defined(CONFIG_ANIMATION_ZIGZAG)
     ret = animation_registry_register(Animation::ZigZag, zigzag_animation_factory);
+    if (ret)
+    {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::ZigZag, ZigZagAnimationIsActive::setLocalActiveState);
     if (ret)
     {
         return ret;
@@ -70,10 +98,22 @@ int animation_registry_register_defaults()
     {
         return ret;
     }
+
+    ret = animation_registry_register_is_active(Animation::Rainbow, RainbowAnimationIsActive::setLocalActiveState);
+    if (ret)
+    {
+        return ret;
+    }
 #endif
 
 #if defined(CONFIG_ANIMATION_MY_EYES)
     ret = animation_registry_register(Animation::MyEyes, my_eyes_animation_factory);
+    if (ret)
+    {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::MyEyes, MyEyesAnimationIsActive::setLocalActiveState);
     if (ret)
     {
         return ret;

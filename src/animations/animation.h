@@ -5,7 +5,7 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/gatt_cpf.h>
 #include <bluetooth/bt_service.h>
-#include <bluetooth/is_active_characteristic.h>
+#include <animations/animation_registry.h>
 #include <pattern_controller.h>
 #include <animations/animation_types.h>
 
@@ -13,7 +13,7 @@
 
 // All services provide the BT "IsActive" service
 template <class T, Animation A, BtServiceId B>
-class BaseAnimationTemplate : public BaseAnimation, public BtService<B>, public IsActiveCharacteristic<T>
+class BaseAnimationTemplate : public BaseAnimation, public BtService<B>
 {
 public:
     static constexpr Animation kAnimationId = A;
@@ -28,17 +28,7 @@ public:
     // Pass the active state change down into our IsActiveCharacteristic()
     void setActive(bool active) override
     {
-        T::getInstance()->setIsActiveState(active);
-    }
-
-    // Callback when our active state is changed remotely
-    void onRemoteActiveChange(bool active) override
-    {
-        if (active)
-        {
-            // Got change to active state!
-            pattern_controller_change_to_animation(kAnimationId);
-        }
+        animation_registry_set_is_active(kAnimationId, active);
     }
 
 protected:
