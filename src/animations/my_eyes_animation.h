@@ -46,7 +46,7 @@ enum class EyeState {
     BlinkOpening // Eye is in the process of opening
 };
 
-class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation::MyEyes, BtServiceId::MyEyes>
+class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation::MyEyes>
 {
     public:
         static constexpr size_t kMaxEyeLen = 3;

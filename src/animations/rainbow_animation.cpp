@@ -64,7 +64,7 @@ namespace
 }
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow, BtServiceId::Rainbow>;
+using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow>;
 
 void RainbowIsActiveCharacteristic::onWrite(const bool &active)
 {

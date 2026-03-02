@@ -45,7 +45,8 @@
 			"img_mgmt_priv.h": "c"
 		},
 		"chat.tools.terminal.autoApprove": {
-			"twister": true
+			"twister": true,
+			"west": true
 		}
 	}
 }

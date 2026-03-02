@@ -61,7 +61,7 @@ namespace
 }
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag, BtServiceId::ZigZag>;
+using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag>;
 
 void ZigZagIsActiveCharacteristic::onWrite(const bool &active)
 {

@@ -15,7 +15,7 @@ public:
     const AnimationUint32ParameterSource &color;
 };
 
-class ZigZagAnimation : public BaseAnimationTemplate<ZigZagAnimation, Animation::ZigZag, BtServiceId::ZigZag>
+class ZigZagAnimation : public BaseAnimationTemplate<ZigZagAnimation, Animation::ZigZag>
 {
     public:
         void setDependencies(const ZigZagAnimationDependencies &deps);

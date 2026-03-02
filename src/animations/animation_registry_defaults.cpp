@@ -10,18 +10,18 @@
 
 namespace
 {
-    using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text, BtServiceId::Text>;
+    using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text>;
 
 #if defined(CONFIG_ANIMATION_ZIGZAG)
-    using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag, BtServiceId::ZigZag>;
+    using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag>;
 #endif
 
 #if defined(CONFIG_ANIMATION_RAINBOW)
-    using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow, BtServiceId::Rainbow>;
+    using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow>;
 #endif
 
 #if defined(CONFIG_ANIMATION_MY_EYES)
-    using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes, BtServiceId::MyEyes>;
+    using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes>;
 #endif
 
     BaseAnimation *null_animation_factory()

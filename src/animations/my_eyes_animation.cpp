@@ -83,7 +83,7 @@ BtGattServer myEyesConfigServer(
 BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes, BtServiceId::MyEyes>;
+using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes>;
 
 void MyEyesIsActiveCharacteristic::onWrite(const bool &active)
 {

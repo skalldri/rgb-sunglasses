@@ -7,7 +7,7 @@
 LOG_MODULE_REGISTER(core_config, LOG_LEVEL_INF);
 
 constexpr bt_uuid_128 kCoreConfigServiceUuid = BT_UUID_INIT_128(
-    BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, CoreConfig::kBtServiceIdNum, 0x56789abc0000));
+    BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, CoreConfig::kServiceIdNum, 0x56789abc0000));
 
 BtGattPrimaryService<kCoreConfigServiceUuid> coreConfigPrimaryService;
 BtGattAutoReadWriteNotifyCharacteristic<"Brightness (0-1000)", uint32_t, 20> coreBrightness;

@@ -2,19 +2,17 @@
 
 #include <animations/animation_types.h>
 
-#include <bluetooth/bt_service.h>
-
 #include <pattern_controller.h>
 
-template <Animation tAnimationId, BtServiceId tBtServiceId>
-class AnimationIsActiveBinding : public BtService<tBtServiceId>
+template <Animation tAnimationId>
+class AnimationIsActiveBinding
 {
 public:
     using SetterCallback = void (*)(bool);
 
-    static AnimationIsActiveBinding<tAnimationId, tBtServiceId> *getInstance()
+    static AnimationIsActiveBinding<tAnimationId> *getInstance()
     {
-        static AnimationIsActiveBinding<tAnimationId, tBtServiceId> instance;
+        static AnimationIsActiveBinding<tAnimationId> instance;
         return &instance;
     }
 

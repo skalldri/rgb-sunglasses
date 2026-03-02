@@ -2,7 +2,7 @@
 
 #include <animations/animation.h>
 
-class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimation, Animation::BtAdvertising, BtServiceId::Invalid>
+class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimation, Animation::BtAdvertising>
 {
     public:
         void init() override;
@@ -22,7 +22,7 @@ class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimati
         size_t currentCycleTimeMs = 0;
 };
 
-class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation, Animation::BtConnecting, BtServiceId::Invalid>
+class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation, Animation::BtConnecting>
 {
     public:
         void init() override;
@@ -43,7 +43,7 @@ class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation
         size_t currentCycleTimeMs = 0;
 };
 
-class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Animation::BtPairing, BtServiceId::Invalid>
+class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Animation::BtPairing>
 {
     public:
         void init() override;

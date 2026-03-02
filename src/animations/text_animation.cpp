@@ -120,7 +120,7 @@ namespace
 }
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text, BtServiceId::Text>;
+using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text>;
 
 void TextIsActiveCharacteristic::onWrite(const bool &active)
 {

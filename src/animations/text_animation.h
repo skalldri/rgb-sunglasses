@@ -38,7 +38,7 @@ public:
     TextAnimationUpNextSource &upNextSource;
 };
 
-class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Text, BtServiceId::Text>
+class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Text>
 {
     public:
         static constexpr size_t kMaxMsgLen = 255;

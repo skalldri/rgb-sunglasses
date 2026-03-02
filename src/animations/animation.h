@@ -4,7 +4,6 @@
 
 #include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/gatt_cpf.h>
-#include <bluetooth/bt_service.h>
 #include <animations/animation_registry.h>
 #include <pattern_controller.h>
 #include <animations/animation_types.h>
@@ -12,8 +11,8 @@
 #include <zephyr/kernel.h>
 
 // All services provide the BT "IsActive" service
-template <class T, Animation A, BtServiceId B>
-class BaseAnimationTemplate : public BaseAnimation, public BtService<B>
+template <class T, Animation A>
+class BaseAnimationTemplate : public BaseAnimation
 {
 public:
     static constexpr Animation kAnimationId = A;

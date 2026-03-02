@@ -15,7 +15,7 @@ public:
     const AnimationUint32ParameterSource &rainbowWidthPix;
 };
 
-class RainbowAnimation : public BaseAnimationTemplate<RainbowAnimation, Animation::Rainbow, BtServiceId::Rainbow>
+class RainbowAnimation : public BaseAnimationTemplate<RainbowAnimation, Animation::Rainbow>
 {
     public:
         void setDependencies(const RainbowAnimationDependencies &deps);
