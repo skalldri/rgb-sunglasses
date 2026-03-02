@@ -78,6 +78,8 @@ int animation_registry_register_defaults()
         return ret;
     }
 
+    text_animation_bind_default_dependencies();
+
 #if defined(CONFIG_ANIMATION_ZIGZAG)
     ret = animation_registry_register(Animation::ZigZag, zigzag_animation_factory);
     if (ret)

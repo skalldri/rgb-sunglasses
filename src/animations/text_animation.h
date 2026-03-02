@@ -1,6 +1,42 @@
 #pragma once
 
 #include <animations/animation.h>
+#include <animations/animation_parameter_source.h>
+
+class TextAnimationSlotSource
+{
+public:
+    virtual ~TextAnimationSlotSource() = default;
+    virtual const char *getStringFromSlot(size_t slot) const = 0;
+};
+
+class TextAnimationUpNextSource
+{
+public:
+    virtual ~TextAnimationUpNextSource() = default;
+    virtual size_t consumeCurrentAndAdvance(size_t numSlots) = 0;
+};
+
+class TextAnimationDependencies
+{
+public:
+    TextAnimationDependencies(
+        const AnimationUint32ParameterSource &stepTimeMs,
+        const AnimationUint32ParameterSource &color,
+        const TextAnimationSlotSource &slotSource,
+        TextAnimationUpNextSource &upNextSource)
+        : stepTimeMs(stepTimeMs),
+          color(color),
+          slotSource(slotSource),
+          upNextSource(upNextSource)
+    {
+    }
+
+    const AnimationUint32ParameterSource &stepTimeMs;
+    const AnimationUint32ParameterSource &color;
+    const TextAnimationSlotSource &slotSource;
+    TextAnimationUpNextSource &upNextSource;
+};
 
 class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Text, BtServiceId::Text>
 {
@@ -8,6 +44,8 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
         static constexpr size_t kMaxMsgLen = 255;
 
         TextAnimation();
+
+        void setDependencies(const TextAnimationDependencies &deps);
 
         void init() override;
         void tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
@@ -17,6 +55,8 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
 
         size_t getUpNext();
 
+        const TextAnimationDependencies *deps_ = nullptr;
+
         char currentMessage[kMaxMsgLen]; 
 
         // Current cycle time within the animation cycle
@@ -24,3 +64,5 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
 
         int32_t currentTextOffset = 0;
 };
+
+    void text_animation_bind_default_dependencies();
