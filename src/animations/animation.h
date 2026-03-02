@@ -12,7 +12,6 @@
 
 #include <zephyr/kernel.h>
 
-
 class BaseAnimation
 {
 public:
@@ -27,7 +26,7 @@ class BaseAnimationTemplate : public BaseAnimation, public BtService<B>, public 
 {
 public:
     static constexpr Animation kAnimationId = A;
-    static constexpr size_t kAnimationIdNum = (size_t) A;
+    static constexpr size_t kAnimationIdNum = (size_t)A;
 
     static T *getInstance()
     {
@@ -35,19 +34,22 @@ public:
         return &anim;
     }
 
-    // Pass the active state chance down into our IsActiveCharacteristic()
-    void setActive(bool active) override {
+    // Pass the active state change down into our IsActiveCharacteristic()
+    void setActive(bool active) override
+    {
         T::getInstance()->setIsActiveState(active);
     }
 
     // Callback when our active state is changed remotely
-    void onRemoteActiveChange(bool active) override {
-        if (active) {
+    void onRemoteActiveChange(bool active) override
+    {
+        if (active)
+        {
             // Got change to active state!
             pattern_controller_change_to_animation(kAnimationId);
         }
     }
 
 protected:
-    BaseAnimationTemplate(){};
+    BaseAnimationTemplate() {};
 };

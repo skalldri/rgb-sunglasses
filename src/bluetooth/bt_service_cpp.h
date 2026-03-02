@@ -7,6 +7,15 @@
 #include <algorithm>
 #include <type_traits>
 
+constexpr bt_uuid_128 composeAutoCharacteristicUuid(const bt_uuid_128 &serviceUuid,
+                                                    uint16_t characteristicId)
+{
+    bt_uuid_128 uuid = serviceUuid;
+    uuid.val[0] = static_cast<uint8_t>(characteristicId & 0xFF);
+    uuid.val[1] = static_cast<uint8_t>((characteristicId >> 8) & 0xFF);
+    return uuid;
+}
+
 // Helper to check if all tuple elements are bt_gatt_attr
 template <typename Tuple, size_t... Is>
 constexpr bool allAttrsAreGattAttr(std::index_sequence<Is...>)
@@ -34,7 +43,24 @@ concept BtGattAttributeProvider = requires(T &t) {
             std::tuple_size_v<decltype(t.getAttrsTuple())>>{});
 };
 
-// Base class for providers that need back-references to the server's attribute array
+template <typename T>
+concept BtGattServiceUuidProvider = requires(T &t) {
+    t.getServiceUuid();
+};
+
+template <typename T>
+concept BtGattAutoUuidAssignable = requires(T &t,
+                                            const bt_uuid_128 &serviceUuid,
+                                            uint16_t characteristicId) {
+    t.assignAutoUuid(serviceUuid, characteristicId);
+};
+
+/**
+ * @brief Base mixin for providers that need attribute-array back-references.
+ *
+ * Instances are non-owning: @ref bind stores a pointer to the server's flattened
+ * attribute storage for later indexed access via @ref getAttr.
+ */
 class BtGattAttrProviderBase
 {
 public:
@@ -104,13 +130,20 @@ void bindProviders(bt_gatt_attr *base,
     (bindIfPossible(providers, offsetOfProvider<Is, Providers...>()), ...);
 }
 
-// A complete GATT server that accepts a variadic list of BtGattAttributeProvider types
-// as input, and constructs a flat array of all attributes provided by them at compile-time.
-// This is then registered as a
+/**
+ * @brief Compile-time GATT server assembler from attribute providers.
+ *
+ * This type consumes @ref BtGattAttributeProvider instances, assigns auto UUIDs
+ * (for assignable providers) in provider order, then flattens all attributes into
+ * one backing array and binds provider base pointers into that storage.
+ */
 template <BtGattAttributeProvider... Providers>
 class BtGattServer
 {
 public:
+    static constexpr size_t kServiceUuidProviderCount =
+        (0 + ... + static_cast<size_t>(BtGattServiceUuidProvider<Providers>));
+
     // Deduce total count from all providers' tuples
     static constexpr size_t kTotalAttrCount =
         (std::tuple_size_v<
@@ -118,9 +151,42 @@ public:
          ...);
 
     BtGattServer(Providers &...providers)
-        : attrs_(tupleToArray(concatenateAttrTuples(providers...),
-                              std::make_index_sequence<kTotalAttrCount>{}))
     {
+        static_assert(kServiceUuidProviderCount > 0,
+                      "BtGattServer requires at least one provider with getServiceUuid().");
+
+        bt_uuid_128 primaryServiceUuid{};
+        bool hasPrimaryServiceUuid = false;
+
+        auto findPrimaryServiceUuid = [&]<typename P>(P &provider)
+        {
+            if constexpr (BtGattServiceUuidProvider<P>)
+            {
+                if (!hasPrimaryServiceUuid)
+                {
+                    primaryServiceUuid = provider.getServiceUuid();
+                    hasPrimaryServiceUuid = true;
+                }
+            }
+        };
+
+        (findPrimaryServiceUuid(providers), ...);
+
+        uint16_t autoCharacteristicId = 0;
+        auto assignAutoUuids = [&]<typename P>(P &provider)
+        {
+            if constexpr (BtGattAutoUuidAssignable<P>)
+            {
+                provider.assignAutoUuid(primaryServiceUuid, autoCharacteristicId);
+                ++autoCharacteristicId;
+            }
+        };
+
+        (assignAutoUuids(providers), ...);
+
+        attrs_ = tupleToArray(concatenateAttrTuples(providers...),
+                              std::make_index_sequence<kTotalAttrCount>{});
+
         // Bind providers that inherit from BtGattAttrProviderBase
         bindProviders(attrs_.data(),
                       std::index_sequence_for<Providers...>{},
@@ -133,7 +199,7 @@ public:
     static constexpr size_t size() { return kTotalAttrCount; }
 
 private:
-    std::array<bt_gatt_attr, kTotalAttrCount> attrs_;
+    std::array<bt_gatt_attr, kTotalAttrCount> attrs_{};
 };
 
 #define BT_GATT_SERVER_REGISTER(_name, _server)                    \
@@ -149,12 +215,21 @@ BtGattServer(Providers &...) -> BtGattServer<Providers...>;
 
 /// SPECIFIC GATT TYPES
 
-// A class to represent a GATT primary service, that conforms to the BtGattAttributeProvider concept.
-// Primary Services are represented by a single GATT attribute, with relatively well understood UUIDs.
+/**
+ * @brief Primary-service provider for @ref BtGattServer assembly.
+ *
+ * Participates in the provider concept by exposing a one-attribute tuple and the
+ * service UUID. The UUID is copied into instance storage and owned by this object.
+ */
 template <bt_uuid_128 ServiceUuid>
 class BtGattPrimaryService
 {
 public:
+    constexpr bt_uuid_128 getServiceUuid() const
+    {
+        return service_uuid_;
+    }
+
     constexpr auto getAttrsTuple()
     {
         return std::make_tuple(bt_gatt_attr(BT_GATT_PRIMARY_SERVICE(&service_uuid_)));
@@ -194,7 +269,12 @@ static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     return len;
 }
 
-// String wrapper for use as NTTP
+/**
+ * @brief Compile-time string wrapper used as a non-type template parameter.
+ *
+ * Stores a copied null-terminated literal in local array storage owned by the
+ * wrapper instance and provides conversion to const char*.
+ */
 template <size_t N>
 struct StringLiteral
 {
@@ -210,21 +290,26 @@ struct StringLiteral
 template <size_t N>
 StringLiteral(const char (&)[N]) -> StringLiteral<N>;
 
-// Extremely cursed struct to hold both managed CCC data and user data
-// We need this because the CCC bt_gatt_attr requires that the `user_data` pointer be a bt_gatt_ccc_managed_user_data.
-// However, we also need to store our own user data, since we need to recover `this` from inside the static `ccc_changed` callback.
-// So we create a new struct which contains both, and use that as the `user_data` pointer.
-// Since bt_gatt_ccc_managed_user_data is the first element in the struct, from the Zephyr Bluetooth code's perspective they
-// are effectively the same thing.
-//
-// So cursed....
+/**
+ * @brief CCC user-data bridge containing Zephyr-managed and app-managed fields.
+ *
+ * The first member must remain @ref bt_gatt_ccc_managed_user_data so Zephyr can
+ * treat this as CCC managed storage, while app_user_data carries the owning
+ * characteristic instance pointer used by static callbacks.
+ */
 struct bt_gatt_ccc_managed_user_data_with_app_user_data
 {
     bt_gatt_ccc_managed_user_data ccc_managed; // !!! MUST BE THE FIRST ELEMENT IN THIS STRUCT !!!
     void *app_user_data;
 };
 
-// A class to represent a GATT Characteristic that supports read, write, and notify, and conforms to the BtGattAttributeProvider concept.
+/**
+ * @brief Explicit-UUID GATT characteristic provider for server assembly.
+ *
+ * Participates in the provider concept via @ref getAttrsTuple and contributes a
+ * characteristic attribute set to @ref BtGattServer. The characteristic UUID comes
+ * from the template parameter and is not rewritten by server auto-assignment.
+ */
 template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
 class BtGattCharacteristic : public BtGattAttrProviderBase
 {
@@ -401,6 +486,170 @@ private:
     };
 };
 
+/**
+ * @brief Auto-UUID GATT characteristic provider for server assembly.
+ *
+ * Participates in the provider concept via @ref getAttrsTuple and receives its
+ * characteristic UUID from @ref BtGattServer through @ref assignAutoUuid using the
+ * primary service UUID plus provider-order characteristic index.
+ */
+template <StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
+class BtGattAutoCharacteristic : public BtGattAttrProviderBase
+{
+public:
+    using Self = BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>;
+
+    static_assert(BtGattCpfTraits<T>::kSupported,
+                  "Unsupported type for BtGattCharacteristic CPF deduction. "
+                  "Add a BtGattCpfTraits<T> specialization with a static constexpr bt_gatt_cpf kValue.");
+
+    void assignAutoUuid(const bt_uuid_128 &serviceUuid, uint16_t characteristicId)
+    {
+        characteristic_uuid_ = composeAutoCharacteristicUuid(serviceUuid, characteristicId);
+    }
+
+    constexpr auto getAttrsTuple()
+    {
+        auto baseAttrs = std::make_tuple(
+            bt_gatt_attr{
+                .uuid = &kGattChrcUuid.uuid,
+                .read = bt_gatt_attr_read_chrc,
+                .write = NULL,
+                .user_data = &characteristic_,
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            },
+            bt_gatt_attr{
+                .uuid = &characteristic_uuid_.uuid,
+                .read = read,
+                .write = ReadOnly ? nullptr : write,
+                .user_data = this,
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ_ENCRYPT | (ReadOnly ? 0 : BT_GATT_PERM_WRITE_ENCRYPT | BT_GATT_PERM_PREPARE_WRITE),
+            },
+            bt_gatt_attr{
+                .uuid = &kGattCudUuid.uuid,
+                .read = bt_gatt_attr_read_cud,
+                .write = NULL,
+                .user_data = const_cast<void *>(static_cast<const void *>(&Description.value)),
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            },
+            bt_gatt_attr{
+                .uuid = &kGattCpfUuid.uuid,
+                .read = bt_gatt_attr_read_cpf,
+                .write = NULL,
+                .user_data = &characteristic_cpf_,
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            });
+
+        if constexpr (Notify)
+        {
+            auto notifyAttrs = std::make_tuple(
+                bt_gatt_attr{
+                    .uuid = &kGattCccUuid.uuid,
+                    .read = bt_gatt_attr_read_ccc,
+                    .write = bt_gatt_attr_write_ccc,
+                    .user_data = &ccc_data_,
+                    .handle = 0,
+                    .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                });
+
+            return std::tuple_cat(baseAttrs, notifyAttrs);
+        }
+        else
+        {
+            return baseAttrs;
+        }
+    }
+
+    void notify()
+    {
+        if constexpr (Notify)
+        {
+            bt_gatt_attr *attr = getAttr(1);
+
+            if (!sendNotifications_)
+            {
+                printk("%p Notifications not enabled, skipping\n", attr);
+                return;
+            }
+
+            printk("NOTIFY: %p\n", attr);
+            int ret = bt_gatt_notify(NULL, attr, &storage_, sizeof(storage_));
+            if (ret != 0)
+            {
+                printk("Notify failed: %d\n", ret);
+            }
+            else
+            {
+                printk("Notify succeeded\n");
+            }
+        }
+        else
+        {
+            printk("NOTIFY: Notifications not enabled for this characteristic\n");
+        }
+    }
+
+    static void cccCfgChanged(const struct bt_gatt_attr *attr, uint16_t value)
+    {
+        bt_gatt_ccc_managed_user_data_with_app_user_data *managed_user_data = reinterpret_cast<bt_gatt_ccc_managed_user_data_with_app_user_data *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+        Self *instance = reinterpret_cast<Self *>(managed_user_data->app_user_data);
+
+        instance->sendNotifications_ = (value == BT_GATT_CCC_NOTIFY);
+        printk("%p Notification state: %d\n", attr, instance->sendNotifications_);
+    }
+
+    static ssize_t read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                        void *buf, uint16_t len, uint16_t offset)
+    {
+        Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+        return bt_gatt_attr_read(conn, attr, buf, len, offset, &instance->storage_, sizeof(instance->storage_));
+    }
+
+    static ssize_t write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                         const void *buf, uint16_t len, uint16_t offset,
+                         uint8_t flags)
+    {
+        Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+        return _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
+    }
+
+    T &operator=(const T &other)
+    {
+        if (storage_ != other)
+        {
+            storage_ = other;
+            notify();
+        }
+
+        return storage_;
+    }
+
+    operator T()
+    {
+        return storage_;
+    }
+
+private:
+    static constexpr bt_uuid_16 kGattChrcUuid = BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
+    static constexpr bt_uuid_16 kGattCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
+    static constexpr bt_uuid_16 kGattCpfUuid = BT_UUID_INIT_16(BT_UUID_GATT_CPF_VAL);
+    static constexpr bt_uuid_16 kGattCccUuid = BT_UUID_INIT_16(BT_UUID_GATT_CCC_VAL);
+
+    T storage_ = Default;
+    bool sendNotifications_ = false;
+    bt_uuid_128 characteristic_uuid_{};
+    bt_gatt_cpf characteristic_cpf_ = BtGattCpfTraits<T>::kValue;
+    bt_gatt_chrc characteristic_ = BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, Notify ? (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY) : (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE));
+    bt_gatt_ccc_managed_user_data_with_app_user_data ccc_data_ = {
+        .ccc_managed = BT_GATT_CCC_MANAGED_USER_DATA_INIT(cccCfgChanged, NULL, NULL),
+        .app_user_data = this,
+    };
+};
+
 // Specialized version of BtGattCharacteristic for combinations of read-only/read-write, notify/no-notify characteristics
 
 template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, typename T, T Default>
@@ -414,3 +663,16 @@ using BtGattReadNotifyCharacteristic = BtGattCharacteristic<CharacteristicUuid, 
 
 template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, typename T, T Default>
 using BtGattReadOnlyCharacteristic = BtGattCharacteristic<CharacteristicUuid, Description, false /* Notify */, true /* ReadOnly */, T, Default>;
+
+// Auto aliases derive UUIDs from BtGattServer provider order; use explicit UUID aliases if UUID stability across reordering is required.
+template <StringLiteral Description, typename T, T Default>
+using BtGattAutoReadWriteCharacteristic = BtGattAutoCharacteristic<Description, false /* Notify */, false /* ReadOnly */, T, Default>;
+
+template <StringLiteral Description, typename T, T Default>
+using BtGattAutoReadWriteNotifyCharacteristic = BtGattAutoCharacteristic<Description, true /* Notify */, false /* ReadOnly */, T, Default>;
+
+template <StringLiteral Description, typename T, T Default>
+using BtGattAutoReadNotifyCharacteristic = BtGattAutoCharacteristic<Description, true /* Notify */, true /* ReadOnly */, T, Default>;
+
+template <StringLiteral Description, typename T, T Default>
+using BtGattAutoReadOnlyCharacteristic = BtGattAutoCharacteristic<Description, false /* Notify */, true /* ReadOnly */, T, Default>;

@@ -14,8 +14,7 @@ LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 constexpr bt_uuid_128 kMyServiceUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x1234, 0x5678, 0x1234, 0x56789abcdef0));
 BtGattPrimaryService<kMyServiceUuid> primaryService;
 
-constexpr bt_uuid_128 kMyCharacteristicUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x4321, 0x8765, 0x4321, 0x0fedcba98765));
-BtGattReadNotifyCharacteristic<kMyCharacteristicUuid, "Now Playing", uint32_t, 0> characteristicA;
+BtGattAutoReadNotifyCharacteristic<"Now Playing", uint32_t, 0> characteristicA;
 
 BtGattServer server(primaryService, characteristicA);
 BT_GATT_SERVER_REGISTER(serverStatic, server);
