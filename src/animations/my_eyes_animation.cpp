@@ -37,6 +37,23 @@ BtGattAutoReadWriteNotifyCharacteristic<"Slot 17", BtGattString<MyEyesAnimation:
 BtGattAutoReadWriteNotifyCharacteristic<"Slot 18", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot18;
 BtGattAutoReadWriteNotifyCharacteristic<"Slot 19", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot19;
 
+using MyEyesIsActiveCharacteristicBase = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
+
+class MyEyesIsActiveCharacteristic : public MyEyesIsActiveCharacteristicBase
+{
+public:
+    using MyEyesIsActiveCharacteristicBase::operator=;
+
+    void setActive(bool active)
+    {
+        this->operator=(active);
+    }
+
+    void onWrite(const bool &active);
+};
+
+MyEyesIsActiveCharacteristic myEyesIsActive;
+
 BtGattServer myEyesConfigServer(
     myEyesPrimaryService,
     myEyesBlinkSpeedMs,
@@ -61,13 +78,32 @@ BtGattServer myEyesConfigServer(
     myEyesSlot16,
     myEyesSlot17,
     myEyesSlot18,
-    myEyesSlot19);
+    myEyesSlot19,
+    myEyesIsActive);
 BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes, BtServiceId::MyEyes>;
-BT_SVC_UUID_DEFINE(MyEyesAnimationIsActive);
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(MyEyesAnimationIsActive);
+
+void MyEyesIsActiveCharacteristic::onWrite(const bool &active)
+{
+    MyEyesAnimationIsActive::onRemoteActiveChange(active);
+}
+
+static void my_eyes_set_is_active(bool active)
+{
+    myEyesIsActive.setActive(active);
+}
+
+struct MyEyesIsActiveBindingRegistrar
+{
+    MyEyesIsActiveBindingRegistrar()
+    {
+        MyEyesAnimationIsActive::registerSetter(my_eyes_set_is_active);
+    }
+};
+
+[[maybe_unused]] MyEyesIsActiveBindingRegistrar sMyEyesIsActiveBindingRegistrar;
 
 namespace
 {
@@ -91,10 +127,6 @@ namespace
 }
 
 constexpr size_t kNumStringSlots = 20;
-
-BT_GATT_SERVICE_DEFINE(myeyes_anim_service,
-                       BT_SVC_UUID_REFERENCE(MyEyesAnimationIsActive),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(MyEyesAnimationIsActive));
 
 const char *kStaticEyes[kNumStringSlots] = {
     "^^",

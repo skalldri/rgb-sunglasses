@@ -51,6 +51,23 @@ BtGattAutoReadWriteNotifyCharacteristic<"Slot 17", BtGattString<TextAnimation::k
 BtGattAutoReadWriteNotifyCharacteristic<"Slot 18", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot18;
 BtGattAutoReadWriteNotifyCharacteristic<"Slot 19", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot19;
 
+using TextIsActiveCharacteristicBase = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
+
+class TextIsActiveCharacteristic : public TextIsActiveCharacteristicBase
+{
+public:
+    using TextIsActiveCharacteristicBase::operator=;
+
+    void setActive(bool active)
+    {
+        this->operator=(active);
+    }
+
+    void onWrite(const bool &active);
+};
+
+TextIsActiveCharacteristic textIsActive;
+
 BtGattServer textConfigServer(
     textPrimaryService,
     textStepTimeMs,
@@ -75,7 +92,8 @@ BtGattServer textConfigServer(
     textSlot16,
     textSlot17,
     textSlot18,
-    textSlot19);
+    textSlot19,
+    textIsActive);
 BT_GATT_SERVER_REGISTER(textConfigServerStatic, textConfigServer);
 
 constexpr size_t kNumStringSlots = 20;
@@ -103,12 +121,26 @@ namespace
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text, BtServiceId::Text>;
-BT_SVC_UUID_DEFINE(TextAnimationIsActive);
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimationIsActive);
 
-BT_GATT_SERVICE_DEFINE(text_anim_service,
-                       BT_SVC_UUID_REFERENCE(TextAnimationIsActive),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(TextAnimationIsActive), );
+void TextIsActiveCharacteristic::onWrite(const bool &active)
+{
+    TextAnimationIsActive::onRemoteActiveChange(active);
+}
+
+static void text_set_is_active(bool active)
+{
+    textIsActive.setActive(active);
+}
+
+struct TextIsActiveBindingRegistrar
+{
+    TextIsActiveBindingRegistrar()
+    {
+        TextAnimationIsActive::registerSetter(text_set_is_active);
+    }
+};
+
+[[maybe_unused]] TextIsActiveBindingRegistrar sTextIsActiveBindingRegistrar;
 
 const char *kStaticMessages[kNumStringSlots] = {
     "LIFE IS MADE OF LITTLE MOMENTS LIKE THIS",

@@ -56,6 +56,11 @@ concept BtGattAutoUuidAssignable = requires(T &t,
     t.assignAutoUuid(serviceUuid, characteristicId);
 };
 
+template <typename TInstance, typename TValue>
+concept BtGattWriteHook = requires(TInstance &instance, const TValue &value) {
+    instance.onWrite(value);
+};
+
 /**
  * @brief Base mixin for providers that need attribute-array back-references.
  *
@@ -474,10 +479,25 @@ public:
 
             memcpy(instance->storage_.data() + offset, buf, len);
             instance->storage_[offset + len] = '\0';
+
+            if constexpr (BtGattWriteHook<Self, T>)
+            {
+                instance->onWrite(instance->storage_);
+            }
+
             return len;
         }
 
-        return _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
+        ssize_t writeRet = _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
+        if (writeRet > 0)
+        {
+            if constexpr (BtGattWriteHook<Self, T>)
+            {
+                instance->onWrite(instance->storage_);
+            }
+        }
+
+        return writeRet;
     }
 
     // Allow variable assignment
@@ -678,10 +698,25 @@ public:
 
             memcpy(instance->storage_.data() + offset, buf, len);
             instance->storage_[offset + len] = '\0';
+
+            if constexpr (BtGattWriteHook<Self, T>)
+            {
+                instance->onWrite(instance->storage_);
+            }
+
             return len;
         }
 
-        return _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
+        ssize_t writeRet = _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
+        if (writeRet > 0)
+        {
+            if constexpr (BtGattWriteHook<Self, T>)
+            {
+                instance->onWrite(instance->storage_);
+            }
+        }
+
+        return writeRet;
     }
 
     T &operator=(const T &other)

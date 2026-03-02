@@ -14,10 +14,28 @@ BtGattPrimaryService<kRainbowConfigServiceUuid> rainbowPrimaryService;
 BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 100> rainbowStepTimeMs;
 BtGattAutoReadWriteNotifyCharacteristic<"Rainbow Width Pixels", uint32_t, 5> rainbowWidthPix;
 
+using RainbowIsActiveCharacteristicBase = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
+
+class RainbowIsActiveCharacteristic : public RainbowIsActiveCharacteristicBase
+{
+public:
+    using RainbowIsActiveCharacteristicBase::operator=;
+
+    void setActive(bool active)
+    {
+        this->operator=(active);
+    }
+
+    void onWrite(const bool &active);
+};
+
+RainbowIsActiveCharacteristic rainbowIsActive;
+
 BtGattServer rainbowConfigServer(
     rainbowPrimaryService,
     rainbowStepTimeMs,
-    rainbowWidthPix);
+    rainbowWidthPix,
+    rainbowIsActive);
 BT_GATT_SERVER_REGISTER(rainbowConfigServerStatic, rainbowConfigServer);
 
 namespace
@@ -47,12 +65,26 @@ namespace
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow, BtServiceId::Rainbow>;
-BT_SVC_UUID_DEFINE(RainbowAnimationIsActive);
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimationIsActive);
 
-BT_GATT_SERVICE_DEFINE(rainbow_active_service,
-                       BT_SVC_UUID_REFERENCE(RainbowAnimationIsActive),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimationIsActive), );
+void RainbowIsActiveCharacteristic::onWrite(const bool &active)
+{
+    RainbowAnimationIsActive::onRemoteActiveChange(active);
+}
+
+static void rainbow_set_is_active(bool active)
+{
+    rainbowIsActive.setActive(active);
+}
+
+struct RainbowIsActiveBindingRegistrar
+{
+    RainbowIsActiveBindingRegistrar()
+    {
+        RainbowAnimationIsActive::registerSetter(rainbow_set_is_active);
+    }
+};
+
+[[maybe_unused]] RainbowIsActiveBindingRegistrar sRainbowIsActiveBindingRegistrar;
 
 void rainbow_animation_bind_default_dependencies()
 {

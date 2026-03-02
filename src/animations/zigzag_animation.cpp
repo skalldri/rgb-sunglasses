@@ -11,10 +11,28 @@ BtGattPrimaryService<kZigZagConfigServiceUuid> zigzagPrimaryService;
 BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 200> zigzagStepTimeMs;
 BtGattAutoReadWriteNotifyCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> zigzagColor;
 
+using ZigZagIsActiveCharacteristicBase = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
+
+class ZigZagIsActiveCharacteristic : public ZigZagIsActiveCharacteristicBase
+{
+public:
+    using ZigZagIsActiveCharacteristicBase::operator=;
+
+    void setActive(bool active)
+    {
+        this->operator=(active);
+    }
+
+    void onWrite(const bool &active);
+};
+
+ZigZagIsActiveCharacteristic zigzagIsActive;
+
 BtGattServer zigzagConfigServer(
     zigzagPrimaryService,
     zigzagStepTimeMs,
-    zigzagColor);
+    zigzagColor,
+    zigzagIsActive);
 BT_GATT_SERVER_REGISTER(zigzagConfigServerStatic, zigzagConfigServer);
 
 namespace
@@ -44,12 +62,26 @@ namespace
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag, BtServiceId::ZigZag>;
-BT_SVC_UUID_DEFINE(ZigZagAnimationIsActive);
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(ZigZagAnimationIsActive);
 
-BT_GATT_SERVICE_DEFINE(zigzag_active_service,
-                       BT_SVC_UUID_REFERENCE(ZigZagAnimationIsActive),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(ZigZagAnimationIsActive), );
+void ZigZagIsActiveCharacteristic::onWrite(const bool &active)
+{
+    ZigZagAnimationIsActive::onRemoteActiveChange(active);
+}
+
+static void zigzag_set_is_active(bool active)
+{
+    zigzagIsActive.setActive(active);
+}
+
+struct ZigZagIsActiveBindingRegistrar
+{
+    ZigZagIsActiveBindingRegistrar()
+    {
+        ZigZagAnimationIsActive::registerSetter(zigzag_set_is_active);
+    }
+};
+
+[[maybe_unused]] ZigZagIsActiveBindingRegistrar sZigZagIsActiveBindingRegistrar;
 
 void zigzag_animation_bind_default_dependencies()
 {
