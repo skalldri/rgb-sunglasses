@@ -4,9 +4,9 @@
 
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
+#include <cstring>
 
 #include <bluetooth/bt_service_cpp.h>
-#include <bluetooth/read_write_string.h>
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 
@@ -29,11 +29,53 @@ BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 50> textStepTi
 BtGattAutoReadWriteNotifyCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> textColor;
 BtGattAutoReadWriteNotifyCharacteristic<"Up Next", uint32_t, 0> textUpNext;
 
+constexpr BtGattString<TextAnimation::kMaxMsgLen> kEmptyTextSlot = {};
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 0", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot0;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 1", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot1;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 2", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot2;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 3", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot3;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 4", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot4;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 5", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot5;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 6", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot6;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 7", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot7;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 8", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot8;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 9", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot9;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 10", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot10;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 11", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot11;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 12", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot12;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 13", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot13;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 14", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot14;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 15", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot15;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 16", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot16;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 17", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot17;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 18", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot18;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 19", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot19;
+
 BtGattServer textConfigServer(
     textPrimaryService,
     textStepTimeMs,
     textColor,
-    textUpNext);
+    textUpNext,
+    textSlot0,
+    textSlot1,
+    textSlot2,
+    textSlot3,
+    textSlot4,
+    textSlot5,
+    textSlot6,
+    textSlot7,
+    textSlot8,
+    textSlot9,
+    textSlot10,
+    textSlot11,
+    textSlot12,
+    textSlot13,
+    textSlot14,
+    textSlot15,
+    textSlot16,
+    textSlot17,
+    textSlot18,
+    textSlot19);
 BT_GATT_SERVER_REGISTER(textConfigServerStatic, textConfigServer);
 
 constexpr size_t kNumStringSlots = 20;
@@ -59,29 +101,6 @@ namespace
     };
 }
 
-// Declare a bunch of read/write string instance
-constexpr size_t kStringSlotStartChrc = 100;
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 100, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 101, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 102, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 103, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 104, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 105, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 106, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 107, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 108, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 109, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 110, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 111, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 112, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 113, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 114, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 115, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 116, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 117, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 118, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 119, TextAnimation::kMaxMsgLen);
-
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text, BtServiceId::Text>;
 BT_SVC_UUID_DEFINE(TextAnimationIsActive);
@@ -89,26 +108,6 @@ BT_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimationIsActive);
 
 BT_GATT_SERVICE_DEFINE(text_anim_service,
                        BT_SVC_UUID_REFERENCE(TextAnimationIsActive),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 100, "Slot 0"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 101, "Slot 1"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 102, "Slot 2"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 103, "Slot 3"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 104, "Slot 4"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 105, "Slot 5"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 106, "Slot 6"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 107, "Slot 7"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 108, "Slot 8"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 109, "Slot 9"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 110, "Slot 10"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 111, "Slot 11"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 112, "Slot 12"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 113, "Slot 13"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 114, "Slot 14"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 115, "Slot 15"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 116, "Slot 16"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 117, "Slot 17"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 118, "Slot 18"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 119, "Slot 19"),
                        BT_SVC_IS_ACTIVE_CHRC_REFERENCE(TextAnimationIsActive), );
 
 const char *kStaticMessages[kNumStringSlots] = {
@@ -134,61 +133,133 @@ const char *kStaticMessages[kNumStringSlots] = {
     "THE GORGE",
 };
 
-template <size_t tChrcId>
-using StrSlot = BtReadWriteString<TextAnimation::kBtServiceIdNum, tChrcId, TextAnimation::kMaxMsgLen>;
-
 namespace
 {
+    static const char *getTextSlot(size_t slot)
+    {
+        switch (slot)
+        {
+        case 0:
+            return textSlot0.value().data();
+        case 1:
+            return textSlot1.value().data();
+        case 2:
+            return textSlot2.value().data();
+        case 3:
+            return textSlot3.value().data();
+        case 4:
+            return textSlot4.value().data();
+        case 5:
+            return textSlot5.value().data();
+        case 6:
+            return textSlot6.value().data();
+        case 7:
+            return textSlot7.value().data();
+        case 8:
+            return textSlot8.value().data();
+        case 9:
+            return textSlot9.value().data();
+        case 10:
+            return textSlot10.value().data();
+        case 11:
+            return textSlot11.value().data();
+        case 12:
+            return textSlot12.value().data();
+        case 13:
+            return textSlot13.value().data();
+        case 14:
+            return textSlot14.value().data();
+        case 15:
+            return textSlot15.value().data();
+        case 16:
+            return textSlot16.value().data();
+        case 17:
+            return textSlot17.value().data();
+        case 18:
+            return textSlot18.value().data();
+        case 19:
+            return textSlot19.value().data();
+        default:
+            return "INVALID STRING SLOT";
+        }
+    }
+
+    static void setTextSlot(size_t slot, const char *value)
+    {
+        BtGattString<TextAnimation::kMaxMsgLen> storage = {};
+        strncpy(storage.data(), value, TextAnimation::kMaxMsgLen - 1);
+
+        switch (slot)
+        {
+        case 0:
+            textSlot0 = storage;
+            break;
+        case 1:
+            textSlot1 = storage;
+            break;
+        case 2:
+            textSlot2 = storage;
+            break;
+        case 3:
+            textSlot3 = storage;
+            break;
+        case 4:
+            textSlot4 = storage;
+            break;
+        case 5:
+            textSlot5 = storage;
+            break;
+        case 6:
+            textSlot6 = storage;
+            break;
+        case 7:
+            textSlot7 = storage;
+            break;
+        case 8:
+            textSlot8 = storage;
+            break;
+        case 9:
+            textSlot9 = storage;
+            break;
+        case 10:
+            textSlot10 = storage;
+            break;
+        case 11:
+            textSlot11 = storage;
+            break;
+        case 12:
+            textSlot12 = storage;
+            break;
+        case 13:
+            textSlot13 = storage;
+            break;
+        case 14:
+            textSlot14 = storage;
+            break;
+        case 15:
+            textSlot15 = storage;
+            break;
+        case 16:
+            textSlot16 = storage;
+            break;
+        case 17:
+            textSlot17 = storage;
+            break;
+        case 18:
+            textSlot18 = storage;
+            break;
+        case 19:
+            textSlot19 = storage;
+            break;
+        }
+    }
+
     class TextSlotSource : public TextAnimationSlotSource
     {
     public:
         const char *getStringFromSlot(size_t slot) const override
         {
-            switch (slot)
-            {
-            case 0:
-                return StrSlot<100>::getInstance();
-            case 1:
-                return StrSlot<101>::getInstance();
-            case 2:
-                return StrSlot<102>::getInstance();
-            case 3:
-                return StrSlot<103>::getInstance();
-            case 4:
-                return StrSlot<104>::getInstance();
-            case 5:
-                return StrSlot<105>::getInstance();
-            case 6:
-                return StrSlot<106>::getInstance();
-            case 7:
-                return StrSlot<107>::getInstance();
-            case 8:
-                return StrSlot<108>::getInstance();
-            case 9:
-                return StrSlot<109>::getInstance();
-            case 10:
-                return StrSlot<110>::getInstance();
-            case 11:
-                return StrSlot<111>::getInstance();
-            case 12:
-                return StrSlot<112>::getInstance();
-            case 13:
-                return StrSlot<113>::getInstance();
-            case 14:
-                return StrSlot<114>::getInstance();
-            case 15:
-                return StrSlot<115>::getInstance();
-            case 16:
-                return StrSlot<116>::getInstance();
-            case 17:
-                return StrSlot<117>::getInstance();
-            case 18:
-                return StrSlot<118>::getInstance();
-            case 19:
-                return StrSlot<119>::getInstance();
-            default:
-                return "INVALID STRING SLOT";
-            }
+            return getTextSlot(slot);
         }
     };
 
@@ -222,23 +293,13 @@ namespace
         sDefaultUpNextSource);
 }
 
-// Helper template to initialize everything
-template <size_t tChrcId>
-static void inline initStrSlot()
-{
-    StrSlot<tChrcId>::getInstance().setValue(kStaticMessages[tChrcId - kStringSlotStartChrc]);
-    initStrSlot<tChrcId - 1>();
-}
-
-template <>
-void inline initStrSlot<kStringSlotStartChrc>()
-{
-    StrSlot<kStringSlotStartChrc>::getInstance().setValue(kStaticMessages[0]);
-}
-
 TextAnimation::TextAnimation()
 {
-    initStrSlot<119>();
+    for (size_t i = 0; i < kNumStringSlots; i++)
+    {
+        setTextSlot(i, kStaticMessages[i]);
+    }
+
     setDependencies(sDefaultTextDeps);
 }
 
@@ -260,29 +321,6 @@ size_t TextAnimation::getUpNext()
     }
 
     return deps_->upNextSource.consumeCurrentAndAdvance(kNumStringSlots);
-}
-
-// Helper template to initialize everything
-template <size_t tChrcId>
-inline const char *getStringFromSlotTemplate(size_t slot)
-{
-    if ((slot + kStringSlotStartChrc) == tChrcId)
-    {
-        return StrSlot<tChrcId>::getInstance();
-    }
-
-    return getStringFromSlotTemplate<tChrcId - 1>(slot);
-}
-
-template <>
-inline const char *getStringFromSlotTemplate<kStringSlotStartChrc>(size_t slot)
-{
-    if ((slot + kStringSlotStartChrc) == kStringSlotStartChrc)
-    {
-        return StrSlot<kStringSlotStartChrc>::getInstance();
-    }
-
-    return "INVALID STRING SLOT";
 }
 
 const char *TextAnimation::getStringFromSlot(size_t slot)

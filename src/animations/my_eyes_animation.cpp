@@ -1,8 +1,8 @@
 #include <animations/my_eyes_animation.h>
 #include <animations/animation_is_active_binding.h>
 #include <bluetooth/bt_service_cpp.h>
-#include <bluetooth/read_write_string.h>
 #include <fonts/FontAtlas.h>
+#include <cstring>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(my_eyes_animation, LOG_LEVEL_INF);
@@ -15,11 +15,53 @@ BtGattAutoReadWriteNotifyCharacteristic<"Blink Speed Ms", uint32_t, 100> myEyesB
 BtGattAutoReadWriteNotifyCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> myEyesColor;
 BtGattAutoReadWriteNotifyCharacteristic<"Up Next", uint32_t, 0> myEyesUpNext;
 
+constexpr BtGattString<MyEyesAnimation::kMaxEyeLen> kEmptyEyeSlot = {};
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 0", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot0;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 1", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot1;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 2", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot2;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 3", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot3;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 4", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot4;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 5", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot5;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 6", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot6;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 7", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot7;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 8", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot8;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 9", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot9;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 10", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot10;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 11", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot11;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 12", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot12;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 13", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot13;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 14", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot14;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 15", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot15;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 16", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot16;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 17", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot17;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 18", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot18;
+BtGattAutoReadWriteNotifyCharacteristic<"Slot 19", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot19;
+
 BtGattServer myEyesConfigServer(
     myEyesPrimaryService,
     myEyesBlinkSpeedMs,
     myEyesColor,
-    myEyesUpNext);
+    myEyesUpNext,
+    myEyesSlot0,
+    myEyesSlot1,
+    myEyesSlot2,
+    myEyesSlot3,
+    myEyesSlot4,
+    myEyesSlot5,
+    myEyesSlot6,
+    myEyesSlot7,
+    myEyesSlot8,
+    myEyesSlot9,
+    myEyesSlot10,
+    myEyesSlot11,
+    myEyesSlot12,
+    myEyesSlot13,
+    myEyesSlot14,
+    myEyesSlot15,
+    myEyesSlot16,
+    myEyesSlot17,
+    myEyesSlot18,
+    myEyesSlot19);
 BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
@@ -50,50 +92,8 @@ namespace
 
 constexpr size_t kNumStringSlots = 20;
 
-constexpr size_t kStringSlotStartChrc = 100;
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 100, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 101, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 102, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 103, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 104, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 105, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 106, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 107, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 108, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 109, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 110, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 111, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 112, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 113, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 114, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 115, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 116, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 117, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 118, MyEyesAnimation::kMaxEyeLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(MyEyesAnimation, 119, MyEyesAnimation::kMaxEyeLen);
-
 BT_GATT_SERVICE_DEFINE(myeyes_anim_service,
                        BT_SVC_UUID_REFERENCE(MyEyesAnimationIsActive),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 100, "Slot 0"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 101, "Slot 1"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 102, "Slot 2"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 103, "Slot 3"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 104, "Slot 4"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 105, "Slot 5"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 106, "Slot 6"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 107, "Slot 7"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 108, "Slot 8"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 109, "Slot 9"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 110, "Slot 10"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 111, "Slot 11"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 112, "Slot 12"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 113, "Slot 13"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 114, "Slot 14"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 115, "Slot 15"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 116, "Slot 16"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 117, "Slot 17"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 118, "Slot 18"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(MyEyesAnimation, 119, "Slot 19"),
                        BT_SVC_IS_ACTIVE_CHRC_REFERENCE(MyEyesAnimationIsActive));
 
 const char *kStaticEyes[kNumStringSlots] = {
@@ -119,61 +119,133 @@ const char *kStaticEyes[kNumStringSlots] = {
     "UU",
 };
 
-template <size_t tChrcId>
-using StrSlot = BtReadWriteString<MyEyesAnimation::kBtServiceIdNum, tChrcId, MyEyesAnimation::kMaxEyeLen>;
-
 namespace
 {
+    static const char *getMyEyesSlot(size_t slot)
+    {
+        switch (slot)
+        {
+        case 0:
+            return myEyesSlot0.value().data();
+        case 1:
+            return myEyesSlot1.value().data();
+        case 2:
+            return myEyesSlot2.value().data();
+        case 3:
+            return myEyesSlot3.value().data();
+        case 4:
+            return myEyesSlot4.value().data();
+        case 5:
+            return myEyesSlot5.value().data();
+        case 6:
+            return myEyesSlot6.value().data();
+        case 7:
+            return myEyesSlot7.value().data();
+        case 8:
+            return myEyesSlot8.value().data();
+        case 9:
+            return myEyesSlot9.value().data();
+        case 10:
+            return myEyesSlot10.value().data();
+        case 11:
+            return myEyesSlot11.value().data();
+        case 12:
+            return myEyesSlot12.value().data();
+        case 13:
+            return myEyesSlot13.value().data();
+        case 14:
+            return myEyesSlot14.value().data();
+        case 15:
+            return myEyesSlot15.value().data();
+        case 16:
+            return myEyesSlot16.value().data();
+        case 17:
+            return myEyesSlot17.value().data();
+        case 18:
+            return myEyesSlot18.value().data();
+        case 19:
+            return myEyesSlot19.value().data();
+        default:
+            return "00";
+        }
+    }
+
+    static void setMyEyesSlot(size_t slot, const char *value)
+    {
+        BtGattString<MyEyesAnimation::kMaxEyeLen> storage = {};
+        strncpy(storage.data(), value, MyEyesAnimation::kMaxEyeLen - 1);
+
+        switch (slot)
+        {
+        case 0:
+            myEyesSlot0 = storage;
+            break;
+        case 1:
+            myEyesSlot1 = storage;
+            break;
+        case 2:
+            myEyesSlot2 = storage;
+            break;
+        case 3:
+            myEyesSlot3 = storage;
+            break;
+        case 4:
+            myEyesSlot4 = storage;
+            break;
+        case 5:
+            myEyesSlot5 = storage;
+            break;
+        case 6:
+            myEyesSlot6 = storage;
+            break;
+        case 7:
+            myEyesSlot7 = storage;
+            break;
+        case 8:
+            myEyesSlot8 = storage;
+            break;
+        case 9:
+            myEyesSlot9 = storage;
+            break;
+        case 10:
+            myEyesSlot10 = storage;
+            break;
+        case 11:
+            myEyesSlot11 = storage;
+            break;
+        case 12:
+            myEyesSlot12 = storage;
+            break;
+        case 13:
+            myEyesSlot13 = storage;
+            break;
+        case 14:
+            myEyesSlot14 = storage;
+            break;
+        case 15:
+            myEyesSlot15 = storage;
+            break;
+        case 16:
+            myEyesSlot16 = storage;
+            break;
+        case 17:
+            myEyesSlot17 = storage;
+            break;
+        case 18:
+            myEyesSlot18 = storage;
+            break;
+        case 19:
+            myEyesSlot19 = storage;
+            break;
+        }
+    }
+
     class MyEyesSlotSource : public MyEyesAnimationSlotSource
     {
     public:
         const char *getStringFromSlot(size_t slot) const override
         {
-            switch (slot)
-            {
-            case 0:
-                return StrSlot<100>::getInstance();
-            case 1:
-                return StrSlot<101>::getInstance();
-            case 2:
-                return StrSlot<102>::getInstance();
-            case 3:
-                return StrSlot<103>::getInstance();
-            case 4:
-                return StrSlot<104>::getInstance();
-            case 5:
-                return StrSlot<105>::getInstance();
-            case 6:
-                return StrSlot<106>::getInstance();
-            case 7:
-                return StrSlot<107>::getInstance();
-            case 8:
-                return StrSlot<108>::getInstance();
-            case 9:
-                return StrSlot<109>::getInstance();
-            case 10:
-                return StrSlot<110>::getInstance();
-            case 11:
-                return StrSlot<111>::getInstance();
-            case 12:
-                return StrSlot<112>::getInstance();
-            case 13:
-                return StrSlot<113>::getInstance();
-            case 14:
-                return StrSlot<114>::getInstance();
-            case 15:
-                return StrSlot<115>::getInstance();
-            case 16:
-                return StrSlot<116>::getInstance();
-            case 17:
-                return StrSlot<117>::getInstance();
-            case 18:
-                return StrSlot<118>::getInstance();
-            case 19:
-                return StrSlot<119>::getInstance();
-            default:
-                return "00";
-            }
+            return getMyEyesSlot(slot);
         }
     };
 
@@ -206,43 +278,6 @@ namespace
         sDefaultUpNextSource);
 }
 
-// Helper template to initialize everything
-template <size_t tChrcId>
-static void inline initStrSlot()
-{
-    StrSlot<tChrcId>::getInstance().setValue(kStaticEyes[tChrcId - kStringSlotStartChrc]);
-    initStrSlot<tChrcId - 1>();
-}
-
-template <>
-void inline initStrSlot<kStringSlotStartChrc>()
-{
-    StrSlot<kStringSlotStartChrc>::getInstance().setValue(kStaticEyes[0]);
-}
-
-// Helper template to initialize everything
-template <size_t tChrcId>
-inline const char *getStringFromSlotTemplate(size_t slot)
-{
-    if ((slot + kStringSlotStartChrc) == tChrcId)
-    {
-        return StrSlot<tChrcId>::getInstance();
-    }
-
-    return getStringFromSlotTemplate<tChrcId - 1>(slot);
-}
-
-template <>
-inline const char *getStringFromSlotTemplate<kStringSlotStartChrc>(size_t slot)
-{
-    if ((slot + kStringSlotStartChrc) == kStringSlotStartChrc)
-    {
-        return StrSlot<kStringSlotStartChrc>::getInstance();
-    }
-
-    return "00";
-}
-
 const char *MyEyesAnimation::getStringFromSlot(size_t slot)
 {
     if (!deps_)
@@ -265,18 +300,11 @@ size_t MyEyesAnimation::getUpNext()
 
 MyEyesAnimation::MyEyesAnimation()
 {
-    for (size_t i = 0; i < myeyes_anim_service.attr_count; i++)
+    for (size_t i = 0; i < kNumStringSlots; i++)
     {
-        if (myeyes_anim_service.attrs[i].uuid == &is_active_MyEyesAnimationIsActive_uuid.uuid)
-        {
-            LOG_INF("MyEyesAnimation isActive attr found at index %d", i);
-            break;
-        }
+        setMyEyesSlot(i, kStaticEyes[i]);
     }
 
-    LOG_INF("MyEyesAnimation isActive init complete");
-
-    initStrSlot<119>();
     setDependencies(sDefaultMyEyesDeps);
 }
 

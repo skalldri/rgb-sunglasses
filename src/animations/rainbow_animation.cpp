@@ -1,17 +1,24 @@
 #include <animations/rainbow_animation.h>
 #include <animations/animation_is_active_binding.h>
 
-#include <bluetooth/read_write_variable.h>
+#include <bluetooth/bt_service_cpp.h>
 
 #include <zephyr/drivers/led_strip.h>
 
 #include <cstddef>
 
-BT_SVC_UUID_DEFINE(RainbowAnimation);
+constexpr bt_uuid_128 kRainbowConfigServiceUuid = BT_UUID_INIT_128(
+    BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x0400, 0x56789abd0000));
 
-using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 0, uint32_t, 100);
+BtGattPrimaryService<kRainbowConfigServiceUuid> rainbowPrimaryService;
+BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 100> rainbowStepTimeMs;
+BtGattAutoReadWriteNotifyCharacteristic<"Rainbow Width Pixels", uint32_t, 5> rainbowWidthPix;
 
-using RainbowWidthPix = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 1, uint32_t, 5);
+BtGattServer rainbowConfigServer(
+    rainbowPrimaryService,
+    rainbowStepTimeMs,
+    rainbowWidthPix);
+BT_GATT_SERVER_REGISTER(rainbowConfigServerStatic, rainbowConfigServer);
 
 namespace
 {
@@ -20,7 +27,7 @@ namespace
     public:
         uint32_t get() const override
         {
-            return (uint32_t)StepTimeMs::getInstance();
+            return rainbowStepTimeMs;
         }
     };
 
@@ -29,7 +36,7 @@ namespace
     public:
         uint32_t get() const override
         {
-            return (uint32_t)RainbowWidthPix::getInstance();
+            return rainbowWidthPix;
         }
     };
 
@@ -40,12 +47,11 @@ namespace
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow, BtServiceId::Rainbow>;
+BT_SVC_UUID_DEFINE(RainbowAnimationIsActive);
 BT_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimationIsActive);
 
-BT_GATT_SERVICE_DEFINE(rainbow_anim_service,
-                       BT_SVC_UUID_REFERENCE(RainbowAnimation),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 0, "Step Time Ms"),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 1, "Rainbow Width Pixels"),
+BT_GATT_SERVICE_DEFINE(rainbow_active_service,
+                       BT_SVC_UUID_REFERENCE(RainbowAnimationIsActive),
                        BT_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimationIsActive), );
 
 void rainbow_animation_bind_default_dependencies()

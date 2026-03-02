@@ -10,6 +10,19 @@
 template <size_t N>
 using BtGattString = std::array<char, N>;
 
+template <typename T>
+struct BtGattStringTraits
+{
+    static constexpr bool kIsString = false;
+};
+
+template <size_t N>
+struct BtGattStringTraits<BtGattString<N>>
+{
+    static constexpr bool kIsString = true;
+    static constexpr size_t kMaxLen = N;
+};
+
 struct BtGattColor
 {
     constexpr BtGattColor() = default;

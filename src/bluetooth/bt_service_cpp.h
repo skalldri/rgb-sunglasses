@@ -6,6 +6,7 @@
 #include <tuple>
 #include <algorithm>
 #include <type_traits>
+#include <cstring>
 
 constexpr bt_uuid_128 composeAutoCharacteristicUuid(const bt_uuid_128 &serviceUuid,
                                                     uint16_t characteristicId)
@@ -434,6 +435,12 @@ public:
         // Get a mutable `this` pointer
         Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
 
+        if constexpr (BtGattStringTraits<T>::kIsString)
+        {
+            const size_t stringLen = strnlen(instance->storage_.data(), BtGattStringTraits<T>::kMaxLen);
+            return bt_gatt_attr_read(conn, attr, buf, len, offset, instance->storage_.data(), stringLen);
+        }
+
         // TODO: I think we need to protect this read in the same way that we protect _write().
         // Ex: we need to add bounds checking and offset handling, to support long reads and prevent buffer overflows.
         // Otherwise a malicious client could cause us to read out of bounds memory.
@@ -446,6 +453,30 @@ public:
     {
         // Get a mutable `this` pointer
         Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+
+        if constexpr (BtGattStringTraits<T>::kIsString)
+        {
+            if (flags & BT_GATT_WRITE_FLAG_PREPARE)
+            {
+                return 0;
+            }
+
+            constexpr size_t maxLen = BtGattStringTraits<T>::kMaxLen;
+            if (len >= maxLen)
+            {
+                return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+            }
+
+            if (offset + len >= maxLen)
+            {
+                return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+            }
+
+            memcpy(instance->storage_.data() + offset, buf, len);
+            instance->storage_[offset + len] = '\0';
+            return len;
+        }
+
         return _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
     }
 
@@ -465,6 +496,11 @@ public:
 
     // Allow casting to our underlying instance
     operator T()
+    {
+        return storage_;
+    }
+
+    const T &value() const
     {
         return storage_;
     }
@@ -606,6 +642,13 @@ public:
                         void *buf, uint16_t len, uint16_t offset)
     {
         Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+
+        if constexpr (BtGattStringTraits<T>::kIsString)
+        {
+            const size_t stringLen = strnlen(instance->storage_.data(), BtGattStringTraits<T>::kMaxLen);
+            return bt_gatt_attr_read(conn, attr, buf, len, offset, instance->storage_.data(), stringLen);
+        }
+
         return bt_gatt_attr_read(conn, attr, buf, len, offset, &instance->storage_, sizeof(instance->storage_));
     }
 
@@ -614,6 +657,30 @@ public:
                          uint8_t flags)
     {
         Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
+
+        if constexpr (BtGattStringTraits<T>::kIsString)
+        {
+            if (flags & BT_GATT_WRITE_FLAG_PREPARE)
+            {
+                return 0;
+            }
+
+            constexpr size_t maxLen = BtGattStringTraits<T>::kMaxLen;
+            if (len >= maxLen)
+            {
+                return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+            }
+
+            if (offset + len >= maxLen)
+            {
+                return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+            }
+
+            memcpy(instance->storage_.data() + offset, buf, len);
+            instance->storage_[offset + len] = '\0';
+            return len;
+        }
+
         return _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
     }
 
@@ -629,6 +696,11 @@ public:
     }
 
     operator T()
+    {
+        return storage_;
+    }
+
+    const T &value() const
     {
         return storage_;
     }
