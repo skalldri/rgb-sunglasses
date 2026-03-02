@@ -56,6 +56,12 @@ concept BtGattAutoUuidAssignable = requires(T &t,
     t.assignAutoUuid(serviceUuid, characteristicId);
 };
 
+/**
+ * @brief Detects whether a characteristic type exposes an `onWrite` hook.
+ *
+ * If satisfied, common write handlers invoke `instance.onWrite(value)` after a
+ * successful write to app storage.
+ */
 template <typename TInstance, typename TValue>
 concept BtGattWriteHook = requires(TInstance &instance, const TValue &value) {
     instance.onWrite(value);
@@ -275,6 +281,12 @@ static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     return len;
 }
 
+/**
+ * @brief Conditionally dispatches characteristic `onWrite` callback.
+ *
+ * This helper keeps write-path callback behavior centralized and avoids
+ * duplicated `if constexpr` logic across characteristic implementations.
+ */
 template <typename TInstance, typename TValue>
 static void _writeHook(TInstance *instance, const TValue &value)
 {
@@ -284,6 +296,12 @@ static void _writeHook(TInstance *instance, const TValue &value)
     }
 }
 
+/**
+ * @brief Type-aware write helper for GATT value attributes.
+ *
+ * Handles string and non-string storage variants, validates offsets/lengths,
+ * updates local storage, and invokes optional write hooks.
+ */
 template <typename TInstance, typename T>
 static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                       const void *buf, uint16_t len, uint16_t offset,
@@ -358,10 +376,22 @@ struct bt_gatt_ccc_managed_user_data_with_app_user_data
     void *app_user_data;
 };
 
+/**
+ * @brief Shared implementation for explicit and auto UUID characteristics.
+ *
+ * Implements common attribute tuple generation, read/write callbacks,
+ * notification plumbing, value storage, and assignment semantics.
+ */
 template <typename Self, StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
 class BtGattCharacteristicCommon : public BtGattAttrProviderBase
 {
 public:
+    /**
+     * @brief Returns all attributes contributed by this characteristic.
+     *
+     * Includes characteristic declaration/value/CUD/CPF and conditionally CCC
+     * when notifications are enabled.
+     */
     static_assert(BtGattCpfTraits<T>::kSupported,
                   "Unsupported type for BtGattCharacteristic CPF deduction. "
                   "Add a BtGattCpfTraits<T> specialization with a static constexpr bt_gatt_cpf kValue.");
@@ -523,7 +553,9 @@ private:
 };
 
 /**
- * @brief Explicit-UUID GATT characteristic provider for server assembly.
+ * @brief Explicit-UUID characteristic wrapper over @ref BtGattCharacteristicCommon.
+ *
+ * Sets UUID storage to the compile-time `CharacteristicUuid` value.
  */
 template <bt_uuid_128 CharacteristicUuid, StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
 class BtGattCharacteristic : public BtGattCharacteristicCommon<BtGattCharacteristic<CharacteristicUuid, Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>
@@ -539,7 +571,9 @@ public:
 };
 
 /**
- * @brief Auto-UUID GATT characteristic provider for server assembly.
+ * @brief Auto-UUID characteristic wrapper over @ref BtGattCharacteristicCommon.
+ *
+ * UUID is assigned by @ref BtGattServer via @ref assignAutoUuid.
  */
 template <StringLiteral Description, bool Notify, bool ReadOnly, typename T, T Default>
 class BtGattAutoCharacteristic : public BtGattCharacteristicCommon<BtGattAutoCharacteristic<Description, Notify, ReadOnly, T, Default>, Description, Notify, ReadOnly, T, Default>
