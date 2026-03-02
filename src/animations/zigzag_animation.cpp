@@ -9,8 +9,8 @@ constexpr bt_uuid_128 kZigZagConfigServiceUuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x0200, 0x56789abd0000));
 
 BtGattPrimaryService<kZigZagConfigServiceUuid> zigzagPrimaryService;
-BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 200> zigzagStepTimeMs;
-BtGattAutoReadWriteNotifyCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> zigzagColor;
+BtGattAutoReadWriteCharacteristic<"Step Time Ms", uint32_t, 200> zigzagStepTimeMs;
+BtGattAutoReadWriteCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> zigzagColor;
 
 using ZigZagIsActiveCharacteristic = IsActiveCharacteristic<Animation::ZigZag>;
 ZigZagIsActiveCharacteristic zigzagIsActive;

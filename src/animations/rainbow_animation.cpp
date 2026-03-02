@@ -12,8 +12,8 @@ constexpr bt_uuid_128 kRainbowConfigServiceUuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x0400, 0x56789abd0000));
 
 BtGattPrimaryService<kRainbowConfigServiceUuid> rainbowPrimaryService;
-BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 100> rainbowStepTimeMs;
-BtGattAutoReadWriteNotifyCharacteristic<"Rainbow Width Pixels", uint32_t, 5> rainbowWidthPix;
+BtGattAutoReadWriteCharacteristic<"Step Time Ms", uint32_t, 100> rainbowStepTimeMs;
+BtGattAutoReadWriteCharacteristic<"Rainbow Width Pixels", uint32_t, 5> rainbowWidthPix;
 
 using RainbowIsActiveCharacteristic = IsActiveCharacteristic<Animation::Rainbow>;
 RainbowIsActiveCharacteristic rainbowIsActive;
