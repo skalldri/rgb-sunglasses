@@ -24,7 +24,6 @@ public:
      */
     void setActive(bool active)
     {
-        printk("LOCAL ON ACTIVE CHANGE: %d\n", active);
         this->operator=(active);
     }
 
@@ -35,7 +34,6 @@ public:
      */
     void onWrite(const bool &active)
     {
-        printk("REMOTE ON ACTIVE CHANGE: %d\n", active);
         AnimationIsActiveBinding<tAnimationId>::onRemoteActiveChange(active);
     }
 };
