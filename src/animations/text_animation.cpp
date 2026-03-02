@@ -5,8 +5,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 
+#include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/read_write_string.h>
-#include <bluetooth/read_write_variable.h>
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 
@@ -21,13 +21,22 @@ BtGattServer server(primaryService, characteristicA);
 BT_GATT_SERVER_REGISTER(serverStatic, server);
 ///////////////////
 
-BT_SVC_UUID_DEFINE(TextAnimation);
+constexpr bt_uuid_128 kTextConfigServiceUuid = BT_UUID_INIT_128(
+    BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x0300, 0x56789abd0000));
+
+BtGattPrimaryService<kTextConfigServiceUuid> textPrimaryService;
+BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 50> textStepTimeMs;
+BtGattAutoReadWriteNotifyCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> textColor;
+BtGattAutoReadWriteNotifyCharacteristic<"Up Next", uint32_t, 0> textUpNext;
+
+BtGattServer textConfigServer(
+    textPrimaryService,
+    textStepTimeMs,
+    textColor,
+    textUpNext);
+BT_GATT_SERVER_REGISTER(textConfigServerStatic, textConfigServer);
 
 constexpr size_t kNumStringSlots = 20;
-
-using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 0, uint32_t, 50);
-using Color = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 1, Color, 0xFFFFFFFF);
-using UpNext = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 2, uint32_t, 0);
 
 namespace
 {
@@ -36,7 +45,7 @@ namespace
     public:
         uint32_t get() const override
         {
-            return (uint32_t)StepTimeMs::getInstance();
+            return textStepTimeMs;
         }
     };
 
@@ -45,7 +54,7 @@ namespace
     public:
         uint32_t get() const override
         {
-            return (uint32_t)Color::getInstance();
+            return static_cast<BtGattColor>(textColor);
         }
     };
 }
@@ -75,13 +84,11 @@ BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 119, TextAnimation::kMaxMsgL
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text, BtServiceId::Text>;
+BT_SVC_UUID_DEFINE(TextAnimationIsActive);
 BT_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimationIsActive);
 
 BT_GATT_SERVICE_DEFINE(text_anim_service,
-                       BT_SVC_UUID_REFERENCE(TextAnimation),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 0, "Step Time Ms"),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 1, "Color"),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 2, "Up Next"),
+                       BT_SVC_UUID_REFERENCE(TextAnimationIsActive),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 100, "Slot 0"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 101, "Slot 1"),
                        BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 102, "Slot 2"),
@@ -190,14 +197,14 @@ namespace
     public:
         size_t consumeCurrentAndAdvance(size_t numSlots) override
         {
-            uint32_t currUpNext = UpNext::getInstance();
+            uint32_t currUpNext = textUpNext;
             uint32_t nextUpNext = currUpNext + 1;
             if (nextUpNext >= numSlots)
             {
                 nextUpNext = 0;
             }
 
-            UpNext::getInstance() = nextUpNext;
+            textUpNext = nextUpNext;
             characteristicA = currUpNext;
 
             return currUpNext;
