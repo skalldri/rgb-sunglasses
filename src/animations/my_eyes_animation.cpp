@@ -1,5 +1,6 @@
 #include <animations/my_eyes_animation.h>
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <fonts/FontAtlas.h>
 #include <cstring>
@@ -37,21 +38,7 @@ BtGattAutoReadWriteNotifyCharacteristic<"Slot 17", BtGattString<MyEyesAnimation:
 BtGattAutoReadWriteNotifyCharacteristic<"Slot 18", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot18;
 BtGattAutoReadWriteNotifyCharacteristic<"Slot 19", BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot> myEyesSlot19;
 
-using MyEyesIsActiveCharacteristicBase = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
-
-class MyEyesIsActiveCharacteristic : public MyEyesIsActiveCharacteristicBase
-{
-public:
-    using MyEyesIsActiveCharacteristicBase::operator=;
-
-    void setActive(bool active)
-    {
-        this->operator=(active);
-    }
-
-    void onWrite(const bool &active);
-};
-
+using MyEyesIsActiveCharacteristic = IsActiveCharacteristic<Animation::MyEyes>;
 MyEyesIsActiveCharacteristic myEyesIsActive;
 
 BtGattServer myEyesConfigServer(
@@ -84,11 +71,6 @@ BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes>;
-
-void MyEyesIsActiveCharacteristic::onWrite(const bool &active)
-{
-    MyEyesAnimationIsActive::onRemoteActiveChange(active);
-}
 
 static void my_eyes_set_is_active(bool active)
 {

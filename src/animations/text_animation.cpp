@@ -1,5 +1,6 @@
 #include <animations/text_animation.h>
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_is_active_characteristic.h>
 #include <fonts/FontAtlas.h>
 
 #include <zephyr/logging/log.h>
@@ -51,21 +52,7 @@ BtGattAutoReadWriteNotifyCharacteristic<"Slot 17", BtGattString<TextAnimation::k
 BtGattAutoReadWriteNotifyCharacteristic<"Slot 18", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot18;
 BtGattAutoReadWriteNotifyCharacteristic<"Slot 19", BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot> textSlot19;
 
-using TextIsActiveCharacteristicBase = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
-
-class TextIsActiveCharacteristic : public TextIsActiveCharacteristicBase
-{
-public:
-    using TextIsActiveCharacteristicBase::operator=;
-
-    void setActive(bool active)
-    {
-        this->operator=(active);
-    }
-
-    void onWrite(const bool &active);
-};
-
+using TextIsActiveCharacteristic = IsActiveCharacteristic<Animation::Text>;
 TextIsActiveCharacteristic textIsActive;
 
 BtGattServer textConfigServer(
@@ -121,11 +108,6 @@ namespace
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text>;
-
-void TextIsActiveCharacteristic::onWrite(const bool &active)
-{
-    TextAnimationIsActive::onRemoteActiveChange(active);
-}
 
 static void text_set_is_active(bool active)
 {

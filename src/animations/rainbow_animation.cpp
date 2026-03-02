@@ -1,5 +1,6 @@
 #include <animations/rainbow_animation.h>
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_is_active_characteristic.h>
 
 #include <bluetooth/bt_service_cpp.h>
 
@@ -14,21 +15,7 @@ BtGattPrimaryService<kRainbowConfigServiceUuid> rainbowPrimaryService;
 BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 100> rainbowStepTimeMs;
 BtGattAutoReadWriteNotifyCharacteristic<"Rainbow Width Pixels", uint32_t, 5> rainbowWidthPix;
 
-using RainbowIsActiveCharacteristicBase = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
-
-class RainbowIsActiveCharacteristic : public RainbowIsActiveCharacteristicBase
-{
-public:
-    using RainbowIsActiveCharacteristicBase::operator=;
-
-    void setActive(bool active)
-    {
-        this->operator=(active);
-    }
-
-    void onWrite(const bool &active);
-};
-
+using RainbowIsActiveCharacteristic = IsActiveCharacteristic<Animation::Rainbow>;
 RainbowIsActiveCharacteristic rainbowIsActive;
 
 BtGattServer rainbowConfigServer(
@@ -65,11 +52,6 @@ namespace
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow>;
-
-void RainbowIsActiveCharacteristic::onWrite(const bool &active)
-{
-    RainbowAnimationIsActive::onRemoteActiveChange(active);
-}
 
 static void rainbow_set_is_active(bool active)
 {

@@ -1,5 +1,6 @@
 #include <animations/zigzag_animation.h>
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 
 #include <zephyr/bluetooth/uuid.h>
@@ -11,21 +12,7 @@ BtGattPrimaryService<kZigZagConfigServiceUuid> zigzagPrimaryService;
 BtGattAutoReadWriteNotifyCharacteristic<"Step Time Ms", uint32_t, 200> zigzagStepTimeMs;
 BtGattAutoReadWriteNotifyCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> zigzagColor;
 
-using ZigZagIsActiveCharacteristicBase = BtGattAutoReadWriteNotifyCharacteristic<"Is Active", bool, false>;
-
-class ZigZagIsActiveCharacteristic : public ZigZagIsActiveCharacteristicBase
-{
-public:
-    using ZigZagIsActiveCharacteristicBase::operator=;
-
-    void setActive(bool active)
-    {
-        this->operator=(active);
-    }
-
-    void onWrite(const bool &active);
-};
-
+using ZigZagIsActiveCharacteristic = IsActiveCharacteristic<Animation::ZigZag>;
 ZigZagIsActiveCharacteristic zigzagIsActive;
 
 BtGattServer zigzagConfigServer(
@@ -62,11 +49,6 @@ namespace
 
 // All services implement the "IsActive" service, so declare relevant BT GATT glue logic
 using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag>;
-
-void ZigZagIsActiveCharacteristic::onWrite(const bool &active)
-{
-    ZigZagAnimationIsActive::onRemoteActiveChange(active);
-}
 
 static void zigzag_set_is_active(bool active)
 {
