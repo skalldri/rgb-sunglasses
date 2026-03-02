@@ -275,6 +275,55 @@ static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     return len;
 }
 
+template <typename TInstance, typename TValue>
+static void _writeHook(TInstance *instance, const TValue &value)
+{
+    if constexpr (BtGattWriteHook<TInstance, TValue>)
+    {
+        instance->onWrite(value);
+    }
+}
+
+template <typename TInstance, typename T>
+static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                      const void *buf, uint16_t len, uint16_t offset,
+                      uint8_t flags, TInstance *instance, T &storage)
+{
+    if constexpr (BtGattStringTraits<T>::kIsString)
+    {
+        if (flags & BT_GATT_WRITE_FLAG_PREPARE)
+        {
+            return 0;
+        }
+
+        constexpr size_t maxLen = BtGattStringTraits<T>::kMaxLen;
+        if (len >= maxLen)
+        {
+            return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+        }
+
+        if (offset + len >= maxLen)
+        {
+            return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+        }
+
+        memcpy(storage.data() + offset, buf, len);
+        storage[offset + len] = '\0';
+
+        _writeHook(instance, storage);
+        return len;
+    }
+
+    ssize_t writeRet = _write(conn, attr, buf, len, offset, flags,
+                              reinterpret_cast<std::byte *>(&storage), sizeof(storage));
+    if (writeRet > 0)
+    {
+        _writeHook(instance, storage);
+    }
+
+    return writeRet;
+}
+
 /**
  * @brief Compile-time string wrapper used as a non-type template parameter.
  *
@@ -458,46 +507,7 @@ public:
     {
         // Get a mutable `this` pointer
         Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
-
-        if constexpr (BtGattStringTraits<T>::kIsString)
-        {
-            if (flags & BT_GATT_WRITE_FLAG_PREPARE)
-            {
-                return 0;
-            }
-
-            constexpr size_t maxLen = BtGattStringTraits<T>::kMaxLen;
-            if (len >= maxLen)
-            {
-                return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-            }
-
-            if (offset + len >= maxLen)
-            {
-                return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-            }
-
-            memcpy(instance->storage_.data() + offset, buf, len);
-            instance->storage_[offset + len] = '\0';
-
-            if constexpr (BtGattWriteHook<Self, T>)
-            {
-                instance->onWrite(instance->storage_);
-            }
-
-            return len;
-        }
-
-        ssize_t writeRet = _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
-        if (writeRet > 0)
-        {
-            if constexpr (BtGattWriteHook<Self, T>)
-            {
-                instance->onWrite(instance->storage_);
-            }
-        }
-
-        return writeRet;
+        return _write(conn, attr, buf, len, offset, flags, instance, instance->storage_);
     }
 
     // Allow variable assignment
@@ -677,46 +687,7 @@ public:
                          uint8_t flags)
     {
         Self *instance = reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
-
-        if constexpr (BtGattStringTraits<T>::kIsString)
-        {
-            if (flags & BT_GATT_WRITE_FLAG_PREPARE)
-            {
-                return 0;
-            }
-
-            constexpr size_t maxLen = BtGattStringTraits<T>::kMaxLen;
-            if (len >= maxLen)
-            {
-                return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-            }
-
-            if (offset + len >= maxLen)
-            {
-                return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-            }
-
-            memcpy(instance->storage_.data() + offset, buf, len);
-            instance->storage_[offset + len] = '\0';
-
-            if constexpr (BtGattWriteHook<Self, T>)
-            {
-                instance->onWrite(instance->storage_);
-            }
-
-            return len;
-        }
-
-        ssize_t writeRet = _write(conn, attr, buf, len, offset, flags, reinterpret_cast<std::byte *>(&instance->storage_), sizeof(instance->storage_));
-        if (writeRet > 0)
-        {
-            if constexpr (BtGattWriteHook<Self, T>)
-            {
-                instance->onWrite(instance->storage_);
-            }
-        }
-
-        return writeRet;
+        return _write(conn, attr, buf, len, offset, flags, instance, instance->storage_);
     }
 
     T &operator=(const T &other)
