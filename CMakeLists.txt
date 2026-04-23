@@ -33,7 +33,6 @@ target_sources(
 )
 
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/sound.cpp)
-
 target_sources_ifdef(CONFIG_ANIMATION_MY_EYES app PRIVATE src/animations/my_eyes_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/animations/rainbow_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG app PRIVATE src/animations/zigzag_animation.cpp)
