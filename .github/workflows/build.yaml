@@ -48,6 +48,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      pull-requests: write
     steps:
       - name: Free up space
         run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /usr/local/lib/android && sudo rm -rf /opt/ghc && sudo rm -rf /opt/hostedtoolcache/CodeQL
@@ -71,7 +72,7 @@ jobs:
           imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           push: always
-          runCmd: twister -T /workspaces/rgb-sunglasses/tests -p native_sim --outdir /workspaces/rgb-sunglasses/twister-out-ci
+          runCmd: twister -T /workspaces/rgb-sunglasses/tests -p native_sim --coverage --coverage-tool lcov --outdir /workspaces/rgb-sunglasses/twister-out-ci
 
       - name: Fix permissions on test output
         if: always()
@@ -87,3 +88,10 @@ jobs:
         with:
           name: twister-out-ci
           path: ${{ github.workspace }}/twister-out-ci
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ${{ github.workspace }}/twister-out-ci/coverage/coverage.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
