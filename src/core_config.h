@@ -3,8 +3,9 @@
 #include <cstddef>
 
 #include <singleton.h>
+#include <configuration_provider.h>
 
-class CoreConfig : public Singleton<CoreConfig> {
+class CoreConfig : public Singleton<CoreConfig>, public ConfigurationProvider {
 public:
     static constexpr size_t kServiceIdNum = 1;
 
@@ -13,9 +14,9 @@ public:
      * 
      * @return float 
      */
-    float getBrightnessFactor();
+    float getBrightnessFactor() override;
 
-    float getDisplayRateMs();
+    float getDisplayRateMs() override;
 
-    float getRenderRateMs();
+    float getRenderRateMs() override;
 };

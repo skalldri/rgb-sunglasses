@@ -3,16 +3,68 @@
 #include <led_controller.h>
 
 #include <core_config.h>
+#include <configuration_provider.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/init.h>
 
 #include <animations/animation_registry.h>
 #include <animations/animation_renderer.h>
 #include <animations/bt_animations.h>
 #include <animations/null_animation.h>
 
+#include <bluetooth/bt_state_observer.h>
+
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
+
+static ConfigurationProvider *sConfigProvider = nullptr;
+
+void pattern_controller_set_config_provider(ConfigurationProvider *provider)
+{
+    sConfigProvider = provider;
+}
+
+static ConfigurationProvider &getPatternConfig()
+{
+    if (!sConfigProvider)
+    {
+        sConfigProvider = &CoreConfig::getInstance();
+    }
+    return *sConfigProvider;
+}
+
+class PatternControllerBtObserver : public BtStateObserver
+{
+public:
+    void onAdvertisingStarted() override
+    {
+        pattern_controller_request_indicator(Indicator::BtAdvertising);
+    }
+    void onConnectingStarted() override
+    {
+        pattern_controller_request_indicator(Indicator::BtConnecting);
+    }
+    void onConnected() override
+    {
+        pattern_controller_reset_indicator();
+    }
+    void onPairingCodeRequired(unsigned int pairingCode) override
+    {
+        BtPairingAnimation::getInstance()->init();
+        BtPairingAnimation::getInstance()->setPairingCode(pairingCode);
+        pattern_controller_request_indicator(Indicator::BtPairing);
+    }
+};
+
+static PatternControllerBtObserver sPatternControllerBtObserver;
+
+static int pattern_controller_register_bt_observer(void)
+{
+    bluetooth_register_state_observer(&sPatternControllerBtObserver);
+    return 0;
+}
+SYS_INIT(pattern_controller_register_bt_observer, APPLICATION, 0);
 
 void pattern_controller_thread_func(void *a, void *b, void *c);
 
@@ -98,7 +150,7 @@ void pattern_controller_thread_func(void *a, void *b, void *c)
     {
         int64_t startTicks = k_uptime_ticks();
 
-        float kTargetRenderIntervalMs = CoreConfig::getInstance().getRenderRateMs();
+        float kTargetRenderIntervalMs = getPatternConfig().getRenderRateMs();
 
         size_t bufferId = 0;
         ret = claimBufferForRender(bufferId);
@@ -111,8 +163,8 @@ void pattern_controller_thread_func(void *a, void *b, void *c)
 
             BaseAnimation *anim = getBestRenderAnimation();
 
-            // Latch current brightness value from the core config
-            sBrightnessForFrame = CoreConfig::getInstance().getBrightnessFactor();
+            // Latch current brightness value from the configuration provider
+            sBrightnessForFrame = getPatternConfig().getBrightnessFactor();
 
             class PatternControllerRenderer : public AnimationRenderer
             {

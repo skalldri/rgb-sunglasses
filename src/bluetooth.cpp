@@ -14,10 +14,16 @@
 
 #include <errno.h>
 
-#include <pattern_controller.h>
-#include <animations/bt_animations.h>
+#include <bluetooth/bt_state_observer.h>
 
 LOG_MODULE_REGISTER(bluetooth, LOG_LEVEL_DBG);
+
+static BtStateObserver *sBtStateObserver = nullptr;
+
+void bluetooth_register_state_observer(BtStateObserver *observer)
+{
+    sBtStateObserver = observer;
+}
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
@@ -389,15 +395,15 @@ int bt_state_change_to(BtThreadContext *ctx, const BtThreadState &targetState)
     case BtThreadState::ADVERTISING:
         // On entry to Advertising state, start advertising
         err = bt_start_advertising();
-        pattern_controller_request_indicator(Indicator::BtAdvertising);
+        if (sBtStateObserver) sBtStateObserver->onAdvertisingStarted();
         break;
 
     case BtThreadState::CONNECTING:
-        pattern_controller_request_indicator(Indicator::BtConnecting);
+        if (sBtStateObserver) sBtStateObserver->onConnectingStarted();
         break;
 
     case BtThreadState::CONNECTED:
-        pattern_controller_reset_indicator();
+        if (sBtStateObserver) sBtStateObserver->onConnected();
         break;
     }
 
@@ -534,9 +540,7 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
     case BtThreadEvent::PAIRING_NEEDED:
         // Peer needs to enter a pin code to pair with us
         LOG_INF("Peer needs to enter a pin code to pair");
-        BtPairingAnimation::getInstance()->init();
-        BtPairingAnimation::getInstance()->setPairingCode(cmd->pairingKey);
-        pattern_controller_request_indicator(Indicator::BtPairing);
+        if (sBtStateObserver) sBtStateObserver->onPairingCodeRequired(cmd->pairingKey);
         break;
 
         // No default here: we want the compiler kicking and screaming if we forget one of these

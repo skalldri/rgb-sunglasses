@@ -1,6 +1,7 @@
 #include <led_controller.h>
 
 #include <core_config.h>
+#include <configuration_provider.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
@@ -16,6 +17,22 @@
 #include <algorithm>
 
 LOG_MODULE_REGISTER(led_controller, LOG_LEVEL_INF);
+
+static ConfigurationProvider *sLedConfigProvider = nullptr;
+
+void led_controller_set_config_provider(ConfigurationProvider *provider)
+{
+    sLedConfigProvider = provider;
+}
+
+static ConfigurationProvider &getLedConfig()
+{
+    if (!sLedConfigProvider)
+    {
+        sLedConfigProvider = &CoreConfig::getInstance();
+    }
+    return *sLedConfigProvider;
+}
 
 void led_display_thread_func(void *a, void *b, void *c);
 
@@ -401,7 +418,7 @@ void led_display_thread_func(void *a, void *b, void *c)
         // Sleep appropriate amount to maintain target framerate
         int64_t startTicks = k_uptime_ticks();
 
-        float kTargetFrameIntervalMs = CoreConfig::getInstance().getDisplayRateMs();
+        float kTargetFrameIntervalMs = getLedConfig().getDisplayRateMs();
 
         size_t bufferId = 0;
         ret = claimBufferForDisplay(bufferId);
