@@ -22,7 +22,13 @@ Treat successful `west build` as the primary validation step after any change. T
 
 Known non-blocking warning: `multi-line comment [-Wcomment]` in `src/bluetooth/bt_service.h`.
 
-## Architecture Overview
+## Commenting rules
+
+- **Preserve existing comments.** Never delete comments unless they are factually incorrect about the code that remains (e.g., a comment that describes a removed code path). Refactoring to change an API does not justify removing comments — update variable/function names in the comment text to match the new API, but keep the explanation.
+- **Commented-out code (`/*...*/` or `//`) is intentional.** Developers in embedded projects often comment out alternative implementations, debug printk calls, or reference snippets as quick-enable stubs. Do not remove these blocks.
+- **Add comments to non-obvious logic.** If you write code whose purpose or mechanism is not immediately clear from reading the code alone, add a comment.
+
+
 
 This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED sunglasses. The target SoC is an nRF53 series device. The codebase is mixed C/C++; `main.c` is C but most application logic is C++23.
 
@@ -50,7 +56,14 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 - `src/animations/animation_is_active_binding.h` — BT-free template that bridges the registry's `setActive` callback to a GATT characteristic setter; also routes remote BLE writes back to `pattern_controller_change_to_animation`.
 - `src/animations/animation_is_active_characteristic.h` — `IsActiveCharacteristic<A>`: a `BtGattAutoCharacteristicExt` subclass that hooks `onWrite` to `AnimationIsActiveBinding<A>::onRemoteActiveChange`.
 
-### Active refactor: animation / BT decoupling (`animation-refactor` branch)
+**DI interfaces (added in `animation-refactor-part2`)**
+- `src/bluetooth/bt_state_observer.h` — `BtStateObserver`: pure abstract observer; `bluetooth.cpp` calls through this instead of including `pattern_controller.h` / `bt_animations.h`. Register with `bluetooth_register_state_observer()`.
+- `src/configuration_provider.h` — `ConfigurationProvider`: abstract interface over `CoreConfig` singleton (getBrightnessFactor, getDisplayRateMs, getRenderRateMs). `CoreConfig` inherits from it. Injected into `led_controller` and `pattern_controller` via setter functions; lazy fallback to `CoreConfig::getInstance()` if not set.
+- `src/button_event_listener.h` + `src/buttons.h` — `ButtonEventListener`: `onButtonPressed(size_t buttonId)`. Dispatch is ISR-safe: GPIO interrupt → `K_MSGQ_DEFINE` → `k_work` → listener on work-queue thread. Register with `buttons_register_listener()`. Button IDs 0–3 = sw0–sw3; ID 4 = wake button.
+
+**Important: `CoreConfig` getters are non-const.** `getBrightnessFactor()` writes back to clamp the value against the BT characteristic range. Any abstract interface it implements must therefore declare those methods without `const`, otherwise `CoreConfig` becomes abstract and `Singleton<CoreConfig>` fails to instantiate.
+
+### Active refactor: animation / BT decoupling (`animation-refactor-part2` branch)
 
 The goal is to remove all BT headers from `src/animations/*_animation.cpp`. Each animation's GATT service, parameter sources, and is-active wiring are being moved to new adapter files in `src/bluetooth/animation_adapters/`. See `docs/animation-bluetooth-decoupling-plan.md` for the full plan, per-file changes, and implementation order.
 
@@ -65,7 +78,7 @@ grep -rE 'bluetooth|BT_GATT|BtGatt' src/animations/
 ### Other subsystems
 
 - `src/power.cpp` / `drivers/` — TPS25750 USB PD controller (custom driver, patch loaded via LZ4-compressed blob) and BQ25792 battery charger (custom driver). I2C-based.
-- `src/buttons.cpp` — GPIO button handling.
+- `src/buttons.cpp` — GPIO button handling. Button callback runs in ISR context; dispatch to `ButtonEventListener` is deferred via `K_MSGQ_DEFINE` + `k_work` for thread safety.
 - `src/fonts/` — `FontAtlas` and `FontShell` provide bitmap font rendering used by `TextAnimation` and `BtPairingAnimation`.
 - `src/sound/sound.cpp` — PDM microphone via VM3011 driver; conditionally compiled with `CONFIG_AUDIO`.
 - `src/core_config.cpp` — device-level settings persisted via Zephyr's settings subsystem.
@@ -80,12 +93,24 @@ CONFIG_ANIMATION_ZIGZAG=y
 ```
 Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_SIZE_OPTIMIZATIONS=y`).
 
+### SYS_INIT ordering for early registration
+
+`SYS_INIT(fn, APPLICATION, N)` runs before `K_THREAD_DEFINE` threads are scheduled. Lower N runs first. When an observer or listener must be registered before a thread can fire its first event, use `SYS_INIT(APPLICATION, 0)`. Both `bluetooth_init` and `button_init` run at priority 1, so registering observers at priority 0 guarantees the observer is in place before either subsystem starts.
+
 ### Test structure
 
 Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suite has its own `CMakeLists.txt`, `prj.conf`, and `testcase.yaml`:
 - `tests/animations/animation_registry/` — unit tests for the registry itself.
 - `tests/animations/*_animation_di/` — dependency-injection tests for each animation, compiling the pure animation `.cpp` without BT. These currently require `CONFIG_BT=y` in their `prj.conf` only because animation `.cpp` files still include BT headers; removing BT from the animations is the goal of the active refactor.
+- `tests/bt_state_observer/` — interface contract tests for `BtStateObserver` (does not link `bluetooth.cpp`).
+- `tests/configuration_provider/` — interface contract tests for `ConfigurationProvider`.
 - `tests/power/tps25750_patch_decompression/` — verifies the LZ4-compressed TPS25750 patch round-trips correctly.
+
+**Twister `testcase.yaml` naming**: The `name` field must use a dotted `category.name` format (e.g., `interfaces.bt_state_observer`). A plain single-word name causes a `TwisterException` at runtime.
+
+**C++23 in test `prj.conf`**: Use `CONFIG_STD_CPP2B=y` (not `CONFIG_STD_CPP23` — that symbol does not exist). Also add `CONFIG_REQUIRES_FULL_LIBCPP=y` and `CONFIG_REQUIRES_FULL_LIBC=y`.
+
+**Test isolation from heavy dependencies**: If a registration function (e.g., `bluetooth_register_state_observer`) lives in a file with heavy BT stack dependencies, avoid linking that file in unit tests. Test the interface/observer contract directly on a mock implementation without calling the real registration function.
 
 ### Scope reminder
 

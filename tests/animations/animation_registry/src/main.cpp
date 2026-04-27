@@ -14,11 +14,10 @@ namespace
             initCount++;
         }
 
-        void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override
+        void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override
         {
-            ARG_UNUSED(config);
+            ARG_UNUSED(renderer);
             ARG_UNUSED(timeSinceLastTickMs);
-            ARG_UNUSED(bufferId);
         }
 
         void setActive(bool active) override
@@ -129,4 +128,25 @@ ZTEST(animation_registry_tests, test_register_is_active_requires_animation_regis
     reset_test_state();
     int ret = animation_registry_register_is_active(Animation::Text, record_active_state);
     zassert_equal(ret, -ENOENT, "Expected -ENOENT for unregistered animation, got %d", ret);
+}
+
+ZTEST(animation_registry_tests, test_reset_after_registration_clears_entries)
+{
+    reset_test_state();
+    animation_registry_register(Animation::Text, first_factory);
+    animation_registry_register(Animation::Rainbow, second_factory);
+    zassert_equal(animation_registry_count(), 2, "Expected 2 entries before reset");
+
+    animation_registry_reset();
+
+    zassert_equal(animation_registry_count(), 0, "Expected 0 entries after reset");
+    zassert_is_null(animation_registry_get(Animation::Text), "Expected null lookup after reset");
+}
+
+ZTEST(animation_registry_tests, test_init_registered_before_any_registration_is_safe)
+{
+    reset_test_state();
+
+    // Should not crash with zero registrations
+    animation_registry_init_registered();
 }

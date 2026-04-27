@@ -1,7 +1,7 @@
 #include <zephyr/ztest.h>
 
 #include <animations/zigzag_animation.h>
-#include <led_config.h>
+#include <animations/animation_renderer.h>
 
 namespace
 {
@@ -39,47 +39,29 @@ namespace
 
     PixelCapture sCapture;
 
-    constexpr size_t kLedsOnRow[] = {2};
-    constexpr size_t kRowStart[] = {0};
-    constexpr bool kRowDirection[] = {true};
-
-    const LedConfig kTestConfig = {
-        .displayWidth = 2,
-        .displayHeight = 1,
-        .ledBankWidth = 1,
-        .ledsOnRow = kLedsOnRow,
-        .rowStartIndex = kRowStart,
-        .rowIsLeftToRight = kRowDirection,
+    class CapturingTestRenderer : public AnimationRenderer
+    {
+    public:
+        size_t displayWidth() const override { return 2; }
+        size_t displayHeight() const override { return 1; }
+        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
+        {
+            if (r != 0 || g != 0 || b != 0)
+            {
+                sCapture.x = x;
+                sCapture.y = y;
+                sCapture.red = r;
+                sCapture.green = g;
+                sCapture.blue = b;
+                sCapture.litPixelWrites++;
+            }
+        }
     };
 
     void reset_capture()
     {
         sCapture = {};
     }
-}
-
-int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t x, size_t y, size_t bufferId, uint8_t red, uint8_t green, uint8_t blue)
-{
-    ARG_UNUSED(config);
-    ARG_UNUSED(bufferId);
-
-    if (red != 0 || green != 0 || blue != 0)
-    {
-        sCapture.x = x;
-        sCapture.y = y;
-        sCapture.red = red;
-        sCapture.green = green;
-        sCapture.blue = blue;
-        sCapture.litPixelWrites++;
-    }
-
-    return 0;
-}
-
-int pattern_controller_change_to_animation(Animation animation)
-{
-    ARG_UNUSED(animation);
-    return 0;
 }
 
 ZTEST_SUITE(zigzag_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
@@ -94,8 +76,9 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_advances_pixel)
     animation->setDependencies(deps);
     animation->init();
 
+    CapturingTestRenderer renderer;
     reset_capture();
-    animation->tick(&kTestConfig, 2, 0);
+    animation->tick(renderer, 2);
 
     zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write");
     zassert_equal(sCapture.x, 1, "Expected lit pixel to advance to x=1");
@@ -115,12 +98,38 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_holds_pixel_when_not_el
     animation->setDependencies(deps);
     animation->init();
 
+    CapturingTestRenderer renderer;
     reset_capture();
-    animation->tick(&kTestConfig, 1, 0);
+    animation->tick(renderer, 1);
 
     zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write");
     zassert_equal(sCapture.x, 0, "Expected pixel to remain at x=0 when step time has not elapsed");
     zassert_equal(sCapture.red, 0xAA, "Expected injected red component");
     zassert_equal(sCapture.green, 0x55, "Expected injected green component");
     zassert_equal(sCapture.blue, 0x00, "Expected injected blue component");
+}
+
+ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indices)
+{
+    // 2x1 display → 2 total indices. With stepTimeMs=0 every positive tick advances.
+    // init: index=0; tick 1 → index=1; tick 2 → index=2 wraps to 0.
+    MutableUint32Source stepTimeMs(0);
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    CapturingTestRenderer renderer;
+
+    reset_capture();
+    animation->tick(renderer, 1); // advances to index 1
+
+    reset_capture();
+    animation->tick(renderer, 1); // advances to index 2 → wraps to 0
+
+    zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write after wrap");
+    zassert_equal(sCapture.x, 0, "Expected lit pixel at x=0 after wrapping");
+    zassert_equal(sCapture.y, 0, "Expected lit pixel at y=0 after wrapping");
 }

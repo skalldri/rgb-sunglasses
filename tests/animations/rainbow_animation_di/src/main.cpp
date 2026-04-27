@@ -1,7 +1,7 @@
 #include <zephyr/ztest.h>
 
 #include <animations/rainbow_animation.h>
-#include <led_config.h>
+#include <animations/animation_renderer.h>
 
 namespace
 {
@@ -36,17 +36,21 @@ namespace
 
     PixelColor sPixelColors[8];
 
-    constexpr size_t kLedsOnRow[] = {4};
-    constexpr size_t kRowStart[] = {0};
-    constexpr bool kRowDirection[] = {true};
-
-    const LedConfig kTestConfig = {
-        .displayWidth = 4,
-        .displayHeight = 1,
-        .ledBankWidth = 2,
-        .ledsOnRow = kLedsOnRow,
-        .rowStartIndex = kRowStart,
-        .rowIsLeftToRight = kRowDirection,
+    class CapturingTestRenderer : public AnimationRenderer
+    {
+    public:
+        size_t displayWidth() const override { return 4; }
+        size_t displayHeight() const override { return 1; }
+        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
+        {
+            ARG_UNUSED(y);
+            if (x < ARRAY_SIZE(sPixelColors))
+            {
+                sPixelColors[x].red = r;
+                sPixelColors[x].green = g;
+                sPixelColors[x].blue = b;
+            }
+        }
     };
 
     void reset_capture()
@@ -56,28 +60,6 @@ namespace
             sPixelColors[i] = {};
         }
     }
-}
-
-int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t x, size_t y, size_t bufferId, uint8_t red, uint8_t green, uint8_t blue)
-{
-    ARG_UNUSED(config);
-    ARG_UNUSED(y);
-    ARG_UNUSED(bufferId);
-
-    if (x < ARRAY_SIZE(sPixelColors))
-    {
-        sPixelColors[x].red = red;
-        sPixelColors[x].green = green;
-        sPixelColors[x].blue = blue;
-    }
-
-    return 0;
-}
-
-int pattern_controller_change_to_animation(Animation animation)
-{
-    ARG_UNUSED(animation);
-    return 0;
 }
 
 ZTEST_SUITE(rainbow_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
@@ -92,12 +74,14 @@ ZTEST(rainbow_animation_di_tests, test_injected_step_time_controls_animation_adv
     animation->setDependencies(deps);
     animation->init();
 
+    CapturingTestRenderer renderer;
+
     reset_capture();
-    animation->tick(&kTestConfig, 1, 0);
+    animation->tick(renderer, 1);
     PixelColor firstTickX0 = sPixelColors[0];
 
     reset_capture();
-    animation->tick(&kTestConfig, 1, 0);
+    animation->tick(renderer, 1);
     PixelColor secondTickX0 = sPixelColors[0];
 
     zassert_equal(firstTickX0.red, secondTickX0.red, "Expected same x0 red channel without advancing");
@@ -107,11 +91,11 @@ ZTEST(rainbow_animation_di_tests, test_injected_step_time_controls_animation_adv
     stepTimeMs.set(0);
 
     reset_capture();
-    animation->tick(&kTestConfig, 1, 0);
+    animation->tick(renderer, 1);
     PixelColor thirdTickX0 = sPixelColors[0];
 
     reset_capture();
-    animation->tick(&kTestConfig, 1, 0);
+    animation->tick(renderer, 1);
     PixelColor fourthTickX0 = sPixelColors[0];
 
     zassert_true((thirdTickX0.red == secondTickX0.red) && (thirdTickX0.green == secondTickX0.green) && (thirdTickX0.blue == secondTickX0.blue),
@@ -131,15 +115,17 @@ ZTEST(rainbow_animation_di_tests, test_injected_width_controls_gradient)
     animation->setDependencies(deps);
     animation->init();
 
+    CapturingTestRenderer renderer;
+
     reset_capture();
-    animation->tick(&kTestConfig, 1, 0);
+    animation->tick(renderer, 1);
     PixelColor widthOneX1 = sPixelColors[1];
 
     rainbowWidthPix.set(2);
 
     reset_capture();
     animation->init();
-    animation->tick(&kTestConfig, 1, 0);
+    animation->tick(renderer, 1);
     PixelColor widthTwoX1 = sPixelColors[1];
 
     zassert_false((widthOneX1.red == widthTwoX1.red) && (widthOneX1.green == widthTwoX1.green) && (widthOneX1.blue == widthTwoX1.blue),

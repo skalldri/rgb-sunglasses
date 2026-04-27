@@ -2,8 +2,6 @@
 
 #include <animations/animation_base.h>
 
-#include <animations/animation_registry.h>
-#include <pattern_controller.h>
 #include <animations/animation_types.h>
 
 #include <zephyr/kernel.h>
@@ -25,7 +23,10 @@ public:
     // Pass the active state change down into our IsActiveCharacteristic()
     void setActive(bool active) override
     {
-        animation_registry_set_is_active(kAnimationId, active);
+        if (sActiveStateObserver_)
+        {
+            sActiveStateObserver_->onActiveStateChanged(kAnimationId, active);
+        }
     }
 
 protected:

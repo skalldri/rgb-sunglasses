@@ -1,0 +1,6 @@
+tests:
+  animations.animation_base:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

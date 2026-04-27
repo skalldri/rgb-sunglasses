@@ -38,7 +38,7 @@ void RainbowAnimation::init()
     currentRainbowStep = 0;
 }
 
-void RainbowAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
+void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs)
 {
     __ASSERT(deps_, "RainbowAnimation::tick before setDependencies");
 
@@ -46,7 +46,7 @@ void RainbowAnimation::tick(const LedConfig *config, const size_t timeSinceLastT
     const uint32_t rainbowColorWidth = deps_->rainbowWidthPix.get();
 
     // Turn off all LEDs
-    for (size_t x = 0; x < config->displayWidth; x++)
+    for (size_t x = 0; x < renderer.displayWidth(); x++)
     {
         size_t currentRainbowColor = ((currentRainbowStep + x) / rainbowColorWidth) % numRainbowColors;
         size_t nextRainbowColor = (currentRainbowColor + 1) % numRainbowColors;
@@ -62,9 +62,9 @@ void RainbowAnimation::tick(const LedConfig *config, const size_t timeSinceLastT
         float green = ((1.0f - blendPercent) * ((float)rainbowColors[currentRainbowColor].g)) + (blendPercent * ((float)rainbowColors[nextRainbowColor].g));
         float blue = ((1.0f - blendPercent) * ((float)rainbowColors[currentRainbowColor].b)) + (blendPercent * ((float)rainbowColors[nextRainbowColor].b));
 
-        for (size_t y = 0; y < config->displayHeight; y++)
+        for (size_t y = 0; y < renderer.displayHeight(); y++)
         {
-            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, red, green, blue);
+            renderer.setPixel(x, y, red, green, blue);
         }
     }
 

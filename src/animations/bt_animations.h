@@ -6,7 +6,7 @@ class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimati
 {
 public:
     void init() override;
-    void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+    void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
     void setActive(bool active) override {};
 
 private:
@@ -26,7 +26,7 @@ class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation
 {
 public:
     void init() override;
-    void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+    void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
     void setActive(bool active) override {};
 
 private:
@@ -47,7 +47,7 @@ class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Anim
 {
 public:
     void init() override;
-    void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+    void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
     void setActive(bool active) override {};
 
     void setPairingCode(unsigned int code);

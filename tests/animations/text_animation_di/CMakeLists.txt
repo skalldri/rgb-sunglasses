@@ -7,6 +7,7 @@ project(text_animation_di_tests)
 target_sources(app PRIVATE src/main.cpp)
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/text_animation.cpp)
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/animation_registry.cpp)
+target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/animation_base.cpp)
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/fonts/FontAtlas.cpp)
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/fonts/FontShell.cpp)
 

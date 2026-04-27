@@ -27,6 +27,7 @@ target_sources(
     src/animations/text_animation.cpp
     src/animations/animation_registry.cpp
     src/animations/animation_registry_defaults.cpp
+    src/animations/animation_base.cpp
     src/fonts/FontAtlas.cpp
     src/fonts/FontShell.cpp
     misc/tps25750/tps25750-config-compressed.c

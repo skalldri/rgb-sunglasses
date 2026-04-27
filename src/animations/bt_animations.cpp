@@ -8,7 +8,7 @@ void BtAdvertisingAnimation::init() {
     currentCycleTimeMs = 0;
 }
 
-void BtAdvertisingAnimation::tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) {
+void BtAdvertisingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
 
     // What should the current brightness be?
     currentCycleTimeMs += timeSinceLastTickMs;
@@ -22,16 +22,16 @@ void BtAdvertisingAnimation::tick(const LedConfig* config, const size_t timeSinc
     // if less than half of kFadeTimeMs, we are getting brighter
     // if more than half of kFadeTimeMS, we are getting dimmer
     size_t currentBrightness = 0;
-    
+
     if (currentCycleTimeMs < kFadeHalfTimeMs) {
         currentBrightness = kMinFade + (kFadeDistance * ((float)currentCycleTimeMs) / ((float)kFadeHalfTimeMs));
     } else {
         currentBrightness = kMaxFade - (kFadeDistance * ((float)(currentCycleTimeMs-kFadeHalfTimeMs)) / ((float)kFadeHalfTimeMs));
     }
 
-    for (size_t x = 0; x < config->displayWidth; x++) {
-        for (size_t y = 0; y < config->displayHeight; y++) {
-            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, currentBrightness);
+    for (size_t x = 0; x < renderer.displayWidth(); x++) {
+        for (size_t y = 0; y < renderer.displayHeight(); y++) {
+            renderer.setPixel(x, y, 0, 0, currentBrightness);
         }
     }
 }
@@ -41,7 +41,7 @@ void BtConnectingAnimation::init() {
     currentCycleTimeMs = 0;
 }
 
-void BtConnectingAnimation::tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) {
+void BtConnectingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
 
     // What should the current brightness be?
     currentCycleTimeMs += timeSinceLastTickMs;
@@ -55,16 +55,16 @@ void BtConnectingAnimation::tick(const LedConfig* config, const size_t timeSince
     }
 
     size_t currentBrightness = 0;
-    
+
     if (isBrightFlash) {
         currentBrightness = kMaxFlash;
     } else {
         currentBrightness = kMinFlash;
     }
 
-    for (size_t x = 0; x < config->displayWidth; x++) {
-        for (size_t y = 0; y < config->displayHeight; y++) {
-            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, currentBrightness);
+    for (size_t x = 0; x < renderer.displayWidth(); x++) {
+        for (size_t y = 0; y < renderer.displayHeight(); y++) {
+            renderer.setPixel(x, y, 0, 0, currentBrightness);
         }
     }
 }
@@ -78,11 +78,11 @@ void BtPairingAnimation::init() {
     currentCycleTimeMs = 0;
 }
 
-void BtPairingAnimation::tick(const LedConfig* config, const size_t timeSinceLastTickMs, const size_t bufferId) {
+void BtPairingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
     // Turn off all LEDs
-    for (size_t x = 0; x < config->displayWidth; x++) {
-        for (size_t y = 0; y < config->displayHeight; y++) {
-            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
+    for (size_t x = 0; x < renderer.displayWidth(); x++) {
+        for (size_t y = 0; y < renderer.displayHeight(); y++) {
+            renderer.setPixel(x, y, 0, 0, 0);
         }
     }
 
@@ -116,11 +116,11 @@ void BtPairingAnimation::tick(const LedConfig* config, const size_t timeSinceLas
 
     // The edges of the "display window"
     const int32_t displayWindowLeftSide = -displayEdgeBuffer;
-    const int32_t displayWindowRightSide = config->displayWidth + displayEdgeBuffer;
+    const int32_t displayWindowRightSide = renderer.displayWidth() + displayEdgeBuffer;
 
     // When we reset currentTextOffset to zero, the text will start off the edge of the display
     // but only just
-    const int32_t currentTextOffsetRelativeToDisplay = currentTextOffset + config->displayWidth;
+    const int32_t currentTextOffsetRelativeToDisplay = currentTextOffset + renderer.displayWidth();
 
     // Predict the first character of the string that could fit on the display
     size_t firstChar = 0;
@@ -153,15 +153,15 @@ void BtPairingAnimation::tick(const LedConfig* config, const size_t timeSinceLas
 
     // This function gets called repeatedly to render to the display
     auto lambda = [&](size_t x, size_t y, bool filled) {
-        int32_t realX =  x + charWindowPos;
+        int32_t realX = x + charWindowPos;
 
-        if (realX < 0 || realX >= (int32_t)config->displayWidth) {
+        if (realX < 0 || realX >= (int32_t)renderer.displayWidth()) {
             // Bail early if this pixel is not on the display
             return;
         }
 
         if (filled) {
-            pattern_controller_set_pixel_in_framebuffer(config, realX, y, bufferId, 0, 0, kLetterBrightness);
+            renderer.setPixel(realX, y, 0, 0, kLetterBrightness);
         }
     };
 

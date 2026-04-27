@@ -1,6 +1,7 @@
 #include <zephyr/ztest.h>
 
 #include <animations/animation_parameter_source.h>
+#include <animations/animation_renderer.h>
 
 #define private public
 #include <animations/text_animation.h>
@@ -10,6 +11,21 @@
 
 namespace
 {
+    class NullTestRenderer : public AnimationRenderer
+    {
+    public:
+        size_t displayWidth() const override { return 40; }
+        size_t displayHeight() const override { return 12; }
+        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
+        {
+            ARG_UNUSED(x);
+            ARG_UNUSED(y);
+            ARG_UNUSED(r);
+            ARG_UNUSED(g);
+            ARG_UNUSED(b);
+        }
+    };
+
     class ConstUint32Source : public AnimationUint32ParameterSource
     {
     public:
@@ -62,24 +78,6 @@ namespace
     };
 }
 
-int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t x, size_t y, size_t bufferId, uint8_t red, uint8_t green, uint8_t blue)
-{
-    ARG_UNUSED(config);
-    ARG_UNUSED(x);
-    ARG_UNUSED(y);
-    ARG_UNUSED(bufferId);
-    ARG_UNUSED(red);
-    ARG_UNUSED(green);
-    ARG_UNUSED(blue);
-    return 0;
-}
-
-int pattern_controller_change_to_animation(Animation animation)
-{
-    ARG_UNUSED(animation);
-    return 0;
-}
-
 ZTEST_SUITE(text_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 
 ZTEST(text_animation_di_tests, test_init_uses_injected_slot_and_upnext_sources)
@@ -116,4 +114,61 @@ ZTEST(text_animation_di_tests, test_init_passes_slot_count_to_upnext_source)
     animation->init();
 
     zassert_equal(upNextSource.lastNumSlots, 20, "Expected up-next source to receive text slot count");
+}
+
+ZTEST(text_animation_di_tests, test_tick_accumulates_cycle_time)
+{
+    ConstUint32Source stepTimeMs(1000);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 50);
+
+    zassert_equal(animation->currentCycleTimeMs, 50,
+                  "Expected cycle time to accumulate the tick delta");
+}
+
+ZTEST(text_animation_di_tests, test_tick_advances_offset_when_step_time_elapses)
+{
+    ConstUint32Source stepTimeMs(10);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 15); // 15 > stepTimeMs(10), should advance offset
+
+    zassert_equal(animation->currentTextOffset, -1,
+                  "Expected offset to decrement once when step time elapses");
+}
+
+ZTEST(text_animation_di_tests, test_tick_does_not_advance_offset_before_step_time)
+{
+    ConstUint32Source stepTimeMs(1000);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 1); // 1 < stepTimeMs(1000), offset unchanged
+
+    zassert_equal(animation->currentTextOffset, 0,
+                  "Expected offset unchanged when step time has not elapsed");
 }

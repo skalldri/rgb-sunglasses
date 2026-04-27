@@ -1,6 +1,7 @@
 #include <zephyr/ztest.h>
 
 #include <animations/animation_parameter_source.h>
+#include <animations/animation_renderer.h>
 
 #define private public
 #include <animations/my_eyes_animation.h>
@@ -10,6 +11,21 @@
 
 namespace
 {
+    class NullTestRenderer : public AnimationRenderer
+    {
+    public:
+        size_t displayWidth() const override { return 40; }
+        size_t displayHeight() const override { return 12; }
+        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
+        {
+            ARG_UNUSED(x);
+            ARG_UNUSED(y);
+            ARG_UNUSED(r);
+            ARG_UNUSED(g);
+            ARG_UNUSED(b);
+        }
+    };
+
     class ConstUint32Source : public AnimationUint32ParameterSource
     {
     public:
@@ -62,24 +78,6 @@ namespace
     };
 }
 
-int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t x, size_t y, size_t bufferId, uint8_t red, uint8_t green, uint8_t blue)
-{
-    ARG_UNUSED(config);
-    ARG_UNUSED(x);
-    ARG_UNUSED(y);
-    ARG_UNUSED(bufferId);
-    ARG_UNUSED(red);
-    ARG_UNUSED(green);
-    ARG_UNUSED(blue);
-    return 0;
-}
-
-int pattern_controller_change_to_animation(Animation animation)
-{
-    ARG_UNUSED(animation);
-    return 0;
-}
-
 ZTEST_SUITE(my_eyes_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 
 ZTEST(my_eyes_animation_di_tests, test_init_uses_injected_slot_and_upnext_sources)
@@ -116,4 +114,72 @@ ZTEST(my_eyes_animation_di_tests, test_init_passes_slot_count_to_upnext_source)
     animation->init();
 
     zassert_equal(upNextSource.lastNumSlots, 20, "Expected up-next source to receive eye slot count");
+}
+
+ZTEST(my_eyes_animation_di_tests, test_tick_renders_pixels_at_both_eye_positions)
+{
+    // Inject "^^" so both eyes have the same character
+    ConstUint32Source blinkSpeedMs(10000);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    MyEyesAnimationDependencies deps(blinkSpeedMs, color, slotSource, upNextSource);
+
+    MyEyesAnimation *animation = MyEyesAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init(); // loads "^^"
+
+    // Use a renderer wide enough for both eye positions (kLeftEyePos=5, kRightEyePos=28)
+    static constexpr size_t kW = 40;
+    static constexpr size_t kH = 12;
+    static constexpr size_t kCharWidth = 7; // atlasPixelWidthPerChar
+
+    struct Pixel { uint8_t r, g, b; };
+    Pixel pixels[kW][kH] = {};
+
+    class EyeCapturingRenderer : public AnimationRenderer
+    {
+    public:
+        Pixel (*pixels_)[kH];
+        size_t displayWidth() const override { return kW; }
+        size_t displayHeight() const override { return kH; }
+        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
+        {
+            if (x < kW && y < kH) { pixels_[x][y] = {r, g, b}; }
+        }
+    };
+
+    EyeCapturingRenderer renderer;
+    renderer.pixels_ = pixels;
+
+    animation->tick(renderer, 1);
+
+    // Count lit pixels in each eye region
+    size_t leftEyeLitPixels = 0;
+    size_t rightEyeLitPixels = 0;
+
+    for (size_t x = MyEyesAnimation::kLeftEyePos; x < MyEyesAnimation::kLeftEyePos + kCharWidth; x++)
+    {
+        for (size_t y = 0; y < kH; y++)
+        {
+            if (pixels[x][y].r || pixels[x][y].g || pixels[x][y].b)
+            {
+                leftEyeLitPixels++;
+            }
+        }
+    }
+
+    for (size_t x = MyEyesAnimation::kRightEyePos; x < MyEyesAnimation::kRightEyePos + kCharWidth; x++)
+    {
+        for (size_t y = 0; y < kH; y++)
+        {
+            if (pixels[x][y].r || pixels[x][y].g || pixels[x][y].b)
+            {
+                rightEyeLitPixels++;
+            }
+        }
+    }
+
+    zassert_true(leftEyeLitPixels > 0, "Expected at least one lit pixel in left eye region");
+    zassert_true(rightEyeLitPixels > 0, "Expected at least one lit pixel in right eye region");
 }

@@ -13,7 +13,7 @@ void ZigZagAnimation::init()
     currentIndex = 0;
 }
 
-void ZigZagAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
+void ZigZagAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs)
 {
     __ASSERT(deps_, "ZigZagAnimation::tick before setDependencies");
 
@@ -25,25 +25,25 @@ void ZigZagAnimation::tick(const LedConfig *config, const size_t timeSinceLastTi
         currentIndex++;
     }
 
-    if (currentIndex >= (config->displayWidth * config->displayHeight))
+    if (currentIndex >= (renderer.displayWidth() * renderer.displayHeight()))
     {
         currentIndex = 0;
     }
 
-    for (size_t x = 0; x < config->displayWidth; x++)
+    for (size_t x = 0; x < renderer.displayWidth(); x++)
     {
-        for (size_t y = 0; y < config->displayHeight; y++)
+        for (size_t y = 0; y < renderer.displayHeight(); y++)
         {
-            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
+            renderer.setPixel(x, y, 0, 0, 0);
         }
     }
 
-    size_t y = currentIndex / config->displayWidth;
-    size_t x = currentIndex % config->displayWidth;
+    size_t y = currentIndex / renderer.displayWidth();
+    size_t x = currentIndex % renderer.displayWidth();
 
     uint32_t color = deps_->color.get();
     uint8_t red = (color >> 16) & 0xFF;
     uint8_t green = (color >> 8) & 0xFF;
     uint8_t blue = (color >> 0) & 0xFF;
-    pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, red, green, blue);
+    renderer.setPixel(x, y, red, green, blue);
 }
