@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(h|cpp\\)$\")",
+      "Bash(west build *)",
+      "Bash(wait %%)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(west --version)",
+      "Bash(cp /workspaces/rgb-sunglasses/src/**)",
+      "WebSearch",
+      "Bash(git restore *)",
+      "Bash(twister -T /workspaces/rgb-sunglasses/tests -p native_sim)"
+    ]
+  }
+}

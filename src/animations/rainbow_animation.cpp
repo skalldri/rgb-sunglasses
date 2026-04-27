@@ -1,25 +1,9 @@
 #include <animations/rainbow_animation.h>
 
-#include <bluetooth/read_write_variable.h>
-
 #include <zephyr/drivers/led_strip.h>
+#include <zephyr/sys/__assert.h>
 
 #include <cstddef>
-
-BT_SVC_UUID_DEFINE(RainbowAnimation);
-
-using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 0, uint32_t, 100);
-
-using RainbowWidthPix = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(RainbowAnimation, 1, uint32_t, 5);
-
-// All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(RainbowAnimation);
-
-BT_GATT_SERVICE_DEFINE(rainbow_anim_service,
-                       BT_SVC_UUID_REFERENCE(RainbowAnimation),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 0, "Step Time Ms"),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(RainbowAnimation, 1, "Rainbow Width Pixels"),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(RainbowAnimation), );
 
 #if defined(CONFIG_LED_STRIP_RGB_SCRATCH)
 #define LED_RGB(r, g, b) {0, r, g, b}
@@ -43,6 +27,11 @@ static constexpr size_t numRainbowColors = ARRAY_SIZE(rainbowColors);
 
 float rainbowBrightness = 0.05f;
 
+void RainbowAnimation::setDependencies(const RainbowAnimationDependencies &deps)
+{
+    deps_ = &deps;
+}
+
 void RainbowAnimation::init()
 {
     currentCycleTimeMs = 0;
@@ -51,8 +40,10 @@ void RainbowAnimation::init()
 
 void RainbowAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
 {
+    __ASSERT(deps_, "RainbowAnimation::tick before setDependencies");
+
     // Read BT variables
-    const uint32_t rainbowColorWidth = (uint32_t)RainbowWidthPix::getInstance();
+    const uint32_t rainbowColorWidth = deps_->rainbowWidthPix.get();
 
     // Turn off all LEDs
     for (size_t x = 0; x < config->displayWidth; x++)
@@ -80,7 +71,7 @@ void RainbowAnimation::tick(const LedConfig *config, const size_t timeSinceLastT
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > (uint32_t)StepTimeMs::getInstance())
+    if (currentCycleTimeMs > deps_->stepTimeMs.get())
     {
         currentCycleTimeMs = 0;
         currentRainbowStep++; // Move text one pixel to the left

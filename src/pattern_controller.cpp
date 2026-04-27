@@ -7,12 +7,9 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include <animations/animation_registry.h>
 #include <animations/bt_animations.h>
 #include <animations/null_animation.h>
-#include <animations/zigzag_animation.h>
-#include <animations/text_animation.h>
-#include <animations/rainbow_animation.h>
-#include <animations/my_eyes_animation.h>
 
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
 
@@ -57,28 +54,7 @@ BaseAnimation *getIndicator(Indicator indicator)
 
 BaseAnimation *getAnimation(Animation animation)
 {
-    switch (animation)
-    {
-#if defined(CONFIG_ANIMATION_ZIGZAG)
-    case Animation::ZigZag:
-        return ZigZagAnimation::getInstance();
-#endif
-
-    case Animation::Text:
-        return TextAnimation::getInstance();
-
-#if defined(CONFIG_ANIMATION_RAINBOW)
-    case Animation::Rainbow:
-        return RainbowAnimation::getInstance();
-#endif
-
-#if defined(CONFIG_ANIMATION_MY_EYES)
-    case Animation::MyEyes:
-        return MyEyesAnimation::getInstance();
-#endif
-    }
-
-    return NULL;
+    return animation_registry_get(animation);
 }
 
 BaseAnimation *getBestRenderAnimation()
@@ -104,20 +80,15 @@ void pattern_controller_thread_func(void *a, void *b, void *c)
     BtConnectingAnimation::getInstance()->init();
     BtPairingAnimation::getInstance()->init();
 
-    NullAnimation::getInstance()->init();
-    TextAnimation::getInstance()->init();
-
-#if defined(CONFIG_ANIMATION_ZIGZAG)
-    ZigZagAnimation::getInstance()->init();
-#endif
-
-#if defined(CONFIG_ANIMATION_RAINBOW)
-    RainbowAnimation::getInstance()->init();
-#endif
-
-#if defined(CONFIG_ANIMATION_MY_EYES)
-    MyEyesAnimation::getInstance()->init();
-#endif
+    ret = animation_registry_register_defaults();
+    if (ret)
+    {
+        LOG_ERR("Failed to register default animations: %d", ret);
+    }
+    else
+    {
+        animation_registry_init_registered();
+    }
 
     // Start in the ZigZag animation
     pattern_controller_change_to_animation(Animation::ZigZag);
@@ -149,7 +120,11 @@ void pattern_controller_thread_func(void *a, void *b, void *c)
             else
             {
                 // No animation: default to all LEDs off to save power
-                NullAnimation::getInstance()->tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
+                BaseAnimation *nullAnimation = animation_registry_get(Animation::None);
+                if (nullAnimation)
+                {
+                    nullAnimation->tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
+                }
             }
 
             ret = releaseBufferFromRender(bufferId);

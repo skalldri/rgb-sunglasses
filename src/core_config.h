@@ -1,10 +1,13 @@
 #pragma once
 
-#include <singleton.h>
-#include <bluetooth/bt_service.h>
+#include <cstddef>
 
-class CoreConfig : public Singleton<CoreConfig>, public BtService<BtServiceId::CoreConfig> {
-    public:
+#include <singleton.h>
+
+class CoreConfig : public Singleton<CoreConfig> {
+public:
+    static constexpr size_t kServiceIdNum = 1;
+
     /**
      * @brief Returns a value between 0 and 1 representing the current display brightness
      * 

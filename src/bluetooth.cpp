@@ -10,6 +10,7 @@
 
 #include <bluetooth/services/nsms.h>
 #include <bluetooth/gatt_cpf.h>
+#include <bluetooth/bt_service_cpp.h>
 
 #include <errno.h>
 
@@ -26,59 +27,38 @@ static const struct bt_data ad[] = {
     BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
 };
 
-static ssize_t read_name(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-                         void *buf, uint16_t len, uint16_t offset)
-{
-    const char *value = bt_get_name();
-
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, value,
-                             strlen(value));
-}
-
-static ssize_t write_name(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-                          const void *buf, uint16_t len, uint16_t offset,
-                          uint8_t flags)
-{
-    char name[255];
-
-    if (offset)
-    {
-        return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-    }
-
-    if (len >= 255)
-    {
-        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-    }
-
-    memcpy(name, buf, len);
-    name[len] = '\0';
-
-    // printk("Got string %s", name);
-
-    return len;
-}
-
-static struct bt_uuid_128 name_uuid = BT_UUID_INIT_128(
+constexpr bt_uuid_128 kNameServiceUuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef0));
 
-static struct bt_uuid_128 name_enc_uuid = BT_UUID_INIT_128(
+constexpr bt_uuid_128 kNameCharacteristicUuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef1));
 
-static const struct bt_gatt_cpf name_cpf = {
-    .format = BLE_GATT_CPF_FORMAT_UTF8S,
-};
+template <size_t N>
+constexpr BtGattString<255> makeDefaultBadgeName(const char (&name)[N])
+{
+    BtGattString<255> out = {};
 
-/* Vendor Primary Service Declaration */
-BT_GATT_SERVICE_DEFINE(name_svc,
-                       /* Vendor Primary Service Declaration */
-                       BT_GATT_PRIMARY_SERVICE(&name_uuid),
-                       BT_GATT_CHARACTERISTIC(&name_enc_uuid.uuid,
-                                              BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
-                                              BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT,
-                                              read_name, write_name, NULL),
-                       BT_GATT_CUD("Badge Name", BT_GATT_PERM_READ),
-                       BT_GATT_CPF(&name_cpf), );
+    size_t copyLen = N;
+    if (copyLen > out.size())
+    {
+        copyLen = out.size();
+    }
+
+    for (size_t i = 0; i < copyLen; i++)
+    {
+        out[i] = name[i];
+    }
+
+    out[out.size() - 1] = '\0';
+    return out;
+}
+
+constexpr BtGattString<255> kDefaultBadgeName = makeDefaultBadgeName(DEVICE_NAME);
+
+BtGattPrimaryService<kNameServiceUuid> namePrimaryService;
+BtGattReadWriteCharacteristic<kNameCharacteristicUuid, "Badge Name", BtGattString<255>, kDefaultBadgeName> badgeName;
+BtGattServer nameServer(namePrimaryService, badgeName);
+BT_GATT_SERVER_REGISTER(nameServerStatic, nameServer);
 
 // We cannot simply use BT_LE_ADV_CONN directly here, because C++ and C have slightly different semantics about
 // taking the address of a temporary.

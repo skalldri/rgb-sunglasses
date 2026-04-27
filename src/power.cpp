@@ -181,6 +181,27 @@ static int cmd_power_pd_patch(const struct shell *shell,
     return 0;
 }
 
+static int cmd_power_sys_vreghvout(const struct shell *shell,
+                                   size_t argc, char **argv, void *data)
+{
+    uint32_t currentVreghvout = (NRF_UICR_S->VREGHVOUT & UICR_VREGHVOUT_VREGHVOUT_Msk);
+
+    if (currentVreghvout == UICR_VREGHVOUT_VREGHVOUT_3V3)
+    {
+        shell_print(shell, "VREGHVOUT = 0x%08X (3.3V)", currentVreghvout);
+    }
+    else if (currentVreghvout == UICR_VREGHVOUT_VREGHVOUT_DEFAULT)
+    {
+        shell_print(shell, "VREGHVOUT = 0x%08X (default/1.8V)", currentVreghvout);
+    }
+    else
+    {
+        shell_print(shell, "VREGHVOUT = 0x%08X (unknown)", currentVreghvout);
+    }
+
+    return 0;
+}
+
 static int cmd_power_sys_boost(const struct shell *shell,
                                size_t argc, char **argv, void *data)
 {
@@ -262,6 +283,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,
                                SHELL_CMD(pd, &sub_power_pd, "TPS25750 PD Controller Commands", NULL),
                                SHELL_CMD(bq, &sub_power_bq, "BQ25792 Battery Charger Commands", NULL),
                                SHELL_CMD(boost, NULL, "Increase NRF5340 VDD to 3.3v", cmd_power_sys_boost),
+                               SHELL_CMD(vreghvout, NULL, "Print current VREGHVOUT register value", cmd_power_sys_vreghvout),
                                SHELL_SUBCMD_SET_END);
 
 /* Creating root (level 0) command "power" */

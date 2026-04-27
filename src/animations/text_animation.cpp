@@ -3,192 +3,43 @@
 
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
-
-#include <bluetooth/read_write_string.h>
-#include <bluetooth/read_write_variable.h>
+#include <zephyr/sys/__assert.h>
+#include <cstring>
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 
-//////////////////
-#include <bluetooth/bt_service_cpp.h>
-constexpr bt_uuid_128 kMyServiceUuid = BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x1234, 0x5678, 0x1234, 0x56789abcdef0));
-BtGattPrimaryService<kMyServiceUuid> primaryService;
+TextAnimation::TextAnimation() = default;
 
-BtGattAutoReadNotifyCharacteristic<"Now Playing", uint32_t, 0> characteristicA;
-
-BtGattServer server(primaryService, characteristicA);
-BT_GATT_SERVER_REGISTER(serverStatic, server);
-///////////////////
-
-BT_SVC_UUID_DEFINE(TextAnimation);
-
-constexpr size_t kNumStringSlots = 20;
-
-using StepTimeMs = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 0, uint32_t, 50);
-using Color = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 1, Color, 0xFFFFFFFF);
-using UpNext = BT_SVC_READ_WRITE_VAR_CHRC_DEFINE(TextAnimation, 2, uint32_t, 0);
-
-// Declare a bunch of read/write string instance
-constexpr size_t kStringSlotStartChrc = 100;
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 100, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 101, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 102, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 103, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 104, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 105, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 106, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 107, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 108, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 109, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 110, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 111, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 112, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 113, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 114, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 115, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 116, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 117, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 118, TextAnimation::kMaxMsgLen);
-BT_SVC_READ_WRITE_STRING_CHRC_DEFINE(TextAnimation, 119, TextAnimation::kMaxMsgLen);
-
-// All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-BT_SVC_IS_ACTIVE_CHRC_DEFINE(TextAnimation);
-
-BT_GATT_SERVICE_DEFINE(text_anim_service,
-                       BT_SVC_UUID_REFERENCE(TextAnimation),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 0, "Step Time Ms"),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 1, "Color"),
-                       BT_SVC_READ_WRITE_VAR_CHRC_REFERENCE(TextAnimation, 2, "Up Next"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 100, "Slot 0"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 101, "Slot 1"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 102, "Slot 2"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 103, "Slot 3"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 104, "Slot 4"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 105, "Slot 5"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 106, "Slot 6"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 107, "Slot 7"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 108, "Slot 8"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 109, "Slot 9"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 110, "Slot 10"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 111, "Slot 11"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 112, "Slot 12"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 113, "Slot 13"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 114, "Slot 14"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 115, "Slot 15"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 116, "Slot 16"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 117, "Slot 17"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 118, "Slot 18"),
-                       BT_SVC_READ_WRITE_STRING_CHRC_REFERENCE(TextAnimation, 119, "Slot 19"),
-                       BT_SVC_IS_ACTIVE_CHRC_REFERENCE(TextAnimation), );
-
-const char *kStaticMessages[kNumStringSlots] = {
-    "LIFE IS MADE OF LITTLE MOMENTS LIKE THIS",
-    "WE ARE ALL WE NEED",
-    "SO LONG AND THANKS FOR ALL THE FISH",
-    "ANJUNAFAM",
-    "EAT SLEEP RAVE REPEAT",
-    "PUSH THE BUTTON",
-    "FEEL THE EARTH BENEATH YOUR FEET",
-    "DREAMS ARE MADE OF NIGHTS LIKE THIS",
-    "LIVE FROM THE GORGE AMPHITHEATER, THIS IS ABGT WEEKENDER 2023",
-    "ART SHOULD COMFORT THE DISTURBED AND DISTURB THE COMFORTABLE",
-    "LIMA OSCAR VICTOR ECHO",
-    "FEEL THE EARTH BENEATH YOUR FEET",
-    "#ABGT2023",
-    "GROUP THERAPY",
-    "YOU ARE LOVED",
-    "EDM IS MY CARDIO",
-    "INSERT CURRENT ARTIST HERE",
-    "STAY HYDRATED",
-    "LOVE CONQUERS HATE",
-    "THE GORGE",
-};
-
-template <size_t tChrcId>
-using StrSlot = BtReadWriteString<TextAnimation::kBtServiceIdNum, tChrcId, TextAnimation::kMaxMsgLen>;
-
-// Helper template to initialize everything
-template <size_t tChrcId>
-static void inline initStrSlot()
+void TextAnimation::setDependencies(const TextAnimationDependencies &deps)
 {
-    StrSlot<tChrcId>::getInstance().setValue(kStaticMessages[tChrcId - kStringSlotStartChrc]);
-    initStrSlot<tChrcId - 1>();
-}
-
-template <>
-void inline initStrSlot<kStringSlotStartChrc>()
-{
-    StrSlot<kStringSlotStartChrc>::getInstance().setValue(kStaticMessages[0]);
-}
-
-TextAnimation::TextAnimation()
-{
-    initStrSlot<119>();
+    deps_ = &deps;
 }
 
 size_t TextAnimation::getUpNext()
 {
-    uint32_t currUpNext = UpNext::getInstance();
-    uint32_t nextUpNext = currUpNext + 1;
-    if (nextUpNext >= kNumStringSlots)
-    {
-        nextUpNext = 0; // Wraparound
-    }
+    __ASSERT(deps_, "TextAnimation::getUpNext before setDependencies");
 
-    // LOG_INF("Playing %u now, %u up next", currUpNext, nextUpNext);
-
-    // Update the variable which will get reflected on the BT remote app, allowing the user
-    // to change the next phrase if needed
-    UpNext::getInstance() = nextUpNext;
-
-    // Write the var which triggers a BT update (if different)
-    characteristicA = currUpNext;
-
-    return currUpNext;
-}
-
-// Helper template to initialize everything
-template <size_t tChrcId>
-inline const char *getStringFromSlotTemplate(size_t slot)
-{
-    if ((slot + kStringSlotStartChrc) == tChrcId)
-    {
-        return StrSlot<tChrcId>::getInstance();
-    }
-
-    return getStringFromSlotTemplate<tChrcId - 1>(slot);
-}
-
-template <>
-inline const char *getStringFromSlotTemplate<kStringSlotStartChrc>(size_t slot)
-{
-    if ((slot + kStringSlotStartChrc) == kStringSlotStartChrc)
-    {
-        return StrSlot<kStringSlotStartChrc>::getInstance();
-    }
-
-    return "INVALID STRING SLOT";
+    return deps_->upNextSource.consumeCurrentAndAdvance(kNumStringSlots);
 }
 
 const char *TextAnimation::getStringFromSlot(size_t slot)
 {
-    if (slot >= kNumStringSlots)
-    {
-        return "INVALID STRING SLOT";
-    }
+    __ASSERT(deps_, "TextAnimation::getStringFromSlot before setDependencies");
 
-    return getStringFromSlotTemplate<119>(slot);
+    return deps_->slotSource.getStringFromSlot(slot);
 }
 
 void TextAnimation::init()
 {
     currentCycleTimeMs = 0;
     currentTextOffset = 0;
-    strncpy(currentMessage, kStaticMessages[getUpNext()], kMaxMsgLen);
+    strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
 }
 
 void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
 {
+    __ASSERT(deps_, "TextAnimation::tick before setDependencies");
+
     // Turn off all LEDs
     for (size_t x = 0; x < config->displayWidth; x++)
     {
@@ -280,7 +131,7 @@ void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTick
 
         if (filled)
         {
-            uint32_t color = Color::getInstance();
+            uint32_t color = deps_->color.get();
             uint8_t red = (color >> 16) & 0xFF;
             uint8_t green = (color >> 8) & 0xFF;
             uint8_t blue = (color >> 0) & 0xFF;
@@ -317,7 +168,7 @@ void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTick
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > StepTimeMs::getInstance())
+    if (currentCycleTimeMs > deps_->stepTimeMs.get())
     {
         currentCycleTimeMs = 0;
         currentTextOffset--; // Move text one pixel to the left

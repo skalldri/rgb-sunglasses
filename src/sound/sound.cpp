@@ -19,7 +19,7 @@ const struct device *pdm0 = DEVICE_DT_GET(DT_NODELABEL(pdm0));
 #define SAMPLE_BIT_WIDTH 16
 
 // We will store the sample as an int16_t
-#define BYTES_PER_SAMPLE sizeof(int16_t)
+#define BYTES_PER_SAMPLE sizeof(int16_t) // (SAMPLE_BIT_WIDTH / 8) would be better
 
 // Milliseconds to wait for a block to be read by the driver
 #define READ_TIMEOUT 1000
@@ -30,7 +30,7 @@ static_assert(MSEC_PER_SEC % BLOCK_CAPTURE_TIME_MS == 0, "Block capture time mus
 
 // How many audio channels are we capturing? Nordic supports 1 or 2
 // We only have 1 mic, so 1
-#define NUM_AUDIO_CHANNELS 2
+#define NUM_AUDIO_CHANNELS 1
 
 #define BLOCK_SIZE_HELPER(_sample_rate_hz, _number_of_channels, _block_time_ms) \
     (BYTES_PER_SAMPLE * (_sample_rate_hz / (MSEC_PER_SEC / _block_time_ms)) * _number_of_channels)
@@ -87,27 +87,25 @@ void configure_pdm()
         },
         .streams = &stream,
         .channel = {
-            .req_num_streams = 1, // Nordic driver only supports a single PCM stream
+            .req_chan_map_lo = dmic_build_channel_map(0,              // Channel number
+                                                      0,              // PDM hardware controller number, always 0 on this board
+                                                      PDM_CHAN_LEFT), // microphone is configured as a left channel which
+                                                                      // means it will emit data on the FALLING edge. We want the PDM circuitry to read data
+                                                                      // on the RISING edge of the clock, so we must tell it we are a RIGHT microphone
+            .req_num_chan = NUM_AUDIO_CHANNELS,                       // Requested number of audio channels
+            .req_num_streams = 1,                                     // Nordic driver only supports a single PCM stream
         },
     };
 
-    cfg.channel.req_num_chan = NUM_AUDIO_CHANNELS; // Requested number of audio channels
-    cfg.channel.req_chan_map_lo = dmic_build_channel_map(
-        0,              // Channel number
-        0,              // PDM hardware controller number, always 0 on this board
-        PDM_CHAN_LEFT); // microphone is configured as a left channel which
-                        // means it will emit data on the FALLING edge. We want the PDM circuitry to read data
-                        // on the RISING edge of the clock, so we must tell it we are a RIGHT microphone
-
-    cfg.channel.req_chan_map_lo |= dmic_build_channel_map(
-        1, // Channel number
-        0, // PDM hardware controller number, always 0 on this board
-        PDM_CHAN_RIGHT);
+    // cfg.channel.req_chan_map_lo |= dmic_build_channel_map(
+    //     1, // Channel number
+    //     0, // PDM hardware controller number, always 0 on this board
+    //     PDM_CHAN_RIGHT);
 
     // Calculate the total recording buffer time
-    // LOG_INF("DMIC Configuration: sample rate: %u hz, sample bit width: %u", SAMPLE_RATE_HZ, SAMPLE_BIT_WIDTH);
-    // LOG_INF("DMIC Configuration: block size: %u bytes, num blocks: %u", BLOCK_SIZE, BLOCK_COUNT);
-    // LOG_INF("DMIC Configuration: total recording buffer %u ms", BLOCK_COUNT * BLOCK_CAPTURE_TIME_MS);
+    LOG_INF("DMIC Configuration: sample rate: %u hz, sample bit width: %u", SAMPLE_RATE_HZ, SAMPLE_BIT_WIDTH);
+    LOG_INF("DMIC Configuration: block size: %u bytes, num blocks: %u", BLOCK_SIZE, BLOCK_COUNT);
+    LOG_INF("DMIC Configuration: total recording buffer %u ms", BLOCK_COUNT * BLOCK_CAPTURE_TIME_MS);
 }
 
 static int cmd_sound_mic_record(const struct shell *shell,
@@ -120,6 +118,11 @@ static int cmd_sound_mic_record(const struct shell *shell,
         shell_error(shell, "%s is not ready", pdm0->name);
         return -ENOEXEC;
     }
+
+    configure_pdm();
+
+    shell_print(shell, "PCM output rate: %u, channels: %u",
+                cfg.streams[0].pcm_rate, cfg.channel.req_num_chan);
 
     ret = dmic_configure(pdm0, &cfg);
     if (ret < 0)
