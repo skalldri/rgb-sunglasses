@@ -1,6 +1,9 @@
 #include <animations/animation_registry.h>
 
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_active_state_observer.h>
+#include <animations/animation_activator.h>
+#include <pattern_controller.h>
 
 #include <animations/null_animation.h>
 #include <animations/text_animation.h>
@@ -10,6 +13,27 @@
 
 namespace
 {
+    class RegistryActiveStateObserver : public AnimationActiveStateObserver
+    {
+    public:
+        void onActiveStateChanged(Animation id, bool active) override
+        {
+            animation_registry_set_is_active(id, active);
+        }
+    };
+
+    class PatternControllerActivator : public AnimationActivator
+    {
+    public:
+        void changeToAnimation(Animation id) override
+        {
+            pattern_controller_change_to_animation(id);
+        }
+    };
+
+    static RegistryActiveStateObserver sRegistryObserver;
+    static PatternControllerActivator sActivator;
+
     using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text>;
 
 #if defined(CONFIG_ANIMATION_ZIGZAG)
@@ -58,6 +82,18 @@ namespace
 
 int animation_registry_register_defaults()
 {
+    BaseAnimation::registerActiveStateObserver(&sRegistryObserver);
+    AnimationIsActiveBinding<Animation::Text>::registerActivator(&sActivator);
+#if defined(CONFIG_ANIMATION_ZIGZAG)
+    AnimationIsActiveBinding<Animation::ZigZag>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_RAINBOW)
+    AnimationIsActiveBinding<Animation::Rainbow>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_MY_EYES)
+    AnimationIsActiveBinding<Animation::MyEyes>::registerActivator(&sActivator);
+#endif
+
     animation_registry_reset();
 
     int ret = animation_registry_register(Animation::None, null_animation_factory);
@@ -130,3 +166,4 @@ int animation_registry_register_defaults()
 
     return 0;
 }
+

@@ -14,11 +14,10 @@ namespace
             initCount++;
         }
 
-        void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override
+        void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override
         {
-            ARG_UNUSED(config);
+            ARG_UNUSED(renderer);
             ARG_UNUSED(timeSinceLastTickMs);
-            ARG_UNUSED(bufferId);
         }
 
         void setActive(bool active) override

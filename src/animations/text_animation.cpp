@@ -36,16 +36,16 @@ void TextAnimation::init()
     strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
 }
 
-void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
+void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs)
 {
     __ASSERT(deps_, "TextAnimation::tick before setDependencies");
 
     // Turn off all LEDs
-    for (size_t x = 0; x < config->displayWidth; x++)
+    for (size_t x = 0; x < renderer.displayWidth(); x++)
     {
-        for (size_t y = 0; y < config->displayHeight; y++)
+        for (size_t y = 0; y < renderer.displayHeight(); y++)
         {
-            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
+            renderer.setPixel(x, y, 0, 0, 0);
         }
     }
 
@@ -68,20 +68,17 @@ void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTick
     // Optimization to avoid repeatedly calculating the strlen() of currentMessage
     const size_t currentMessageLen = strlen(currentMessage);
 
-    // The total "width" of the virtual texture that would contain the entire string
-    // const size_t renderedStringWidth = currentMessageLen * FontAtlas::atlasPixelWidthPerChar;
-
     // The size of the buffer on either side of the display where we will continue attempting to render
     // characters, which allows characters to partially slide onto the display, one pixel at a time
     const size_t displayEdgeBuffer = FontAtlas::atlasPixelWidthPerChar;
 
     // The edges of the "display window"
     const int32_t displayWindowLeftSide = -displayEdgeBuffer;
-    const int32_t displayWindowRightSide = config->displayWidth + displayEdgeBuffer;
+    const int32_t displayWindowRightSide = renderer.displayWidth() + displayEdgeBuffer;
 
     // When we reset currentTextOffset to zero, the text will start off the edge of the display
     // but only just
-    const int32_t currentTextOffsetRelativeToDisplay = currentTextOffset + config->displayWidth;
+    const int32_t currentTextOffsetRelativeToDisplay = currentTextOffset + renderer.displayWidth();
 
     // Predict the first character of the string that could fit on the display
     size_t firstChar = 0;
@@ -123,7 +120,7 @@ void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTick
     {
         int32_t realX = x + charWindowPos;
 
-        if (realX < 0 || realX >= (int32_t)config->displayWidth)
+        if (realX < 0 || realX >= (int32_t)renderer.displayWidth())
         {
             // Bail early if this pixel is not on the display
             return;
@@ -135,7 +132,7 @@ void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTick
             uint8_t red = (color >> 16) & 0xFF;
             uint8_t green = (color >> 8) & 0xFF;
             uint8_t blue = (color >> 0) & 0xFF;
-            pattern_controller_set_pixel_in_framebuffer(config, realX, y, bufferId, red, green, blue);
+            renderer.setPixel(realX, y, red, green, blue);
         }
     };
 
@@ -151,9 +148,6 @@ void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTick
         if (charWindowPos >= displayWindowLeftSide && charWindowPos < displayWindowRightSide)
         {
             FontAtlas::getInstance()->PrintChar(currentMessage[i], lambda);
-
-            // Debugging
-            // printk("%c", currentMessage[i]);
         }
         else if (charWindowPos > displayWindowRightSide)
         {
@@ -162,8 +156,6 @@ void TextAnimation::tick(const LedConfig *config, const size_t timeSinceLastTick
             break;
         }
     }
-
-    // printk("\n");
 
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;

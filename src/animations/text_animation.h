@@ -49,7 +49,7 @@ public:
     void setDependencies(const TextAnimationDependencies &deps);
 
     void init() override;
-    void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+    void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
 private:
     const char *getStringFromSlot(size_t slot);

@@ -8,6 +8,7 @@
 #include <zephyr/logging/log.h>
 
 #include <animations/animation_registry.h>
+#include <animations/animation_renderer.h>
 #include <animations/bt_animations.h>
 #include <animations/null_animation.h>
 
@@ -113,9 +114,23 @@ void pattern_controller_thread_func(void *a, void *b, void *c)
             // Latch current brightness value from the core config
             sBrightnessForFrame = CoreConfig::getInstance().getBrightnessFactor();
 
+            class PatternControllerRenderer : public AnimationRenderer
+            {
+                const LedConfig *config_;
+                size_t bufferId_;
+            public:
+                PatternControllerRenderer(const LedConfig *c, size_t b) : config_(c), bufferId_(b) {}
+                size_t displayWidth() const override { return config_->displayWidth; }
+                size_t displayHeight() const override { return config_->displayHeight; }
+                void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override {
+                    pattern_controller_set_pixel_in_framebuffer(config_, x, y, bufferId_, r, g, b);
+                }
+            };
+            PatternControllerRenderer renderer(get_current_led_config(), bufferId);
+
             if (anim)
             {
-                anim->tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
+                anim->tick(renderer, kTargetRenderIntervalMs);
             }
             else
             {
@@ -123,7 +138,7 @@ void pattern_controller_thread_func(void *a, void *b, void *c)
                 BaseAnimation *nullAnimation = animation_registry_get(Animation::None);
                 if (nullAnimation)
                 {
-                    nullAnimation->tick(get_current_led_config(), kTargetRenderIntervalMs, bufferId);
+                    nullAnimation->tick(renderer, kTargetRenderIntervalMs);
                 }
             }
 

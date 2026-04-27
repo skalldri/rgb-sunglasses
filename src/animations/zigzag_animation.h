@@ -20,7 +20,7 @@ class ZigZagAnimation : public BaseAnimationTemplate<ZigZagAnimation, Animation:
 public:
     void setDependencies(const ZigZagAnimationDependencies &deps);
     void init() override;
-    void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+    void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
 private:
     const ZigZagAnimationDependencies *deps_ = nullptr;

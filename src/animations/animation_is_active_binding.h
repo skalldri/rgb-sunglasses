@@ -2,7 +2,7 @@
 
 #include <animations/animation_types.h>
 
-#include <pattern_controller.h>
+#include <animations/animation_activator.h>
 
 /**
  * @brief Binds an animation's local active-state mirror to remote BLE writes.
@@ -35,6 +35,17 @@ public:
     }
 
     /**
+     * @brief Registers the activator used to switch to this animation on remote write.
+     *
+     * @param activator Object whose changeToAnimation() is called when the remote
+     *                  client writes true.
+     */
+    static void registerActivator(AnimationActivator *activator)
+    {
+        getInstance()->activator_ = activator;
+    }
+
+    /**
      * @brief Pushes active-state changes from registry/runtime into BLE state.
      *
      * @param active True if the animation should be marked active locally.
@@ -50,19 +61,19 @@ public:
     /**
      * @brief Handles BLE-originated active-state updates.
      *
-     * When the remote client writes `true`, the pattern controller switches to
-     * this animation.
+     * When the remote client writes `true`, the activator switches to this animation.
      *
      * @param active Remote active value received via BLE write.
      */
     static void onRemoteActiveChange(bool active)
     {
-        if (active)
+        if (active && getInstance()->activator_)
         {
-            pattern_controller_change_to_animation(tAnimationId);
+            getInstance()->activator_->changeToAnimation(tAnimationId);
         }
     }
 
 private:
     SetterCallback setter_ = nullptr;
+    AnimationActivator *activator_ = nullptr;
 };

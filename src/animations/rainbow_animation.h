@@ -20,7 +20,7 @@ class RainbowAnimation : public BaseAnimationTemplate<RainbowAnimation, Animatio
 public:
     void setDependencies(const RainbowAnimationDependencies &deps);
     void init() override;
-    void tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId) override;
+    void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
 private:
     const RainbowAnimationDependencies *deps_ = nullptr;

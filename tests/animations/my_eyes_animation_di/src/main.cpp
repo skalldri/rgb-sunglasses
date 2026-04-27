@@ -1,6 +1,7 @@
 #include <zephyr/ztest.h>
 
 #include <animations/animation_parameter_source.h>
+#include <animations/animation_renderer.h>
 
 #define private public
 #include <animations/my_eyes_animation.h>
@@ -10,6 +11,21 @@
 
 namespace
 {
+    class NullTestRenderer : public AnimationRenderer
+    {
+    public:
+        size_t displayWidth() const override { return 40; }
+        size_t displayHeight() const override { return 12; }
+        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
+        {
+            ARG_UNUSED(x);
+            ARG_UNUSED(y);
+            ARG_UNUSED(r);
+            ARG_UNUSED(g);
+            ARG_UNUSED(b);
+        }
+    };
+
     class ConstUint32Source : public AnimationUint32ParameterSource
     {
     public:
@@ -60,24 +76,6 @@ namespace
             return "00";
         }
     };
-}
-
-int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t x, size_t y, size_t bufferId, uint8_t red, uint8_t green, uint8_t blue)
-{
-    ARG_UNUSED(config);
-    ARG_UNUSED(x);
-    ARG_UNUSED(y);
-    ARG_UNUSED(bufferId);
-    ARG_UNUSED(red);
-    ARG_UNUSED(green);
-    ARG_UNUSED(blue);
-    return 0;
-}
-
-int pattern_controller_change_to_animation(Animation animation)
-{
-    ARG_UNUSED(animation);
-    return 0;
 }
 
 ZTEST_SUITE(my_eyes_animation_di_tests, NULL, NULL, NULL, NULL, NULL);

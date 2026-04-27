@@ -33,18 +33,19 @@ void MyEyesAnimation::init()
     strncpy(currentEyes, getStringFromSlot(getUpNext()), kMaxEyeLen);
 }
 
-void MyEyesAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
+void MyEyesAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs)
 {
     __ASSERT(deps_, "MyEyesAnimation::tick before setDependencies");
 
+    ARG_UNUSED(timeSinceLastTickMs);
     ARG_UNUSED(deps_->blinkSpeedMs);
 
     // Turn off all LEDs
-    for (size_t x = 0; x < config->displayWidth; x++)
+    for (size_t x = 0; x < renderer.displayWidth(); x++)
     {
-        for (size_t y = 0; y < config->displayHeight; y++)
+        for (size_t y = 0; y < renderer.displayHeight(); y++)
         {
-            pattern_controller_set_pixel_in_framebuffer(config, x, y, bufferId, 0, 0, 0);
+            renderer.setPixel(x, y, 0, 0, 0);
         }
     }
 
@@ -55,7 +56,7 @@ void MyEyesAnimation::tick(const LedConfig *config, const size_t timeSinceLastTi
     {
         int32_t realX = x + charWindowPos;
 
-        if (realX < 0 || realX >= (int32_t)config->displayWidth)
+        if (realX < 0 || realX >= (int32_t)renderer.displayWidth())
         {
             // Bail early if this pixel is not on the display
             return;
@@ -68,7 +69,7 @@ void MyEyesAnimation::tick(const LedConfig *config, const size_t timeSinceLastTi
             uint8_t red = (color >> 16) & 0xFF;
             uint8_t green = (color >> 8) & 0xFF;
             uint8_t blue = (color >> 0) & 0xFF;
-            pattern_controller_set_pixel_in_framebuffer(config, realX, y, bufferId, red, green, blue);
+            renderer.setPixel(realX, y, red, green, blue);
         }
     };
 
