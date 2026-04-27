@@ -73,6 +73,16 @@ jobs:
           push: always
           runCmd: twister -T /workspaces/rgb-sunglasses/tests -p native_sim --outdir /workspaces/rgb-sunglasses/twister-out-ci
 
+      - name: Fix permissions on test output
+        if: always()
+        run: |
+          # Remove symlinks created by the Zephyr build system that point to
+          # paths only accessible inside the container (e.g. syscalls_links).
+          # upload-artifact follows symlinks and hits EACCES on those targets.
+          sudo find "${{ github.workspace }}/twister-out-ci" -type l -delete 2>/dev/null || true
+          # Fix ownership so the upload-artifact action can read all remaining files.
+          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/twister-out-ci" || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: twister-out-ci
