@@ -108,3 +108,28 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_holds_pixel_when_not_el
     zassert_equal(sCapture.green, 0x55, "Expected injected green component");
     zassert_equal(sCapture.blue, 0x00, "Expected injected blue component");
 }
+
+ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indices)
+{
+    // 2x1 display → 2 total indices. With stepTimeMs=0 every positive tick advances.
+    // init: index=0; tick 1 → index=1; tick 2 → index=2 wraps to 0.
+    MutableUint32Source stepTimeMs(0);
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    CapturingTestRenderer renderer;
+
+    reset_capture();
+    animation->tick(renderer, 1); // advances to index 1
+
+    reset_capture();
+    animation->tick(renderer, 1); // advances to index 2 → wraps to 0
+
+    zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write after wrap");
+    zassert_equal(sCapture.x, 0, "Expected lit pixel at x=0 after wrapping");
+    zassert_equal(sCapture.y, 0, "Expected lit pixel at y=0 after wrapping");
+}

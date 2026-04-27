@@ -115,3 +115,71 @@ ZTEST(my_eyes_animation_di_tests, test_init_passes_slot_count_to_upnext_source)
 
     zassert_equal(upNextSource.lastNumSlots, 20, "Expected up-next source to receive eye slot count");
 }
+
+ZTEST(my_eyes_animation_di_tests, test_tick_renders_pixels_at_both_eye_positions)
+{
+    // Inject "^^" so both eyes have the same character
+    ConstUint32Source blinkSpeedMs(10000);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    MyEyesAnimationDependencies deps(blinkSpeedMs, color, slotSource, upNextSource);
+
+    MyEyesAnimation *animation = MyEyesAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init(); // loads "^^"
+
+    // Use a renderer wide enough for both eye positions (kLeftEyePos=5, kRightEyePos=28)
+    static constexpr size_t kW = 40;
+    static constexpr size_t kH = 12;
+    static constexpr size_t kCharWidth = 7; // atlasPixelWidthPerChar
+
+    struct Pixel { uint8_t r, g, b; };
+    Pixel pixels[kW][kH] = {};
+
+    class EyeCapturingRenderer : public AnimationRenderer
+    {
+    public:
+        Pixel (*pixels_)[kH];
+        size_t displayWidth() const override { return kW; }
+        size_t displayHeight() const override { return kH; }
+        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
+        {
+            if (x < kW && y < kH) { pixels_[x][y] = {r, g, b}; }
+        }
+    };
+
+    EyeCapturingRenderer renderer;
+    renderer.pixels_ = pixels;
+
+    animation->tick(renderer, 1);
+
+    // Count lit pixels in each eye region
+    size_t leftEyeLitPixels = 0;
+    size_t rightEyeLitPixels = 0;
+
+    for (size_t x = MyEyesAnimation::kLeftEyePos; x < MyEyesAnimation::kLeftEyePos + kCharWidth; x++)
+    {
+        for (size_t y = 0; y < kH; y++)
+        {
+            if (pixels[x][y].r || pixels[x][y].g || pixels[x][y].b)
+            {
+                leftEyeLitPixels++;
+            }
+        }
+    }
+
+    for (size_t x = MyEyesAnimation::kRightEyePos; x < MyEyesAnimation::kRightEyePos + kCharWidth; x++)
+    {
+        for (size_t y = 0; y < kH; y++)
+        {
+            if (pixels[x][y].r || pixels[x][y].g || pixels[x][y].b)
+            {
+                rightEyeLitPixels++;
+            }
+        }
+    }
+
+    zassert_true(leftEyeLitPixels > 0, "Expected at least one lit pixel in left eye region");
+    zassert_true(rightEyeLitPixels > 0, "Expected at least one lit pixel in right eye region");
+}

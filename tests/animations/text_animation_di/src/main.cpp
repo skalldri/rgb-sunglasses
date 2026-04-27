@@ -115,3 +115,60 @@ ZTEST(text_animation_di_tests, test_init_passes_slot_count_to_upnext_source)
 
     zassert_equal(upNextSource.lastNumSlots, 20, "Expected up-next source to receive text slot count");
 }
+
+ZTEST(text_animation_di_tests, test_tick_accumulates_cycle_time)
+{
+    ConstUint32Source stepTimeMs(1000);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 50);
+
+    zassert_equal(animation->currentCycleTimeMs, 50,
+                  "Expected cycle time to accumulate the tick delta");
+}
+
+ZTEST(text_animation_di_tests, test_tick_advances_offset_when_step_time_elapses)
+{
+    ConstUint32Source stepTimeMs(10);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 15); // 15 > stepTimeMs(10), should advance offset
+
+    zassert_equal(animation->currentTextOffset, -1,
+                  "Expected offset to decrement once when step time elapses");
+}
+
+ZTEST(text_animation_di_tests, test_tick_does_not_advance_offset_before_step_time)
+{
+    ConstUint32Source stepTimeMs(1000);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 1); // 1 < stepTimeMs(1000), offset unchanged
+
+    zassert_equal(animation->currentTextOffset, 0,
+                  "Expected offset unchanged when step time has not elapsed");
+}
