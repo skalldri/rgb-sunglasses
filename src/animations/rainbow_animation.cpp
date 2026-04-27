@@ -1,82 +1,9 @@
 #include <animations/rainbow_animation.h>
-#include <animations/animation_is_active_binding.h>
-#include <animations/animation_is_active_characteristic.h>
-
-#include <bluetooth/bt_service_cpp.h>
 
 #include <zephyr/drivers/led_strip.h>
+#include <zephyr/sys/__assert.h>
 
 #include <cstddef>
-
-constexpr bt_uuid_128 kRainbowConfigServiceUuid = BT_UUID_INIT_128(
-    BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x0400, 0x56789abd0000));
-
-BtGattPrimaryService<kRainbowConfigServiceUuid> rainbowPrimaryService;
-BtGattAutoReadWriteCharacteristic<"Step Time Ms", uint32_t, 100> rainbowStepTimeMs;
-BtGattAutoReadWriteCharacteristic<"Rainbow Width Pixels", uint32_t, 5> rainbowWidthPix;
-
-using RainbowIsActiveCharacteristic = IsActiveCharacteristic<Animation::Rainbow>;
-RainbowIsActiveCharacteristic rainbowIsActive;
-
-BtGattServer rainbowConfigServer(
-    rainbowPrimaryService,
-    rainbowStepTimeMs,
-    rainbowWidthPix,
-    rainbowIsActive);
-BT_GATT_SERVER_REGISTER(rainbowConfigServerStatic, rainbowConfigServer);
-
-namespace
-{
-    class RainbowStepTimeSource : public AnimationUint32ParameterSource
-    {
-    public:
-        uint32_t get() const override
-        {
-            return rainbowStepTimeMs;
-        }
-    };
-
-    class RainbowWidthSource : public AnimationUint32ParameterSource
-    {
-    public:
-        uint32_t get() const override
-        {
-            return rainbowWidthPix;
-        }
-    };
-
-    RainbowStepTimeSource sDefaultStepTimeSource;
-    RainbowWidthSource sDefaultWidthSource;
-    RainbowAnimationDependencies sDefaultDeps(sDefaultStepTimeSource, sDefaultWidthSource);
-}
-
-// All services implement the "IsActive" service, so declare relevant BT GATT glue logic
-using RainbowAnimationIsActive = AnimationIsActiveBinding<Animation::Rainbow>;
-
-static void rainbow_set_is_active(bool active)
-{
-    rainbowIsActive.setActive(active);
-}
-
-struct RainbowIsActiveBindingRegistrar
-{
-    RainbowIsActiveBindingRegistrar()
-    {
-        RainbowAnimationIsActive::registerSetter(rainbow_set_is_active);
-    }
-};
-
-[[maybe_unused]] RainbowIsActiveBindingRegistrar sRainbowIsActiveBindingRegistrar;
-
-void rainbow_animation_bind_default_dependencies()
-{
-    RainbowAnimation::getInstance()->setDependencies(sDefaultDeps);
-}
-
-void RainbowAnimation::setDependencies(const RainbowAnimationDependencies &deps)
-{
-    deps_ = &deps;
-}
 
 #if defined(CONFIG_LED_STRIP_RGB_SCRATCH)
 #define LED_RGB(r, g, b) {0, r, g, b}
@@ -100,6 +27,11 @@ static constexpr size_t numRainbowColors = ARRAY_SIZE(rainbowColors);
 
 float rainbowBrightness = 0.05f;
 
+void RainbowAnimation::setDependencies(const RainbowAnimationDependencies &deps)
+{
+    deps_ = &deps;
+}
+
 void RainbowAnimation::init()
 {
     currentCycleTimeMs = 0;
@@ -108,10 +40,7 @@ void RainbowAnimation::init()
 
 void RainbowAnimation::tick(const LedConfig *config, const size_t timeSinceLastTickMs, const size_t bufferId)
 {
-    if (!deps_)
-    {
-        setDependencies(sDefaultDeps);
-    }
+    __ASSERT(deps_, "RainbowAnimation::tick before setDependencies");
 
     // Read BT variables
     const uint32_t rainbowColorWidth = deps_->rainbowWidthPix.get();

@@ -2,8 +2,6 @@
 
 #include <animations/animation_base.h>
 
-#include <zephyr/bluetooth/gatt.h>
-#include <bluetooth/gatt_cpf.h>
 #include <animations/animation_registry.h>
 #include <pattern_controller.h>
 #include <animations/animation_types.h>

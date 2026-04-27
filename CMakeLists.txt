@@ -37,6 +37,12 @@ target_sources_ifdef(CONFIG_ANIMATION_MY_EYES app PRIVATE src/animations/my_eyes
 target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/animations/rainbow_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG app PRIVATE src/animations/zigzag_animation.cpp)
 
+target_sources(app PRIVATE src/bluetooth/animation_adapters/text_animation_bt.cpp)
+
+target_sources_ifdef(CONFIG_ANIMATION_MY_EYES app PRIVATE src/bluetooth/animation_adapters/my_eyes_animation_bt.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/bluetooth/animation_adapters/rainbow_animation_bt.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG  app PRIVATE src/bluetooth/animation_adapters/zigzag_animation_bt.cpp)
+
 target_include_directories(
   app 
   PRIVATE

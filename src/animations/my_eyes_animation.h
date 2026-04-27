@@ -51,6 +51,7 @@ class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation:
 {
 public:
     static constexpr size_t kMaxEyeLen = 3;
+    static constexpr size_t kNumStringSlots = 20;
     static constexpr size_t kLeftEyePos = 5;   // X-start coordinate of left eye
     static constexpr size_t kRightEyePos = 28; // X-start coordinate of left eye
 

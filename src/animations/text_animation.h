@@ -42,6 +42,7 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
 {
 public:
     static constexpr size_t kMaxMsgLen = 255;
+    static constexpr size_t kNumStringSlots = 20;
 
     TextAnimation();
 
