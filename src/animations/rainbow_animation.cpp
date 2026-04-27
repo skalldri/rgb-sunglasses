@@ -45,6 +45,7 @@ void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     // Read BT variables
     const uint32_t rainbowColorWidth = deps_->rainbowWidthPix.get();
 
+    // Turn off all LEDs
     for (size_t x = 0; x < renderer.displayWidth(); x++)
     {
         size_t currentRainbowColor = ((currentRainbowStep + x) / rainbowColorWidth) % numRainbowColors;

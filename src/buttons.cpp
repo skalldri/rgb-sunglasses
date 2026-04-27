@@ -20,6 +20,35 @@ static struct gpio_callback callback2;
 static struct gpio_callback callback3;
 static struct gpio_callback callback_wake;
 
+/*
+void button_thread_func(void* a, void* b, void* c);
+
+K_THREAD_DEFINE(
+    button_thread,
+    2048,
+    button_thread_func,
+    NULL,
+    NULL,
+    NULL,
+    6,
+    0,
+    0
+);
+
+void button_thread_func(void* a, void* b, void* c) {
+    while(true) {
+
+        int val = gpio_pin_get_dt(&button2);
+
+        if (val != 0) {
+            LOG_INF("Button pressed!");
+        }
+
+        k_msleep(100);
+    }
+}
+*/
+
 static ButtonEventListener *sButtonListener = nullptr;
 
 void buttons_register_listener(ButtonEventListener *listener)
@@ -52,28 +81,36 @@ static void enqueue_button_press(size_t buttonId)
 
 void button_callback(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins)
 {
+    //printk("ISR Triggered! Pins: %u\n", pins);
+
+    // Which button was pushed?
     if ((port == button0.port) && (pins & BIT(button0.pin)))
     {
+        //printk("Button 0 Pressed!\n");
         enqueue_button_press(0);
     }
 
     if ((port == button1.port) && (pins & BIT(button1.pin)))
     {
+        //printk("Button 1 Pressed!\n");
         enqueue_button_press(1);
     }
 
     if ((port == button2.port) && (pins & BIT(button2.pin)))
     {
+        //printk("Button 2 Pressed!\n");
         enqueue_button_press(2);
     }
 
     if ((port == button3.port) && (pins & BIT(button3.pin)))
     {
+        //printk("Button 3 Pressed!\n");
         enqueue_button_press(3);
     }
 
     if ((port == button_wake.port) && (pins & BIT(button_wake.pin)))
     {
+        //printk("Wake Button Pressed!\n");
         enqueue_button_press(4);
     }
 }

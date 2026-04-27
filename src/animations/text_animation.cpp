@@ -68,6 +68,9 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // Optimization to avoid repeatedly calculating the strlen() of currentMessage
     const size_t currentMessageLen = strlen(currentMessage);
 
+    // The total "width" of the virtual texture that would contain the entire string
+    // const size_t renderedStringWidth = currentMessageLen * FontAtlas::atlasPixelWidthPerChar;
+
     // The size of the buffer on either side of the display where we will continue attempting to render
     // characters, which allows characters to partially slide onto the display, one pixel at a time
     const size_t displayEdgeBuffer = FontAtlas::atlasPixelWidthPerChar;
@@ -148,6 +151,9 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
         if (charWindowPos >= displayWindowLeftSide && charWindowPos < displayWindowRightSide)
         {
             FontAtlas::getInstance()->PrintChar(currentMessage[i], lambda);
+
+            // Debugging
+            // printk("%c", currentMessage[i]);
         }
         else if (charWindowPos > displayWindowRightSide)
         {
@@ -156,6 +162,8 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
             break;
         }
     }
+
+    // printk("\n");
 
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;

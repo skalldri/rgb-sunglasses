@@ -20,6 +20,7 @@ public:
         return &anim;
     }
 
+    // Pass the active state change down into our IsActiveCharacteristic()
     void setActive(bool active) override
     {
         if (sActiveStateObserver_)
