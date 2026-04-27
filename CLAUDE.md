@@ -5,6 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Test Commands
 
 ```bash
+# First time build (pristine, setup build system, very slow! Only run if build folder is empty / nonexistent)
+west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="/workspaces/rgb-sunglasses"
+
 # Full incremental build (preferred)
 west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses
 
@@ -87,3 +90,8 @@ Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suit
 ### Scope reminder
 
 Prefer changes under `/workspaces/rgb-sunglasses` (app code). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
+
+### Zephyr RTOS
+This project uses the Zephyr RTOS.
+
+Read the documentation directly from /root/ncs/v3.1.1/zephyr/doc
