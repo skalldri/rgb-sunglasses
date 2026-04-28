@@ -68,7 +68,7 @@
 			label = "Push button 4";
 		};
 		button4: bmic_wake {
-			gpios = <&gpio0 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			gpios = <&gpio0 2 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BMIC Wake";
 		};
 	};
@@ -77,7 +77,7 @@
 		compatible = "nordic,nrf-gpio-forwarder";
 		status = "okay";
 		uart {
-			gpios = <&gpio1 1 0>, <&gpio1 0 0>, <&gpio0 11 0>, <&gpio0 10 0>;
+			gpios = <&gpio1 13 0>, <&gpio1 14 0>;
 		};
 	};
 
@@ -99,8 +99,8 @@
 		watchdog0 = &wdt0;
 		led-strip-0 = &led_strip_0;
 		led-strip-1 = &led_strip_1;
-		/*spi-flash0 = &mx25r64;*/
-		mic-control = &vm3011;
+		led-strip-2 = &led_strip_2;
+		spi-flash0 = &mx25r64;
 		mic = &pdm0;
 	};
 };
@@ -158,15 +158,10 @@
 		bq25792: bq25792@6b {
 			compatible = "ti,bq25792";
 			reg = <0x6B>;
+			/* P1.04 = BQ25792 interrupt (active low) */
+			irq-gpios = <&gpio1 4 (GPIO_ACTIVE_LOW)>;
 			status = "okay";
 		};
-	};
-
-	vm3011: vm3011@60 {
-		compatible = "vesper,vm3011";
-		reg = <0x60>;
-		irq-gpios = <&gpio0 16 (GPIO_ACTIVE_HIGH)>;
-		status = "okay";
 	};
 };
 
@@ -182,6 +177,9 @@
 	clock-source = "PCLK32M";
 };
 
+/* uart0 shares the hardware instance with i2c0 (TWIM0) on nRF5340 — cannot enable both.
+ * The physical UART pins (P1.13=TX, P1.14=RX) are defined in pinctrl for future use,
+ * but the peripheral is disabled here. Primary console is USB CDC ACM. */
 &uart0 {
 	//status = "okay";
 	current-speed = <115200>;
@@ -209,6 +207,25 @@
 	status = "okay";
 };
 
+/* BMI270 6-axis IMU: P0.09=MOSI, P0.10=MISO, P0.12=SCK, P0.24=CS, P0.26=INT1, P0.25=INT2
+ * Uses SPI3 (SPIM3): SPI0/SPIM0 shares the same hardware instance as I2C0/TWIM0 on nRF5340. */
+&spi3 {
+	status = "okay";
+	pinctrl-0 = <&spi3_default>;
+	pinctrl-1 = <&spi3_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 24 GPIO_ACTIVE_LOW>;
+
+	bmi270: bmi270@0 {
+		compatible = "bosch,bmi270";
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(10)>;
+		/* P0.26 = INT1, P0.25 = INT2 */
+		irq-gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>,
+			    <&gpio0 25 GPIO_ACTIVE_HIGH>;
+	};
+};
+
 led_strip_spi_0: &spi1 {
 	status = "okay";
 	pinctrl-0 = <&spi1_default>;
@@ -227,6 +244,30 @@ led_strip_spi_0: &spi1 {
 
 		/* WS2812 */
 		chain-length = <216>; /* arbitrary; change at will */
+		spi-one-frame = <0x70>;
+		spi-zero-frame = <0x40>;
+		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
+	};
+};
+
+/* Onboard status LEDs: 2x WS2812 on P1.01 */
+led_strip_spi_2: &spi2 {
+	status = "okay";
+	pinctrl-0 = <&spi2_default>;
+	pinctrl-1 = <&spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	led_strip_2: ws2812_2@0 {
+		compatible = "worldsemi,ws2812-spi";
+		status = "okay";
+
+		/* SPI */
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(4)>;
+		frame-format = <SPI_FRAME_FORMAT_TI>;
+
+		/* WS2812 */
+		chain-length = <2>;
 		spi-one-frame = <0x70>;
 		spi-zero-frame = <0x40>;
 		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
@@ -254,6 +295,34 @@ led_strip_spi_1: &spi4 {
 		spi-one-frame = <0x70>;
 		spi-zero-frame = <0x40>;
 		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
+	};
+};
+
+&qspi {
+	status = "okay";
+	pinctrl-0 = <&qspi_default>;
+	pinctrl-1 = <&qspi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	/* MX25R6435F 64 Mbit QSPI NOR flash */
+	mx25r64: mx25r6435f@0 {
+		compatible = "nordic,qspi-nor";
+		reg = <0>;
+		/* proto0 has all 4 IO lines: use 4-bit read/write */
+		writeoc = "pp4io";
+		readoc = "read4io";
+		sck-frequency = <8000000>;
+		jedec-id = [c2 28 17];
+		sfdp-bfp = [
+			e5 20 f1 ff  ff ff ff 03  44 eb 08 6b  08 3b 04 bb
+			ee ff ff ff  ff ff 00 ff  ff ff 00 ff  0c 20 0f 52
+			10 d8 00 ff  23 72 f5 00  82 ed 04 cc  44 83 68 44
+			30 b0 30 b0  f7 c4 d5 5c  00 be 29 ff  f0 d0 ff ff
+		];
+		size = <67108864>;
+		has-dpd;
+		t-enter-dpd = <10000>;
+		t-exit-dpd = <35000>;
 	};
 };
 
