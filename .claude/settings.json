@@ -4,7 +4,10 @@
       "Bash(arm-zephyr-eabi-nm *)",
       "Bash(arm-zephyr-eabi-size *)",
       "Bash(west build *)",
-      "Bash(twister *)"
+      "Bash(twister *)",
+      "Read(//root/ncs/v3.1.1/**)",
+      "Bash(arm-zephyr-eabi-size *)",
+      "Bash(arm-zephyr-eabi-nm *)"
     ]
   }
 }
