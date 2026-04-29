@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(arm-zephyr-eabi-nm *)",
+      "Bash(arm-zephyr-eabi-size *)",
+      "Bash(west build *)",
+      "Bash(twister *)"
+    ]
+  }
+}
