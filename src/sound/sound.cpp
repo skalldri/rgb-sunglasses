@@ -2,14 +2,18 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 
+#if defined(CONFIG_VM3011)
 #include <zephyr/drivers/vm3011/vm3011.h>
+#endif
 #include <zephyr/audio/dmic.h>
 
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(sound);
 
+#if defined(CONFIG_VM3011)
 const struct device *vm3011 = DEVICE_DT_GET(DT_NODELABEL(vm3011));
+#endif
 const struct device *pdm0 = DEVICE_DT_GET(DT_NODELABEL(pdm0));
 
 // Number of PCM samples the driver will generate in 1s
@@ -176,6 +180,7 @@ static int cmd_sound_mic_record(const struct shell *shell,
     return 0;
 }
 
+#if defined(CONFIG_VM3011)
 static int cmd_sound_vm_dump(const struct shell *shell,
                              size_t argc, char **argv, void *data)
 {
@@ -195,6 +200,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_vm,
                                SHELL_CMD(dump, NULL, "Dump VM3011 Registers to console", cmd_sound_vm_dump),
                                SHELL_CMD(clear, NULL, "Clear VM3011 DOUT pin", cmd_sound_vm_clear),
                                SHELL_SUBCMD_SET_END);
+#endif // defined(CONFIG_VM3011)
 
 // Subcommands for "sound mic"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_mic,
@@ -203,7 +209,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_mic,
 
 // Subcommands for "sound"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound,
+#if defined(CONFIG_VM3011)
                                SHELL_CMD(vm, &sub_sound_vm, "VM3011 Commands", NULL),
+#endif
                                SHELL_CMD(mic, &sub_sound_mic, "Mic Commands", NULL),
                                SHELL_SUBCMD_SET_END);
 

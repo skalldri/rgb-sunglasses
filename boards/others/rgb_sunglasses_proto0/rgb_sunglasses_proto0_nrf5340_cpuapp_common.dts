@@ -1,0 +1,397 @@
+/*
+ * Copyright (c) 2019-2020 Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#include "rgb_sunglasses_proto0_nrf5340_cpuapp_common-pinctrl.dtsi"
+
+#include <freq.h>
+#include <zephyr/dt-bindings/led/led.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+
+/ {
+
+	chosen {
+		zephyr,console = &cdc_acm_uart0;
+		zephyr,shell-uart = &cdc_acm_uart0;
+		zephyr,uart-mcumgr = &cdc_acm_uart1;
+		//zephyr,bt-mon-uart = &uart0; // @skalldri what does this do?
+		//zephyr,bt-c2h-uart = &uart0; // @skalldri what does this do?
+		zephyr,bt-hci = &bt_hci_ipc0;
+		nordic,802154-spinel-ipc = &ipc0;
+		zephyr,ieee802154 = &ieee802154;
+	};
+
+	/*leds {
+		compatible = "gpio-leds";
+		led0: led_0 {
+			gpios = <&gpio0 28 GPIO_ACTIVE_LOW>;
+			label = "Green LED 0";
+		};
+		led1: led_1 {
+			gpios = <&gpio0 29 GPIO_ACTIVE_LOW>;
+			label = "Green LED 1";
+		};
+		led2: led_2 {
+			gpios = <&gpio0 30 GPIO_ACTIVE_LOW>;
+			label = "Green LED 2";
+		};
+		led3: led_3 {
+			gpios = <&gpio0 31 GPIO_ACTIVE_LOW>;
+			label = "Green LED 3";
+		};
+	};*/
+
+	/*pwmleds {
+		compatible = "pwm-leds";
+		pwm_led0: pwm_led_0 {
+			pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_INVERTED>;
+		};
+	};*/
+
+	buttons {
+		compatible = "gpio-keys";
+		button0: button_0 {
+			gpios = <&gpio0 30 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Push button 1";
+		};
+		button1: button_1 {
+			gpios = <&gpio1 11 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Push button 2";
+		};
+		button2: button_2 {
+			gpios = <&gpio1 10 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Push button 3";
+		};
+		button3: button_3 {
+			gpios = <&gpio1 12 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Push button 4";
+		};
+		button4: bmic_wake {
+			gpios = <&gpio0 2 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "BMIC Wake";
+		};
+	};
+
+	gpio_fwd: nrf-gpio-forwarder {
+		compatible = "nordic,nrf-gpio-forwarder";
+		status = "okay";
+		uart {
+			gpios = <&gpio1 13 0>, <&gpio1 14 0>;
+		};
+	};
+
+	/* These aliases are provided for compatibility with samples */
+	aliases {
+		/*led0 = &led0;
+		led1 = &led1;
+		led2 = &led2;
+		led3 = &led3;
+		pwm-led0 = &pwm_led0;*/
+		sw0 = &button0;
+		sw1 = &button1;
+		sw2 = &button2;
+		sw3 = &button3;
+		sw-wake = &button4;
+		/*bootloader-led0 = &led0;*/
+		mcuboot-button0 = &button1;
+		/*mcuboot-led0 = &led0;*/
+		watchdog0 = &wdt0;
+		led-strip-0 = &led_strip_0;
+		led-strip-1 = &led_strip_1;
+		led-strip-2 = &led_strip_2;
+		spi-flash0 = &mx25r64;
+		mic = &pdm0;
+	};
+};
+
+/* configure VREGMAIN in DC/DC mode */
+&vregmain {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+/* configure VREGRADIO in DC/DC mode */
+&vregradio {
+	regulator-initial-mode = <NRF5X_REG_MODE_DCDC>;
+};
+
+/* mistake in the devkit. Didn't populate DCCH. Cannot use DCDC mode for the HV regulator */
+&vregh {
+	status = "disabled";
+};
+
+&adc {
+	status = "okay";
+};
+
+&gpiote {
+	status = "okay";
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&i2c0 {
+	compatible = "nordic,nrf-twim";
+	status = "okay";
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-1 = <&i2c0_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	tps25750: tps25750@21 {
+		compatible = "ti,tps25750";
+		reg = <0x21>; /* The address of the device in "normal" mode */
+		patch-address = <0x15>; /* The address of the device during patch download */
+		patch-chunk-size = <128>; /* the size of the packets sent during patch download */
+		status = "okay";
+		irq-gpios = <&gpio0 22 (GPIO_ACTIVE_LOW)>; /* Might need to add GPIO_PULL_UP or GPIO_PULL_DOWN here? */
+
+		/* TPS25750 is also an I2C master. Define required properties */
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		bq25792: bq25792@6b {
+			compatible = "ti,bq25792";
+			reg = <0x6B>;
+			/* P1.04 = BQ25792 interrupt (active low) */
+			irq-gpios = <&gpio1 4 (GPIO_ACTIVE_LOW)>;
+			status = "okay";
+		};
+	};
+};
+
+&clock {
+	hfclkaudio-frequency = <12288000>;
+};
+
+&pdm0 {
+	status = "okay";
+	pinctrl-0 = <&pdm0_default>;
+	pinctrl-names = "default";
+	queue-size = <10>;
+	clock-source = "PCLK32M";
+};
+
+/* uart0 shares the hardware instance with i2c0 (TWIM0) on nRF5340 — cannot enable both.
+ * The physical UART pins (P1.13=TX, P1.14=RX) are defined in pinctrl for future use,
+ * but the peripheral is disabled here. Primary console is USB CDC ACM. */
+&uart0 {
+	//status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_default>;
+	pinctrl-1 = <&uart0_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&pwm0 {
+	status = "okay";
+	pinctrl-0 = <&pwm0_default>;
+	pinctrl-1 = <&pwm0_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&timer0 {
+	status = "okay";
+};
+
+&timer1 {
+	status = "okay";
+};
+
+&timer2 {
+	status = "okay";
+};
+
+/* BMI270 6-axis IMU: P0.09=MOSI, P0.10=MISO, P0.12=SCK, P0.24=CS, P0.26=INT1, P0.25=INT2
+ * Uses SPI3 (SPIM3): SPI0/SPIM0 shares the same hardware instance as I2C0/TWIM0 on nRF5340. */
+&spi3 {
+	status = "okay";
+	pinctrl-0 = <&spi3_default>;
+	pinctrl-1 = <&spi3_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 24 GPIO_ACTIVE_LOW>;
+
+	bmi270: bmi270@0 {
+		compatible = "bosch,bmi270";
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(10)>;
+		/* P0.26 = INT1, P0.25 = INT2 */
+		irq-gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>,
+			    <&gpio0 25 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+led_strip_spi_0: &spi1 {
+	status = "okay";
+	pinctrl-0 = <&spi1_default>;
+	pinctrl-1 = <&spi1_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	// Attach our LED strip to SPI1
+	led_strip_0: ws2812@0 {
+		compatible = "worldsemi,ws2812-spi";
+		status = "okay";
+
+		/* SPI */
+		reg = <0>; /* ignored, but necessary for SPI bindings */
+		spi-max-frequency = <DT_FREQ_M(4)>;
+		frame-format = <SPI_FRAME_FORMAT_TI>;
+
+		/* WS2812 */
+		chain-length = <216>; /* arbitrary; change at will */
+		spi-one-frame = <0x70>;
+		spi-zero-frame = <0x40>;
+		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
+	};
+};
+
+/* Onboard status LEDs: 2x WS2812 on P1.01 */
+led_strip_spi_2: &spi2 {
+	status = "okay";
+	pinctrl-0 = <&spi2_default>;
+	pinctrl-1 = <&spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	led_strip_2: ws2812_2@0 {
+		compatible = "worldsemi,ws2812-spi";
+		status = "okay";
+
+		/* SPI */
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(4)>;
+		frame-format = <SPI_FRAME_FORMAT_TI>;
+
+		/* WS2812 */
+		chain-length = <2>;
+		spi-one-frame = <0x70>;
+		spi-zero-frame = <0x40>;
+		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
+	};
+};
+
+led_strip_spi_1: &spi4 {
+	status = "okay";
+	pinctrl-0 = <&spi4_default>;
+	pinctrl-1 = <&spi4_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	// Attach our LED strip to SPI1
+	led_strip_1: ws2812_1@0 {
+		compatible = "worldsemi,ws2812-spi";
+		status = "okay";
+
+		/* SPI */
+		reg = <0>; /* ignored, but necessary for SPI bindings */
+		spi-max-frequency = <DT_FREQ_M(4)>;
+		frame-format = <SPI_FRAME_FORMAT_TI>;
+
+		/* WS2812 */
+		chain-length = <216>; /* arbitrary; change at will */
+		spi-one-frame = <0x70>;
+		spi-zero-frame = <0x40>;
+		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
+	};
+};
+
+&qspi {
+	status = "okay";
+	pinctrl-0 = <&qspi_default>;
+	pinctrl-1 = <&qspi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	/* MX25R6435F 64 Mbit QSPI NOR flash */
+	mx25r64: mx25r6435f@0 {
+		compatible = "nordic,qspi-nor";
+		reg = <0>;
+		/* proto0 has all 4 IO lines: use 4-bit read/write */
+		writeoc = "pp4io";
+		readoc = "read4io";
+		sck-frequency = <8000000>;
+		jedec-id = [c2 28 17];
+		sfdp-bfp = [
+			e5 20 f1 ff  ff ff ff 03  44 eb 08 6b  08 3b 04 bb
+			ee ff ff ff  ff ff 00 ff  ff ff 00 ff  0c 20 0f 52
+			10 d8 00 ff  23 72 f5 00  82 ed 04 cc  44 83 68 44
+			30 b0 30 b0  f7 c4 d5 5c  00 be 29 ff  f0 d0 ff ff
+		];
+		size = <67108864>;
+		has-dpd;
+		t-enter-dpd = <10000>;
+		t-exit-dpd = <35000>;
+	};
+};
+
+/* WARNING: these partition definitions do nothing because we are always building in multi-image mode, so we instead use Nordic's "Partition manager" */
+&flash0 {
+	status = "okay";
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 0x00030000>;
+		};
+		slot0_partition: partition@30000 {
+			label = "image-0";
+		};
+		slot1_partition: partition@90000 {
+			label = "image-1";
+		};
+		scratch_partition: partition@f0000 {
+			label = "image-scratch";
+			reg = <0x000f0000 0xa000>;
+		};
+		storage_partition: partition@fa000 {
+			label = "storage";
+			reg = <0x000fa000 0x00006000>;
+		};
+	};
+};
+
+&ieee802154 {
+	status = "okay";
+};
+
+zephyr_udc0: &usbd {
+	compatible = "nordic,nrf-usbd";
+	status = "okay";
+
+	/* Add a USB UART device */
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+
+	cdc_acm_uart1: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+/ {
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		sram0_image: image@20000000 {
+			/* Zephyr image(s) memory */
+		};
+
+		sram0_s: image_s@20000000 {
+			/* Secure image memory */
+		};
+
+		sram0_ns: image_ns@20040000 {
+			/* Non-Secure image memory */
+		};
+	};
+};
+
+/* Include partition configuration file */
+#include "rgb_sunglasses_proto0_nrf5340_cpuapp_partition_conf.dts"

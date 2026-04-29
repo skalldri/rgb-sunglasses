@@ -117,3 +117,29 @@ const LedConfig kDevKitLedConfig = {
     kDevKitRowStartIndex,
     kDevKitRowIsLeftToRight
 };
+
+/**
+ * @brief Constants for the Proto0 onboard status LEDs (2x WS2812 on led_strip_2)
+ *
+ * The two onboard LEDs are a single strip of 2 pixels treated as a 2×1 display.
+ * The entire strip is one bank (no left/right split).
+ */
+
+constexpr size_t kProto0OnboardDisplayWidth  = 2;
+constexpr size_t kProto0OnboardDisplayHeight = 1;
+
+// All 2 LEDs are in one bank; ledBankWidth equals the full display width
+constexpr size_t kProto0OnboardLedBankWidth  = kProto0OnboardDisplayWidth;
+
+const size_t kProto0OnboardLedsOnRow[kProto0OnboardDisplayHeight]     = { 2 };
+const size_t kProto0OnboardRowStartIndex[kProto0OnboardDisplayHeight] = { 0 };
+const bool   kProto0OnboardRowIsLeftToRight[kProto0OnboardDisplayHeight] = { true };
+
+const LedConfig kProto0OnboardLedConfig = {
+    kProto0OnboardDisplayWidth,
+    kProto0OnboardDisplayHeight,
+    kProto0OnboardLedBankWidth,
+    kProto0OnboardLedsOnRow,
+    kProto0OnboardRowStartIndex,
+    kProto0OnboardRowIsLeftToRight
+};

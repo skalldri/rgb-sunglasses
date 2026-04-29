@@ -43,6 +43,41 @@ jobs:
           name: dfu_application.zip
           path: ${{ github.workspace }}/build/dfu_application.zip
 
+  build-proto0:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Free up space
+        run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /usr/local/lib/android && sudo rm -rf /opt/ghc && sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - name: Check HDD space
+        run: df -h
+
+      - name: Checkout (GitHub)
+        uses: actions/checkout@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and run dev container task
+        uses: devcontainers/ci@v0.3
+        with:
+          imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          push: always
+          runCmd: west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dfu_application_proto0.zip
+          path: ${{ github.workspace }}/build/dfu_application.zip
+
   tests:
     runs-on: ubuntu-latest
     permissions:

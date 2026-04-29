@@ -55,6 +55,12 @@ K_THREAD_DEFINE(
 #define LED_STRIP_0_NUM_PIXELS DT_PROP(LED_STRIP_0_NODE_ID, chain_length)
 #define LED_STRIP_1_NUM_PIXELS DT_PROP(LED_STRIP_1_NODE_ID, chain_length)
 
+// Optional third strip (proto0 onboard LEDs)
+#if DT_HAS_ALIAS(led_strip_2)
+#define LED_STRIP_2_NODE_ID    DT_ALIAS(led_strip_2)
+#define LED_STRIP_2_NUM_PIXELS DT_PROP(LED_STRIP_2_NODE_ID, chain_length)
+#endif
+
 // Triple buffering to make things easy
 constexpr size_t kNumDisplayBuffers = 3;
 
@@ -71,6 +77,9 @@ size_t outstandingRenderBuffers = 0;  // Number of buffers currently claimed for
 // Double-buffered framebuffers for rendering with
 static struct led_rgb led_0[kNumDisplayBuffers][LED_STRIP_0_NUM_PIXELS];
 static struct led_rgb led_1[kNumDisplayBuffers][LED_STRIP_1_NUM_PIXELS];
+#if DT_HAS_ALIAS(led_strip_2)
+static struct led_rgb led_2[kNumDisplayBuffers][LED_STRIP_2_NUM_PIXELS];
+#endif
 
 // Hold this lock for _very_ short periods of time!
 K_MUTEX_DEFINE(displayBufferMutex);
@@ -380,6 +389,9 @@ void led_display_thread_func(void *a, void *b, void *c)
 {
     const struct device *led_strip_0 = DEVICE_DT_GET(LED_STRIP_0_NODE_ID);
     const struct device *led_strip_1 = DEVICE_DT_GET(LED_STRIP_1_NODE_ID);
+#if DT_HAS_ALIAS(led_strip_2)
+    const struct device *led_strip_2 = DEVICE_DT_GET(LED_STRIP_2_NODE_ID);
+#endif
 
     if (!device_is_ready(led_strip_0))
     {
@@ -393,11 +405,22 @@ void led_display_thread_func(void *a, void *b, void *c)
         return;
     }
 
+#if DT_HAS_ALIAS(led_strip_2)
+    if (!device_is_ready(led_strip_2))
+    {
+        LOG_ERR("Device %s is not ready", led_strip_2->name);
+        return;
+    }
+#endif
+
     // Set the entire LED bank to NULL before starting
     for (size_t i = 0; i < kNumDisplayBuffers; i++)
     {
         memset(led_0[i], 0, sizeof(struct led_rgb) * LED_STRIP_0_NUM_PIXELS);
         memset(led_1[i], 0, sizeof(struct led_rgb) * LED_STRIP_1_NUM_PIXELS);
+#if DT_HAS_ALIAS(led_strip_2)
+        memset(led_2[i], 0, sizeof(struct led_rgb) * LED_STRIP_2_NUM_PIXELS);
+#endif
     }
 
     // All display buffers start not-in-use
@@ -429,6 +452,9 @@ void led_display_thread_func(void *a, void *b, void *c)
 
         led_strip_update_rgb(led_strip_0, led_0[bufferId], LED_STRIP_0_NUM_PIXELS);
         led_strip_update_rgb(led_strip_1, led_1[bufferId], LED_STRIP_1_NUM_PIXELS);
+#if DT_HAS_ALIAS(led_strip_2)
+        led_strip_update_rgb(led_strip_2, led_2[bufferId], LED_STRIP_2_NUM_PIXELS);
+#endif
 
         ret = releaseBufferFromDisplay(bufferId);
         if (ret)

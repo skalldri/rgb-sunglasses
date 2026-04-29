@@ -20,6 +20,8 @@ twister -T /workspaces/rgb-sunglasses/tests/animations/animation_registry -p nat
 
 Treat successful `west build` as the primary validation step after any change. The NCS SDK lives at `/root/ncs/v3.1.1`.
 
+**Always use `west build` for building — never invoke `cmake` or `ninja` directly.** The `west build` command handles multi-image (sysbuild) coordination correctly; raw `cmake`/`ninja` invocations bypass that and produce misleading results.
+
 Known non-blocking warning: `multi-line comment [-Wcomment]` in `src/bluetooth/bt_service.h`.
 
 ## Commenting rules
