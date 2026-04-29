@@ -30,8 +30,6 @@ Known non-blocking warning: `multi-line comment [-Wcomment]` in `src/bluetooth/b
 - **Commented-out code (`/*...*/` or `//`) is intentional.** Developers in embedded projects often comment out alternative implementations, debug printk calls, or reference snippets as quick-enable stubs. Do not remove these blocks.
 - **Add comments to non-obvious logic.** If you write code whose purpose or mechanism is not immediately clear from reading the code alone, add a comment.
 
-
-
 This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED sunglasses. The target SoC is an nRF53 series device. The codebase is mixed C/C++; `main.c` is C but most application logic is C++23.
 
 ### Subsystems and their roles
@@ -122,3 +120,7 @@ Prefer changes under `/workspaces/rgb-sunglasses` (app code). Only touch `/root/
 This project uses the Zephyr RTOS.
 
 Read the documentation directly from /root/ncs/v3.1.1/zephyr/doc
+
+## Build Failures
+
+If a build fails, prefer to read the log files instead of building it again.

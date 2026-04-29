@@ -7,7 +7,9 @@
       "Bash(twister *)",
       "Read(//root/ncs/v3.1.1/**)",
       "Bash(arm-zephyr-eabi-size *)",
-      "Bash(arm-zephyr-eabi-nm *)"
+      "Bash(arm-zephyr-eabi-nm *)",
+      "Bash(jobs -l)",
+      "Bash(grep -E \"@[0-9a-f]{3,8}\")"
     ]
   }
 }

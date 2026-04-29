@@ -8,7 +8,8 @@
 #   mcuboot_secondary   0x000000  944 KB (0xEC000)  — must match mcuboot_primary
 #   mcuboot_secondary_1 0x0EC000  256 KB (0x40000)  — net core OTA staging
 #   settings_storage    0x12C000    8 KB (0x02000)  — NVS persistent settings
-#   external_flash      0x12E000 ~6.82 MB (0x6D2000) — available to application
+#   fat_storage         0x12E000    4 MB (0x400000)  — FAT filesystem / USB Mass Storage
+#   external_flash      0x52E000 ~2.82 MB (0x2D2000) — remaining raw flash
 #
 # CONFIG_BOOT_MAX_IMG_SECTORS=256 is set in the mcuboot board conf to handle
 # the 236 internal-flash sectors (944 KB / 4 KB) in the primary slot.
@@ -71,9 +72,22 @@ settings_storage:
   device: MX25R64
   region: external_flash
 
-external_flash:
+fat_storage:
   address: 0x12e000
-  size: 0x6d2000
+  size: 0x400000        # 4 MB — FAT filesystem (USB Mass Storage)
+  device: MX25R64
+  region: external_flash
+  # affiliation: disk registers this partition with the flash disk driver (PM path).
+  # extra_params keys follow the disk_<param> convention required by flashdisk.c.
+  affiliation: disk
+  extra_params:
+    disk_name: NAND
+    disk_cache_size: 4096
+    disk_sector_size: 4096
+
+external_flash:
+  address: 0x52e000
+  size: 0x2d2000        # ~2.82 MB — remaining raw flash
   device: MX25R64
   region: external_flash
 
