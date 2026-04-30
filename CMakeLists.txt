@@ -13,9 +13,10 @@ add_subdirectory(include)
 
 # NORDIC SDK APP START
 target_sources(
-  app 
+  app
   PRIVATE
     src/main.c
+    src/usb/usb_init.c
     src/led_controller.cpp
     src/pattern_controller.cpp
     src/buttons.cpp
