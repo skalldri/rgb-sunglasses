@@ -13,9 +13,10 @@ add_subdirectory(include)
 
 # NORDIC SDK APP START
 target_sources(
-  app 
+  app
   PRIVATE
     src/main.c
+    src/usb/usb_init.c
     src/led_controller.cpp
     src/pattern_controller.cpp
     src/buttons.cpp
@@ -34,6 +35,7 @@ target_sources(
 )
 
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/sound.cpp)
+target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/storage.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_MY_EYES app PRIVATE src/animations/my_eyes_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/animations/rainbow_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG app PRIVATE src/animations/zigzag_animation.cpp)
