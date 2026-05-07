@@ -174,7 +174,7 @@
 	status = "okay";
 	pinctrl-0 = <&pdm0_default>;
 	pinctrl-names = "default";
-	queue-size = <10>;
+	queue-size = <32>;
 	clock-source = "PCLK32M";
 };
 

@@ -1,0 +1,6 @@
+tests:
+  sound.audio_dsp:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

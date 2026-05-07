@@ -11,7 +11,11 @@
 
 #include <zephyr/logging/log.h>
 
+#include "audio_dsp.h"
+
 LOG_MODULE_REGISTER(sound);
+
+K_MSGQ_DEFINE(audio_result_q, sizeof(struct audio_analysis_result), 4, 4);
 
 #if defined(CONFIG_VM3011)
 const struct device *vm3011 = DEVICE_DT_GET(DT_NODELABEL(vm3011));
@@ -28,18 +32,27 @@ const struct device *pdm0 = DEVICE_DT_GET(DT_NODELABEL(pdm0));
 #define BYTES_PER_SAMPLE sizeof(int16_t) // (SAMPLE_BIT_WIDTH / 8) would be better
 
 // How much time (in ms) is captured in each block?
-#define BLOCK_CAPTURE_TIME_MS 100
-static_assert(MSEC_PER_SEC % BLOCK_CAPTURE_TIME_MS == 0, "Block capture time must cleanly divide into 1s");
+#define BLOCK_CAPTURE_TIME_MS 32
 
 // How many audio channels are we capturing? Nordic supports 1 or 2
 // We only have 1 mic, so 1
 #define NUM_AUDIO_CHANNELS 1
 
 #define BLOCK_SIZE_HELPER(_sample_rate_hz, _number_of_channels, _block_time_ms) \
-    (BYTES_PER_SAMPLE * (_sample_rate_hz / (MSEC_PER_SEC / _block_time_ms)) * _number_of_channels)
+    (BYTES_PER_SAMPLE * ((float)_sample_rate_hz / ((float)MSEC_PER_SEC / (float)_block_time_ms)) * _number_of_channels)
 
 // Size of a block required to capture the specified amount of time of PCM samples
-#define BLOCK_SIZE BLOCK_SIZE_HELPER(SAMPLE_RATE_HZ, NUM_AUDIO_CHANNELS, BLOCK_CAPTURE_TIME_MS)
+#define BLOCK_SIZE_FLOAT BLOCK_SIZE_HELPER(SAMPLE_RATE_HZ, NUM_AUDIO_CHANNELS, BLOCK_CAPTURE_TIME_MS)
+
+#define BLOCK_SIZE ((size_t)(BLOCK_SIZE_FLOAT))
+
+// Verify that the float arithmetic in BLOCK_SIZE_HELPER produces a whole number of bytes.
+// If the sample rate and capture time don't divide evenly, the result truncates silently
+// when used as an integer (e.g. in K_MEM_SLAB_DEFINE_STATIC), dropping required bytes.
+static_assert(BLOCK_SIZE == BLOCK_SIZE_FLOAT,
+    "BLOCK_SIZE is not an integer — SAMPLE_RATE_HZ and BLOCK_CAPTURE_TIME_MS produce a "
+    "fractional sample count; adjust them so (SAMPLE_RATE_HZ * BLOCK_CAPTURE_TIME_MS) is "
+    "divisible by MSEC_PER_SEC");
 
 // Number of blocks available to the driver
 // MCU must keep up with the PCM system: reading block contents
@@ -63,6 +76,20 @@ K_MEM_SLAB_DEFINE_STATIC(
 
 static struct pcm_stream_cfg stream;
 static struct dmic_cfg cfg;
+
+void audio_dsp_thread_func(void *a, void *b, void *c);
+
+K_THREAD_DEFINE(
+    audio_dsp_thread,
+    8096, // stack size
+    audio_dsp_thread_func,
+    NULL,
+    NULL,
+    NULL,
+    -7, // Priority
+    K_FP_REGS, // Options
+    0 // Startup delay
+);
 
 int configure_pdm()
 {
@@ -127,12 +154,73 @@ int configure_pdm()
     LOG_INF("Gain R Register Value: 0x%d", *gain_r);
 
     // Increase gain from 0x28 (0 dB) -> 0x40 (+12 dB)
-    *gain_l = 0x50;
-    *gain_r = 0x50;
+    *gain_l = 0x40;
+    *gain_r = 0x40;
 
     return ret;
 }
 
+void audio_dsp_thread_func(void *a, void *b, void *c)
+{
+    if (!device_is_ready(pdm0))
+    {
+        LOG_ERR("%s is not ready, cannot run audio DSP thread", pdm0->name);
+        return;
+    }
+
+    int ret = configure_pdm();
+    if (ret < 0) {
+        LOG_ERR("Failed to configure PDM (%d), cannot run audio DSP thread", ret);
+        return;
+    }
+
+    ret = dmic_trigger(pdm0, DMIC_TRIGGER_START);
+    if (ret < 0)
+    {
+        LOG_ERR("DMIC START trigger failed: %d", ret);
+        return;
+    }
+
+    audio_dsp_init();
+    uint32_t seq = 0;
+
+    while (true) {
+        void *buffer = NULL;
+        uint32_t size = 0;
+
+        ret = dmic_read(pdm0, 0, &buffer, &size, READ_TIMEOUT);
+        if (ret)
+        {
+            LOG_ERR("Failed to read block %d", ret);
+            if (buffer != NULL) {
+                k_mem_slab_free(&mem_slab, buffer);
+            }
+            continue;
+        }
+
+        struct audio_analysis_result result;
+        audio_dsp_process(static_cast<const int16_t *>(buffer), seq++, &result);
+        k_mem_slab_free(&mem_slab, buffer);
+
+        // Log beats for validation before Phase 3 LED wiring
+        for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+            if (result.beat[b]) {
+                LOG_INF("beat band=%d energy=%.1f seq=%u",
+                        b, (double)result.band_energy[b], result.seq);
+            }
+        }
+
+        // Publish result; drop oldest if the queue is full
+        if (k_msgq_put(&audio_result_q, &result, K_NO_WAIT) == -ENOMSG) {
+            k_msgq_purge(&audio_result_q);
+            k_msgq_put(&audio_result_q, &result, K_NO_WAIT);
+        }
+    }
+}
+
+/*
+// OG sound recording function: never really worked on the DevKit board, superceeded by new
+// recording-to-flash function
 static int cmd_sound_mic_record(const struct shell *shell,
                                 size_t argc, char **argv, void *data)
 {
@@ -198,6 +286,7 @@ static int cmd_sound_mic_record(const struct shell *shell,
 
     return 0;
 }
+*/
 
 #if defined(CONFIG_VM3011)
 static int cmd_sound_vm_dump(const struct shell *shell,
@@ -369,7 +458,7 @@ static int cmd_sound_mic_record_wav(const struct shell *shell,
 
 // Subcommands for "sound mic"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_mic,
-                               SHELL_CMD(record, NULL, "Record sound to console (hex)", cmd_sound_mic_record),
+                               /*SHELL_CMD(record, NULL, "Record sound to console (hex)", cmd_sound_mic_record),*/
                                SHELL_CMD_ARG(record_wav, NULL, "Record sound to WAV file [duration_s] [path]", cmd_sound_mic_record_wav, 0, 2),
                                SHELL_SUBCMD_SET_END);
 
@@ -383,12 +472,3 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound,
 
 /* Creating root (level 0) command "sound" */
 SHELL_CMD_REGISTER(sound, &sub_sound, "Sound commands", NULL);
-
-static int init_microphone(void)
-{
-    configure_pdm();
-
-    return 0;
-}
-
-SYS_INIT(init_microphone, APPLICATION, 2);
