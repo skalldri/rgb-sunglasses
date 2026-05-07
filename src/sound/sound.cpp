@@ -6,6 +6,8 @@
 #include <zephyr/drivers/vm3011/vm3011.h>
 #endif
 #include <zephyr/audio/dmic.h>
+#include <zephyr/fs/fs.h>
+#include <stdlib.h>
 
 #include <zephyr/logging/log.h>
 
@@ -24,9 +26,6 @@ const struct device *pdm0 = DEVICE_DT_GET(DT_NODELABEL(pdm0));
 
 // We will store the sample as an int16_t
 #define BYTES_PER_SAMPLE sizeof(int16_t) // (SAMPLE_BIT_WIDTH / 8) would be better
-
-// Milliseconds to wait for a block to be read by the driver
-#define READ_TIMEOUT 1000
 
 // How much time (in ms) is captured in each block?
 #define BLOCK_CAPTURE_TIME_MS 100
@@ -59,15 +58,18 @@ K_MEM_SLAB_DEFINE_STATIC(
     BLOCK_COUNT + 1, // Add an extra block to keep the driver happy
     MEM_SLAB_ALIGNMENT);
 
+// Milliseconds to wait for a block to be read by the driver
+#define READ_TIMEOUT (BLOCK_CAPTURE_TIME_MS * 2)
+
 static struct pcm_stream_cfg stream;
 static struct dmic_cfg cfg;
 
-void configure_pdm()
+int configure_pdm()
 {
     if (!device_is_ready(pdm0))
     {
         LOG_ERR("%s is not ready", pdm0->name);
-        return;
+        return -ENODEV;
     }
 
     // Information about the PCM stream we want the driver to create
@@ -110,6 +112,25 @@ void configure_pdm()
     LOG_INF("DMIC Configuration: sample rate: %u hz, sample bit width: %u", SAMPLE_RATE_HZ, SAMPLE_BIT_WIDTH);
     LOG_INF("DMIC Configuration: block size: %u bytes, num blocks: %u", BLOCK_SIZE, BLOCK_COUNT);
     LOG_INF("DMIC Configuration: total recording buffer %u ms", BLOCK_COUNT * BLOCK_CAPTURE_TIME_MS);
+
+    int ret = dmic_configure(pdm0, &cfg);
+
+    // Need to write the gain_l and gain_r registers directly. Zephyr provides no API to do this...
+    // so we can do it the hard way.
+    volatile uint32_t* gain_l = (volatile uint32_t*)(DT_REG_ADDR_RAW(DT_NODELABEL(pdm0)) + 0x518);
+    volatile uint32_t* gain_r = (volatile uint32_t*)(DT_REG_ADDR_RAW(DT_NODELABEL(pdm0)) + 0x51C);
+
+    LOG_INF("Gain L Register Address: 0x%p", gain_l);
+    LOG_INF("Gain R Register Address: 0x%p", gain_r);
+
+    LOG_INF("Gain L Register Value: 0x%d", *gain_l);
+    LOG_INF("Gain R Register Value: 0x%d", *gain_r);
+
+    // Increase gain from 0x28 (0 dB) -> 0x40 (+12 dB)
+    *gain_l = 0x50;
+    *gain_r = 0x50;
+
+    return ret;
 }
 
 static int cmd_sound_mic_record(const struct shell *shell,
@@ -123,17 +144,15 @@ static int cmd_sound_mic_record(const struct shell *shell,
         return -ENOEXEC;
     }
 
-    configure_pdm();
-
-    shell_print(shell, "PCM output rate: %u, channels: %u",
-                cfg.streams[0].pcm_rate, cfg.channel.req_num_chan);
-
-    ret = dmic_configure(pdm0, &cfg);
+    ret = configure_pdm();
     if (ret < 0)
     {
         shell_error(shell, "Failed to configure the driver: %d", ret);
         return ret;
     }
+
+    shell_print(shell, "PCM output rate: %u, channels: %u",
+                cfg.streams[0].pcm_rate, cfg.channel.req_num_chan);
 
     ret = dmic_trigger(pdm0, DMIC_TRIGGER_START);
     if (ret < 0)
@@ -164,7 +183,7 @@ static int cmd_sound_mic_record(const struct shell *shell,
 
         shell_hexdump(shell, reinterpret_cast<const uint8_t *>(buffer), size);
 
-        k_mem_slab_free(&mem_slab, &buffer);
+        k_mem_slab_free(&mem_slab, buffer);
     }
 
     shell_print(shell, "*** STOP PCM DATA ***");
@@ -202,9 +221,156 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_vm,
                                SHELL_SUBCMD_SET_END);
 #endif // defined(CONFIG_VM3011)
 
+// WAV file header layout (44 bytes, little-endian PCM)
+struct __attribute__((packed)) wav_header {
+    char     riff_id[4];       // "RIFF"
+    uint32_t file_size;        // total bytes after this field
+    char     wave_id[4];       // "WAVE"
+    char     fmt_id[4];        // "fmt "
+    uint32_t fmt_size;         // 16 for PCM
+    uint16_t audio_format;     // 1 = PCM
+    uint16_t num_channels;
+    uint32_t sample_rate;
+    uint32_t byte_rate;        // sample_rate * num_channels * bytes_per_sample
+    uint16_t block_align;      // num_channels * bytes_per_sample
+    uint16_t bits_per_sample;
+    char     data_id[4];       // "data"
+    uint32_t data_size;        // raw PCM byte count
+};
+
+#define DEFAULT_WAV_PATH "/NAND:/sound.wav"
+#define DEFAULT_RECORD_DURATION_S 10
+
+static int cmd_sound_mic_record_wav(const struct shell *shell,
+                                    size_t argc, char **argv, void *data)
+{
+    int ret;
+
+    // argv[1] = optional duration in seconds, argv[2] = optional output path
+    uint32_t duration_s = DEFAULT_RECORD_DURATION_S;
+    const char *path    = DEFAULT_WAV_PATH;
+
+    if (argc > 1) {
+        duration_s = (uint32_t)strtoul(argv[1], NULL, 10);
+        if (duration_s == 0) {
+            shell_error(shell, "Invalid duration: %s", argv[1]);
+            return -EINVAL;
+        }
+    }
+    if (argc > 2) {
+        path = argv[2];
+    }
+
+    // Total blocks needed; the slab recycles so this can exceed BLOCK_COUNT
+    const uint32_t total_blocks = (duration_s * MSEC_PER_SEC) / BLOCK_CAPTURE_TIME_MS;
+
+    if (!device_is_ready(pdm0))
+    {
+        shell_error(shell, "%s is not ready", pdm0->name);
+        return -ENOEXEC;
+    }
+
+    ret = configure_pdm();
+    if (ret < 0)
+    {
+        shell_error(shell, "Failed to configure the driver: %d", ret);
+        return ret;
+    }
+
+    // Open (or create/truncate) the output file
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    ret = fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
+    if (ret < 0)
+    {
+        shell_error(shell, "Failed to open %s: %d", path, ret);
+        return ret;
+    }
+
+    // Write a placeholder header; sizes will be patched after recording
+    struct wav_header hdr = {
+        .riff_id       = {'R','I','F','F'},
+        .file_size     = 0,
+        .wave_id       = {'W','A','V','E'},
+        .fmt_id        = {'f','m','t',' '},
+        .fmt_size      = 16,
+        .audio_format  = 1,
+        .num_channels  = NUM_AUDIO_CHANNELS,
+        .sample_rate   = SAMPLE_RATE_HZ,
+        .byte_rate     = SAMPLE_RATE_HZ * NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
+        .block_align   = NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
+        .bits_per_sample = SAMPLE_BIT_WIDTH,
+        .data_id       = {'d','a','t','a'},
+        .data_size     = 0,
+    };
+
+    ret = fs_write(&f, &hdr, sizeof(hdr));
+    if (ret != sizeof(hdr))
+    {
+        shell_error(shell, "Failed to write WAV header: %d", ret);
+        fs_close(&f);
+        return -EIO;
+    }
+
+    ret = dmic_trigger(pdm0, DMIC_TRIGGER_START);
+    if (ret < 0)
+    {
+        shell_error(shell, "START trigger failed: %d", ret);
+        fs_close(&f);
+        return ret;
+    }
+
+    shell_print(shell, "Recording %u s to %s ...", duration_s, path);
+
+    uint32_t total_bytes = 0;
+
+    for (uint32_t i = 0; i < total_blocks; i++)
+    {
+        void *buffer = NULL;
+        uint32_t size = 0;
+
+        ret = dmic_read(pdm0, 0, &buffer, &size, READ_TIMEOUT);
+        if (ret)
+        {
+            shell_error(shell, "Failed to read block %u: %d", i, ret);
+            if (buffer != NULL) {
+                k_mem_slab_free(&mem_slab, buffer);
+            }
+            continue;
+        }
+
+        ssize_t written = fs_write(&f, buffer, size);
+        if (written != (ssize_t)size)
+        {
+            shell_error(shell, "Short write on block %u (%d of %u bytes)", i, written, size);
+        }
+        else
+        {
+            total_bytes += size;
+        }
+
+        k_mem_slab_free(&mem_slab, buffer);
+    }
+
+    dmic_trigger(pdm0, DMIC_TRIGGER_STOP);
+
+    // Patch the two size fields in the header
+    hdr.data_size = total_bytes;
+    hdr.file_size = sizeof(hdr) - 8 + total_bytes; // -8: RIFF id + file_size itself
+
+    fs_seek(&f, 0, FS_SEEK_SET);
+    fs_write(&f, &hdr, sizeof(hdr));
+
+    fs_close(&f);
+
+    shell_print(shell, "Wrote %u bytes of PCM to %s", total_bytes, path);
+    return 0;
+}
+
 // Subcommands for "sound mic"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_mic,
-                               SHELL_CMD(record, NULL, "Record sound to buffer", cmd_sound_mic_record),
+                               SHELL_CMD(record, NULL, "Record sound to console (hex)", cmd_sound_mic_record),
+                               SHELL_CMD_ARG(record_wav, NULL, "Record sound to WAV file [duration_s] [path]", cmd_sound_mic_record_wav, 0, 2),
                                SHELL_SUBCMD_SET_END);
 
 // Subcommands for "sound"

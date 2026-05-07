@@ -13,7 +13,7 @@ static FATFS fat_fs;
  * CONFIG_FS_FATFS_MOUNT_MKFS=y auto-formats the partition on first boot. */
 static struct fs_mount_t fat_mnt = {
     .type      = FS_FATFS,
-    .mnt_point = "/NAND",
+    .mnt_point = "/NAND:",
     .fs_data   = &fat_fs,
     .storage_dev = (void*)FIXED_PARTITION_ID(fat_storage),
 };
