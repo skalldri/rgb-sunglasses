@@ -202,11 +202,17 @@ void audio_dsp_thread_func(void *a, void *b, void *c)
         audio_dsp_process(static_cast<const int16_t *>(buffer), seq++, &result);
         k_mem_slab_free(&mem_slab, buffer);
 
-        // Log beats for validation before Phase 3 LED wiring
+        // Log beats including noise-floor stats for threshold tuning
         for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
             if (result.beat[b]) {
-                LOG_INF("beat band=%d energy=%.1f seq=%u",
-                        b, (double)result.band_energy[b], result.seq);
+                LOG_INF("beat band=%d energy=%.5f mean=%.5f sigma=%.5f "
+                        "threshold=%.5f seq=%u",
+                        b,
+                        (double)result.band_energy[b],
+                        (double)result.band_mean[b],
+                        (double)result.band_sigma[b],
+                        (double)(result.band_mean[b] + 2.0f * result.band_sigma[b]),
+                        result.seq);
             }
         }
 

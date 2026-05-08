@@ -7,6 +7,8 @@
 
 struct audio_analysis_result {
 	float band_energy[AUDIO_NUM_BANDS];
+	float band_mean[AUDIO_NUM_BANDS];   /* history mean, for noise-floor tuning */
+	float band_sigma[AUDIO_NUM_BANDS];  /* history std-dev, for noise-floor tuning */
 	bool  beat[AUDIO_NUM_BANDS];
 	uint32_t seq;
 };

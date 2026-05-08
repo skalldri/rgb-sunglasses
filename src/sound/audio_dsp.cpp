@@ -11,8 +11,16 @@ LOG_MODULE_REGISTER(audio_dsp);
 #define NUM_FFT_SAMPLES AUDIO_FFT_SIZE
 #define NUM_BANDS       AUDIO_NUM_BANDS
 #define HISTORY_LEN     32    /* ~1 s at 32 ms/frame */
-#define BEAT_ALPHA      2.0f  /* threshold = mean + alpha * sigma */
+/* threshold = mean + alpha * sigma.  At 2.0 anything above the 97.7th
+ * percentile fires (~1 false per few seconds from ambient noise at 31 Hz).
+ * 3.5 requires a genuine outlier spike; raise toward 4.0 in noisy rooms. */
+#define BEAT_ALPHA      3.5f
 #define BEAT_REFRACTORY 5     /* minimum frames between beats per band */
+/* Absolute normalised power floor.  Bands 1–3 have much lower raw energy
+ * than band 0; without this floor their tiny absolute fluctuations pass the
+ * relative threshold even when nothing is happening.  1e-3 is safely above
+ * the measured ambient for all bands while remaining well below a real beat. */
+#define BEAT_ENERGY_FLOOR 1e-3f
 
 /* Sub-band bin boundaries (512-pt FFT at 16 kHz, bin width = 31.25 Hz).
  * Band 0 bass:    bins  1– 6  →  31– 200 Hz (kick drum)
@@ -46,9 +54,9 @@ void audio_dsp_init(void)
 void audio_dsp_process(const int16_t *pcm, uint32_t seq,
 		       struct audio_analysis_result *out)
 {
-	/* 1. Convert int16 → float32 and apply Hann window. */
+	/* 1. Normalise int16 to [-1, 1] and apply Hann window. */
 	for (int i = 0; i < NUM_FFT_SAMPLES; i++) {
-		s_fft_input[i] = (float32_t)pcm[i] * s_hann_window[i];
+		s_fft_input[i] = ((float32_t)pcm[i] / 32768.0f) * s_hann_window[i];
 	}
 
 #if defined(CONFIG_DEBUG) && defined(CONFIG_CPU_CORTEX_M)
@@ -87,9 +95,12 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq,
 		float32_t mean, sigma;
 		arm_mean_f32(s_band_history[b], HISTORY_LEN, &mean);
 		arm_std_f32(s_band_history[b], HISTORY_LEN, &sigma);
+		out->band_mean[b]  = mean;
+		out->band_sigma[b] = sigma;
 
 		bool beat = false;
-		if (s_refractory[b] == 0 && energy > mean + BEAT_ALPHA * sigma) {
+		if (s_refractory[b] == 0 && energy > BEAT_ENERGY_FLOOR &&
+		    energy > mean + BEAT_ALPHA * sigma) {
 			beat = true;
 			s_refractory[b] = BEAT_REFRACTORY;
 		} else if (s_refractory[b] > 0) {
