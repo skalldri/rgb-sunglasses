@@ -50,9 +50,9 @@ const struct device *pdm0 = DEVICE_DT_GET(DT_NODELABEL(pdm0));
 // If the sample rate and capture time don't divide evenly, the result truncates silently
 // when used as an integer (e.g. in K_MEM_SLAB_DEFINE_STATIC), dropping required bytes.
 static_assert(BLOCK_SIZE == BLOCK_SIZE_FLOAT,
-    "BLOCK_SIZE is not an integer — SAMPLE_RATE_HZ and BLOCK_CAPTURE_TIME_MS produce a "
-    "fractional sample count; adjust them so (SAMPLE_RATE_HZ * BLOCK_CAPTURE_TIME_MS) is "
-    "divisible by MSEC_PER_SEC");
+              "BLOCK_SIZE is not an integer — SAMPLE_RATE_HZ and BLOCK_CAPTURE_TIME_MS produce a "
+              "fractional sample count; adjust them so (SAMPLE_RATE_HZ * BLOCK_CAPTURE_TIME_MS) is "
+              "divisible by MSEC_PER_SEC");
 
 // Number of blocks available to the driver
 // MCU must keep up with the PCM system: reading block contents
@@ -86,9 +86,9 @@ K_THREAD_DEFINE(
     NULL,
     NULL,
     NULL,
-    -7, // Priority
+    -7,        // Priority
     K_FP_REGS, // Options
-    0 // Startup delay
+    0          // Startup delay
 );
 
 int configure_pdm()
@@ -144,8 +144,8 @@ int configure_pdm()
 
     // Need to write the gain_l and gain_r registers directly. Zephyr provides no API to do this...
     // so we can do it the hard way.
-    volatile uint32_t* gain_l = (volatile uint32_t*)(DT_REG_ADDR_RAW(DT_NODELABEL(pdm0)) + 0x518);
-    volatile uint32_t* gain_r = (volatile uint32_t*)(DT_REG_ADDR_RAW(DT_NODELABEL(pdm0)) + 0x51C);
+    volatile uint32_t *gain_l = (volatile uint32_t *)(DT_REG_ADDR_RAW(DT_NODELABEL(pdm0)) + 0x518);
+    volatile uint32_t *gain_r = (volatile uint32_t *)(DT_REG_ADDR_RAW(DT_NODELABEL(pdm0)) + 0x51C);
 
     LOG_INF("Gain L Register Address: 0x%p", gain_l);
     LOG_INF("Gain R Register Address: 0x%p", gain_r);
@@ -169,7 +169,8 @@ void audio_dsp_thread_func(void *a, void *b, void *c)
     }
 
     int ret = configure_pdm();
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to configure PDM (%d), cannot run audio DSP thread", ret);
         return;
     }
@@ -184,7 +185,8 @@ void audio_dsp_thread_func(void *a, void *b, void *c)
     audio_dsp_init();
     uint32_t seq = 0;
 
-    while (true) {
+    while (true)
+    {
         void *buffer = NULL;
         uint32_t size = 0;
 
@@ -192,7 +194,8 @@ void audio_dsp_thread_func(void *a, void *b, void *c)
         if (ret)
         {
             LOG_ERR("Failed to read block %d", ret);
-            if (buffer != NULL) {
+            if (buffer != NULL)
+            {
                 k_mem_slab_free(&mem_slab, buffer);
             }
             continue;
@@ -203,8 +206,11 @@ void audio_dsp_thread_func(void *a, void *b, void *c)
         k_mem_slab_free(&mem_slab, buffer);
 
         // Log beats including noise-floor stats for threshold tuning
-        for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
-            if (result.beat[b]) {
+        for (int b = 0; b < AUDIO_NUM_BANDS; b++)
+        {
+            // Disabled output for now
+            if (false && result.beat[b])
+            {
                 LOG_INF("beat band=%d energy=%.5f mean=%.5f sigma=%.5f "
                         "threshold=%.5f seq=%u",
                         b,
@@ -217,7 +223,8 @@ void audio_dsp_thread_func(void *a, void *b, void *c)
         }
 
         // Publish result; drop oldest if the queue is full
-        if (k_msgq_put(&audio_result_q, &result, K_NO_WAIT) == -ENOMSG) {
+        if (k_msgq_put(&audio_result_q, &result, K_NO_WAIT) == -ENOMSG)
+        {
             k_msgq_purge(&audio_result_q);
             k_msgq_put(&audio_result_q, &result, K_NO_WAIT);
         }
@@ -317,20 +324,21 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_vm,
 #endif // defined(CONFIG_VM3011)
 
 // WAV file header layout (44 bytes, little-endian PCM)
-struct __attribute__((packed)) wav_header {
-    char     riff_id[4];       // "RIFF"
-    uint32_t file_size;        // total bytes after this field
-    char     wave_id[4];       // "WAVE"
-    char     fmt_id[4];        // "fmt "
-    uint32_t fmt_size;         // 16 for PCM
-    uint16_t audio_format;     // 1 = PCM
+struct __attribute__((packed)) wav_header
+{
+    char riff_id[4];       // "RIFF"
+    uint32_t file_size;    // total bytes after this field
+    char wave_id[4];       // "WAVE"
+    char fmt_id[4];        // "fmt "
+    uint32_t fmt_size;     // 16 for PCM
+    uint16_t audio_format; // 1 = PCM
     uint16_t num_channels;
     uint32_t sample_rate;
-    uint32_t byte_rate;        // sample_rate * num_channels * bytes_per_sample
-    uint16_t block_align;      // num_channels * bytes_per_sample
+    uint32_t byte_rate;   // sample_rate * num_channels * bytes_per_sample
+    uint16_t block_align; // num_channels * bytes_per_sample
     uint16_t bits_per_sample;
-    char     data_id[4];       // "data"
-    uint32_t data_size;        // raw PCM byte count
+    char data_id[4];    // "data"
+    uint32_t data_size; // raw PCM byte count
 };
 
 #define DEFAULT_WAV_PATH "/NAND:/sound.wav"
@@ -343,16 +351,19 @@ static int cmd_sound_mic_record_wav(const struct shell *shell,
 
     // argv[1] = optional duration in seconds, argv[2] = optional output path
     uint32_t duration_s = DEFAULT_RECORD_DURATION_S;
-    const char *path    = DEFAULT_WAV_PATH;
+    const char *path = DEFAULT_WAV_PATH;
 
-    if (argc > 1) {
+    if (argc > 1)
+    {
         duration_s = (uint32_t)strtoul(argv[1], NULL, 10);
-        if (duration_s == 0) {
+        if (duration_s == 0)
+        {
             shell_error(shell, "Invalid duration: %s", argv[1]);
             return -EINVAL;
         }
     }
-    if (argc > 2) {
+    if (argc > 2)
+    {
         path = argv[2];
     }
 
@@ -384,19 +395,19 @@ static int cmd_sound_mic_record_wav(const struct shell *shell,
 
     // Write a placeholder header; sizes will be patched after recording
     struct wav_header hdr = {
-        .riff_id       = {'R','I','F','F'},
-        .file_size     = 0,
-        .wave_id       = {'W','A','V','E'},
-        .fmt_id        = {'f','m','t',' '},
-        .fmt_size      = 16,
-        .audio_format  = 1,
-        .num_channels  = NUM_AUDIO_CHANNELS,
-        .sample_rate   = SAMPLE_RATE_HZ,
-        .byte_rate     = SAMPLE_RATE_HZ * NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
-        .block_align   = NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
+        .riff_id = {'R', 'I', 'F', 'F'},
+        .file_size = 0,
+        .wave_id = {'W', 'A', 'V', 'E'},
+        .fmt_id = {'f', 'm', 't', ' '},
+        .fmt_size = 16,
+        .audio_format = 1,
+        .num_channels = NUM_AUDIO_CHANNELS,
+        .sample_rate = SAMPLE_RATE_HZ,
+        .byte_rate = SAMPLE_RATE_HZ * NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
+        .block_align = NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
         .bits_per_sample = SAMPLE_BIT_WIDTH,
-        .data_id       = {'d','a','t','a'},
-        .data_size     = 0,
+        .data_id = {'d', 'a', 't', 'a'},
+        .data_size = 0,
     };
 
     ret = fs_write(&f, &hdr, sizeof(hdr));
@@ -428,7 +439,8 @@ static int cmd_sound_mic_record_wav(const struct shell *shell,
         if (ret)
         {
             shell_error(shell, "Failed to read block %u: %d", i, ret);
-            if (buffer != NULL) {
+            if (buffer != NULL)
+            {
                 k_mem_slab_free(&mem_slab, buffer);
             }
             continue;
