@@ -17,7 +17,7 @@ private:
 
     /* Per-bucket smoothed energy (exponential moving average).
      * Sized to hold the maximum number of display buckets we ever expect. */
-    static constexpr size_t kMaxDisplayBuckets = 16;
+    static constexpr size_t kMaxDisplayBuckets = 24;
     float smoothed_[kMaxDisplayBuckets] = {};
 };
 

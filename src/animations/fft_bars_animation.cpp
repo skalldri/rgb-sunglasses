@@ -1,7 +1,7 @@
 #include <animations/fft_bars_animation.h>
 
 /* Width of each rendered bar in display pixels. */
-static constexpr size_t kBarWidthPx = 2;
+static constexpr size_t kBarWidthPx = 1;
 
 /* Maps mean bucket power to a bar-height fraction in [0, 1].
  * Tune empirically: kEnergyScale=20 means energy=0.05 fills the display. */

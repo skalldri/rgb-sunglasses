@@ -32,25 +32,34 @@ static const uint16_t band_bin_start[NUM_BANDS] = {  1,  7, 26,  64 };
 static const uint16_t band_bin_end[NUM_BANDS]   = {  6, 25, 63, 191 };
 
 /* Display bucket boundaries modelled on a professional VU meter, capped at 3 kHz.
+ * Each previous 10-bucket range is split in two at a natural frequency boundary.
  * (bin width = 31.25 Hz; bin 1 = 31 Hz is sub-bass below PDM mic range, skipped)
- * Fine resolution in the bass and low-mid where musical content is densest;
- * coarser above 1.5 kHz where adjacent semitones are less perceptually distinct.
  *
- * Bucket 0:  bins   2–  9   62– 281 Hz  (VU   0– 300, merged – bin 1 is noise)
- * Bucket 1:  bins  10– 14  313– 438 Hz  (VU 300– 450)
- * Bucket 2:  bins  15– 19  469– 594 Hz  (VU 450– 600)
- * Bucket 3:  bins  20– 28  625– 875 Hz  (VU 600– 750 + 750– 900, merged)
- * Bucket 4:  bins  29– 38  906–1188 Hz  (VU 900–1000 + 1000–1200, merged)
- * Bucket 5:  bins  39– 48 1219–1500 Hz  (VU 1200–1400 + 1400–1500, merged)
- * Bucket 6:  bins  49– 57 1531–1781 Hz  (VU 1500–1700 + 1700–1800, merged)
- * Bucket 7:  bins  58– 64 1813–2000 Hz  (VU 1800–2000)
- * Bucket 8:  bins  65– 80 2031–2500 Hz  (VU 2000–2200 + 2200–2500, merged)
- * Bucket 9:  bins  81– 96 2531–3000 Hz  (VU 2500–4000, capped at 3 kHz) */
+ * Bucket  0:  bins   2–  5   62– 156 Hz  (low bass)
+ * Bucket  1:  bins   6–  9  188– 281 Hz  (upper bass)
+ * Bucket  2:  bins  10– 11  313– 344 Hz  (VU 300–450 lower half)
+ * Bucket  3:  bins  12– 14  375– 438 Hz  (VU 300–450 upper half)
+ * Bucket  4:  bins  15– 16  469– 500 Hz  (VU 450–600 lower half)
+ * Bucket  5:  bins  17– 19  531– 594 Hz  (VU 450–600 upper half)
+ * Bucket  6:  bins  20– 24  625– 750 Hz  (VU 600–750)
+ * Bucket  7:  bins  25– 28  781– 875 Hz  (VU 750–900)
+ * Bucket  8:  bins  29– 32  906–1000 Hz  (VU 900–1000)
+ * Bucket  9:  bins  33– 38 1031–1188 Hz  (VU 1000–1200)
+ * Bucket 10:  bins  39– 44 1219–1375 Hz  (VU 1200–1400)
+ * Bucket 11:  bins  45– 48 1406–1500 Hz  (VU 1400–1500)
+ * Bucket 12:  bins  49– 54 1531–1688 Hz  (VU 1500–1700)
+ * Bucket 13:  bins  55– 57 1719–1781 Hz  (VU 1700–1800)
+ * Bucket 14:  bins  58– 60 1813–1875 Hz  (VU 1800–2000 lower half)
+ * Bucket 15:  bins  61– 64 1906–2000 Hz  (VU 1800–2000 upper half)
+ * Bucket 16:  bins  65– 72 2031–2250 Hz  (VU 2000–2500 lower half)
+ * Bucket 17:  bins  73– 80 2281–2500 Hz  (VU 2000–2500 upper half)
+ * Bucket 18:  bins  81– 88 2531–2750 Hz  (VU 2500–3000 lower half)
+ * Bucket 19:  bins  89– 96 2781–3000 Hz  (VU 2500–3000 upper half) */
 static const uint16_t display_bucket_start[NUM_DISPLAY_BUCKETS] = {
-	 2, 10, 15, 20, 29, 39, 49, 58, 65, 81
+	 2,  6, 10, 12, 15, 17, 20, 25, 29, 33, 39, 45, 49, 55, 58, 61, 65, 73, 81, 89
 };
 static const uint16_t display_bucket_end[NUM_DISPLAY_BUCKETS] = {
-	 9, 14, 19, 28, 38, 48, 57, 64, 80, 96
+	 5,  9, 11, 14, 16, 19, 24, 28, 32, 38, 44, 48, 54, 57, 60, 64, 72, 80, 88, 96
 };
 
 /* All buffers are file-scope static to avoid pressure on the DSP thread stack. */

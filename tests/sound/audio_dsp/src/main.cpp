@@ -94,9 +94,8 @@ ZTEST(audio_dsp, test_silence_no_beat)
 }
 
 /* ── Test 4: Display bucket energy localisation ──────────────────────────────
- * A 100 Hz sine (bin ~3) sits inside bucket 0 (bins 2–9, 62–281 Hz).
- * Its energy must exceed that of the upper-mid bucket 6 (1531–1781 Hz)
- * and the top bucket 9 (2531–3000 Hz). */
+ * A 100 Hz sine (bin ~3) sits inside bucket 0 (bins 2–5, 62–156 Hz).
+ * Its energy must exceed bucket 12 (1531–1688 Hz) and bucket 19 (2781–3000 Hz). */
 ZTEST(audio_dsp, test_100hz_sine_localises_in_low_display_bucket)
 {
 	audio_dsp_init();
@@ -107,14 +106,14 @@ ZTEST(audio_dsp, test_100hz_sine_localises_in_low_display_bucket)
 	make_100hz_sine(pcm);
 	audio_dsp_process(pcm, 0, &result);
 
-	zassert_true(result.display_bucket_energy[0] > result.display_bucket_energy[6],
-		     "100 Hz energy in bucket 0 (%f) should exceed bucket 6 (%f)",
+	zassert_true(result.display_bucket_energy[0] > result.display_bucket_energy[12],
+		     "100 Hz energy in bucket 0 (%f) should exceed bucket 12 (%f)",
 		     (double)result.display_bucket_energy[0],
-		     (double)result.display_bucket_energy[6]);
-	zassert_true(result.display_bucket_energy[0] > result.display_bucket_energy[9],
-		     "100 Hz energy in bucket 0 (%f) should exceed bucket 9 (%f)",
+		     (double)result.display_bucket_energy[12]);
+	zassert_true(result.display_bucket_energy[0] > result.display_bucket_energy[19],
+		     "100 Hz energy in bucket 0 (%f) should exceed bucket 19 (%f)",
 		     (double)result.display_bucket_energy[0],
-		     (double)result.display_bucket_energy[9]);
+		     (double)result.display_bucket_energy[19]);
 }
 
 ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, NULL, NULL);
