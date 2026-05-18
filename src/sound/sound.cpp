@@ -154,8 +154,8 @@ int configure_pdm()
     LOG_INF("Gain R Register Value: 0x%d", *gain_r);
 
     // Increase gain from 0x28 (0 dB) -> 0x40 (+12 dB)
-    *gain_l = 0x40;
-    *gain_r = 0x40;
+    *gain_l = 0x30;
+    *gain_r = 0x30;
 
     return ret;
 }

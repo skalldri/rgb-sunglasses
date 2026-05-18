@@ -11,8 +11,12 @@
 #include <animations/rainbow_animation.h>
 #include <animations/my_eyes_animation.h>
 
-#if defined(CONFIG_ANIMATION_AUDIO)
-#include <animations/audio_animation.h>
+#if defined(CONFIG_ANIMATION_BEAT)
+#include <animations/beat_animation.h>
+#endif
+
+#if defined(CONFIG_ANIMATION_FFT_BARS)
+#include <animations/fft_bars_animation.h>
 #endif
 
 namespace
@@ -52,8 +56,12 @@ namespace
     using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes>;
 #endif
 
-#if defined(CONFIG_ANIMATION_AUDIO)
-    using AudioAnimationIsActive = AnimationIsActiveBinding<Animation::Audio>;
+#if defined(CONFIG_ANIMATION_BEAT)
+    using BeatAnimationIsActive = AnimationIsActiveBinding<Animation::Beat>;
+#endif
+
+#if defined(CONFIG_ANIMATION_FFT_BARS)
+    using FftBarsAnimationIsActive = AnimationIsActiveBinding<Animation::FftBars>;
 #endif
 
     BaseAnimation *null_animation_factory()
@@ -87,10 +95,17 @@ namespace
     }
 #endif
 
-#if defined(CONFIG_ANIMATION_AUDIO)
-    BaseAnimation *audio_animation_factory()
+#if defined(CONFIG_ANIMATION_BEAT)
+    BaseAnimation *beat_animation_factory()
     {
-        return AudioAnimation::getInstance();
+        return BeatAnimation::getInstance();
+    }
+#endif
+
+#if defined(CONFIG_ANIMATION_FFT_BARS)
+    BaseAnimation *fft_bars_animation_factory()
+    {
+        return FftBarsAnimation::getInstance();
     }
 #endif
 }
@@ -108,8 +123,11 @@ int animation_registry_register_defaults()
 #if defined(CONFIG_ANIMATION_MY_EYES)
     AnimationIsActiveBinding<Animation::MyEyes>::registerActivator(&sActivator);
 #endif
-#if defined(CONFIG_ANIMATION_AUDIO)
-    AnimationIsActiveBinding<Animation::Audio>::registerActivator(&sActivator);
+#if defined(CONFIG_ANIMATION_BEAT)
+    AnimationIsActiveBinding<Animation::Beat>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_FFT_BARS)
+    AnimationIsActiveBinding<Animation::FftBars>::registerActivator(&sActivator);
 #endif
 
     animation_registry_reset();
@@ -182,23 +200,39 @@ int animation_registry_register_defaults()
     my_eyes_animation_bind_default_dependencies();
 #endif
 
-#if defined(CONFIG_ANIMATION_AUDIO)
-    ret = animation_registry_register(Animation::Audio, audio_animation_factory);
+#if defined(CONFIG_ANIMATION_BEAT)
+    ret = animation_registry_register(Animation::Beat, beat_animation_factory);
     if (ret)
     {
         return ret;
     }
 
-    ret = animation_registry_register_is_active(Animation::Audio, AudioAnimationIsActive::setLocalActiveState);
+    ret = animation_registry_register_is_active(Animation::Beat, BeatAnimationIsActive::setLocalActiveState);
     if (ret)
     {
         return ret;
     }
 
-    audio_animation_bind_default_sound_dependencies();
-    audio_animation_bind_default_bt_dependencies();
+    beat_animation_bind_default_sound_dependencies();
+    beat_animation_bind_default_bt_dependencies();
+#endif
+
+#if defined(CONFIG_ANIMATION_FFT_BARS)
+    ret = animation_registry_register(Animation::FftBars, fft_bars_animation_factory);
+    if (ret)
+    {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::FftBars, FftBarsAnimationIsActive::setLocalActiveState);
+    if (ret)
+    {
+        return ret;
+    }
+
+    fft_bars_animation_bind_default_sound_dependencies();
+    fft_bars_animation_bind_default_bt_dependencies();
 #endif
 
     return 0;
 }
-

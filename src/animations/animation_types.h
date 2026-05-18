@@ -11,5 +11,6 @@ enum class Animation
     Rainbow = 5,
     BtPairing = 6,
     MyEyes = 7,
-    Audio = 8,
+    Beat = 8,
+    FftBars = 9,
 };

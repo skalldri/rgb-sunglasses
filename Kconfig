@@ -49,12 +49,18 @@ config ANIMATION_ZIGZAG
 	help
 	  Enable the Zigzag animation for the sunglasses.
 
-config ANIMATION_AUDIO
-	bool "Enable Audio animation"
+config ANIMATION_BEAT
+	bool "Enable Beat animation"
 	depends on AUDIO
 	help
-	  Enable the Audio animation. Requires CONFIG_AUDIO=y.
-	  Provides BeatColor mode (flash per-band on beat detection) and
-	  FrequencyBars mode (live bar graph of band energies).
+	  Enable the Beat animation. Requires CONFIG_AUDIO=y.
+	  Flashes per-band column strips on each detected beat.
+
+config ANIMATION_FFT_BARS
+	bool "Enable FFT Bars animation"
+	depends on AUDIO
+	help
+	  Enable the FFT Bars animation. Requires CONFIG_AUDIO=y.
+	  Displays a live bar graph of the four frequency-band energies.
 
 rsource "drivers/Kconfig"

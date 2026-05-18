@@ -93,4 +93,28 @@ ZTEST(audio_dsp, test_silence_no_beat)
 	}
 }
 
+/* ── Test 4: Display bucket energy localisation ──────────────────────────────
+ * A 100 Hz sine (bin ~3) should produce higher energy in the low-frequency
+ * display buckets than in a high-frequency bucket. Bucket 1 covers bins [3,3]
+ * and bucket 13 covers bins [180,254] (~5.6–7.9 kHz). */
+ZTEST(audio_dsp, test_100hz_sine_localises_in_low_display_bucket)
+{
+	audio_dsp_init();
+
+	int16_t pcm[AUDIO_FFT_SIZE];
+	struct audio_analysis_result result;
+
+	make_100hz_sine(pcm);
+	audio_dsp_process(pcm, 0, &result);
+
+	zassert_true(result.display_bucket_energy[1] > result.display_bucket_energy[10],
+		     "100 Hz energy in bucket 1 (%f) should exceed bucket 10 (%f)",
+		     (double)result.display_bucket_energy[1],
+		     (double)result.display_bucket_energy[10]);
+	zassert_true(result.display_bucket_energy[1] > result.display_bucket_energy[13],
+		     "100 Hz energy in bucket 1 (%f) should exceed bucket 13 (%f)",
+		     (double)result.display_bucket_energy[1],
+		     (double)result.display_bucket_energy[13]);
+}
+
 ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, NULL, NULL);

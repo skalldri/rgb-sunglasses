@@ -1,5 +1,5 @@
 tests:
-  animations.audio_animation_di:
+  animations.fft_bars_animation_di:
     platform_allow:
       - native_sim
     integration_platforms:
