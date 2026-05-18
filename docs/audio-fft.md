@@ -100,7 +100,68 @@ The recommended sequence trades risk for velocity. Each phase produces a working
 
 **Phase 1 — Energy-based bass detection (1 day).** Implement Patin's time-domain algorithm in the cleaned-up `μ + 2σ` form on 32 ms blocks with a 31-block (~1 s) history. Drive a single LED on/off via GPIO on detection. **This will look great on EDM/techno** and validates the end-to-end timing. You can ship this as a v0 product.
 
-**Phase 2 — CMSIS-DSP integration and sub-band energies (1–2 days).** Add `CONFIG_FPU=y`, `CONFIG_FPU_SHARING=y`, `CONFIG_CMSIS_DSP=y`, `CONFIG_CMSIS_DSP_TRANSFORM=y`, `CONFIG_CMSIS_DSP_COMPLEX_MATH=y`. Move processing into a dedicated DSP thread fed by the slab. Implement 512-point Hann-windowed `arm_rfft_fast_f32` followed by `arm_cmplx_mag_squared_f32`. Aggregate into 4–8 logarithmic sub-bands. Verify FFT timing with `DWT->CYCCNT`.
+**Phase 2 — CMSIS-DSP integration and sub-band energies (1–2 days).** Add `CONFIG_FPU=y`, `CONFIG_FPU_SHARING=y`, `CONFIG_CMSIS_DSP=y`, `CONFIG_CMSIS_DSP_TRANSFORM=y`, `CONFIG_CMSIS_DSP_COMPLEXMATH=y`, `CONFIG_CMSIS_DSP_STATISTICS=y`, `CONFIG_CMSIS_DSP_WINDOW=y`. Move processing into a dedicated DSP thread fed by the slab. Implement 512-point Hann-windowed `arm_rfft_fast_f32` followed by `arm_cmplx_mag_squared_f32`. Aggregate into 4 logarithmic sub-bands (bass 31–200 Hz, low-mid 219–781 Hz, mid 813–1969 Hz, high 2–6 kHz). Publish `{band_energy[4], beat[4], seq}` via `k_msgq`. Verify FFT timing with `DWT->CYCCNT`. **PCM must be normalised to [-1, 1] (divide int16 by 32768.0f) before the FFT.** The beat detector uses `energy > BEAT_ENERGY_FLOOR && energy > mean + alpha*sigma` with `alpha = 3.5` and `BEAT_ENERGY_FLOOR = 1e-3f`. Implemented in `src/sound/audio_dsp.cpp` (no DMIC dependency) with a Twister test suite at `tests/sound/audio_dsp/`.
+
+**Phase 2b — Replace band-energy detector with per-band log-spectral-flux ODF (1 day).** The `mean + alpha*sigma` test on raw energy is scale-dependent and fails across large dynamic-range changes: in a quiet room sigma collapses and the threshold fires on computer fans; at a festival the sustained bass floor becomes the mean and real beats look like ordinary variance. No single alpha value works across both environments. The correct fix is per-band **half-wave-rectified log-magnitude spectral flux** with an adaptive median threshold:
+
+```
+log_e[b]   = log1p(GAMMA * band_energy[b])      // GAMMA ≈ 1000 compresses dynamic range
+sf[b]      = max(0, log_e[b] - prev_log_e[b])   // half-wave-rectified frame-to-frame diff
+threshold  = median(sf_history[b]) + SF_DELTA    // SF_DELTA ≈ 0.10 — tune in the field
+beat fires when sf[b] > threshold
+```
+
+Log compression makes SF scale-invariant: doubling the room volume adds a constant to every log value that cancels in the difference. The adaptive median self-adjusts to the typical ODF level at any venue — quiet room median ≈ 0, festival median reflects ongoing musical flux — so a beat spike stands out equally at both extremes. The median computation is a simple insertion sort over the 32-entry HISTORY_LEN buffer (~250 comparisons, < 5 µs on M33F, no extra Kconfig). `log1pf()` is available in newlib and is more accurate than `logf(1 + x)` for small x. Tuning guide: lower `SF_DELTA` if real beats are missed; raise it if false positives persist. The log line `sf=X threshold=Y` shows exactly how much headroom each detected beat has.
+
+**Phase 2c — Adaptive gain control (AGC) (0.5–1 day).** The nRF5340 PDM peripheral's GAINL/GAINR registers (offsets 0x518/0x51C from the PDM base address) accept values in the range `NRF_PDM_GAIN_MINIMUM = 0x00` (−20 dB) through `NRF_PDM_GAIN_DEFAULT = 0x28` (0 dB) through `NRF_PDM_GAIN_MAXIMUM = 0x50` (+20 dB), at 0.5 dB per LSB. The current firmware writes 0x40 (+12 dB) once at startup and never revisits it. This is fine at home-studio listening levels but will clip at a festival stage and will be over-sensitive in a very quiet room.
+
+The AGC design is RMS-based with asymmetric attack/release timing to prevent gain pumping on transients:
+
+```
+// Compute per-block RMS in audio_dsp_process() (arm_rms_f32, already in CMSIS_DSP_STATISTICS)
+// Expose rms in audio_analysis_result.
+
+// AGC state in sound.cpp (the DMIC thread — already owns the register pointers):
+uint8_t  gain_current = 0x40;          // starting value; NRF_PDM_GAIN_DEFAULT-range
+int      rms_low_count  = 0;           // consecutive frames below target
+int      rms_high_count = 0;           // consecutive frames above target
+uint32_t gain_last_changed_seq = 0;    // rate-limiter
+
+// Each frame:
+if (any sample >= 32700) {             // near-clip: immediate 2-step reduction, no rate limit
+    gain_current = MAX(gain_current - 2, NRF_PDM_GAIN_MINIMUM);
+    write_gain(gain_current);
+    audio_dsp_reset_history();         // see below
+}
+else if (rms > AGC_TARGET_HIGH) {      // too loud: fast attack (3 consecutive frames)
+    if (++rms_high_count >= 3 && seq - gain_last_changed_seq >= AGC_MIN_FRAME_GAP) {
+        gain_current = MAX(gain_current - 1, NRF_PDM_GAIN_MINIMUM);
+        write_gain(gain_current); gain_last_changed_seq = seq; rms_high_count = 0;
+        audio_dsp_reset_history();
+    }
+} else { rms_high_count = 0; }
+
+if (rms < AGC_TARGET_LOW) {            // too quiet: slow release (15 consecutive frames)
+    if (++rms_low_count >= 15 && seq - gain_last_changed_seq >= AGC_MIN_FRAME_GAP) {
+        gain_current = MIN(gain_current + 1, NRF_PDM_GAIN_MAXIMUM);
+        write_gain(gain_current); gain_last_changed_seq = seq; rms_low_count = 0;
+        audio_dsp_reset_history();
+    }
+} else { rms_low_count = 0; }
+```
+
+Suggested constants (tune on hardware):
+- `AGC_TARGET_LOW  = 0.02f` (−34 dBFS normalised RMS — mic is too quiet, raise gain)
+- `AGC_TARGET_HIGH = 0.30f` (−10 dBFS normalised RMS — mic is getting loud, back off)
+- `AGC_MIN_FRAME_GAP = 10` (minimum 10 frames ≈ 320 ms between gain steps to prevent hunting)
+
+**History flush after a gain change** is important: all energy history buffers (`s_band_history` for Phase 2, `s_sf_history` and `s_prev_log_energy` for Phase 2b) contain samples captured at the old gain setting. A 1-step (0.5 dB, ~12% amplitude) change introduces a discontinuity that looks like a beat onset. Expose `audio_dsp_reset_history()` from `audio_dsp.h` and call it from `sound.cpp` after every gain write. For Phase 2b's spectral flux this matters most for `prev_log_energy`: the immediate frame after a gain step will produce a large false-positive SF value unless `prev_log_energy` is cleared.
+
+**Implementation notes:**
+- `nrf_pdm.h` (already reachable from the nrfx HAL) defines `NRF_PDM_GAIN_MINIMUM`, `NRF_PDM_GAIN_DEFAULT`, `NRF_PDM_GAIN_MAXIMUM`. Use them instead of the current magic numbers 0x28 / 0x40.
+- `arm_rms_f32(s_fft_input, NUM_FFT_SAMPLES, &rms)` can be called in `audio_dsp_process()` after the int16→float conversion, before the FFT window is applied (since the Hann window would reduce the RMS). Expose `rms` in `audio_analysis_result`.
+- The near-clip detection can read the raw int16 buffer before conversion: scan for `abs(pcm[i]) >= 32700`.
+- Add `current_gain` to `audio_analysis_result` so the log line can show what gain level is active — useful for confirming the AGC is working at the venue.
 
 **Phase 3 — LED strip integration (1 day).** Wire the WS2812 I2S backend with a level-shifter, build from `samples/drivers/led/led_strip`, drive the strip from a separate LED thread fed via `k_msgq` from the DSP thread. Implement bass-driven brightness with exponential decay and a slowly rotating color palette. This is the first version that looks like a real product.
 
