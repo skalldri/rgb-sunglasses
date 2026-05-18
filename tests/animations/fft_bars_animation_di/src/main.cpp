@@ -5,17 +5,7 @@
 
 namespace
 {
-    class MutableUint32Source : public AnimationUint32ParameterSource
-    {
-    public:
-        explicit MutableUint32Source(uint32_t value) : value_(value) {}
-        uint32_t get() const override { return value_; }
-        void set(uint32_t value) { value_ = value; }
-    private:
-        uint32_t value_;
-    };
-
-    /* 4 test display buckets: with kBarWidthPx=2 and a 8-wide renderer this
+    /* 4 test display buckets: with kBarWidthPx=2 and an 8-wide renderer this
      * fills exactly 4*2=8 px — the full test display width. */
     class MutableAudioSource : public AnimationAudioSource
     {
@@ -44,14 +34,13 @@ namespace
             for (size_t b = 0; b < kTestBuckets; b++) energy_[b] = 0.0f;
         }
 
-        /* 4 buckets × 2 px = 8 px, matching the test renderer width. */
         static constexpr size_t kTestBuckets = 4;
 
     private:
         float energy_[kTestBuckets] = {};
     };
 
-    /* Test display: 8 columns × 4 rows. With 4 test buckets × 2 px/bar = 8 px. */
+    /* Test display: 8 columns × 4 rows. 4 test buckets × 2 px/bar = 8 px wide. */
     static constexpr size_t kTestWidth = 8;
     static constexpr size_t kTestHeight = 4;
 
@@ -121,13 +110,11 @@ ZTEST_SUITE(fft_bars_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 /* Zero energy for all buckets → entire display is dark. */
 ZTEST(fft_bars_animation_di_tests, test_zero_energy_is_dark)
 {
-    MutableUint32Source color(0x00FFFFFF);
     MutableAudioSource audio;
     audio.resetAll();
 
     FftBarsAnimation *anim = FftBarsAnimation::getInstance();
     anim->setAudioSource(audio);
-    anim->setColor(color);
     anim->init();
 
     CapturingTestRenderer renderer;
@@ -140,7 +127,6 @@ ZTEST(fft_bars_animation_di_tests, test_zero_energy_is_dark)
 /* Non-zero energy for bucket 0 lights the bottom pixel of its 2-px-wide strip. */
 ZTEST(fft_bars_animation_di_tests, test_energy_lights_bottom_pixel)
 {
-    MutableUint32Source color(0x0000FF00); /* green */
     MutableAudioSource audio;
     audio.resetAll();
     /* kEnergyScale=20: energy=0.1 → fraction=1.0 after smoothing converges.
@@ -149,7 +135,6 @@ ZTEST(fft_bars_animation_di_tests, test_energy_lights_bottom_pixel)
 
     FftBarsAnimation *anim = FftBarsAnimation::getInstance();
     anim->setAudioSource(audio);
-    anim->setColor(color);
     anim->init();
 
     CapturingTestRenderer renderer;
@@ -166,14 +151,12 @@ ZTEST(fft_bars_animation_di_tests, test_energy_lights_bottom_pixel)
 /* Energy only in bucket 2 lights only bucket 2's 2-px column strip. */
 ZTEST(fft_bars_animation_di_tests, test_bucket_column_isolation)
 {
-    MutableUint32Source color(0x00FF00FF); /* magenta */
     MutableAudioSource audio;
     audio.resetAll();
     audio.setEnergy(2, 0.1f);
 
     FftBarsAnimation *anim = FftBarsAnimation::getInstance();
     anim->setAudioSource(audio);
-    anim->setColor(color);
     anim->init();
 
     CapturingTestRenderer renderer;
@@ -190,17 +173,49 @@ ZTEST(fft_bars_animation_di_tests, test_bucket_column_isolation)
     zassert_true(bucketStripIsDark(3), "Bucket 3 strip should be dark");
 }
 
+/* Bottom lit pixel is greenish; top lit pixel is reddish (gradient test).
+ * Use full energy so the bar fills the entire display height. */
+ZTEST(fft_bars_animation_di_tests, test_gradient_bottom_green_top_red)
+{
+    MutableAudioSource audio;
+    audio.resetAll();
+    audio.setEnergy(0, 1.0f); /* saturate: will converge to full bar */
+
+    FftBarsAnimation *anim = FftBarsAnimation::getInstance();
+    anim->setAudioSource(audio);
+    anim->init();
+
+    CapturingTestRenderer renderer;
+
+    /* Drive smoothing to convergence. */
+    for (int i = 0; i < 20; i++)
+    {
+        resetCapture();
+        anim->tick(renderer, 16);
+    }
+
+    /* Bottom row: fraction=0.0 → pure green (r=0, g=255, b=0). */
+    size_t bottomRow = kTestHeight - 1;
+    zassert_equal(sPixels[0][bottomRow].r, 0,   "Bottom pixel red should be 0");
+    zassert_equal(sPixels[0][bottomRow].b, 0,   "Bottom pixel blue should be 0");
+    zassert_true(sPixels[0][bottomRow].g > 200, "Bottom pixel should be greenish");
+
+    /* Top row: fraction=1.0 → pure red (r=255, g=0, b=0). */
+    size_t topRow = 0;
+    zassert_equal(sPixels[0][topRow].r, 255, "Top pixel red should be 255");
+    zassert_equal(sPixels[0][topRow].g, 0,   "Top pixel green should be 0");
+    zassert_equal(sPixels[0][topRow].b, 0,   "Top pixel blue should be 0");
+}
+
 /* init() resets the smoothed energy so the animation starts from silence. */
 ZTEST(fft_bars_animation_di_tests, test_init_resets_smoothed_energy)
 {
-    MutableUint32Source color(0x00FFFFFF);
     MutableAudioSource audio;
     audio.resetAll();
     audio.setEnergy(0, 0.1f);
 
     FftBarsAnimation *anim = FftBarsAnimation::getInstance();
     anim->setAudioSource(audio);
-    anim->setColor(color);
     anim->init();
 
     CapturingTestRenderer renderer;
