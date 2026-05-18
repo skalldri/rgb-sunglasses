@@ -11,6 +11,10 @@
 #include <animations/rainbow_animation.h>
 #include <animations/my_eyes_animation.h>
 
+#if defined(CONFIG_ANIMATION_AUDIO)
+#include <animations/audio_animation.h>
+#endif
+
 namespace
 {
     class RegistryActiveStateObserver : public AnimationActiveStateObserver
@@ -48,6 +52,10 @@ namespace
     using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes>;
 #endif
 
+#if defined(CONFIG_ANIMATION_AUDIO)
+    using AudioAnimationIsActive = AnimationIsActiveBinding<Animation::Audio>;
+#endif
+
     BaseAnimation *null_animation_factory()
     {
         return NullAnimation::getInstance();
@@ -78,6 +86,13 @@ namespace
         return MyEyesAnimation::getInstance();
     }
 #endif
+
+#if defined(CONFIG_ANIMATION_AUDIO)
+    BaseAnimation *audio_animation_factory()
+    {
+        return AudioAnimation::getInstance();
+    }
+#endif
 }
 
 int animation_registry_register_defaults()
@@ -92,6 +107,9 @@ int animation_registry_register_defaults()
 #endif
 #if defined(CONFIG_ANIMATION_MY_EYES)
     AnimationIsActiveBinding<Animation::MyEyes>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_AUDIO)
+    AnimationIsActiveBinding<Animation::Audio>::registerActivator(&sActivator);
 #endif
 
     animation_registry_reset();
@@ -162,6 +180,23 @@ int animation_registry_register_defaults()
     }
 
     my_eyes_animation_bind_default_dependencies();
+#endif
+
+#if defined(CONFIG_ANIMATION_AUDIO)
+    ret = animation_registry_register(Animation::Audio, audio_animation_factory);
+    if (ret)
+    {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::Audio, AudioAnimationIsActive::setLocalActiveState);
+    if (ret)
+    {
+        return ret;
+    }
+
+    audio_animation_bind_default_sound_dependencies();
+    audio_animation_bind_default_bt_dependencies();
 #endif
 
     return 0;

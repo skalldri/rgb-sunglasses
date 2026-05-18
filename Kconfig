@@ -49,4 +49,12 @@ config ANIMATION_ZIGZAG
 	help
 	  Enable the Zigzag animation for the sunglasses.
 
+config ANIMATION_AUDIO
+	bool "Enable Audio animation"
+	depends on AUDIO
+	help
+	  Enable the Audio animation. Requires CONFIG_AUDIO=y.
+	  Provides BeatColor mode (flash per-band on beat detection) and
+	  FrequencyBars mode (live bar graph of band energies).
+
 rsource "drivers/Kconfig"
