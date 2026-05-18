@@ -9,7 +9,7 @@
 #include "rgb_sunglasses_dk_nrf5340_cpunet-pinctrl.dtsi"
 
 / {
-	model = "Nordic NRF5340 DK NRF5340 Network";
+	model = "RGB Sunglasses DK NRF5340 Network";
 	compatible = "nordic,nrf5340-dk-nrf5340-cpunet";
 
 	chosen {
