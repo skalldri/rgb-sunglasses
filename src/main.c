@@ -20,7 +20,7 @@ LOG_MODULE_REGISTER(main);
 
 void main(void)
 {
-    LOG_INF("RGB Sunglasses DK - Main");
+    LOG_INF("RGB Sunglasses - Main");
 
     for (;;) {
         // LOG_INF("App is alive");

@@ -9,7 +9,7 @@
 #include "rgb_sunglasses_proto0_nrf5340_cpuapp_common.dts"
 
 / {
-	model = "Nordic NRF5340 DK NRF5340 Application";
+	model = "RGB Sunglasses Proto0 NRF5340 Application";
 	compatible = "nordic,nrf5340-dk-nrf5340-cpuapp";
 
 	chosen {

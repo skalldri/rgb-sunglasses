@@ -1,0 +1,98 @@
+# Static partition map for rgb_sunglasses_proto0 (nRF5340 CPUAPP)
+#
+# Internal flash: 1 MB (0x100000) — code only
+#   mcuboot   0x00000  80 KB  (0x14000)  — enlarged for QSPI NOR driver
+#   app       0x14200 ~943 KB (0xEBE00)  — fills ALL remaining internal flash
+#
+# External flash: MX25R6435F 8 MB (0x800000)
+#   mcuboot_secondary   0x000000  944 KB (0xEC000)  — must match mcuboot_primary
+#   mcuboot_secondary_1 0x0EC000  256 KB (0x40000)  — net core OTA staging
+#   settings_storage    0x12C000    8 KB (0x02000)  — NVS persistent settings
+#   fat_storage         0x12E000    4 MB (0x400000)  — FAT filesystem / USB Mass Storage
+#   external_flash      0x52E000 ~2.82 MB (0x2D2000) — remaining raw flash
+#
+# CONFIG_BOOT_MAX_IMG_SECTORS=256 is set in the mcuboot board conf to handle
+# the 236 internal-flash sectors (944 KB / 4 KB) in the primary slot.
+
+mcuboot:
+  address: 0x0
+  region: flash_primary
+  size: 0x14000
+
+mcuboot_pad:
+  address: 0x14000
+  region: flash_primary
+  size: 0x200
+
+app:
+  address: 0x14200
+  region: flash_primary
+  size: 0xebe00
+
+mcuboot_primary:
+  address: 0x14000
+  orig_span: &id001
+  - mcuboot_pad
+  - app
+  region: flash_primary
+  size: 0xec000
+  span: *id001
+
+mcuboot_primary_app:
+  address: 0x14200
+  orig_span: &id002
+  - app
+  region: flash_primary
+  size: 0xebe00
+  span: *id002
+
+# Net core primary: modelled as ram_flash (app core cannot directly access net
+# core flash; PCD copies the validated image here, then B0N pulls it in).
+mcuboot_primary_1:
+  address: 0x0
+  size: 0x40000
+  device: flash_ctrl
+  region: ram_flash
+
+mcuboot_secondary:
+  address: 0x00000
+  size: 0xec000
+  device: MX25R64
+  region: external_flash
+
+mcuboot_secondary_1:
+  address: 0xec000
+  size: 0x40000
+  device: MX25R64
+  region: external_flash
+
+settings_storage:
+  address: 0x12c000
+  size: 0x2000
+  device: MX25R64
+  region: external_flash
+
+fat_storage:
+  address: 0x12e000
+  size: 0x400000        # 4 MB — FAT filesystem (USB Mass Storage)
+  device: MX25R64
+  region: external_flash
+  # affiliation: disk registers this partition with the flash disk driver (PM path).
+  # extra_params keys follow the disk_<param> convention required by flashdisk.c.
+  affiliation: disk
+  extra_params:
+    disk_name: NAND
+    disk_cache_size: 4096
+    disk_sector_size: 4096
+
+external_flash:
+  address: 0x52e000
+  size: 0x2d2000        # ~2.82 MB — remaining raw flash
+  device: MX25R64
+  region: external_flash
+
+# PCD shared SRAM: MCUboot signals the net core update request here.
+pcd_sram:
+  address: 0x20000000
+  size: 0x2000
+  region: sram_primary
