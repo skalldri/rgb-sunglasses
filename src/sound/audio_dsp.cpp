@@ -31,27 +31,26 @@ LOG_MODULE_REGISTER(audio_dsp);
 static const uint16_t band_bin_start[NUM_BANDS] = {  1,  7, 26,  64 };
 static const uint16_t band_bin_end[NUM_BANDS]   = {  6, 25, 63, 191 };
 
-/* Display bucket boundaries: 14 logarithmically-spaced buckets from bin 2 to
- * bin 254 (~62 Hz – 7.9 kHz).  Derived from round(exp(log(2) + i*(log(255)-log(2))/14)).
- * Bucket 0:  bins   2–  2   62 Hz        (1 bin)
- * Bucket 1:  bins   3–  3   94 Hz        (1 bin)
- * Bucket 2:  bins   4–  5  125–156 Hz    (2 bins)
- * Bucket 3:  bins   6–  7  188–219 Hz    (2 bins)
- * Bucket 4:  bins   8– 10  250–313 Hz    (3 bins)
- * Bucket 5:  bins  11– 15  344–469 Hz    (5 bins)
- * Bucket 6:  bins  16– 22  500–688 Hz    (7 bins)
- * Bucket 7:  bins  23– 31  719–969 Hz    (9 bins)
- * Bucket 8:  bins  32– 44 1000–1375 Hz  (13 bins)
- * Bucket 9:  bins  45– 63 1406–1969 Hz  (19 bins)
- * Bucket 10: bins  64– 89 2000–2781 Hz  (26 bins)
- * Bucket 11: bins  90–126 2813–3938 Hz  (37 bins)
- * Bucket 12: bins 127–179 3969–5594 Hz  (53 bins)
- * Bucket 13: bins 180–254 5625–7938 Hz  (75 bins) */
+/* Display bucket boundaries modelled on a professional VU meter, capped at 3 kHz.
+ * (bin width = 31.25 Hz; bin 1 = 31 Hz is sub-bass below PDM mic range, skipped)
+ * Fine resolution in the bass and low-mid where musical content is densest;
+ * coarser above 1.5 kHz where adjacent semitones are less perceptually distinct.
+ *
+ * Bucket 0:  bins   2–  9   62– 281 Hz  (VU   0– 300, merged – bin 1 is noise)
+ * Bucket 1:  bins  10– 14  313– 438 Hz  (VU 300– 450)
+ * Bucket 2:  bins  15– 19  469– 594 Hz  (VU 450– 600)
+ * Bucket 3:  bins  20– 28  625– 875 Hz  (VU 600– 750 + 750– 900, merged)
+ * Bucket 4:  bins  29– 38  906–1188 Hz  (VU 900–1000 + 1000–1200, merged)
+ * Bucket 5:  bins  39– 48 1219–1500 Hz  (VU 1200–1400 + 1400–1500, merged)
+ * Bucket 6:  bins  49– 57 1531–1781 Hz  (VU 1500–1700 + 1700–1800, merged)
+ * Bucket 7:  bins  58– 64 1813–2000 Hz  (VU 1800–2000)
+ * Bucket 8:  bins  65– 80 2031–2500 Hz  (VU 2000–2200 + 2200–2500, merged)
+ * Bucket 9:  bins  81– 96 2531–3000 Hz  (VU 2500–4000, capped at 3 kHz) */
 static const uint16_t display_bucket_start[NUM_DISPLAY_BUCKETS] = {
-	  2,   3,   4,   6,   8,  11,  16,  23,  32,  45,  64,  90, 127, 180
+	 2, 10, 15, 20, 29, 39, 49, 58, 65, 81
 };
 static const uint16_t display_bucket_end[NUM_DISPLAY_BUCKETS] = {
-	  2,   3,   5,   7,  10,  15,  22,  31,  44,  63,  89, 126, 179, 254
+	 9, 14, 19, 28, 38, 48, 57, 64, 80, 96
 };
 
 /* All buffers are file-scope static to avoid pressure on the DSP thread stack. */

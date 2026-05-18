@@ -56,6 +56,30 @@ static void gradient_color(float fraction, uint8_t &r, uint8_t &g, uint8_t &b)
     b = lerp_channel(from.b, to.b, t);
 }
 
+/* Render a single bar column (one pixel wide) at display column `x`. */
+static void render_bar_column(AnimationRenderer &renderer, size_t x, size_t H,
+                               size_t barHeight)
+{
+    for (size_t y = 0; y < H; y++)
+    {
+        bool lit = (H > 0) && (y >= H - barHeight);
+        if (lit)
+        {
+            float rowFraction = (H > 1)
+                                    ? static_cast<float>(H - 1 - y) /
+                                          static_cast<float>(H - 1)
+                                    : 0.0f;
+            uint8_t r, g, b;
+            gradient_color(rowFraction, r, g, b);
+            renderer.setPixel(x, y, r, g, b);
+        }
+        else
+        {
+            renderer.setPixel(x, y, 0, 0, 0);
+        }
+    }
+}
+
 void FftBarsAnimation::setAudioSource(AnimationAudioSource &source)
 {
     audioSource_ = &source;
@@ -73,11 +97,14 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
 {
     ARG_UNUSED(timeSinceLastTickMs);
 
+    size_t W = renderer.displayWidth();
+    size_t H = renderer.displayHeight();
+
     if (!audioSource_)
     {
-        for (size_t x = 0; x < renderer.displayWidth(); x++)
+        for (size_t x = 0; x < W; x++)
         {
-            for (size_t y = 0; y < renderer.displayHeight(); y++)
+            for (size_t y = 0; y < H; y++)
             {
                 renderer.setPixel(x, y, 0, 0, 0);
             }
@@ -93,9 +120,6 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
         numBuckets = kMaxDisplayBuckets;
     }
 
-    size_t W = renderer.displayWidth();
-    size_t H = renderer.displayHeight();
-
     /* Update smoothed energies with exponential moving average. */
     for (size_t bucket = 0; bucket < numBuckets; bucket++)
     {
@@ -103,17 +127,19 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
         smoothed_[bucket] = kSmoothingCoeff * energy + (1.0f - kSmoothingCoeff) * smoothed_[bucket];
     }
 
-    /* Render bars: each bucket occupies exactly kBarWidthPx columns. */
-    size_t barAreaWidth = numBuckets * kBarWidthPx;
-
-    for (size_t bucket = 0; bucket < numBuckets; bucket++)
+    /* Mirrored layout: the left half of the display shows buckets low→high
+     * (bucket 0 at the outer left edge, highest bucket at the centre-left).
+     * The right half mirrors this symmetrically (highest bucket at centre-right,
+     * bucket 0 at the outer right edge). */
+    size_t halfWidth = W / 2;
+    size_t bucketsPerHalf = halfWidth / kBarWidthPx;
+    if (bucketsPerHalf > numBuckets)
     {
-        size_t startX = bucket * kBarWidthPx;
-        if (startX >= W)
-        {
-            break;
-        }
+        bucketsPerHalf = numBuckets;
+    }
 
+    for (size_t bucket = 0; bucket < bucketsPerHalf; bucket++)
+    {
         float fraction = smoothed_[bucket] * kEnergyScale;
         if (fraction > 1.0f)
         {
@@ -126,32 +152,30 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
 
         size_t barHeight = static_cast<size_t>(fraction * static_cast<float>(H) + 0.5f);
 
-        for (size_t bx = 0; bx < kBarWidthPx && startX + bx < W; bx++)
+        /* Left side: bucket 0 at x=0, increasing frequency toward the centre. */
+        size_t leftStartX = bucket * kBarWidthPx;
+
+        /* Right side: mirror — bucket 0 at x=W-kBarWidthPx, toward the centre. */
+        size_t rightStartX = W - (bucket + 1) * kBarWidthPx;
+
+        for (size_t bx = 0; bx < kBarWidthPx; bx++)
         {
-            for (size_t y = 0; y < H; y++)
+            if (leftStartX + bx < W)
             {
-                bool lit = (H > 0) && (y >= H - barHeight);
-                if (lit)
-                {
-                    /* Colour depends on absolute row: bottom = green, top = red. */
-                    float rowFraction = (H > 1)
-                                            ? static_cast<float>(H - 1 - y) /
-                                                  static_cast<float>(H - 1)
-                                            : 0.0f;
-                    uint8_t r, g, b;
-                    gradient_color(rowFraction, r, g, b);
-                    renderer.setPixel(startX + bx, y, r, g, b);
-                }
-                else
-                {
-                    renderer.setPixel(startX + bx, y, 0, 0, 0);
-                }
+                render_bar_column(renderer, leftStartX + bx, H, barHeight);
+            }
+            if (rightStartX + bx < W)
+            {
+                render_bar_column(renderer, rightStartX + bx, H, barHeight);
             }
         }
     }
 
-    /* Black-fill any display columns to the right of the bar area. */
-    for (size_t x = barAreaWidth; x < W; x++)
+    /* Black-fill any gap between the two halves (e.g. if bucketsPerHalf *
+     * kBarWidthPx does not reach the centre exactly). */
+    size_t leftEnd   = bucketsPerHalf * kBarWidthPx;
+    size_t rightStart = W - bucketsPerHalf * kBarWidthPx;
+    for (size_t x = leftEnd; x < rightStart; x++)
     {
         for (size_t y = 0; y < H; y++)
         {

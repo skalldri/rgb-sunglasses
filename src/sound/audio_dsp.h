@@ -5,9 +5,10 @@
 #define AUDIO_NUM_BANDS          4
 #define AUDIO_FFT_SIZE           512
 
-/* 14 logarithmically-spaced buckets (bins 2–254, ~62 Hz–8 kHz).
+/* 10 VU-meter-inspired buckets covering bins 2–96 (~62 Hz–3 kHz).
+ * More granular at lower frequencies, coarser above 1.5 kHz.
  * Used for display visualisation; beat detection uses AUDIO_NUM_BANDS. */
-#define AUDIO_NUM_DISPLAY_BUCKETS 14
+#define AUDIO_NUM_DISPLAY_BUCKETS 10
 
 struct audio_analysis_result {
 	float band_energy[AUDIO_NUM_BANDS];

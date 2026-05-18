@@ -5,8 +5,10 @@
 
 namespace
 {
-    /* 4 test display buckets: with kBarWidthPx=2 and an 8-wide renderer this
-     * fills exactly 4*2=8 px — the full test display width. */
+    /* 2 test display buckets.
+     * Test display is 8 px wide; halfWidth=4, kBarWidthPx=2 → 2 buckets per side.
+     * Left:  bucket 0 → x[0,1],  bucket 1 → x[2,3]
+     * Right (mirror): bucket 1 → x[4,5],  bucket 0 → x[6,7] */
     class MutableAudioSource : public AnimationAudioSource
     {
     public:
@@ -34,14 +36,14 @@ namespace
             for (size_t b = 0; b < kTestBuckets; b++) energy_[b] = 0.0f;
         }
 
-        static constexpr size_t kTestBuckets = 4;
+        static constexpr size_t kTestBuckets = 2;
 
     private:
         float energy_[kTestBuckets] = {};
     };
 
-    /* Test display: 8 columns × 4 rows. 4 test buckets × 2 px/bar = 8 px wide. */
-    static constexpr size_t kTestWidth = 8;
+    /* 8 × 4 display: 2 buckets × 2 px × 2 sides = 8 px — fills exactly. */
+    static constexpr size_t kTestWidth  = 8;
     static constexpr size_t kTestHeight = 4;
 
     struct PixelColor
@@ -55,7 +57,7 @@ namespace
     class CapturingTestRenderer : public AnimationRenderer
     {
     public:
-        size_t displayWidth() const override { return kTestWidth; }
+        size_t displayWidth()  const override { return kTestWidth; }
         size_t displayHeight() const override { return kTestHeight; }
         void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
         {
@@ -89,17 +91,18 @@ namespace
         return true;
     }
 
-    /* Each bucket occupies exactly kBarWidthPx=2 columns.
-     * Bucket b → x = [b*2, b*2+1]. */
-    bool bucketStripIsDark(size_t bucket)
+    /* Returns true if ALL pixels (all rows) of bucket `b`'s left AND mirrored
+     * right strip are dark. */
+    bool bucketIsDarkBothSides(size_t bucket)
     {
-        size_t startX = bucket * 2;
-        for (size_t x = startX; x < startX + 2 && x < kTestWidth; x++)
+        size_t leftX  = bucket * 2;
+        size_t rightX = kTestWidth - (bucket + 1) * 2;
+        for (size_t y = 0; y < kTestHeight; y++)
         {
-            for (size_t y = 0; y < kTestHeight; y++)
-            {
-                if (!sPixels[x][y].isBlack()) return false;
-            }
+            if (!sPixels[leftX][y].isBlack())     return false;
+            if (!sPixels[leftX + 1][y].isBlack()) return false;
+            if (!sPixels[rightX][y].isBlack())     return false;
+            if (!sPixels[rightX + 1][y].isBlack()) return false;
         }
         return true;
     }
@@ -107,7 +110,7 @@ namespace
 
 ZTEST_SUITE(fft_bars_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 
-/* Zero energy for all buckets → entire display is dark. */
+/* Zero energy → entire display dark. */
 ZTEST(fft_bars_animation_di_tests, test_zero_energy_is_dark)
 {
     MutableAudioSource audio;
@@ -124,13 +127,12 @@ ZTEST(fft_bars_animation_di_tests, test_zero_energy_is_dark)
     zassert_true(allPixelsDark(), "Display should be fully dark with zero energy");
 }
 
-/* Non-zero energy for bucket 0 lights the bottom pixel of its 2-px-wide strip. */
-ZTEST(fft_bars_animation_di_tests, test_energy_lights_bottom_pixel)
+/* Non-zero energy for bucket 0 lights the bottom pixel of BOTH its left and
+ * right mirror strips. */
+ZTEST(fft_bars_animation_di_tests, test_energy_lights_both_mirror_sides)
 {
     MutableAudioSource audio;
     audio.resetAll();
-    /* kEnergyScale=20: energy=0.1 → fraction=1.0 after smoothing converges.
-     * After one tick: smoothed = 0.3*0.1 = 0.03 → fraction=0.6 → barHeight >= 1. */
     audio.setEnergy(0, 0.1f);
 
     FftBarsAnimation *anim = FftBarsAnimation::getInstance();
@@ -142,18 +144,20 @@ ZTEST(fft_bars_animation_di_tests, test_energy_lights_bottom_pixel)
     anim->tick(renderer, 16);
 
     size_t bottomRow = kTestHeight - 1;
-    zassert_false(sPixels[0][bottomRow].isBlack(),
-                  "Bottom pixel of bucket 0 strip (x=0) should be lit");
-    zassert_false(sPixels[1][bottomRow].isBlack(),
-                  "Bottom pixel of bucket 0 strip (x=1) should be lit");
+    /* Left side: bucket 0 → x = 0, 1 */
+    zassert_false(sPixels[0][bottomRow].isBlack(), "Left x=0 bottom should be lit");
+    zassert_false(sPixels[1][bottomRow].isBlack(), "Left x=1 bottom should be lit");
+    /* Right mirror: bucket 0 → x = 6, 7 */
+    zassert_false(sPixels[6][bottomRow].isBlack(), "Right mirror x=6 bottom should be lit");
+    zassert_false(sPixels[7][bottomRow].isBlack(), "Right mirror x=7 bottom should be lit");
 }
 
-/* Energy only in bucket 2 lights only bucket 2's 2-px column strip. */
+/* Energy only in bucket 1 lights its column strips and leaves bucket 0 dark. */
 ZTEST(fft_bars_animation_di_tests, test_bucket_column_isolation)
 {
     MutableAudioSource audio;
     audio.resetAll();
-    audio.setEnergy(2, 0.1f);
+    audio.setEnergy(1, 0.1f); /* only bucket 1 */
 
     FftBarsAnimation *anim = FftBarsAnimation::getInstance();
     anim->setAudioSource(audio);
@@ -164,22 +168,24 @@ ZTEST(fft_bars_animation_di_tests, test_bucket_column_isolation)
     anim->tick(renderer, 16);
 
     size_t bottomRow = kTestHeight - 1;
-    /* Bucket 2 → x = [4, 5] */
-    zassert_false(sPixels[4][bottomRow].isBlack(), "Bucket 2 strip x=4 should be lit");
-    zassert_false(sPixels[5][bottomRow].isBlack(), "Bucket 2 strip x=5 should be lit");
+    /* Bucket 1 left → x = 2, 3 */
+    zassert_false(sPixels[2][bottomRow].isBlack(), "Left x=2 bottom should be lit");
+    zassert_false(sPixels[3][bottomRow].isBlack(), "Left x=3 bottom should be lit");
+    /* Bucket 1 right mirror → x = 4, 5 */
+    zassert_false(sPixels[4][bottomRow].isBlack(), "Right mirror x=4 bottom should be lit");
+    zassert_false(sPixels[5][bottomRow].isBlack(), "Right mirror x=5 bottom should be lit");
 
-    zassert_true(bucketStripIsDark(0), "Bucket 0 strip should be dark");
-    zassert_true(bucketStripIsDark(1), "Bucket 1 strip should be dark");
-    zassert_true(bucketStripIsDark(3), "Bucket 3 strip should be dark");
+    /* Bucket 0 (both sides) should be dark. */
+    zassert_true(bucketIsDarkBothSides(0), "Bucket 0 (both mirror sides) should be dark");
 }
 
 /* Bottom lit pixel is greenish; top lit pixel is reddish (gradient test).
- * Use full energy so the bar fills the entire display height. */
+ * Saturate bucket 0 so the bar fills the entire display height. */
 ZTEST(fft_bars_animation_di_tests, test_gradient_bottom_green_top_red)
 {
     MutableAudioSource audio;
     audio.resetAll();
-    audio.setEnergy(0, 1.0f); /* saturate: will converge to full bar */
+    audio.setEnergy(0, 1.0f);
 
     FftBarsAnimation *anim = FftBarsAnimation::getInstance();
     anim->setAudioSource(audio);
@@ -194,20 +200,24 @@ ZTEST(fft_bars_animation_di_tests, test_gradient_bottom_green_top_red)
         anim->tick(renderer, 16);
     }
 
-    /* Bottom row: fraction=0.0 → pure green (r=0, g=255, b=0). */
+    /* Check the left bar (x=0); the right mirror (x=6) should match. */
     size_t bottomRow = kTestHeight - 1;
     zassert_equal(sPixels[0][bottomRow].r, 0,   "Bottom pixel red should be 0");
     zassert_equal(sPixels[0][bottomRow].b, 0,   "Bottom pixel blue should be 0");
     zassert_true(sPixels[0][bottomRow].g > 200, "Bottom pixel should be greenish");
 
-    /* Top row: fraction=1.0 → pure red (r=255, g=0, b=0). */
-    size_t topRow = 0;
-    zassert_equal(sPixels[0][topRow].r, 255, "Top pixel red should be 255");
-    zassert_equal(sPixels[0][topRow].g, 0,   "Top pixel green should be 0");
-    zassert_equal(sPixels[0][topRow].b, 0,   "Top pixel blue should be 0");
+    zassert_equal(sPixels[0][0].r, 255, "Top pixel red should be 255");
+    zassert_equal(sPixels[0][0].g, 0,   "Top pixel green should be 0");
+    zassert_equal(sPixels[0][0].b, 0,   "Top pixel blue should be 0");
+
+    /* Right mirror must match the left. */
+    zassert_equal(sPixels[6][bottomRow].r, sPixels[0][bottomRow].r,
+                  "Right mirror bottom should match left");
+    zassert_equal(sPixels[6][0].r, sPixels[0][0].r,
+                  "Right mirror top should match left");
 }
 
-/* init() resets the smoothed energy so the animation starts from silence. */
+/* init() resets smoothed energy; display returns to dark immediately. */
 ZTEST(fft_bars_animation_di_tests, test_init_resets_smoothed_energy)
 {
     MutableAudioSource audio;
