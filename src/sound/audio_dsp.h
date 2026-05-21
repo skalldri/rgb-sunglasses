@@ -28,3 +28,8 @@ void audio_dsp_init(void);
 /* Process one 512-sample int16 PCM block. Result written to *out. */
 void audio_dsp_process(const int16_t *pcm, uint32_t seq,
 		       struct audio_analysis_result *out);
+
+/* Reset all internal beat-detection history (flux buffers, refractory counters,
+ * previous-frame state).  Must be called after every AGC gain change: the
+ * amplitude discontinuity would otherwise look like a beat onset. */
+void audio_dsp_reset_history(void);

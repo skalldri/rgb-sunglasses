@@ -3,25 +3,32 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <arm_math.h>
+#include <math.h>     /* log1pf */
+#include <string.h>   /* memset */
 
 #include "audio_dsp.h"
 
 LOG_MODULE_REGISTER(audio_dsp);
 
-#define NUM_FFT_SAMPLES    AUDIO_FFT_SIZE
-#define NUM_BANDS          AUDIO_NUM_BANDS
+#define NUM_FFT_SAMPLES     AUDIO_FFT_SIZE
+#define NUM_BANDS           AUDIO_NUM_BANDS
 #define NUM_DISPLAY_BUCKETS AUDIO_NUM_DISPLAY_BUCKETS
 #define HISTORY_LEN     32    /* ~1 s at 32 ms/frame */
-/* threshold = mean + alpha * sigma.  At 2.0 anything above the 97.7th
- * percentile fires (~1 false per few seconds from ambient noise at 31 Hz).
- * 3.5 requires a genuine outlier spike; raise toward 4.0 in noisy rooms. */
-#define BEAT_ALPHA      3.5f
-#define BEAT_REFRACTORY 5     /* minimum frames between beats per band */
-/* Absolute normalised power floor.  Bands 1–3 have much lower raw energy
- * than band 0; without this floor their tiny absolute fluctuations pass the
- * relative threshold even when nothing is happening.  1e-3 is safely above
- * the measured ambient for all bands while remaining well below a real beat. */
-#define BEAT_ENERGY_FLOOR 1e-3f
+
+/* Beat detection — Level 3: log-magnitude spectral flux ODF.
+ * Reference: Bello et al. 2005 IEEE TSAP; Dixon 2006 DAFx.
+ *
+ * Per-band flux = max(0, log1p(GAMMA*energy) - log1p(GAMMA*prev_energy))
+ * Beat fires when flux > flux_mean + BEAT_ALPHA * flux_sigma AND flux > BEAT_FLUX_FLOOR.
+ *
+ * Advantages over Level 2 (raw energy threshold):
+ *   - Detects onset (change in energy), not sustained loudness → no false beats on held notes.
+ *   - Log compression (GAMMA=1000) equalises sensitivity across quiet and loud passages.
+ *   - Works across rock, jazz, acoustic music, not just bass-heavy EDM. */
+#define FLUX_GAMMA      1000.0f /* log-compression factor: log1p(GAMMA * energy) */
+#define BEAT_FLUX_FLOOR 0.005f  /* minimum flux to prevent false positives on silence */
+#define BEAT_ALPHA      3.5f    /* threshold multiplier: mean + alpha * sigma */
+#define BEAT_REFRACTORY 5       /* minimum frames between beats per band (~160 ms) */
 
 /* Sub-band bin boundaries (512-pt FFT at 16 kHz, bin width = 31.25 Hz).
  * Band 0 bass:    bins  1– 6  →  31– 200 Hz (kick drum)
@@ -71,9 +78,21 @@ static float32_t s_hann_window[NUM_FFT_SAMPLES];
 
 static arm_rfft_fast_instance_f32 s_rfft_inst;
 
-static float32_t s_band_history[NUM_BANDS][HISTORY_LEN];
+/* Level 3 beat detection state. */
+static float32_t s_band_flux_history[NUM_BANDS][HISTORY_LEN];
+static float32_t s_prev_log_energy[NUM_BANDS];
 static uint8_t   s_history_idx;
 static uint8_t   s_refractory[NUM_BANDS];
+static bool      s_first_frame;
+
+void audio_dsp_reset_history(void)
+{
+	memset(s_band_flux_history, 0, sizeof(s_band_flux_history));
+	memset(s_prev_log_energy,   0, sizeof(s_prev_log_energy));
+	memset(s_refractory,        0, sizeof(s_refractory));
+	s_history_idx = 0;
+	s_first_frame = true;
+}
 
 void audio_dsp_init(void)
 {
@@ -81,6 +100,7 @@ void audio_dsp_init(void)
 	 * for unused FFT sizes, saving ~3 KB flash vs. the generic init. */
 	arm_rfft_fast_init_512_f32(&s_rfft_inst);
 	arm_hanning_f32(s_hann_window, NUM_FFT_SAMPLES);
+	audio_dsp_reset_history();
 }
 
 void audio_dsp_process(const int16_t *pcm, uint32_t seq,
@@ -111,10 +131,12 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq,
 	LOG_DBG("FFT cycles: %u (~%u us)", cycles, cycles / 128);
 #endif
 
-	/* 4. Aggregate into sub-bands and run per-band beat detection. */
+	/* 4. Aggregate into sub-bands and run Level 3 spectral-flux beat detection. */
 	out->seq = seq;
 
 	for (int b = 0; b < NUM_BANDS; b++) {
+		/* 4a. Mean power across band bins (same as before; kept in band_energy
+		 *     for display and diagnostic use). */
 		float32_t energy = 0.0f;
 		for (int k = band_bin_start[b]; k <= band_bin_end[b]; k++) {
 			energy += s_magnitude[k - 1]; /* s_magnitude[0] = bin 1 */
@@ -122,17 +144,32 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq,
 		energy /= (float32_t)(band_bin_end[b] - band_bin_start[b] + 1);
 		out->band_energy[b] = energy;
 
-		s_band_history[b][s_history_idx] = energy;
+		/* 4b. Log-compress and compute half-wave-rectified spectral flux.
+		 *     flux = max(0, log1p(GAMMA*energy) - log1p(GAMMA*prev_energy))
+		 *     On the first frame there is no previous state, so flux = 0. */
+		float32_t log_e = log1pf(FLUX_GAMMA * energy);
+		float32_t flux  = 0.0f;
+		if (!s_first_frame && log_e > s_prev_log_energy[b]) {
+			flux = log_e - s_prev_log_energy[b];
+		}
+		s_prev_log_energy[b] = log_e;
 
-		float32_t mean, sigma;
-		arm_mean_f32(s_band_history[b], HISTORY_LEN, &mean);
-		arm_std_f32(s_band_history[b], HISTORY_LEN, &sigma);
-		out->band_mean[b]  = mean;
-		out->band_sigma[b] = sigma;
+		/* 4c. Adaptive threshold: track flux history, compute mean + alpha*sigma. */
+		s_band_flux_history[b][s_history_idx] = flux;
 
+		float32_t flux_mean, flux_sigma;
+		arm_mean_f32(s_band_flux_history[b], HISTORY_LEN, &flux_mean);
+		arm_std_f32 (s_band_flux_history[b], HISTORY_LEN, &flux_sigma);
+
+		/* Expose flux stats; callers can use these for diagnostic logging. */
+		out->band_mean[b]  = flux_mean;
+		out->band_sigma[b] = flux_sigma;
+
+		/* 4d. Beat: flux spike above adaptive threshold and noise floor. */
 		bool beat = false;
-		if (s_refractory[b] == 0 && energy > BEAT_ENERGY_FLOOR &&
-		    energy > mean + BEAT_ALPHA * sigma) {
+		if (s_refractory[b] == 0 &&
+		    flux > BEAT_FLUX_FLOOR &&
+		    flux > flux_mean + BEAT_ALPHA * flux_sigma) {
 			beat = true;
 			s_refractory[b] = BEAT_REFRACTORY;
 		} else if (s_refractory[b] > 0) {
@@ -141,9 +178,10 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq,
 		out->beat[b] = beat;
 	}
 
+	s_first_frame = false;
 	s_history_idx = (s_history_idx + 1) % HISTORY_LEN;
 
-	/* 5. Compute mean power for each display bucket. */
+	/* 5. Compute mean power for each display bucket (raw energy, not flux). */
 	for (int b = 0; b < NUM_DISPLAY_BUCKETS; b++) {
 		float32_t energy = 0.0f;
 		for (int k = display_bucket_start[b]; k <= display_bucket_end[b]; k++) {

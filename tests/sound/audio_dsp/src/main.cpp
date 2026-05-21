@@ -42,10 +42,11 @@ ZTEST(audio_dsp, test_bass_sine_band_energy)
 		     (double)result.band_energy[0], (double)result.band_energy[3]);
 }
 
-/* ── Test 2: Beat detection fires on a step-change in energy ────────────────
- * Strategy: fill the history with silence so mean and sigma are near zero,
- * then inject a loud 100 Hz sine. The first loud frame should fire beat[0]
- * because energy >> mean + 2*sigma (sigma is near zero from silent history). */
+/* ── Test 2: Beat detection fires on onset (Level 3 spectral flux) ───────────
+ * Strategy: fill history with silence so flux_mean and flux_sigma are near zero.
+ * Then inject a loud 100 Hz sine.  The FIRST frame produces a large positive
+ * flux (log_e - log_e_prev ≈ log1p(GAMMA * loud_energy)), which spikes far above
+ * the near-zero adaptive threshold → beat fires. */
 ZTEST(audio_dsp, test_beat_fires_on_energy_step)
 {
 	audio_dsp_init();
@@ -59,7 +60,7 @@ ZTEST(audio_dsp, test_beat_fires_on_energy_step)
 		audio_dsp_process(pcm, i, &result);
 	}
 
-	/* Inject a loud bass tone — should trigger beat[0]. */
+	/* Inject a loud bass tone — onset flux spike should trigger beat[0]. */
 	make_100hz_sine(pcm);
 	bool beat_fired = false;
 	/* Run enough frames to clear any residual refractory state and catch a fire. */
@@ -71,7 +72,7 @@ ZTEST(audio_dsp, test_beat_fires_on_energy_step)
 	}
 
 	zassert_true(beat_fired,
-		     "beat[0] should fire when loud bass follows silent history");
+		     "beat[0] should fire when loud bass onset follows silent history");
 }
 
 /* ── Test 3: No beats on silence ────────────────────────────────────────────
@@ -114,6 +115,40 @@ ZTEST(audio_dsp, test_100hz_sine_localises_in_low_display_bucket)
 		     "100 Hz energy in bucket 0 (%f) should exceed bucket 19 (%f)",
 		     (double)result.display_bucket_energy[0],
 		     (double)result.display_bucket_energy[19]);
+}
+
+/* ── Test 5: Sustained tone fires beat at most once (Level 3 key property) ──
+ * This is the defining advantage of spectral flux over Level 2 (raw energy):
+ * flux = max(0, log_e_now - log_e_prev) drops to ~0 once energy stabilises,
+ * so no further beats fire on a steady-state tone. */
+ZTEST(audio_dsp, test_sustained_tone_fires_beat_at_most_once)
+{
+	audio_dsp_init();
+
+	int16_t pcm[AUDIO_FFT_SIZE];
+	struct audio_analysis_result result;
+
+	/* Establish silent history → near-zero flux mean and sigma. */
+	make_silence(pcm);
+	for (int i = 0; i < HISTORY_LEN; i++) {
+		audio_dsp_process(pcm, i, &result);
+	}
+
+	/* Run a constant-amplitude 100 Hz tone for many frames.
+	 * The onset (first frame) may trigger one beat; subsequent frames
+	 * produce zero flux and must not trigger further beats. */
+	make_100hz_sine(pcm);
+	int beats_fired = 0;
+	for (int i = 0; i < HISTORY_LEN; i++) {
+		audio_dsp_process(pcm, HISTORY_LEN + i, &result);
+		if (result.beat[0]) {
+			beats_fired++;
+		}
+	}
+
+	zassert_true(beats_fired <= 1,
+		     "sustained tone should trigger beat at most once; fired %d times",
+		     beats_fired);
 }
 
 ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, NULL, NULL);
