@@ -136,6 +136,21 @@ static int cmd_power_bq_freq_change(const struct shell *shell,
     return 0;
 }
 
+static int cmd_power_bq_dump_charge_params(const struct shell *shell,
+                                           size_t argc, char **argv, void *data)
+{
+    bq25792_dump_charge_parameters(bq);
+    return 0;
+}
+
+static int cmd_power_bq_charge_enable(const struct shell *shell,
+                                      size_t argc, char **argv, void *data)
+{
+    int selection = (int)data;
+    bq25792_set_charge_enable(bq, (bool)selection);
+    return 0;
+}
+
 static int cmd_power_pd_dump(const struct shell *shell,
                              size_t argc, char **argv, void *data)
 {
@@ -271,12 +286,22 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_freq, cmd_power_bq_freq_change,
                              (high, bq25792_charge_frequency_t::HIGH, "1.5Mhz PWM Frequency"),
                              (low, bq25792_charge_frequency_t::LOW, "750 Khz PWM Frequency"));
 
+SHELL_SUBCMD_DICT_SET_CREATE(sub_charge_enable, cmd_power_bq_charge_enable,
+                             (disable, 0, "disable charging"),
+                             (enable, 1, "enable charging"));
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_charge,
+                               SHELL_CMD(dump, NULL, "Dump BQ25792 Charging Parameters to console", cmd_power_bq_dump_charge_params),
+                               SHELL_CMD(enable, &sub_charge_enable, "Enable/Disable BQ25792 Charging", NULL),
+                               SHELL_SUBCMD_SET_END);
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power_bq,
                                SHELL_CMD(dump, NULL, "Dump BQ25792 Registers to console", cmd_power_bq_dump),
                                SHELL_CMD(temp_override, &sub_temp_override, "Override BQ25792 battery temperature monitoring", NULL),
                                SHELL_CMD(adc, &sub_adc, "Enable/Disable BQ25792 ADC", NULL),
                                SHELL_CMD(pfm, &sub_pfm, "Enable/Disable BQ25792 Pulse Frequency Modulation (PFM)", NULL),
                                SHELL_CMD(freq, &sub_freq, "Change BQ25792 PWM Frequency", NULL),
+                               SHELL_CMD(charge, &sub_charge, "Change BQ25792 Charge Parameters", NULL),
                                SHELL_SUBCMD_SET_END);
 // Subcommands for "power"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,
