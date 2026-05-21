@@ -26,8 +26,22 @@ public:
 #define BQ25792_REG_MINIMAL_SYSTEM_VOLTAGE_ADDR 0x00
 static const char MINIMAL_SYSTEM_VOLTAGE_NAME[] = "MINIMAL_SYSTEM_VOLTAGE";
 
+class BQ25792_MINIMAL_SYSTEM_VOLTAGE_VSYS_MIN_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mV";
+    }
+
+    static inline int64_t conversion(uint32_t val)
+    {
+        return (val * 250) + 2500;
+    }
+};
+
 static const char VSYS_MIN_NAME[] = "VSYS_MIN";
-using BQ25792_MINIMAL_SYSTEM_VOLTAGE_VSYS_MIN = RegisterField<VSYS_MIN_NAME, 0, 6>;
+using BQ25792_MINIMAL_SYSTEM_VOLTAGE_VSYS_MIN = RegisterField<VSYS_MIN_NAME, 0, 6, BQ25792_MINIMAL_SYSTEM_VOLTAGE_VSYS_MIN_UnitConversion>;
 
 using BQ25792_MINIMAL_SYSTEM_VOLTAGE =
     BQ25792Register<
@@ -194,14 +208,72 @@ using BQ25792_TERMINATION_CONTROL =
 #define BQ25792_REG_RECHARGE_CONTROL_ADDR 0x0A
 static const char RECHARGE_CONTROL_NAME[] = "RECHARGE_CONTROL";
 
+class BQ25792_RECHARGE_CONTROL_CELL_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "cells";
+    }
+
+    static inline int64_t conversion(uint32_t val)
+    {
+        return val + 1;
+    }
+};
+
 static const char CELL_NAME[] = "CELL";
-using BQ25792_RECHARGE_CONTROL_CELL = RegisterField<CELL_NAME, 6, 2>;
+using BQ25792_RECHARGE_CONTROL_CELL = RegisterField<CELL_NAME, 6, 2, BQ25792_RECHARGE_CONTROL_CELL_UnitConversion>;
+
+class BQ25792_RECHARGE_CONTROL_TRECHG_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mS";
+    }
+
+    static inline int64_t conversion(uint32_t val)
+    {
+        switch (val)
+        {
+        case 0:
+            return 64;
+
+        case 1:
+            return 256;
+
+        case 2:
+            return 1024;
+
+        case 3:
+            return 2048;
+
+        default:
+            return -1;
+        }
+    }
+};
 
 static const char TRECHG_NAME[] = "TRECHG";
-using BQ25792_RECHARGE_CONTROL_TRECHG = RegisterField<TRECHG_NAME, 4, 2>;
+using BQ25792_RECHARGE_CONTROL_TRECHG = RegisterField<TRECHG_NAME, 4, 2, BQ25792_RECHARGE_CONTROL_TRECHG_UnitConversion>;
+
+class BQ25792_RECHARGE_CONTROL_VRECHG_UnitConversion
+{
+public:
+    static inline const char *unit()
+    {
+        return "mV";
+    }
+
+    static inline int64_t conversion(uint32_t val)
+    {
+        return (val * 50) + 50;
+    }
+};
 
 static const char VRECHG_NAME[] = "VRECHG";
-using BQ25792_RECHARGE_CONTROL_VRECHG = RegisterField<VRECHG_NAME, 0, 4>;
+using BQ25792_RECHARGE_CONTROL_VRECHG = RegisterField<VRECHG_NAME, 0, 4, BQ25792_RECHARGE_CONTROL_VRECHG_UnitConversion>;
 
 using BQ25792_RECHARGE_CONTROL =
     BQ25792Register<
@@ -924,7 +996,7 @@ using BQ25792_FAULT_STATUS_1 =
 
 /**
  * @brief Reusable unit conversion class for all current-measurement ADC registers
- * 
+ *
  */
 class BQ25792_ADC_CURRENT_UnitConversion
 {
@@ -954,7 +1026,8 @@ public:
 
         // BQ25792 are 16-bit 2's compliment
         // Sign-extend if needed
-        if (bigVal & (1 << 15)) {
+        if (bigVal & (1 << 15))
+        {
             bigVal |= 0xFFFFFFFFFFFF0000;
         }
 
@@ -976,7 +1049,8 @@ public:
 
         // BQ25792 are 16-bit 2's compliment
         // Sign-extend if needed
-        if (bigVal & (1 << 15)) {
+        if (bigVal & (1 << 15))
+        {
             bigVal |= 0xFFFFFFFFFFFF0000;
         }
 

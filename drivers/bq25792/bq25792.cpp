@@ -122,3 +122,48 @@ int bq25792_set_charge_frequency(const struct device *dev, bq25792_charge_freque
 
     return reg.set<BQ25792_CHARGER_CONTROL_4_PWM_FREQ>(pwm_freq, true /* flush */);
 }
+
+int bq25792_dump_charge_parameters(const struct device *dev)
+{
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
+
+    BQ25792_MINIMAL_SYSTEM_VOLTAGE minimalSystemVoltage(cfg);
+    BQ25792_RECHARGE_CONTROL rechargeControl(cfg);
+    BQ25792_CHARGE_VOLTAGE_LIMIT chargeVoltageLimit(cfg);
+    BQ25792_VBAT_ADC vbatAdc(cfg);
+
+    BQ25792_CHARGER_CONTROL_0 chargerControl0(cfg);
+
+    BQ25792_CHARGER_STATUS_0 chargerStatus0(cfg);
+    BQ25792_CHARGER_STATUS_1 chargerStatus1(cfg);
+    BQ25792_CHARGER_STATUS_2 chargerStatus2(cfg);
+    BQ25792_CHARGER_STATUS_3 chargerStatus3(cfg);
+    BQ25792_CHARGER_STATUS_4 chargerStatus4(cfg);
+
+    BQ25792_FAULT_STATUS_0 faultStatus0(cfg);
+    BQ25792_FAULT_STATUS_1 faultStatus1(cfg);
+
+    minimalSystemVoltage.dump();
+    rechargeControl.dump();
+    chargeVoltageLimit.dump();
+    vbatAdc.dump();
+    chargerControl0.dump();
+    chargerStatus0.dump();
+    chargerStatus1.dump();
+    chargerStatus2.dump();
+    chargerStatus3.dump();
+    chargerStatus4.dump();
+    faultStatus0.dump();
+    faultStatus1.dump();
+
+    return 0;
+}
+
+int bq25792_set_charge_enable(const struct device *dev, bool enabled)
+{
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
+    BQ25792_CHARGER_CONTROL_0 chargerControl0(cfg);
+    LOG_INF("Setting EN_CHG to %u", enabled ? 1 : 0);
+    chargerControl0.set<BQ25792_CHARGER_CONTROL_0_EN_CHG>(enabled ? 1 : 0, true /* flush */);
+    return 0;
+}
