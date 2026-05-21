@@ -22,10 +22,10 @@
  *
  * Thresholds calibrated to the actual microphone output. RMS measured with
  * active music: 0.015–0.025 (sparse due to gaps between notes).
- * Target window prevents gain from continuously maxing out.
+ * Target window [0.005, 0.008] keeps signal quiet to prevent FFT saturation.
  * All threshold values are tunable via shell commands. */
-static float s_agc_target_low   = 0.010f; /* increase gain when quieter than this */
-static float s_agc_target_high  = 0.035f; /* decrease gain when louder than this  */
+static float s_agc_target_low   = 0.005f; /* increase gain when quieter than this */
+static float s_agc_target_high  = 0.008f; /* decrease gain when louder than this  */
 #define AGC_GAIN_MIN     0x00   /* −20 dB (PDM GAINL/GAINR register floor)        */
 #define AGC_GAIN_MAX     0x50   /* +20 dB (PDM GAINL/GAINR register ceiling)      */
 static uint8_t s_agc_rate_limit = 10;     /* minimum frames between gain steps (~320 ms) */
