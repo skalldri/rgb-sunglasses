@@ -150,12 +150,12 @@ int configure_pdm()
     LOG_INF("Gain L Register Address: 0x%p", gain_l);
     LOG_INF("Gain R Register Address: 0x%p", gain_r);
 
-    LOG_INF("Gain L Register Value: 0x%d", *gain_l);
-    LOG_INF("Gain R Register Value: 0x%d", *gain_r);
-
     // Increase gain from 0x28 (0 dB) -> 0x40 (+12 dB)
     *gain_l = 0x28;
     *gain_r = 0x28;
+
+    LOG_INF("Gain L Register Value: 0x%d", *gain_l);
+    LOG_INF("Gain R Register Value: 0x%d", *gain_r);
 
     return ret;
 }
