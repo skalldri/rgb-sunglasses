@@ -477,7 +477,7 @@ public:
         }
         else
         {
-            printk("NOTIFY: Notifications not enabled for this characteristic\n");
+            // printk("NOTIFY: Notifications not enabled for this characteristic\n");
         }
     }
 

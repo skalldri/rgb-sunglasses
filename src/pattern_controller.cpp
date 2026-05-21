@@ -8,6 +8,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/init.h>
+#include <zephyr/shell/shell.h>
 
 #include <animations/animation_registry.h>
 #include <animations/animation_renderer.h>
@@ -267,3 +268,79 @@ int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t 
     // Scale colors by the current brightness before submitting to the LED controller
     return set_pixel_in_framebuffer(config, x, y, bufferId, ((float)red) * sBrightnessForFrame, ((float)green) * sBrightnessForFrame, ((float)blue) * sBrightnessForFrame);
 }
+
+#if defined(CONFIG_SHELL)
+
+static int cmd_anim_set(const struct shell *shell, size_t argc, char **argv, void *data)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    Animation animation = static_cast<Animation>(reinterpret_cast<intptr_t>(data));
+    int ret = pattern_controller_change_to_animation(animation);
+    if (ret)
+    {
+        shell_error(shell, "Failed to change animation: %d", ret);
+    }
+    return ret;
+}
+
+static int cmd_anim_get(const struct shell *shell, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    Animation current = pattern_controller_get_current_animation();
+
+    /* Map enum value to a human-readable name for display. */
+    const char *name;
+    switch (current)
+    {
+    case Animation::None:         name = "none";         break;
+    case Animation::ZigZag:       name = "zigzag";       break;
+    case Animation::Text:         name = "text";         break;
+    case Animation::BtAdvertising: name = "bt_advertising"; break;
+    case Animation::BtConnecting: name = "bt_connecting"; break;
+    case Animation::Rainbow:      name = "rainbow";      break;
+    case Animation::BtPairing:    name = "bt_pairing";   break;
+    case Animation::MyEyes:       name = "my_eyes";      break;
+    case Animation::Beat:         name = "beat";         break;
+    case Animation::FftBars:      name = "fft_bars";     break;
+    default:                      name = "unknown";      break;
+    }
+
+    shell_print(shell, "%s", name);
+    return 0;
+}
+
+SHELL_SUBCMD_DICT_SET_CREATE(sub_anim_set, cmd_anim_set,
+    (none,         0, "No animation (all LEDs off)"),
+    (zigzag,       1, "ZigZag animation"),
+    (text,         2, "Text animation"),
+    (rainbow,      5, "Rainbow animation"),
+    (my_eyes,      7, "My Eyes animation"),
+    (beat,         8, "Beat animation (per-band flash on beat detection)"),
+    (fft_bars,     9, "FFT Bars animation (live frequency bar graph)"));
+
+static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    pattern_controller_reset_indicator();
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_anim_indicator,
+    SHELL_CMD(clear, NULL, "Clear the active indicator and return to the current animation", cmd_anim_indicator_clear),
+    SHELL_SUBCMD_SET_END);
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_anim,
+    SHELL_CMD(set, &sub_anim_set, "Switch to a named animation", NULL),
+    SHELL_CMD(get, NULL, "Print the current animation name", cmd_anim_get),
+    SHELL_CMD(indicator, &sub_anim_indicator, "Indicator commands", NULL),
+    SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(anim, &sub_anim, "Animation commands", NULL);
+
+#endif /* CONFIG_SHELL */
