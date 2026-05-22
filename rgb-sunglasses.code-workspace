@@ -47,6 +47,53 @@
 		"chat.tools.terminal.autoApprove": {
 			"twister": true,
 			"west": true
+		},
+		"nrf-connect.debugging.bindings": {
+			"${workspaceFolder}/build": "Launch rgb-sunglasses/build",
+			"${workspaceFolder}/build/rgb-sunglasses": "Launch rgb-sunglasses/build/rgb-sunglasses",
+			"${workspaceFolder}/build/b0n": "Launch rgb-sunglasses/build/b0n",
+			"${workspaceFolder}/build/ipc_radio": "Launch rgb-sunglasses/build/ipc_radio",
+			"${workspaceFolder}/build/mcuboot": "Launch rgb-sunglasses/build/mcuboot"
 		}
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"type": "nrf-connect",
+				"request": "launch",
+				"name": "Launch rgb-sunglasses/build",
+				"config": "${workspaceFolder}/build",
+				"runToEntryPoint": "main"
+			},
+			{
+				"type": "nrf-connect",
+				"request": "launch",
+				"name": "Launch rgb-sunglasses/build/rgb-sunglasses",
+				"config": "${workspaceFolder}/build/rgb-sunglasses",
+				"runToEntryPoint": "main"
+			},
+			{
+				"type": "nrf-connect",
+				"request": "launch",
+				"name": "Launch rgb-sunglasses/build/b0n",
+				"config": "${workspaceFolder}/build/b0n",
+				"runToEntryPoint": "main"
+			},
+			{
+				"type": "nrf-connect",
+				"request": "launch",
+				"name": "Launch rgb-sunglasses/build/ipc_radio",
+				"config": "${workspaceFolder}/build/ipc_radio",
+				"runToEntryPoint": "main"
+			},
+			{
+				"type": "nrf-connect",
+				"request": "launch",
+				"name": "Launch rgb-sunglasses/build/mcuboot",
+				"config": "${workspaceFolder}/build/mcuboot",
+				"runToEntryPoint": "main"
+			}
+		]
 	}
 }
