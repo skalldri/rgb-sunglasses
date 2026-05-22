@@ -8,7 +8,7 @@
 #include <zephyr/audio/dmic.h>
 #include <zephyr/fs/fs.h>
 #include <stdlib.h>
-#include <math.h>   /* sqrtf */
+#include <math.h> /* sqrtf */
 
 #include <zephyr/logging/log.h>
 
@@ -24,21 +24,21 @@
  * active music: 0.015–0.025 (sparse due to gaps between notes).
  * Target window [0.005, 0.008] keeps signal quiet to prevent FFT saturation.
  * All threshold values are tunable via shell commands. */
-static float s_agc_target_low   = 0.005f; /* increase gain when quieter than this */
-static float s_agc_target_high  = 0.008f; /* decrease gain when louder than this  */
-#define AGC_GAIN_MIN     0x00   /* −20 dB (PDM GAINL/GAINR register floor)        */
-#define AGC_GAIN_MAX     0x50   /* +20 dB (PDM GAINL/GAINR register ceiling)      */
-static uint8_t s_agc_rate_limit = 10;     /* minimum frames between gain steps (~320 ms) */
+static float s_agc_target_low = 0.005f;  /* increase gain when quieter than this */
+static float s_agc_target_high = 0.008f; /* decrease gain when louder than this  */
+#define AGC_GAIN_MIN 0x00                /* −20 dB (PDM GAINL/GAINR register floor)        */
+#define AGC_GAIN_MAX 0x50                /* +20 dB (PDM GAINL/GAINR register ceiling)      */
+static uint8_t s_agc_rate_limit = 10;    /* minimum frames between gain steps (~320 ms) */
 
 /* PDM gain register pointers — set once in configure_pdm(), used by AGC loop. */
 static volatile uint32_t *s_gain_l;
 static volatile uint32_t *s_gain_r;
 
-static uint8_t s_agc_gain         = 0x28; /* current gain register value (0 dB) */
-static int     s_agc_frames_since = 0;    /* frames elapsed since last adjustment */
-static float   s_latest_rms       = 0.0f; /* latest instantaneous RMS */
-static float   s_smoothed_rms     = 0.0f; /* 1-second averaged RMS for AGC decisions */
-static int16_t s_latest_peak      = 0;    /* latest peak sample magnitude */
+static uint8_t s_agc_gain = 0x28;   /* current gain register value (0 dB) */
+static int s_agc_frames_since = 0;  /* frames elapsed since last adjustment */
+static float s_latest_rms = 0.0f;   /* latest instantaneous RMS */
+static float s_smoothed_rms = 0.0f; /* 1-second averaged RMS for AGC decisions */
+static int16_t s_latest_peak = 0;   /* latest peak sample magnitude */
 
 /* 1-second RMS history (32 frames at 32 ms/frame) */
 #define AGC_HISTORY_LEN 32
@@ -49,10 +49,12 @@ static float agc_compute_rms(const int16_t *pcm, uint32_t n)
 {
     float sum_sq = 0.0f;
     int16_t peak = 0;
-    for (uint32_t i = 0; i < n; i++) {
+    for (uint32_t i = 0; i < n; i++)
+    {
         int16_t sample = pcm[i];
         int16_t abs_sample = (sample < 0) ? -sample : sample;
-        if (abs_sample > peak) peak = abs_sample;
+        if (abs_sample > peak)
+            peak = abs_sample;
 
         float s = (float)sample * (1.0f / 32768.0f);
         sum_sq += s * s;
@@ -253,7 +255,7 @@ void audio_dsp_thread_func(void *a, void *b, void *c)
 
         /* AGC: 1-second history window for stable gain control. */
         float rms = agc_compute_rms(pcm, AUDIO_FFT_SIZE);
-        s_latest_rms = rms;  /* Instantaneous RMS for diagnostics */
+        s_latest_rms = rms; /* Instantaneous RMS for diagnostics */
 
         /* Update RMS history (same structure as beat detection flux history). */
         s_rms_history[s_rms_history_idx] = rms;
@@ -261,33 +263,39 @@ void audio_dsp_thread_func(void *a, void *b, void *c)
 
         /* Compute mean RMS over the 1-second window. */
         float sum_rms = 0.0f;
-        for (int i = 0; i < AGC_HISTORY_LEN; i++) {
+        for (int i = 0; i < AGC_HISTORY_LEN; i++)
+        {
             sum_rms += s_rms_history[i];
         }
         s_smoothed_rms = sum_rms / (float)AGC_HISTORY_LEN;
 
         /* Check for gain adjustment every s_agc_rate_limit frames. */
         s_agc_frames_since++;
-        if (s_agc_frames_since >= s_agc_rate_limit) {
+        if (s_agc_frames_since >= s_agc_rate_limit)
+        {
             bool gain_changed = false;
 
             /* Use smoothed RMS (1-second average) for stable decisions. */
-            if (s_smoothed_rms < s_agc_target_low && s_agc_gain < AGC_GAIN_MAX) {
+            if (s_smoothed_rms < s_agc_target_low && s_agc_gain < AGC_GAIN_MAX)
+            {
                 s_agc_gain++;
                 gain_changed = true;
-            } else if (s_smoothed_rms > s_agc_target_high && s_agc_gain > AGC_GAIN_MIN) {
+            }
+            else if (s_smoothed_rms > s_agc_target_high && s_agc_gain > AGC_GAIN_MIN)
+            {
                 s_agc_gain--;
                 gain_changed = true;
             }
 
-            if (gain_changed) {
+            if (gain_changed)
+            {
                 *s_gain_l = s_agc_gain;
                 *s_gain_r = s_agc_gain;
                 /* Gain discontinuity invalidates the flux history. */
                 audio_dsp_reset_history();
                 s_agc_frames_since = 0;
                 float db = (float)s_agc_gain * 0.5f - 20.0f;
-                LOG_INF("AGC: gain=0x%02x (%.1f dB) smoothed_rms=%.4f", s_agc_gain, (double)db, (double)s_smoothed_rms);
+                LOG_DBG("AGC: gain=0x%02x (%.1f dB) smoothed_rms=%.4f", s_agc_gain, (double)db, (double)s_smoothed_rms);
             }
         }
 
@@ -589,16 +597,19 @@ static int cmd_sound_agc_status(const struct shell *shell, size_t argc, char **a
 
 static int cmd_sound_agc_target_low(const struct shell *shell, size_t argc, char **argv)
 {
-    if (argc == 1) {
+    if (argc == 1)
+    {
         shell_print(shell, "AGC target low: %.4f", (double)s_agc_target_low);
         return 0;
     }
-    if (argc != 2) {
+    if (argc != 2)
+    {
         shell_error(shell, "Usage: sound agc target-low [<value>]");
         return -EINVAL;
     }
     float val = (float)strtof(argv[1], NULL);
-    if (val < 0.001f || val > 0.1f) {
+    if (val < 0.001f || val > 0.1f)
+    {
         shell_error(shell, "Value must be in range [0.001, 0.1]");
         return -EINVAL;
     }
@@ -609,16 +620,19 @@ static int cmd_sound_agc_target_low(const struct shell *shell, size_t argc, char
 
 static int cmd_sound_agc_target_high(const struct shell *shell, size_t argc, char **argv)
 {
-    if (argc == 1) {
+    if (argc == 1)
+    {
         shell_print(shell, "AGC target high: %.4f", (double)s_agc_target_high);
         return 0;
     }
-    if (argc != 2) {
+    if (argc != 2)
+    {
         shell_error(shell, "Usage: sound agc target-high [<value>]");
         return -EINVAL;
     }
     float val = (float)strtof(argv[1], NULL);
-    if (val < 0.001f || val > 0.2f) {
+    if (val < 0.001f || val > 0.2f)
+    {
         shell_error(shell, "Value must be in range [0.001, 0.2]");
         return -EINVAL;
     }
@@ -629,16 +643,19 @@ static int cmd_sound_agc_target_high(const struct shell *shell, size_t argc, cha
 
 static int cmd_sound_agc_rate(const struct shell *shell, size_t argc, char **argv)
 {
-    if (argc == 1) {
+    if (argc == 1)
+    {
         shell_print(shell, "AGC rate limit: %d frames (~%d ms)", s_agc_rate_limit, s_agc_rate_limit * 32);
         return 0;
     }
-    if (argc != 2) {
+    if (argc != 2)
+    {
         shell_error(shell, "Usage: sound agc rate [<frames>]");
         return -EINVAL;
     }
     uint8_t val = (uint8_t)strtoul(argv[1], NULL, 10);
-    if (val < 1 || val > 100) {
+    if (val < 1 || val > 100)
+    {
         shell_error(shell, "Value must be in range [1, 100] frames");
         return -EINVAL;
     }
@@ -665,8 +682,8 @@ static int cmd_sound_rms(const struct shell *shell, size_t argc, char **argv)
 // Subcommands for "sound agc"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_agc,
                                SHELL_CMD_ARG(status, NULL, "Show current AGC status", cmd_sound_agc_status, 0, 0),
-                               SHELL_CMD_ARG(target-low, NULL, "Get/set AGC target-low threshold", cmd_sound_agc_target_low, 0, 1),
-                               SHELL_CMD_ARG(target-high, NULL, "Get/set AGC target-high threshold", cmd_sound_agc_target_high, 0, 1),
+                               SHELL_CMD_ARG(target - low, NULL, "Get/set AGC target-low threshold", cmd_sound_agc_target_low, 0, 1),
+                               SHELL_CMD_ARG(target - high, NULL, "Get/set AGC target-high threshold", cmd_sound_agc_target_high, 0, 1),
                                SHELL_CMD_ARG(rate, NULL, "Get/set AGC rate limit (frames)", cmd_sound_agc_rate, 0, 1),
                                SHELL_SUBCMD_SET_END);
 
