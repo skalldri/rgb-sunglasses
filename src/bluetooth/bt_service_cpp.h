@@ -269,7 +269,7 @@ static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                       const void *buf, uint16_t len, uint16_t offset,
                       uint8_t flags, std::byte *out, size_t maxLen)
 {
-    printk("WR! l=%d, o=%d, f=%d\n", len, offset, flags);
+    // printk("WR! l=%d, o=%d, f=%d\n", len, offset, flags);
 
     if (flags & BT_GATT_WRITE_FLAG_PREPARE)
     {
@@ -476,7 +476,7 @@ public:
                 return;
             }
 
-            printk("NOTIFY: %p\n", attr);
+            // printk("NOTIFY: %p\n", attr);
             int ret = bt_gatt_notify(NULL, attr, &storage_, sizeof(storage_));
             if (ret != 0)
             {
@@ -484,7 +484,7 @@ public:
             }
             else
             {
-                printk("Notify succeeded\n");
+                // printk("Notify succeeded\n");
             }
         }
         else
@@ -499,7 +499,7 @@ public:
         Self *instance = reinterpret_cast<Self *>(managed_user_data->app_user_data);
 
         instance->sendNotifications_ = (value == BT_GATT_CCC_NOTIFY);
-        printk("%p Notification state: %d\n", attr, instance->sendNotifications_);
+        // printk("%p Notification state: %d\n", attr, instance->sendNotifications_);
     }
 
     static ssize_t read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
