@@ -36,12 +36,17 @@ jobs:
           imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           push: always
-          runCmd: west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses"
+          runCmd: west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses" && west build --domain rgb-sunglasses -t llext-edk
 
       - uses: actions/upload-artifact@v4
         with:
           name: dfu_application.zip
           path: ${{ github.workspace }}/build/dfu_application.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llext-edk.tar.xz
+          path: ${{ github.workspace }}/build/rgb-sunglasses/zephyr/llext-edk.tar.xz
 
   build-proto0:
     runs-on: ubuntu-latest
