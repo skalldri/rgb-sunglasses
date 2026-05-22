@@ -3,10 +3,7 @@
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 
-#include <zephyr/bluetooth/uuid.h>
-
-constexpr bt_uuid_128 kBeatConfigServiceUuid = BT_UUID_INIT_128(
-    BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x0200, 0x56789abd0006));
+constexpr bt_uuid_128 kBeatConfigServiceUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Beat));
 
 BtGattPrimaryService<kBeatConfigServiceUuid> beatPrimaryService;
 BtGattAutoReadWriteCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> beatColor;

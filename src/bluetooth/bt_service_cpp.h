@@ -2,6 +2,7 @@
 
 #include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/bt_gatt_traits.h>
+#include <animations/animation_types.h>
 #include <array>
 #include <tuple>
 #include <algorithm>
@@ -16,6 +17,17 @@ constexpr bt_uuid_128 composeAutoCharacteristicUuid(const bt_uuid_128 &serviceUu
     uuid.val[1] = static_cast<uint8_t>((characteristicId >> 8) & 0xFF);
     return uuid;
 }
+
+/**
+ * @brief Helper macro to generate unique GATT service UUIDs for animations.
+ *
+ * Each animation gets a unique service UUID based on its Animation enum ID.
+ * The ID is placed in the third parameter (upper byte) to ensure uniqueness
+ * in the first 14 bytes, which protects against characteristic UUID collisions
+ * when composeAutoCharacteristicUuid() modifies the first 2 bytes.
+ */
+#define BT_ANIMATION_SERVICE_UUID(anim_id) \
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, ((uint16_t)(anim_id) << 8), 0x56789abd0000))
 
 // Helper to check if all tuple elements are bt_gatt_attr
 template <typename Tuple, size_t... Is>
