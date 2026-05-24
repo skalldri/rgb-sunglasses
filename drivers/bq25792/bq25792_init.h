@@ -1,5 +1,7 @@
 #pragma once
 
+#include <zephyr/drivers/i2c.h>
+
 struct bq25792_dev_data {};
 
 struct bq25792_dev_config {
