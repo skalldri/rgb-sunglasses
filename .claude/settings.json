@@ -10,7 +10,8 @@
       "Bash(arm-zephyr-eabi-nm *)",
       "Bash(jobs -l)",
       "Bash(grep -E \"@[0-9a-f]{3,8}\")",
-      "Bash(pytest *)"
+      "Bash(pytest *)",
+      "Bash(python3 -m pytest *)"
     ]
   }
 }
