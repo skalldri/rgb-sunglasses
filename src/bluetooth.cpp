@@ -7,6 +7,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/init.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/drivers/hwinfo.h>
+#include <zephyr/shell/shell.h>
 
 #include <bluetooth/services/nsms.h>
 #include <bluetooth/gatt_cpf.h>
@@ -26,11 +28,9 @@ void bluetooth_register_state_observer(BtStateObserver *observer)
 }
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
-#define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
 
 static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
 };
 
 constexpr bt_uuid_128 kNameServiceUuid = BT_UUID_INIT_128(
@@ -71,10 +71,31 @@ BT_GATT_SERVER_REGISTER(nameServerStatic, nameServer);
 // We will reconstruct the same values as BT_LE_ADV_CONN and use this const instead
 static const struct bt_le_adv_param adv_param =
     BT_LE_ADV_PARAM_INIT(
-        BT_LE_ADV_OPT_CONN,
+        BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_NAME,
         BT_GAP_ADV_FAST_INT_MIN_2,
         BT_GAP_ADV_FAST_INT_MAX_2,
         NULL);
+
+// Storage for runtime-built BT device name (base name + " XXXX" serial suffix)
+static char sBtDeviceName[CONFIG_BT_DEVICE_NAME_MAX + 1];
+
+// Reads FICR device ID and builds "<CONFIG_BT_DEVICE_NAME> XXXX" into sBtDeviceName,
+// where XXXX is the last 2 bytes of the 8-byte device ID as uppercase hex.
+// Falls back to CONFIG_BT_DEVICE_NAME if hwinfo is unavailable.
+static void build_bt_device_name(void)
+{
+    uint8_t dev_id[8] = {};
+    ssize_t len = hwinfo_get_device_id(dev_id, sizeof(dev_id));
+
+    if (len < 2) {
+        strncpy(sBtDeviceName, CONFIG_BT_DEVICE_NAME, sizeof(sBtDeviceName) - 1);
+        sBtDeviceName[sizeof(sBtDeviceName) - 1] = '\0';
+        return;
+    }
+
+    snprintk(sBtDeviceName, sizeof(sBtDeviceName), "%s %02X%02X",
+             CONFIG_BT_DEVICE_NAME, dev_id[len - 2], dev_id[len - 1]);
+}
 
 enum class BtThreadState
 {
@@ -695,6 +716,13 @@ static int bluetooth_init(void)
 
     LOG_INF("Bluetooth initialized");
 
+    build_bt_device_name();
+    err = bt_set_name(sBtDeviceName);
+    if (err) {
+        LOG_WRN("Failed to set BT device name (err %d), using default", err);
+    }
+    LOG_INF("BT device name: %s", sBtDeviceName);
+
     // Settings must be loaded after bt_enable() because BT uses settings to store bonding information
     if (IS_ENABLED(CONFIG_SETTINGS))
     {
@@ -707,3 +735,28 @@ static int bluetooth_init(void)
 }
 
 SYS_INIT(bluetooth_init, APPLICATION, 1);
+
+static int cmd_serial_print(const struct shell *sh, size_t argc, char **argv)
+{
+    uint8_t dev_id[8] = {};
+    ssize_t len = hwinfo_get_device_id(dev_id, sizeof(dev_id));
+
+    if (len <= 0) {
+        shell_error(sh, "Failed to read device ID (err %d)", (int)len);
+        return -EIO;
+    }
+
+    shell_print(sh, "Device serial (%d bytes):", (int)len);
+    for (ssize_t i = 0; i < len; i++) {
+        shell_fprintf(sh, SHELL_NORMAL, "%02X", dev_id[i]);
+    }
+    shell_fprintf(sh, SHELL_NORMAL, "\n");
+    shell_print(sh, "BT device name: %s", sBtDeviceName);
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(serial_cmds,
+    SHELL_CMD(print, NULL, "Print device serial number and BT name", cmd_serial_print),
+    SHELL_SUBCMD_SET_END
+);
+SHELL_CMD_REGISTER(serial, &serial_cmds, "Serial number commands", NULL);

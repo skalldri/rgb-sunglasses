@@ -2,6 +2,7 @@
 
 #include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/bt_gatt_traits.h>
+#include <animations/animation_types.h>
 #include <array>
 #include <tuple>
 #include <algorithm>
@@ -16,6 +17,17 @@ constexpr bt_uuid_128 composeAutoCharacteristicUuid(const bt_uuid_128 &serviceUu
     uuid.val[1] = static_cast<uint8_t>((characteristicId >> 8) & 0xFF);
     return uuid;
 }
+
+/**
+ * @brief Helper macro to generate unique GATT service UUIDs for animations.
+ *
+ * Each animation gets a unique service UUID based on its Animation enum ID.
+ * The ID is placed in the third parameter (upper byte) to ensure uniqueness
+ * in the first 14 bytes, which protects against characteristic UUID collisions
+ * when composeAutoCharacteristicUuid() modifies the first 2 bytes.
+ */
+#define BT_ANIMATION_SERVICE_UUID(anim_id) \
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, ((uint16_t)(anim_id) << 8), 0x56789abd0000))
 
 // Helper to check if all tuple elements are bt_gatt_attr
 template <typename Tuple, size_t... Is>
@@ -257,7 +269,7 @@ static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                       const void *buf, uint16_t len, uint16_t offset,
                       uint8_t flags, std::byte *out, size_t maxLen)
 {
-    printk("WR! l=%d, o=%d, f=%d\n", len, offset, flags);
+    // printk("WR! l=%d, o=%d, f=%d\n", len, offset, flags);
 
     if (flags & BT_GATT_WRITE_FLAG_PREPARE)
     {
@@ -464,7 +476,7 @@ public:
                 return;
             }
 
-            printk("NOTIFY: %p\n", attr);
+            // printk("NOTIFY: %p\n", attr);
             int ret = bt_gatt_notify(NULL, attr, &storage_, sizeof(storage_));
             if (ret != 0)
             {
@@ -472,7 +484,7 @@ public:
             }
             else
             {
-                printk("Notify succeeded\n");
+                // printk("Notify succeeded\n");
             }
         }
         else
@@ -487,7 +499,7 @@ public:
         Self *instance = reinterpret_cast<Self *>(managed_user_data->app_user_data);
 
         instance->sendNotifications_ = (value == BT_GATT_CCC_NOTIFY);
-        printk("%p Notification state: %d\n", attr, instance->sendNotifications_);
+        // printk("%p Notification state: %d\n", attr, instance->sendNotifications_);
     }
 
     static ssize_t read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
