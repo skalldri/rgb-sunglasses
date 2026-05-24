@@ -680,12 +680,14 @@ static int cmd_sound_rms(const struct shell *shell, size_t argc, char **argv)
 }
 
 // Subcommands for "sound agc"
+// clang-format off
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_agc,
+                               SHELL_CMD_ARG(target-low, NULL, "Get/set AGC target-low threshold", cmd_sound_agc_target_low, 0, 1),
+                               SHELL_CMD_ARG(target-high, NULL, "Get/set AGC target-high threshold", cmd_sound_agc_target_high, 0, 1),
                                SHELL_CMD_ARG(status, NULL, "Show current AGC status", cmd_sound_agc_status, 0, 0),
-                               SHELL_CMD_ARG(target - low, NULL, "Get/set AGC target-low threshold", cmd_sound_agc_target_low, 0, 1),
-                               SHELL_CMD_ARG(target - high, NULL, "Get/set AGC target-high threshold", cmd_sound_agc_target_high, 0, 1),
                                SHELL_CMD_ARG(rate, NULL, "Get/set AGC rate limit (frames)", cmd_sound_agc_rate, 0, 1),
                                SHELL_SUBCMD_SET_END);
+// clang-format on
 
 // Subcommands for "sound"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound,
