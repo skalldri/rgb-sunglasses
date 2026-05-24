@@ -1,20 +1,19 @@
-#include <zephyr/ztest.h>
 #include <configuration_provider.h>
+#include <zephyr/ztest.h>
 
 // ---------------------------------------------------------------------------
 // Configurable test double
 // ---------------------------------------------------------------------------
 
-class FakeConfigurationProvider : public ConfigurationProvider
-{
-public:
+class FakeConfigurationProvider : public ConfigurationProvider {
+   public:
     float brightness = 1.0f;
     float displayRateMs = 33.0f;
     float renderRateMs = 11.0f;
 
     float getBrightnessFactor() override { return brightness; }
-    float getDisplayRateMs() override    { return displayRateMs; }
-    float getRenderRateMs() override     { return renderRateMs; }
+    float getDisplayRateMs() override { return displayRateMs; }
+    float getRenderRateMs() override { return renderRateMs; }
 };
 
 // ---------------------------------------------------------------------------
@@ -24,8 +23,7 @@ public:
 
 ZTEST_SUITE(configuration_provider_tests, NULL, NULL, NULL, NULL, NULL);
 
-ZTEST(configuration_provider_tests, test_fake_returns_injected_brightness)
-{
+ZTEST(configuration_provider_tests, test_fake_returns_injected_brightness) {
     FakeConfigurationProvider fake;
     fake.brightness = 0.5f;
     ConfigurationProvider &provider = fake;
@@ -34,28 +32,23 @@ ZTEST(configuration_provider_tests, test_fake_returns_injected_brightness)
                    "Expected injected brightness factor");
 }
 
-ZTEST(configuration_provider_tests, test_fake_returns_injected_display_rate)
-{
+ZTEST(configuration_provider_tests, test_fake_returns_injected_display_rate) {
     FakeConfigurationProvider fake;
     fake.displayRateMs = 16.67f;
     ConfigurationProvider &provider = fake;
 
-    zassert_within(provider.getDisplayRateMs(), 16.67f, 0.01f,
-                   "Expected injected display rate");
+    zassert_within(provider.getDisplayRateMs(), 16.67f, 0.01f, "Expected injected display rate");
 }
 
-ZTEST(configuration_provider_tests, test_fake_returns_injected_render_rate)
-{
+ZTEST(configuration_provider_tests, test_fake_returns_injected_render_rate) {
     FakeConfigurationProvider fake;
     fake.renderRateMs = 8.0f;
     ConfigurationProvider &provider = fake;
 
-    zassert_within(provider.getRenderRateMs(), 8.0f, 0.001f,
-                   "Expected injected render rate");
+    zassert_within(provider.getRenderRateMs(), 8.0f, 0.001f, "Expected injected render rate");
 }
 
-ZTEST(configuration_provider_tests, test_interface_allows_zero_brightness)
-{
+ZTEST(configuration_provider_tests, test_interface_allows_zero_brightness) {
     FakeConfigurationProvider fake;
     fake.brightness = 0.0f;
     ConfigurationProvider &provider = fake;
@@ -64,8 +57,7 @@ ZTEST(configuration_provider_tests, test_interface_allows_zero_brightness)
                    "Expected brightness of zero to be expressible");
 }
 
-ZTEST(configuration_provider_tests, test_interface_allows_full_brightness)
-{
+ZTEST(configuration_provider_tests, test_interface_allows_full_brightness) {
     FakeConfigurationProvider fake;
     fake.brightness = 1.0f;
     ConfigurationProvider &provider = fake;

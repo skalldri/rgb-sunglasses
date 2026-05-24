@@ -1,6 +1,6 @@
 #include <animations/bt_animations.h>
-#include <zephyr/logging/log.h>
 #include <fonts/FontAtlas.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(bt_anim, LOG_LEVEL_INF);
 
@@ -9,7 +9,6 @@ void BtAdvertisingAnimation::init() {
 }
 
 void BtAdvertisingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
-
     // What should the current brightness be?
     currentCycleTimeMs += timeSinceLastTickMs;
 
@@ -18,15 +17,18 @@ void BtAdvertisingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceL
         currentCycleTimeMs = 0;
     }
 
-    // Current brightness: 
+    // Current brightness:
     // if less than half of kFadeTimeMs, we are getting brighter
     // if more than half of kFadeTimeMS, we are getting dimmer
     size_t currentBrightness = 0;
 
     if (currentCycleTimeMs < kFadeHalfTimeMs) {
-        currentBrightness = kMinFade + (kFadeDistance * ((float)currentCycleTimeMs) / ((float)kFadeHalfTimeMs));
+        currentBrightness =
+            kMinFade + (kFadeDistance * ((float)currentCycleTimeMs) / ((float)kFadeHalfTimeMs));
     } else {
-        currentBrightness = kMaxFade - (kFadeDistance * ((float)(currentCycleTimeMs-kFadeHalfTimeMs)) / ((float)kFadeHalfTimeMs));
+        currentBrightness =
+            kMaxFade - (kFadeDistance * ((float)(currentCycleTimeMs - kFadeHalfTimeMs)) /
+                        ((float)kFadeHalfTimeMs));
     }
 
     for (size_t x = 0; x < renderer.displayWidth(); x++) {
@@ -42,7 +44,6 @@ void BtConnectingAnimation::init() {
 }
 
 void BtConnectingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
-
     // What should the current brightness be?
     currentCycleTimeMs += timeSinceLastTickMs;
 
@@ -92,13 +93,13 @@ void BtPairingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastT
     // High level theory of operation:
     // We will consider the entire text string to be a single giant texture.
     // The width of the texture == strlen(str) * FontAtlas::atlasPixelWidthPerChar
-    // 
-    // The texture will start at the right side of the display: we apply an offset to the texture
-    // render location, and then slowly reduce this offset (and eventually make it negative) to cause
-    // the texture to scroll across the display.
     //
-    // We consider the display to be a "window" looking into the texture. To save on compute, we will only
-    // attempt to render characters which are within the window + some bounding box.
+    // The texture will start at the right side of the display: we apply an offset to the texture
+    // render location, and then slowly reduce this offset (and eventually make it negative) to
+    // cause the texture to scroll across the display.
+    //
+    // We consider the display to be a "window" looking into the texture. To save on compute, we
+    // will only attempt to render characters which are within the window + some bounding box.
 
     // First, lets define some useful constants
 
@@ -110,8 +111,9 @@ void BtPairingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastT
     // The total "width" of the virtual texture that would contain the entire string
     // const size_t renderedStringWidth = currentMessageLen * FontAtlas::atlasPixelWidthPerChar;
 
-    // The size of the buffer on either side of the display where we will continue attempting to render
-    // characters, which allows characters to partially slide onto the display, one pixel at a time
+    // The size of the buffer on either side of the display where we will continue attempting to
+    // render characters, which allows characters to partially slide onto the display, one pixel at
+    // a time
     const size_t displayEdgeBuffer = FontAtlas::atlasPixelWidthPerChar;
 
     // The edges of the "display window"
@@ -126,18 +128,23 @@ void BtPairingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastT
     size_t firstChar = 0;
 
     // Until currentTextOffset goes negative, the first char to display will always be 0
-    // When currentTextOffset is negative, the first character has fallen off the edge of the display
+    // When currentTextOffset is negative, the first character has fallen off the edge of the
+    // display
     if (currentTextOffsetRelativeToDisplay < displayWindowLeftSide) {
-        // For every FontAtlas::atlasPixelWidthPerChar we are beyond the displayWindowLeftSide, 
+        // For every FontAtlas::atlasPixelWidthPerChar we are beyond the displayWindowLeftSide,
         // we can start one character later
-        int32_t offsetRelativeToDisplayWindowLeftSide = currentTextOffsetRelativeToDisplay - displayWindowLeftSide;
+        int32_t offsetRelativeToDisplayWindowLeftSide =
+            currentTextOffsetRelativeToDisplay - displayWindowLeftSide;
 
-        // For each FontAtlas::atlasPixelWidthPerChar we are beyond the display left edge, we can drop a character
-        // Rely on integer division to round down
-        int32_t charsToDrop = offsetRelativeToDisplayWindowLeftSide / (int32_t)(-FontAtlas::atlasPixelWidthPerChar);
+        // For each FontAtlas::atlasPixelWidthPerChar we are beyond the display left edge, we can
+        // drop a character Rely on integer division to round down
+        int32_t charsToDrop =
+            offsetRelativeToDisplayWindowLeftSide / (int32_t)(-FontAtlas::atlasPixelWidthPerChar);
 
         if (charsToDrop < 0) {
-            LOG_ERR("Chars to drop is negative unexpectedly: %d %d %d", currentTextOffsetRelativeToDisplay, offsetRelativeToDisplayWindowLeftSide, charsToDrop);
+            LOG_ERR("Chars to drop is negative unexpectedly: %d %d %d",
+                    currentTextOffsetRelativeToDisplay, offsetRelativeToDisplayWindowLeftSide,
+                    charsToDrop);
         } else {
             firstChar += charsToDrop;
         }
@@ -179,8 +186,9 @@ void BtPairingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastT
             // Debugging
             // printk("%c", currentMessage[i]);
         } else if (charWindowPos > displayWindowRightSide) {
-            // Early optimization: if we have found a character which is off the edge of the right side of the display window,
-            // we can stop iterating since no more chars will ever need to be rendered
+            // Early optimization: if we have found a character which is off the edge of the right
+            // side of the display window, we can stop iterating since no more chars will ever need
+            // to be rendered
             break;
         }
     }
@@ -192,6 +200,6 @@ void BtPairingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastT
 
     if (currentCycleTimeMs > kStepTimeMs) {
         currentCycleTimeMs = 0;
-        currentTextOffset--; // Move text one pixel to the left
+        currentTextOffset--;  // Move text one pixel to the left
     }
 }

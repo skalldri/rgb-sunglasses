@@ -1,7 +1,6 @@
-#include <zephyr/ztest.h>
-
 #include <animations/animation_parameter_source.h>
 #include <animations/animation_renderer.h>
+#include <zephyr/ztest.h>
 
 #define private public
 #include <animations/text_animation.h>
@@ -9,79 +8,62 @@
 
 #include <cstring>
 
-namespace
-{
-    class NullTestRenderer : public AnimationRenderer
-    {
-    public:
-        size_t displayWidth() const override { return 40; }
-        size_t displayHeight() const override { return 12; }
-        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
-        {
-            ARG_UNUSED(x);
-            ARG_UNUSED(y);
-            ARG_UNUSED(r);
-            ARG_UNUSED(g);
-            ARG_UNUSED(b);
+namespace {
+class NullTestRenderer : public AnimationRenderer {
+   public:
+    size_t displayWidth() const override { return 40; }
+    size_t displayHeight() const override { return 12; }
+    void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override {
+        ARG_UNUSED(x);
+        ARG_UNUSED(y);
+        ARG_UNUSED(r);
+        ARG_UNUSED(g);
+        ARG_UNUSED(b);
+    }
+};
+
+class ConstUint32Source : public AnimationUint32ParameterSource {
+   public:
+    explicit ConstUint32Source(uint32_t value) : value_(value) {}
+
+    uint32_t get() const override { return value_; }
+
+   private:
+    uint32_t value_;
+};
+
+class SequenceUpNextSource : public TextAnimationUpNextSource {
+   public:
+    size_t consumeCurrentAndAdvance(size_t numSlots) override {
+        lastNumSlots = numSlots;
+        size_t value = sequence[index % 2];
+        index++;
+        return value;
+    }
+
+    size_t sequence[2] = {0, 1};
+    size_t index = 0;
+    size_t lastNumSlots = 0;
+};
+
+class FixedSlotSource : public TextAnimationSlotSource {
+   public:
+    const char *getStringFromSlot(size_t slot) const override {
+        if (slot == 0) {
+            return "HELLO";
         }
-    };
-
-    class ConstUint32Source : public AnimationUint32ParameterSource
-    {
-    public:
-        explicit ConstUint32Source(uint32_t value)
-            : value_(value)
-        {
+        if (slot == 1) {
+            return "WORLD";
         }
 
-        uint32_t get() const override
-        {
-            return value_;
-        }
-
-    private:
-        uint32_t value_;
-    };
-
-    class SequenceUpNextSource : public TextAnimationUpNextSource
-    {
-    public:
-        size_t consumeCurrentAndAdvance(size_t numSlots) override
-        {
-            lastNumSlots = numSlots;
-            size_t value = sequence[index % 2];
-            index++;
-            return value;
-        }
-
-        size_t sequence[2] = {0, 1};
-        size_t index = 0;
-        size_t lastNumSlots = 0;
-    };
-
-    class FixedSlotSource : public TextAnimationSlotSource
-    {
-    public:
-        const char *getStringFromSlot(size_t slot) const override
-        {
-            if (slot == 0)
-            {
-                return "HELLO";
-            }
-            if (slot == 1)
-            {
-                return "WORLD";
-            }
-
-            return "UNKNOWN";
-        }
-    };
-}
+        return "UNKNOWN";
+    }
+};
+}  // namespace
 
 ZTEST_SUITE(text_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 
-ZTEST(text_animation_di_tests, test_init_uses_injected_slot_and_upnext_sources)
-{
+ZTEST(text_animation_di_tests, test_init_uses_injected_slot_and_upnext_sources) {
     ConstUint32Source stepTimeMs(10);
     ConstUint32Source color(0xAABBCC);
     FixedSlotSource slotSource;
@@ -93,14 +75,15 @@ ZTEST(text_animation_di_tests, test_init_uses_injected_slot_and_upnext_sources)
     animation->setDependencies(deps);
 
     animation->init();
-    zassert_true(strcmp(animation->currentMessage, "HELLO") == 0, "Expected first injected message to be HELLO");
+    zassert_true(strcmp(animation->currentMessage, "HELLO") == 0,
+                 "Expected first injected message to be HELLO");
 
     animation->init();
-    zassert_true(strcmp(animation->currentMessage, "WORLD") == 0, "Expected second injected message to be WORLD");
+    zassert_true(strcmp(animation->currentMessage, "WORLD") == 0,
+                 "Expected second injected message to be WORLD");
 }
 
-ZTEST(text_animation_di_tests, test_init_passes_slot_count_to_upnext_source)
-{
+ZTEST(text_animation_di_tests, test_init_passes_slot_count_to_upnext_source) {
     ConstUint32Source stepTimeMs(10);
     ConstUint32Source color(0xAABBCC);
     FixedSlotSource slotSource;
@@ -113,11 +96,11 @@ ZTEST(text_animation_di_tests, test_init_passes_slot_count_to_upnext_source)
 
     animation->init();
 
-    zassert_equal(upNextSource.lastNumSlots, 20, "Expected up-next source to receive text slot count");
+    zassert_equal(upNextSource.lastNumSlots, 20,
+                  "Expected up-next source to receive text slot count");
 }
 
-ZTEST(text_animation_di_tests, test_tick_accumulates_cycle_time)
-{
+ZTEST(text_animation_di_tests, test_tick_accumulates_cycle_time) {
     ConstUint32Source stepTimeMs(1000);
     ConstUint32Source color(0xFFFFFF);
     FixedSlotSource slotSource;
@@ -135,8 +118,7 @@ ZTEST(text_animation_di_tests, test_tick_accumulates_cycle_time)
                   "Expected cycle time to accumulate the tick delta");
 }
 
-ZTEST(text_animation_di_tests, test_tick_advances_offset_when_step_time_elapses)
-{
+ZTEST(text_animation_di_tests, test_tick_advances_offset_when_step_time_elapses) {
     ConstUint32Source stepTimeMs(10);
     ConstUint32Source color(0xFFFFFF);
     FixedSlotSource slotSource;
@@ -148,14 +130,13 @@ ZTEST(text_animation_di_tests, test_tick_advances_offset_when_step_time_elapses)
     animation->init();
 
     NullTestRenderer renderer;
-    animation->tick(renderer, 15); // 15 > stepTimeMs(10), should advance offset
+    animation->tick(renderer, 15);  // 15 > stepTimeMs(10), should advance offset
 
     zassert_equal(animation->currentTextOffset, -1,
                   "Expected offset to decrement once when step time elapses");
 }
 
-ZTEST(text_animation_di_tests, test_tick_does_not_advance_offset_before_step_time)
-{
+ZTEST(text_animation_di_tests, test_tick_does_not_advance_offset_before_step_time) {
     ConstUint32Source stepTimeMs(1000);
     ConstUint32Source color(0xFFFFFF);
     FixedSlotSource slotSource;
@@ -167,7 +148,7 @@ ZTEST(text_animation_di_tests, test_tick_does_not_advance_offset_before_step_tim
     animation->init();
 
     NullTestRenderer renderer;
-    animation->tick(renderer, 1); // 1 < stepTimeMs(1000), offset unchanged
+    animation->tick(renderer, 1);  // 1 < stepTimeMs(1000), offset unchanged
 
     zassert_equal(animation->currentTextOffset, 0,
                   "Expected offset unchanged when step time has not elapsed");

@@ -1,8 +1,7 @@
 #pragma once
 
-#include <animations/animation_types.h>
-
 #include <animations/animation_activator.h>
+#include <animations/animation_types.h>
 
 /**
  * @brief Binds an animation's local active-state mirror to remote BLE writes.
@@ -12,14 +11,12 @@
  * while also exposing @ref onRemoteActiveChange for BLE-originated updates.
  */
 template <Animation tAnimationId>
-class AnimationIsActiveBinding
-{
-public:
+class AnimationIsActiveBinding {
+   public:
     using SetterCallback = void (*)(bool);
 
     /** @brief Returns the per-animation binding instance. */
-    static AnimationIsActiveBinding<tAnimationId> *getInstance()
-    {
+    static AnimationIsActiveBinding<tAnimationId> *getInstance() {
         static AnimationIsActiveBinding<tAnimationId> instance;
         return &instance;
     }
@@ -29,10 +26,7 @@ public:
      *
      * @param setter Function invoked by @ref setLocalActiveState.
      */
-    static void registerSetter(SetterCallback setter)
-    {
-        getInstance()->setter_ = setter;
-    }
+    static void registerSetter(SetterCallback setter) { getInstance()->setter_ = setter; }
 
     /**
      * @brief Registers the activator used to switch to this animation on remote write.
@@ -40,8 +34,7 @@ public:
      * @param activator Object whose changeToAnimation() is called when the remote
      *                  client writes true.
      */
-    static void registerActivator(AnimationActivator *activator)
-    {
+    static void registerActivator(AnimationActivator *activator) {
         getInstance()->activator_ = activator;
     }
 
@@ -50,10 +43,8 @@ public:
      *
      * @param active True if the animation should be marked active locally.
      */
-    static void setLocalActiveState(bool active)
-    {
-        if (getInstance()->setter_)
-        {
+    static void setLocalActiveState(bool active) {
+        if (getInstance()->setter_) {
             getInstance()->setter_(active);
         }
     }
@@ -65,15 +56,13 @@ public:
      *
      * @param active Remote active value received via BLE write.
      */
-    static void onRemoteActiveChange(bool active)
-    {
-        if (active && getInstance()->activator_)
-        {
+    static void onRemoteActiveChange(bool active) {
+        if (active && getInstance()->activator_) {
             getInstance()->activator_->changeToAnimation(tAnimationId);
         }
     }
 
-private:
+   private:
     SetterCallback setter_ = nullptr;
     AnimationActivator *activator_ = nullptr;
 };

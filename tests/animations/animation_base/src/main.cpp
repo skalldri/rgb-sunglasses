@@ -1,47 +1,39 @@
-#include <zephyr/ztest.h>
-
 #include <animations/animation.h>
 #include <animations/animation_active_state_observer.h>
+#include <zephyr/ztest.h>
 
-namespace
-{
-    struct ObservedCall
-    {
-        Animation id = Animation::None;
-        bool active = false;
-        size_t callCount = 0;
-    };
+namespace {
+struct ObservedCall {
+    Animation id = Animation::None;
+    bool active = false;
+    size_t callCount = 0;
+};
 
-    class RecordingObserver : public AnimationActiveStateObserver
-    {
-    public:
-        void onActiveStateChanged(Animation id, bool active) override
-        {
-            last.id = id;
-            last.active = active;
-            last.callCount++;
-        }
+class RecordingObserver : public AnimationActiveStateObserver {
+   public:
+    void onActiveStateChanged(Animation id, bool active) override {
+        last.id = id;
+        last.active = active;
+        last.callCount++;
+    }
 
-        ObservedCall last;
-    };
+    ObservedCall last;
+};
 
-    // Concrete animation that exercises BaseAnimationTemplate::setActive()
-    class FakeAnimation : public BaseAnimationTemplate<FakeAnimation, Animation::ZigZag>
-    {
-    public:
-        void init() override {}
-        void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override
-        {
-            ARG_UNUSED(renderer);
-            ARG_UNUSED(timeSinceLastTickMs);
-        }
-    };
-}
+// Concrete animation that exercises BaseAnimationTemplate::setActive()
+class FakeAnimation : public BaseAnimationTemplate<FakeAnimation, Animation::ZigZag> {
+   public:
+    void init() override {}
+    void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override {
+        ARG_UNUSED(renderer);
+        ARG_UNUSED(timeSinceLastTickMs);
+    }
+};
+}  // namespace
 
 ZTEST_SUITE(animation_base_tests, NULL, NULL, NULL, NULL, NULL);
 
-ZTEST(animation_base_tests, test_set_active_calls_observer_with_correct_id)
-{
+ZTEST(animation_base_tests, test_set_active_calls_observer_with_correct_id) {
     RecordingObserver observer;
     BaseAnimation::registerActiveStateObserver(&observer);
 
@@ -54,8 +46,7 @@ ZTEST(animation_base_tests, test_set_active_calls_observer_with_correct_id)
     BaseAnimation::registerActiveStateObserver(nullptr);
 }
 
-ZTEST(animation_base_tests, test_set_active_passes_false_state)
-{
+ZTEST(animation_base_tests, test_set_active_passes_false_state) {
     RecordingObserver observer;
     BaseAnimation::registerActiveStateObserver(&observer);
 
@@ -67,8 +58,7 @@ ZTEST(animation_base_tests, test_set_active_passes_false_state)
     BaseAnimation::registerActiveStateObserver(nullptr);
 }
 
-ZTEST(animation_base_tests, test_set_active_safe_without_observer)
-{
+ZTEST(animation_base_tests, test_set_active_safe_without_observer) {
     BaseAnimation::registerActiveStateObserver(nullptr);
 
     // Should not crash

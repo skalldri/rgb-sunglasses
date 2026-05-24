@@ -6,54 +6,47 @@
 
 #include <animations/animation_renderer.h>
 
-namespace
-{
-    static constexpr size_t kWidth = 40;
-    static constexpr size_t kHeight = 12;
+namespace {
+static constexpr size_t kWidth = 40;
+static constexpr size_t kHeight = 12;
 
-    struct PixelState
-    {
-        uint8_t r = 0;
-        uint8_t g = 0;
-        uint8_t b = 0;
-    };
+struct PixelState {
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+};
 
-    PixelState sPixels[kWidth][kHeight];
+PixelState sPixels[kWidth][kHeight];
 
-    class CapturingRenderer : public AnimationRenderer
-    {
-    public:
-        size_t displayWidth() const override { return kWidth; }
-        size_t displayHeight() const override { return kHeight; }
-        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
-        {
-            if (x < kWidth && y < kHeight)
-            {
-                sPixels[x][y] = {r, g, b};
-            }
-        }
-    };
-
-    void reset_pixels()
-    {
-        for (size_t x = 0; x < kWidth; x++)
-        {
-            for (size_t y = 0; y < kHeight; y++)
-            {
-                sPixels[x][y] = {};
-            }
+class CapturingRenderer : public AnimationRenderer {
+   public:
+    size_t displayWidth() const override { return kWidth; }
+    size_t displayHeight() const override { return kHeight; }
+    void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override {
+        if (x < kWidth && y < kHeight) {
+            sPixels[x][y] = {r, g, b};
         }
     }
+};
 
-    uint8_t blue_at(size_t x, size_t y) { return sPixels[x][y].b; }
+void reset_pixels() {
+    for (size_t x = 0; x < kWidth; x++) {
+        for (size_t y = 0; y < kHeight; y++) {
+            sPixels[x][y] = {};
+        }
+    }
 }
+
+uint8_t blue_at(size_t x, size_t y) {
+    return sPixels[x][y].b;
+}
+}  // namespace
 
 ZTEST_SUITE(bt_animations_di_tests, NULL, NULL, NULL, NULL, NULL);
 
 // --- BtAdvertisingAnimation ---
 
-ZTEST(bt_animations_di_tests, test_advertising_tick_fills_all_pixels_blue)
-{
+ZTEST(bt_animations_di_tests, test_advertising_tick_fills_all_pixels_blue) {
     BtAdvertisingAnimation *anim = BtAdvertisingAnimation::getInstance();
     anim->init();
 
@@ -61,10 +54,8 @@ ZTEST(bt_animations_di_tests, test_advertising_tick_fills_all_pixels_blue)
     reset_pixels();
     anim->tick(renderer, 1);
 
-    for (size_t x = 0; x < kWidth; x++)
-    {
-        for (size_t y = 0; y < kHeight; y++)
-        {
+    for (size_t x = 0; x < kWidth; x++) {
+        for (size_t y = 0; y < kHeight; y++) {
             zassert_equal(sPixels[x][y].r, 0, "Expected r=0 at (%d,%d)", x, y);
             zassert_equal(sPixels[x][y].g, 0, "Expected g=0 at (%d,%d)", x, y);
             zassert_true(sPixels[x][y].b > 0, "Expected b>0 at (%d,%d)", x, y);
@@ -72,8 +63,7 @@ ZTEST(bt_animations_di_tests, test_advertising_tick_fills_all_pixels_blue)
     }
 }
 
-ZTEST(bt_animations_di_tests, test_advertising_brightness_is_minimum_at_start)
-{
+ZTEST(bt_animations_di_tests, test_advertising_brightness_is_minimum_at_start) {
     BtAdvertisingAnimation *anim = BtAdvertisingAnimation::getInstance();
     anim->init();
 
@@ -87,8 +77,7 @@ ZTEST(bt_animations_di_tests, test_advertising_brightness_is_minimum_at_start)
                   "Expected minimum brightness at start of cycle");
 }
 
-ZTEST(bt_animations_di_tests, test_advertising_brightness_is_maximum_at_half_cycle)
-{
+ZTEST(bt_animations_di_tests, test_advertising_brightness_is_maximum_at_half_cycle) {
     BtAdvertisingAnimation *anim = BtAdvertisingAnimation::getInstance();
     anim->init();
 
@@ -103,8 +92,7 @@ ZTEST(bt_animations_di_tests, test_advertising_brightness_is_maximum_at_half_cyc
                   "Expected maximum brightness at half-cycle point");
 }
 
-ZTEST(bt_animations_di_tests, test_advertising_brightness_increases_toward_half_cycle)
-{
+ZTEST(bt_animations_di_tests, test_advertising_brightness_increases_toward_half_cycle) {
     BtAdvertisingAnimation *anim = BtAdvertisingAnimation::getInstance();
     anim->init();
 
@@ -123,8 +111,7 @@ ZTEST(bt_animations_di_tests, test_advertising_brightness_increases_toward_half_
 
 // --- BtConnectingAnimation ---
 
-ZTEST(bt_animations_di_tests, test_connecting_tick_starts_dim)
-{
+ZTEST(bt_animations_di_tests, test_connecting_tick_starts_dim) {
     BtConnectingAnimation *anim = BtConnectingAnimation::getInstance();
     anim->init();
 
@@ -136,8 +123,7 @@ ZTEST(bt_animations_di_tests, test_connecting_tick_starts_dim)
                   "Expected dim brightness before first flash transition");
 }
 
-ZTEST(bt_animations_di_tests, test_connecting_tick_flips_bright_after_flash_speed)
-{
+ZTEST(bt_animations_di_tests, test_connecting_tick_flips_bright_after_flash_speed) {
     BtConnectingAnimation *anim = BtConnectingAnimation::getInstance();
     anim->init();
 
@@ -151,8 +137,7 @@ ZTEST(bt_animations_di_tests, test_connecting_tick_flips_bright_after_flash_spee
                   "Expected maximum brightness after flash speed elapsed");
 }
 
-ZTEST(bt_animations_di_tests, test_connecting_tick_does_not_flip_at_exact_boundary)
-{
+ZTEST(bt_animations_di_tests, test_connecting_tick_does_not_flip_at_exact_boundary) {
     BtConnectingAnimation *anim = BtConnectingAnimation::getInstance();
     anim->init();
 
@@ -168,8 +153,7 @@ ZTEST(bt_animations_di_tests, test_connecting_tick_does_not_flip_at_exact_bounda
 
 // --- BtPairingAnimation ---
 
-ZTEST(bt_animations_di_tests, test_pairing_offset_advances_after_step_time_elapses)
-{
+ZTEST(bt_animations_di_tests, test_pairing_offset_advances_after_step_time_elapses) {
     BtPairingAnimation *anim = BtPairingAnimation::getInstance();
     anim->setPairingCode(123456);
     anim->init();
@@ -180,11 +164,11 @@ ZTEST(bt_animations_di_tests, test_pairing_offset_advances_after_step_time_elaps
     // Tick past kStepTimeMs (100ms)
     anim->tick(renderer, 101);
 
-    zassert_equal(anim->currentTextOffset, -1, "Expected offset to decrement after step time elapses");
+    zassert_equal(anim->currentTextOffset, -1,
+                  "Expected offset to decrement after step time elapses");
 }
 
-ZTEST(bt_animations_di_tests, test_pairing_offset_does_not_advance_before_step_time)
-{
+ZTEST(bt_animations_di_tests, test_pairing_offset_does_not_advance_before_step_time) {
     BtPairingAnimation *anim = BtPairingAnimation::getInstance();
     anim->setPairingCode(123456);
     anim->init();

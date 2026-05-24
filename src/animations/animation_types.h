@@ -1,8 +1,7 @@
 #pragma once
 
 // Defines the ID for each animation
-enum class Animation
-{
+enum class Animation {
     None = 0,
     ZigZag = 1,
     Text = 2,

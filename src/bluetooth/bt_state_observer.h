@@ -7,9 +7,8 @@
  * connected, and pairing events without depending on the BT stack.
  * Register an instance with bluetooth_register_state_observer().
  */
-class BtStateObserver
-{
-public:
+class BtStateObserver {
+   public:
     virtual ~BtStateObserver() = default;
 
     virtual void onAdvertisingStarted() = 0;

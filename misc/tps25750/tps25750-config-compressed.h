@@ -8,4 +8,4 @@ extern const char tps25750_patch[];
 extern const unsigned int g_tps25750_patch_CompressedSize;
 extern const unsigned int g_tps25750_patch_UncompressedSize;
 
-#endif // TPS25750_PATCH_H
+#endif  // TPS25750_PATCH_H

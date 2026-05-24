@@ -1,73 +1,55 @@
+#include <animations/animation_renderer.h>
+#include <animations/zigzag_animation.h>
 #include <zephyr/ztest.h>
 
-#include <animations/zigzag_animation.h>
-#include <animations/animation_renderer.h>
+namespace {
+class MutableUint32Source : public AnimationUint32ParameterSource {
+   public:
+    explicit MutableUint32Source(uint32_t value) : value_(value) {}
 
-namespace
-{
-    class MutableUint32Source : public AnimationUint32ParameterSource
-    {
-    public:
-        explicit MutableUint32Source(uint32_t value)
-            : value_(value)
-        {
+    uint32_t get() const override { return value_; }
+
+    void set(uint32_t value) { value_ = value; }
+
+   private:
+    uint32_t value_;
+};
+
+struct PixelCapture {
+    size_t x = 0;
+    size_t y = 0;
+    uint8_t red = 0;
+    uint8_t green = 0;
+    uint8_t blue = 0;
+    size_t litPixelWrites = 0;
+};
+
+PixelCapture sCapture;
+
+class CapturingTestRenderer : public AnimationRenderer {
+   public:
+    size_t displayWidth() const override { return 2; }
+    size_t displayHeight() const override { return 1; }
+    void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override {
+        if (r != 0 || g != 0 || b != 0) {
+            sCapture.x = x;
+            sCapture.y = y;
+            sCapture.red = r;
+            sCapture.green = g;
+            sCapture.blue = b;
+            sCapture.litPixelWrites++;
         }
-
-        uint32_t get() const override
-        {
-            return value_;
-        }
-
-        void set(uint32_t value)
-        {
-            value_ = value;
-        }
-
-    private:
-        uint32_t value_;
-    };
-
-    struct PixelCapture
-    {
-        size_t x = 0;
-        size_t y = 0;
-        uint8_t red = 0;
-        uint8_t green = 0;
-        uint8_t blue = 0;
-        size_t litPixelWrites = 0;
-    };
-
-    PixelCapture sCapture;
-
-    class CapturingTestRenderer : public AnimationRenderer
-    {
-    public:
-        size_t displayWidth() const override { return 2; }
-        size_t displayHeight() const override { return 1; }
-        void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) override
-        {
-            if (r != 0 || g != 0 || b != 0)
-            {
-                sCapture.x = x;
-                sCapture.y = y;
-                sCapture.red = r;
-                sCapture.green = g;
-                sCapture.blue = b;
-                sCapture.litPixelWrites++;
-            }
-        }
-    };
-
-    void reset_capture()
-    {
-        sCapture = {};
     }
+};
+
+void reset_capture() {
+    sCapture = {};
 }
+}  // namespace
 
 ZTEST_SUITE(zigzag_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 
-ZTEST(zigzag_animation_di_tests, test_injected_step_time_advances_pixel)
-{
+ZTEST(zigzag_animation_di_tests, test_injected_step_time_advances_pixel) {
     MutableUint32Source stepTimeMs(1);
     MutableUint32Source color(0x112233);
     ZigZagAnimationDependencies deps(stepTimeMs, color);
@@ -88,8 +70,7 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_advances_pixel)
     zassert_equal(sCapture.blue, 0x33, "Expected injected blue component");
 }
 
-ZTEST(zigzag_animation_di_tests, test_injected_step_time_holds_pixel_when_not_elapsed)
-{
+ZTEST(zigzag_animation_di_tests, test_injected_step_time_holds_pixel_when_not_elapsed) {
     MutableUint32Source stepTimeMs(1000);
     MutableUint32Source color(0xAA5500);
     ZigZagAnimationDependencies deps(stepTimeMs, color);
@@ -109,8 +90,7 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_holds_pixel_when_not_el
     zassert_equal(sCapture.blue, 0x00, "Expected injected blue component");
 }
 
-ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indices)
-{
+ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indices) {
     // 2x1 display → 2 total indices. With stepTimeMs=0 every positive tick advances.
     // init: index=0; tick 1 → index=1; tick 2 → index=2 wraps to 0.
     MutableUint32Source stepTimeMs(0);
@@ -124,10 +104,10 @@ ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indic
     CapturingTestRenderer renderer;
 
     reset_capture();
-    animation->tick(renderer, 1); // advances to index 1
+    animation->tick(renderer, 1);  // advances to index 1
 
     reset_capture();
-    animation->tick(renderer, 1); // advances to index 2 → wraps to 0
+    animation->tick(renderer, 1);  // advances to index 2 → wraps to 0
 
     zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write after wrap");
     zassert_equal(sCapture.x, 0, "Expected lit pixel at x=0 after wrapping");

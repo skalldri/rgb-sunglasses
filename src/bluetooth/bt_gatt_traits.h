@@ -1,7 +1,7 @@
 #pragma once
 
-#include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/gatt_cpf.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #include <array>
 #include <cstddef>
@@ -11,37 +11,27 @@ template <size_t N>
 using BtGattString = std::array<char, N>;
 
 template <typename T>
-struct BtGattStringTraits
-{
+struct BtGattStringTraits {
     static constexpr bool kIsString = false;
 };
 
 template <size_t N>
-struct BtGattStringTraits<BtGattString<N>>
-{
+struct BtGattStringTraits<BtGattString<N>> {
     static constexpr bool kIsString = true;
     static constexpr size_t kMaxLen = N;
 };
 
-struct BtGattColor
-{
+struct BtGattColor {
     constexpr BtGattColor() = default;
-    constexpr BtGattColor(uint32_t raw)
-        : value(raw)
-    {
-    }
+    constexpr BtGattColor(uint32_t raw) : value(raw) {}
 
-    constexpr operator uint32_t() const
-    {
-        return value;
-    }
+    constexpr operator uint32_t() const { return value; }
 
     uint32_t value = 0;
 };
 
 template <typename T>
-struct BtGattCpfTraits
-{
+struct BtGattCpfTraits {
     static constexpr bool kSupported = false;
 };
 
@@ -56,8 +46,7 @@ struct BtGattCpfTraits
 // };
 
 template <>
-struct BtGattCpfTraits<bool>
-{
+struct BtGattCpfTraits<bool> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_BOOLEAN,
@@ -65,8 +54,7 @@ struct BtGattCpfTraits<bool>
 };
 
 template <>
-struct BtGattCpfTraits<uint8_t>
-{
+struct BtGattCpfTraits<uint8_t> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_UINT8,
@@ -74,8 +62,7 @@ struct BtGattCpfTraits<uint8_t>
 };
 
 template <>
-struct BtGattCpfTraits<uint16_t>
-{
+struct BtGattCpfTraits<uint16_t> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_UINT16,
@@ -83,8 +70,7 @@ struct BtGattCpfTraits<uint16_t>
 };
 
 template <>
-struct BtGattCpfTraits<uint32_t>
-{
+struct BtGattCpfTraits<uint32_t> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_UINT32,
@@ -92,8 +78,7 @@ struct BtGattCpfTraits<uint32_t>
 };
 
 template <>
-struct BtGattCpfTraits<uint64_t>
-{
+struct BtGattCpfTraits<uint64_t> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_UINT64,
@@ -101,8 +86,7 @@ struct BtGattCpfTraits<uint64_t>
 };
 
 template <>
-struct BtGattCpfTraits<int8_t>
-{
+struct BtGattCpfTraits<int8_t> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_SINT8,
@@ -110,8 +94,7 @@ struct BtGattCpfTraits<int8_t>
 };
 
 template <>
-struct BtGattCpfTraits<int16_t>
-{
+struct BtGattCpfTraits<int16_t> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_SINT16,
@@ -119,8 +102,7 @@ struct BtGattCpfTraits<int16_t>
 };
 
 template <>
-struct BtGattCpfTraits<int32_t>
-{
+struct BtGattCpfTraits<int32_t> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_SINT32,
@@ -128,8 +110,7 @@ struct BtGattCpfTraits<int32_t>
 };
 
 template <>
-struct BtGattCpfTraits<int64_t>
-{
+struct BtGattCpfTraits<int64_t> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_SINT64,
@@ -137,8 +118,7 @@ struct BtGattCpfTraits<int64_t>
 };
 
 template <>
-struct BtGattCpfTraits<float>
-{
+struct BtGattCpfTraits<float> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_FLOAT32,
@@ -146,8 +126,7 @@ struct BtGattCpfTraits<float>
 };
 
 template <>
-struct BtGattCpfTraits<double>
-{
+struct BtGattCpfTraits<double> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_FLOAT64,
@@ -155,8 +134,7 @@ struct BtGattCpfTraits<double>
 };
 
 template <size_t N>
-struct BtGattCpfTraits<BtGattString<N>>
-{
+struct BtGattCpfTraits<BtGattString<N>> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_UTF8S,
@@ -164,8 +142,7 @@ struct BtGattCpfTraits<BtGattString<N>>
 };
 
 template <>
-struct BtGattCpfTraits<BtGattColor>
-{
+struct BtGattCpfTraits<BtGattColor> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_RGB888,

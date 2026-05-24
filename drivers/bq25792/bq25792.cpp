@@ -1,9 +1,9 @@
-#include <zephyr/init.h>
-#include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/bq25792/bq25792.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/i2c.h>
+#include <zephyr/init.h>
 #include <zephyr/logging/log.h>
 
-#include <zephyr/drivers/bq25792/bq25792.h>
 #include "bq25792_init.h"
 
 LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_INF);
@@ -19,18 +19,15 @@ LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_INF);
         tmp.dump();        \
     }
 
-int bq25792_dump(const struct device *dev)
-{
-    if (!dev)
-    {
+int bq25792_dump(const struct device *dev) {
+    if (!dev) {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
 
     const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
 
-    if (!device_is_ready(cfg->i2c.bus))
-    {
+    if (!device_is_ready(cfg->i2c.bus)) {
         LOG_ERR("bus not ready");
         return -ENODEV;
     }
@@ -45,10 +42,8 @@ int bq25792_dump(const struct device *dev)
 }
 #undef REG
 
-int bq25792_temp_override(const struct device *dev, bool enable)
-{
-    if (!dev)
-    {
+int bq25792_temp_override(const struct device *dev, bool enable) {
+    if (!dev) {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
@@ -63,10 +58,8 @@ int bq25792_temp_override(const struct device *dev, bool enable)
     return reg.set<BQ25792_NTC_CONTROL_1_TS_IGNORE>(ts_ignore, true /* flush */);
 }
 
-int bq25792_adc_enable(const struct device *dev, bool enable)
-{
-    if (!dev)
-    {
+int bq25792_adc_enable(const struct device *dev, bool enable) {
+    if (!dev) {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
@@ -81,10 +74,8 @@ int bq25792_adc_enable(const struct device *dev, bool enable)
     return reg.set<BQ25792_ADC_CONTROL_ADC_EN>(adc_en, true /* flush */);
 }
 
-int bq25792_pfm_enable(const struct device *dev, bool enable)
-{
-    if (!dev)
-    {
+int bq25792_pfm_enable(const struct device *dev, bool enable) {
+    if (!dev) {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
@@ -99,16 +90,13 @@ int bq25792_pfm_enable(const struct device *dev, bool enable)
     return reg.set<BQ25792_CHARGER_CONTROL_3_PFM_FWD_DIS>(pfm_fwd_dis, true /* flush */);
 }
 
-int bq25792_set_charge_frequency(const struct device *dev, bq25792_charge_frequency_t freq)
-{
-    if (!dev)
-    {
+int bq25792_set_charge_frequency(const struct device *dev, bq25792_charge_frequency_t freq) {
+    if (!dev) {
         LOG_ERR("NULL-device pointer");
         return -ENODEV;
     }
 
-    if (freq > NUM_CHARGE_FREQUENCY)
-    {
+    if (freq > NUM_CHARGE_FREQUENCY) {
         LOG_ERR("Invalid frequency setting %u", freq);
         return -EINVAL;
     }
@@ -123,8 +111,7 @@ int bq25792_set_charge_frequency(const struct device *dev, bq25792_charge_freque
     return reg.set<BQ25792_CHARGER_CONTROL_4_PWM_FREQ>(pwm_freq, true /* flush */);
 }
 
-int bq25792_dump_charge_parameters(const struct device *dev)
-{
+int bq25792_dump_charge_parameters(const struct device *dev) {
     const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
 
     BQ25792_MINIMAL_SYSTEM_VOLTAGE minimalSystemVoltage(cfg);
@@ -159,8 +146,7 @@ int bq25792_dump_charge_parameters(const struct device *dev)
     return 0;
 }
 
-int bq25792_set_charge_enable(const struct device *dev, bool enabled)
-{
+int bq25792_set_charge_enable(const struct device *dev, bool enabled) {
     const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
     BQ25792_CHARGER_CONTROL_0 chargerControl0(cfg);
     LOG_INF("Setting EN_CHG to %u", enabled ? 1 : 0);
