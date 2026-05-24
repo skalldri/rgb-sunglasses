@@ -2,7 +2,7 @@
 #include <animations/animation_types.h>
 
 class AnimationActivator {
-public:
+   public:
     virtual ~AnimationActivator() = default;
     virtual void changeToAnimation(Animation id) = 0;
 };

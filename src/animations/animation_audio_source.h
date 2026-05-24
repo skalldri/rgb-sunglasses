@@ -2,9 +2,8 @@
 
 #include <cstddef>
 
-class AnimationAudioSource
-{
-public:
+class AnimationAudioSource {
+   public:
     virtual ~AnimationAudioSource() = default;
 
     /* Drain the audio result queue and refresh the internal cache.

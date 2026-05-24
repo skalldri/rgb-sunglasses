@@ -3,34 +3,28 @@
 #include <animations/animation.h>
 #include <animations/animation_parameter_source.h>
 
-class MyEyesAnimationSlotSource
-{
-public:
+class MyEyesAnimationSlotSource {
+   public:
     virtual ~MyEyesAnimationSlotSource() = default;
     virtual const char *getStringFromSlot(size_t slot) const = 0;
 };
 
-class MyEyesAnimationUpNextSource
-{
-public:
+class MyEyesAnimationUpNextSource {
+   public:
     virtual ~MyEyesAnimationUpNextSource() = default;
     virtual size_t consumeCurrentAndAdvance(size_t numSlots) = 0;
 };
 
-class MyEyesAnimationDependencies
-{
-public:
-    MyEyesAnimationDependencies(
-        const AnimationUint32ParameterSource &blinkSpeedMs,
-        const AnimationUint32ParameterSource &color,
-        const MyEyesAnimationSlotSource &slotSource,
-        MyEyesAnimationUpNextSource &upNextSource)
+class MyEyesAnimationDependencies {
+   public:
+    MyEyesAnimationDependencies(const AnimationUint32ParameterSource &blinkSpeedMs,
+                                const AnimationUint32ParameterSource &color,
+                                const MyEyesAnimationSlotSource &slotSource,
+                                MyEyesAnimationUpNextSource &upNextSource)
         : blinkSpeedMs(blinkSpeedMs),
           color(color),
           slotSource(slotSource),
-          upNextSource(upNextSource)
-    {
-    }
+          upNextSource(upNextSource) {}
 
     const AnimationUint32ParameterSource &blinkSpeedMs;
     const AnimationUint32ParameterSource &color;
@@ -38,22 +32,20 @@ public:
     MyEyesAnimationUpNextSource &upNextSource;
 };
 
-enum class EyeState
-{
-    Open,             // Eye is fully open, we are not within a blink cycle
-    OpenInBlinkCycle, // Eye is fully open, but we have more blinks to perform in this cycle
-    BlinkClosing,     // Eye is in the process of shutting
-    Closed,           // Eye is fully closed
-    BlinkOpening      // Eye is in the process of opening
+enum class EyeState {
+    Open,              // Eye is fully open, we are not within a blink cycle
+    OpenInBlinkCycle,  // Eye is fully open, but we have more blinks to perform in this cycle
+    BlinkClosing,      // Eye is in the process of shutting
+    Closed,            // Eye is fully closed
+    BlinkOpening       // Eye is in the process of opening
 };
 
-class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation::MyEyes>
-{
-public:
+class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation::MyEyes> {
+   public:
     static constexpr size_t kMaxEyeLen = 3;
     static constexpr size_t kNumStringSlots = 20;
-    static constexpr size_t kLeftEyePos = 5;   // X-start coordinate of left eye
-    static constexpr size_t kRightEyePos = 28; // X-start coordinate of left eye
+    static constexpr size_t kLeftEyePos = 5;    // X-start coordinate of left eye
+    static constexpr size_t kRightEyePos = 28;  // X-start coordinate of left eye
 
     MyEyesAnimation();
 
@@ -62,7 +54,7 @@ public:
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
-private:
+   private:
     const char *getStringFromSlot(size_t slot);
 
     size_t getUpNext();

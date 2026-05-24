@@ -2,7 +2,6 @@
 
 AnimationActiveStateObserver *BaseAnimation::sActiveStateObserver_ = nullptr;
 
-void BaseAnimation::registerActiveStateObserver(AnimationActiveStateObserver *observer)
-{
+void BaseAnimation::registerActiveStateObserver(AnimationActiveStateObserver *observer) {
     sActiveStateObserver_ = observer;
 }

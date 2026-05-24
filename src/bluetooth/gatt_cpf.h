@@ -33,4 +33,4 @@
 #define BLE_GATT_CPF_FORMAT_STRUCT 0x1B
 
 // Extra CPF values, specific to RGB Sunglasses project
-#define BLE_GATT_CPF_FORMAT_RGB888 0xE0 // 3 bytes: R, G, B
+#define BLE_GATT_CPF_FORMAT_RGB888 0xE0  // 3 bytes: R, G, B

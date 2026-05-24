@@ -8,9 +8,8 @@
  * Implementations are called from a system work queue thread (not from
  * the GPIO interrupt context). Register with buttons_register_listener().
  */
-class ButtonEventListener
-{
-public:
+class ButtonEventListener {
+   public:
     virtual ~ButtonEventListener() = default;
 
     /**

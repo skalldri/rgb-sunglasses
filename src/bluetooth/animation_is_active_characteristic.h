@@ -1,7 +1,6 @@
 #pragma once
 
 #include <animations/animation_is_active_binding.h>
-
 #include <bluetooth/bt_service_cpp.h>
 
 /**
@@ -11,10 +10,12 @@
  * remote writes into @ref AnimationIsActiveBinding for the selected animation.
  */
 template <Animation tAnimationId>
-class IsActiveCharacteristic : public BtGattAutoCharacteristicExt<IsActiveCharacteristic<tAnimationId>, "Is Active", true, false, bool, false>
-{
-public:
-    using Base = BtGattAutoCharacteristicExt<IsActiveCharacteristic<tAnimationId>, "Is Active", true, false, bool, false>;
+class IsActiveCharacteristic
+    : public BtGattAutoCharacteristicExt<IsActiveCharacteristic<tAnimationId>, "Is Active", true,
+                                         false, bool, false> {
+   public:
+    using Base = BtGattAutoCharacteristicExt<IsActiveCharacteristic<tAnimationId>, "Is Active",
+                                             true, false, bool, false>;
     using Base::operator=;
 
     /**
@@ -22,18 +23,14 @@ public:
      *
      * @param active New local active state.
      */
-    void setActive(bool active)
-    {
-        this->operator=(active);
-    }
+    void setActive(bool active) { this->operator=(active); }
 
     /**
      * @brief Reacts to remote writes by requesting animation activation.
      *
      * @param active Value written by the remote BLE client.
      */
-    void onWrite(const bool &active)
-    {
+    void onWrite(const bool &active) {
         AnimationIsActiveBinding<tAnimationId>::onRemoteActiveChange(active);
     }
 };

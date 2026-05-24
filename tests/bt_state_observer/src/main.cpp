@@ -1,12 +1,11 @@
-#include <zephyr/ztest.h>
 #include <bluetooth/bt_state_observer.h>
+#include <zephyr/ztest.h>
 
 // ---------------------------------------------------------------------------
 // Minimal recording observer
 // ---------------------------------------------------------------------------
 
-struct RecordingObserver : public BtStateObserver
-{
+struct RecordingObserver : public BtStateObserver {
     int advertisingCount = 0;
     int connectingCount = 0;
     int connectedCount = 0;
@@ -14,28 +13,25 @@ struct RecordingObserver : public BtStateObserver
     unsigned int lastPairingCode = 0;
 
     void onAdvertisingStarted() override { advertisingCount++; }
-    void onConnectingStarted() override  { connectingCount++; }
-    void onConnected() override          { connectedCount++; }
-    void onPairingCodeRequired(unsigned int code) override
-    {
+    void onConnectingStarted() override { connectingCount++; }
+    void onConnected() override { connectedCount++; }
+    void onPairingCodeRequired(unsigned int code) override {
         pairingCount++;
         lastPairingCode = code;
     }
 
-    void reset()
-    {
+    void reset() {
         advertisingCount = 0;
-        connectingCount  = 0;
-        connectedCount   = 0;
-        pairingCount     = 0;
-        lastPairingCode  = 0;
+        connectingCount = 0;
+        connectedCount = 0;
+        pairingCount = 0;
+        lastPairingCode = 0;
     }
 };
 
 static RecordingObserver sObserver;
 
-static void reset_observer(void *f)
-{
+static void reset_observer(void *f) {
     sObserver.reset();
 }
 
@@ -47,8 +43,7 @@ ZTEST_SUITE(bt_state_observer_tests, NULL, NULL, reset_observer, reset_observer,
 // when the state machine calls its methods.
 // ---------------------------------------------------------------------------
 
-ZTEST(bt_state_observer_tests, test_observer_receives_advertising)
-{
+ZTEST(bt_state_observer_tests, test_observer_receives_advertising) {
     BtStateObserver &obs = sObserver;
     obs.onAdvertisingStarted();
 
@@ -58,8 +53,7 @@ ZTEST(bt_state_observer_tests, test_observer_receives_advertising)
     zassert_equal(sObserver.pairingCount, 0, "No other calls expected");
 }
 
-ZTEST(bt_state_observer_tests, test_observer_receives_connecting)
-{
+ZTEST(bt_state_observer_tests, test_observer_receives_connecting) {
     BtStateObserver &obs = sObserver;
     obs.onConnectingStarted();
 
@@ -67,16 +61,14 @@ ZTEST(bt_state_observer_tests, test_observer_receives_connecting)
     zassert_equal(sObserver.advertisingCount, 0, "No other calls expected");
 }
 
-ZTEST(bt_state_observer_tests, test_observer_receives_connected)
-{
+ZTEST(bt_state_observer_tests, test_observer_receives_connected) {
     BtStateObserver &obs = sObserver;
     obs.onConnected();
 
     zassert_equal(sObserver.connectedCount, 1, "Expected connected notification");
 }
 
-ZTEST(bt_state_observer_tests, test_observer_receives_pairing_code)
-{
+ZTEST(bt_state_observer_tests, test_observer_receives_pairing_code) {
     BtStateObserver &obs = sObserver;
     obs.onPairingCodeRequired(123456);
 
@@ -84,8 +76,7 @@ ZTEST(bt_state_observer_tests, test_observer_receives_pairing_code)
     zassert_equal(sObserver.lastPairingCode, 123456U, "Expected correct pairing code");
 }
 
-ZTEST(bt_state_observer_tests, test_observer_receives_zero_pairing_code)
-{
+ZTEST(bt_state_observer_tests, test_observer_receives_zero_pairing_code) {
     BtStateObserver &obs = sObserver;
     obs.onPairingCodeRequired(0);
 
@@ -93,8 +84,7 @@ ZTEST(bt_state_observer_tests, test_observer_receives_zero_pairing_code)
     zassert_equal(sObserver.lastPairingCode, 0U, "Expected pairing code 0 to be forwarded");
 }
 
-ZTEST(bt_state_observer_tests, test_multiple_events_accumulated)
-{
+ZTEST(bt_state_observer_tests, test_multiple_events_accumulated) {
     BtStateObserver &obs = sObserver;
     obs.onAdvertisingStarted();
     obs.onAdvertisingStarted();
@@ -103,4 +93,3 @@ ZTEST(bt_state_observer_tests, test_multiple_events_accumulated)
     zassert_equal(sObserver.advertisingCount, 2, "Expected two advertising notifications");
     zassert_equal(sObserver.connectingCount, 1, "Expected one connecting notification");
 }
-

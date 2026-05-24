@@ -1,18 +1,18 @@
 #pragma once
 
+#include <configuration_provider.h>
+#include <singleton.h>
+
 #include <cstddef>
 
-#include <singleton.h>
-#include <configuration_provider.h>
-
 class CoreConfig : public Singleton<CoreConfig>, public ConfigurationProvider {
-public:
+   public:
     static constexpr size_t kServiceIdNum = 1;
 
     /**
      * @brief Returns a value between 0 and 1 representing the current display brightness
-     * 
-     * @return float 
+     *
+     * @return float
      */
     float getBrightnessFactor() override;
 

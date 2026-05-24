@@ -2,14 +2,14 @@
 
 #include <animations/animation.h>
 
-class BtAdvertisingAnimation : public BaseAnimationTemplate<BtAdvertisingAnimation, Animation::BtAdvertising>
-{
-public:
+class BtAdvertisingAnimation
+    : public BaseAnimationTemplate<BtAdvertisingAnimation, Animation::BtAdvertising> {
+   public:
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
-    void setActive(bool active) override {};
+    void setActive(bool active) override{};
 
-private:
+   private:
     static constexpr size_t kMinFade = 50;
     static constexpr size_t kMaxFade = 255;
     static constexpr size_t kFadeDistance = kMaxFade - kMinFade;
@@ -22,14 +22,14 @@ private:
     size_t currentCycleTimeMs = 0;
 };
 
-class BtConnectingAnimation : public BaseAnimationTemplate<BtConnectingAnimation, Animation::BtConnecting>
-{
-public:
+class BtConnectingAnimation
+    : public BaseAnimationTemplate<BtConnectingAnimation, Animation::BtConnecting> {
+   public:
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
-    void setActive(bool active) override {};
+    void setActive(bool active) override{};
 
-private:
+   private:
     static constexpr size_t kMinFlash = 50;
     static constexpr size_t kMaxFlash = 255;
 
@@ -43,16 +43,15 @@ private:
     size_t currentCycleTimeMs = 0;
 };
 
-class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Animation::BtPairing>
-{
-public:
+class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Animation::BtPairing> {
+   public:
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
-    void setActive(bool active) override {};
+    void setActive(bool active) override{};
 
     void setPairingCode(unsigned int code);
 
-private:
+   private:
     unsigned int pairingCode = 0;
 
     static constexpr size_t kLetterBrightness = 255;

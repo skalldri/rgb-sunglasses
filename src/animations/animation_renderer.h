@@ -3,7 +3,7 @@
 #include <cstdint>
 
 class AnimationRenderer {
-public:
+   public:
     virtual ~AnimationRenderer() = default;
     virtual size_t displayWidth() const = 0;
     virtual size_t displayHeight() const = 0;

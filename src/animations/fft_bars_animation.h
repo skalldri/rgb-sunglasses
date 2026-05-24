@@ -3,16 +3,15 @@
 #include <animations/animation.h>
 #include <animations/animation_audio_source.h>
 
-class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animation::FftBars>
-{
-public:
+class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animation::FftBars> {
+   public:
     /* Injected by src/sound/animation_adapters/audio_animations_sound.cpp */
     void setAudioSource(AnimationAudioSource &source);
 
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
-private:
+   private:
     AnimationAudioSource *audioSource_ = nullptr;
 
     /* Per-bucket smoothed energy (exponential moving average).

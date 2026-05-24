@@ -6,9 +6,8 @@
  * Implementations may read from BLE GATT characteristics (CoreConfig),
  * hard-coded defaults, or test doubles.
  */
-class ConfigurationProvider
-{
-public:
+class ConfigurationProvider {
+   public:
     virtual ~ConfigurationProvider() = default;
 
     /** @return Brightness multiplier in [0, 1]. */

@@ -1,12 +1,11 @@
 #pragma once
 
 #include <animations/animation.h>
-#include <animations/animation_parameter_source.h>
 #include <animations/animation_audio_source.h>
+#include <animations/animation_parameter_source.h>
 
-class BeatAnimation : public BaseAnimationTemplate<BeatAnimation, Animation::Beat>
-{
-public:
+class BeatAnimation : public BaseAnimationTemplate<BeatAnimation, Animation::Beat> {
+   public:
     /* Injected by src/sound/animation_adapters/audio_animations_sound.cpp */
     void setAudioSource(AnimationAudioSource &source);
 
@@ -16,7 +15,7 @@ public:
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
-private:
+   private:
     AnimationAudioSource *audioSource_ = nullptr;
     const AnimationUint32ParameterSource *color_ = nullptr;
 
