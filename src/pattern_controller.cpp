@@ -220,6 +220,18 @@ int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t 
                                     ((float)blue) * sBrightnessForFrame);
 }
 
+#if defined(CONFIG_ANIMATION_BAD_APPLE)
+#define BAD_APPLE_SHELL_SUBCMD , (bad_apple, 10, "Bad Apple!! animation (plays from /NAND:/bad_apple.glim)")
+#else
+#define BAD_APPLE_SHELL_SUBCMD
+#endif
+
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+#define NYAN_CAT_SHELL_SUBCMD , (nyan_cat, 11, "Nyan Cat animation (plays from /NAND:/nyan_cat.glim)")
+#else
+#define NYAN_CAT_SHELL_SUBCMD
+#endif
+
 #if defined(CONFIG_SHELL)
 
 static int cmd_anim_set(const struct shell *shell, size_t argc, char **argv, void *data) {
@@ -273,6 +285,16 @@ static int cmd_anim_get(const struct shell *shell, size_t argc, char **argv) {
         case Animation::FftBars:
             name = "fft_bars";
             break;
+#if defined(CONFIG_ANIMATION_BAD_APPLE)
+        case Animation::BadApple:
+            name = "bad_apple";
+            break;
+#endif
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+        case Animation::NyanCat:
+            name = "nyan_cat";
+            break;
+#endif
         default:
             name = "unknown";
             break;
@@ -286,7 +308,9 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_anim_set, cmd_anim_set, (none, 0, "No animation
                              (zigzag, 1, "ZigZag animation"), (text, 2, "Text animation"),
                              (rainbow, 5, "Rainbow animation"), (my_eyes, 7, "My Eyes animation"),
                              (beat, 8, "Beat animation (per-band flash on beat detection)"),
-                             (fft_bars, 9, "FFT Bars animation (live frequency bar graph)"));
+                             (fft_bars, 9, "FFT Bars animation (live frequency bar graph)")
+                             BAD_APPLE_SHELL_SUBCMD
+                             NYAN_CAT_SHELL_SUBCMD);
 
 static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argc);

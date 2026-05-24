@@ -26,6 +26,14 @@ constexpr size_t kFrameDisplayHeight =
 constexpr size_t kFrameLedBankWidth =
     kFrameDisplayWidth / 2;  // There are two LED banks, each is half the display width
 
+// Nose cutout: a rectangular region in the center-bottom of the display where no LEDs exist.
+// The cutout is symmetric about the horizontal center and sits flush with the bottom edge.
+// Animations should avoid placing important content in this region.
+constexpr size_t kFrameNoseCutoutWidth  = 10u;
+constexpr size_t kFrameNoseCutoutHeight = 6u;
+constexpr size_t kFrameNoseCutoutX      = (kFrameDisplayWidth  - kFrameNoseCutoutWidth)  / 2u; // = 15
+constexpr size_t kFrameNoseCutoutY      = kFrameDisplayHeight  - kFrameNoseCutoutHeight;        // = 6
+
 // Number of LEDs on each row of ONE BANK
 const size_t kFrameLedsOnRow[kFrameDisplayHeight] = {
     20,  // Row 00 has 20 LEDs

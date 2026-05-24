@@ -17,6 +17,14 @@
 #include <animations/fft_bars_animation.h>
 #endif
 
+#if defined(CONFIG_ANIMATION_BAD_APPLE)
+#include <animations/bad_apple_animation.h>
+#endif
+
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+#include <animations/nyan_cat_animation.h>
+#endif
+
 namespace {
 class RegistryActiveStateObserver : public AnimationActiveStateObserver {
    public:
@@ -53,6 +61,14 @@ using BeatAnimationIsActive = AnimationIsActiveBinding<Animation::Beat>;
 
 #if defined(CONFIG_ANIMATION_FFT_BARS)
 using FftBarsAnimationIsActive = AnimationIsActiveBinding<Animation::FftBars>;
+#endif
+
+#if defined(CONFIG_ANIMATION_BAD_APPLE)
+using BadAppleAnimationIsActive = AnimationIsActiveBinding<Animation::BadApple>;
+#endif
+
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+using NyanCatAnimationIsActive = AnimationIsActiveBinding<Animation::NyanCat>;
 #endif
 
 BaseAnimation *null_animation_factory() {
@@ -92,6 +108,18 @@ BaseAnimation *fft_bars_animation_factory() {
     return FftBarsAnimation::getInstance();
 }
 #endif
+
+#if defined(CONFIG_ANIMATION_BAD_APPLE)
+BaseAnimation *bad_apple_animation_factory() {
+    return BadAppleAnimation::getInstance();
+}
+#endif
+
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+BaseAnimation *nyan_cat_animation_factory() {
+    return NyanCatAnimation::getInstance();
+}
+#endif
 }  // namespace
 
 int animation_registry_register_defaults() {
@@ -111,6 +139,12 @@ int animation_registry_register_defaults() {
 #endif
 #if defined(CONFIG_ANIMATION_FFT_BARS)
     AnimationIsActiveBinding<Animation::FftBars>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_BAD_APPLE)
+    AnimationIsActiveBinding<Animation::BadApple>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+    AnimationIsActiveBinding<Animation::NyanCat>::registerActivator(&sActivator);
 #endif
 
     animation_registry_reset();
@@ -208,6 +242,36 @@ int animation_registry_register_defaults() {
 
     fft_bars_animation_bind_default_sound_dependencies();
     fft_bars_animation_bind_default_bt_dependencies();
+#endif
+
+#if defined(CONFIG_ANIMATION_BAD_APPLE)
+    ret = animation_registry_register(Animation::BadApple, bad_apple_animation_factory);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::BadApple,
+                                                BadAppleAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    bad_apple_animation_bind_default_bt_dependencies();
+#endif
+
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+    ret = animation_registry_register(Animation::NyanCat, nyan_cat_animation_factory);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::NyanCat,
+                                                NyanCatAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    nyan_cat_animation_bind_default_bt_dependencies();
 #endif
 
     return 0;
