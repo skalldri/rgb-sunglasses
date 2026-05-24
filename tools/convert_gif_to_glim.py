@@ -7,9 +7,14 @@ Supports both monochrome (Raw, 1-bit) and full-colour (Rgb24, 3-byte) output.
 Display geometry: 40 × 12 pixels. Nose cutout: 10 × 6 px at center-bottom
   (x=15–24, y=6–11). Use --x-offset to shift content away from the cutout.
 
+For Nyan Cat specifically, prefer the dedicated procedural generator:
+  python tools/generate_nyan_cat_glim.py
+That script draws the sprite pixel-by-pixel instead of scaling a GIF, which
+produces a much better result on the 40×12 display.
+
 Usage examples:
-  # Download and convert Nyan Cat (RGB24, right-biased for nose cutout)
-  python convert_gif_to_glim.py --output nyan_cat.glim
+  # Download and convert a GIF (RGB24, right-biased for nose cutout)
+  python convert_gif_to_glim.py --output animation.glim
 
   # Convert a local GIF to monochrome with a custom on-colour
   python convert_gif_to_glim.py --input anim.gif --mono --mono-color 255,0,128

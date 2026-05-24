@@ -7,7 +7,7 @@ can be reached with a single O(1) seek rather than scanning the file.
 **Extension:** `.glim`  
 **Byte order:** little-endian throughout.  
 **Reference implementation:** `glim_decoder.{h,cpp}` (this directory).  
-**Conversion tools:** `tools/convert_bad_apple.py`, `tools/convert_gif_to_glim.py`.
+**Conversion tools:** `tools/convert_bad_apple.py`, `tools/convert_gif_to_glim.py`, `tools/generate_nyan_cat_glim.py`.
 
 ---
 
