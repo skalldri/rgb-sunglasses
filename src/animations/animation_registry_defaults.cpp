@@ -21,6 +21,10 @@
 #include <animations/bad_apple_animation.h>
 #endif
 
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+#include <animations/nyan_cat_animation.h>
+#endif
+
 namespace {
 class RegistryActiveStateObserver : public AnimationActiveStateObserver {
    public:
@@ -61,6 +65,10 @@ using FftBarsAnimationIsActive = AnimationIsActiveBinding<Animation::FftBars>;
 
 #if defined(CONFIG_ANIMATION_BAD_APPLE)
 using BadAppleAnimationIsActive = AnimationIsActiveBinding<Animation::BadApple>;
+#endif
+
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+using NyanCatAnimationIsActive = AnimationIsActiveBinding<Animation::NyanCat>;
 #endif
 
 BaseAnimation *null_animation_factory() {
@@ -106,6 +114,12 @@ BaseAnimation *bad_apple_animation_factory() {
     return BadAppleAnimation::getInstance();
 }
 #endif
+
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+BaseAnimation *nyan_cat_animation_factory() {
+    return NyanCatAnimation::getInstance();
+}
+#endif
 }  // namespace
 
 int animation_registry_register_defaults() {
@@ -128,6 +142,9 @@ int animation_registry_register_defaults() {
 #endif
 #if defined(CONFIG_ANIMATION_BAD_APPLE)
     AnimationIsActiveBinding<Animation::BadApple>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+    AnimationIsActiveBinding<Animation::NyanCat>::registerActivator(&sActivator);
 #endif
 
     animation_registry_reset();
@@ -240,6 +257,21 @@ int animation_registry_register_defaults() {
     }
 
     bad_apple_animation_bind_default_bt_dependencies();
+#endif
+
+#if defined(CONFIG_ANIMATION_NYAN_CAT)
+    ret = animation_registry_register(Animation::NyanCat, nyan_cat_animation_factory);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::NyanCat,
+                                                NyanCatAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    nyan_cat_animation_bind_default_bt_dependencies();
 #endif
 
     return 0;

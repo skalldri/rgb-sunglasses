@@ -10,6 +10,15 @@ bool GlimDecoder::getPixel(const uint8_t *buf, size_t x, size_t y, size_t width)
     return (buf[bitIdx / 8u] >> (7u - (bitIdx % 8u))) & 1u;
 }
 
+void GlimDecoder::getPixelRgb(const uint8_t *buf, size_t x, size_t y, size_t width,
+                               uint8_t &r, uint8_t &g, uint8_t &b)
+{
+    size_t offset = (y * width + x) * 3u;
+    r = buf[offset + 0u];
+    g = buf[offset + 1u];
+    b = buf[offset + 2u];
+}
+
 int GlimDecoder::open(const char *path)
 {
     close(); // Ensure any previous file is closed
@@ -65,7 +74,10 @@ int GlimDecoder::open(const char *path)
         return -EBADF;
     }
 
-    if (formatByte != (uint8_t)FrameFormat::Raw && formatByte != (uint8_t)FrameFormat::Lz4PerFrame) {
+    if (formatByte != (uint8_t)FrameFormat::Raw &&
+        formatByte != (uint8_t)FrameFormat::Lz4PerFrame &&
+        formatByte != (uint8_t)FrameFormat::Rgb24 &&
+        formatByte != (uint8_t)FrameFormat::Lz4PerFrameRgb24) {
         LOG_ERR("Unknown frame format: %u", formatByte);
         fs_close(&file_);
         return -EBADF;
@@ -76,6 +88,14 @@ int GlimDecoder::open(const char *path)
         fps = 24;
     }
 
+    // Mono color: bytes 20-22 (formerly reserved). (0,0,0) means default white.
+    uint8_t monoR = headerBuf[20];
+    uint8_t monoG = headerBuf[21];
+    uint8_t monoB = headerBuf[22];
+    if (monoR == 0u && monoG == 0u && monoB == 0u) {
+        monoR = monoG = monoB = 255u;
+    }
+
     // Store parsed header
     header_.version    = version;
     header_.format     = (FrameFormat)formatByte;
@@ -83,9 +103,17 @@ int GlimDecoder::open(const char *path)
     header_.width      = width;
     header_.height     = height;
     header_.frameCount = frameCount;
+    header_.monoColorR = monoR;
+    header_.monoColorG = monoG;
+    header_.monoColorB = monoB;
 
     frameDataOffset_ = frameDataOffset;
-    frameBytes_      = (width * height + 7u) / 8u;
+    if ((FrameFormat)formatByte == FrameFormat::Rgb24 ||
+        (FrameFormat)formatByte == FrameFormat::Lz4PerFrameRgb24) {
+        frameBytes_ = (size_t)width * (size_t)height * 3u;
+    } else {
+        frameBytes_ = ((size_t)width * (size_t)height + 7u) / 8u;
+    }
 
     fileOpen_ = true;
     LOG_INF("GLIM opened: %ux%u, %u frames @ %u fps, format %u",
@@ -119,9 +147,11 @@ int GlimDecoder::readFrame(uint32_t index, uint8_t *buf, size_t bufSize)
         return -ENOBUFS;
     }
 
-    if (header_.format == FrameFormat::Raw) {
+    if (header_.format == FrameFormat::Raw || header_.format == FrameFormat::Rgb24) {
+        // Both Raw and Rgb24 are contiguous byte sequences with O(1) seek.
         return readRawFrame(index, buf, bufSize);
     } else {
+        // Lz4PerFrame and Lz4PerFrameRgb24 require per-frame index tables — not yet implemented.
         LOG_ERR("LZ4 format not yet supported");
         return -ENOTSUP;
     }

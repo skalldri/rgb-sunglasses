@@ -1,35 +1,33 @@
-#include <animations/bad_apple_animation.h>
+#include <animations/nyan_cat_animation.h>
 #include <fonts/FontAtlas.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/__assert.h>
 
-LOG_MODULE_REGISTER(bad_apple_animation, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(nyan_cat_animation, LOG_LEVEL_INF);
 
-#define BAD_APPLE_FILE_PATH "/NAND:/bad_apple.glim"
-#define BAD_APPLE_FILE_PATH_SHORT "/NAND:/BAD_AP~1.GLI"
+#define NYAN_CAT_FILE_PATH       "/NAND:/nyan_cat.glim"
+#define NYAN_CAT_FILE_PATH_SHORT "/NAND:/NYAN_CA~1.GLI"
 
-void BadAppleAnimation::init() {
-    currentFrame_ = 0;
-    accumulatedMs_ = 0;
-    inErrorState_ = false;
-    errorScrollOffset_ = 0;
+void NyanCatAnimation::init() {
+    currentFrame_       = 0;
+    accumulatedMs_      = 0;
+    inErrorState_       = false;
+    errorScrollOffset_  = 0;
     errorScrollAccumMs_ = 0;
 }
 
-void BadAppleAnimation::setActive(bool active) {
-    // Notify the registry observer (same pattern as BaseAnimationTemplate::setActive)
+void NyanCatAnimation::setActive(bool active) {
     if (sActiveStateObserver_) {
         sActiveStateObserver_->onActiveStateChanged(kAnimationId, active);
     }
 
     if (active) {
         init();
-        int rc = decoder_.open(BAD_APPLE_FILE_PATH);
+        int rc = decoder_.open(NYAN_CAT_FILE_PATH);
         if (rc < 0) {
-            LOG_ERR("Failed to open %s: %d", BAD_APPLE_FILE_PATH, rc);
-            rc = decoder_.open(BAD_APPLE_FILE_PATH_SHORT);
+            LOG_ERR("Failed to open %s: %d", NYAN_CAT_FILE_PATH, rc);
+            rc = decoder_.open(NYAN_CAT_FILE_PATH_SHORT);
             if (rc < 0) {
-                LOG_ERR("Failed to open %s: %d", BAD_APPLE_FILE_PATH_SHORT, rc);
+                LOG_ERR("Failed to open %s: %d", NYAN_CAT_FILE_PATH_SHORT, rc);
                 inErrorState_ = true;
             }
         }
@@ -39,7 +37,7 @@ void BadAppleAnimation::setActive(bool active) {
     }
 }
 
-void BadAppleAnimation::tick(AnimationRenderer& renderer, size_t timeSinceLastTickMs) {
+void NyanCatAnimation::tick(AnimationRenderer& renderer, size_t timeSinceLastTickMs) {
     if (inErrorState_) {
         renderError(renderer, timeSinceLastTickMs);
         return;
@@ -53,7 +51,7 @@ void BadAppleAnimation::tick(AnimationRenderer& renderer, size_t timeSinceLastTi
 
     // Advance playback clock
     accumulatedMs_ += timeSinceLastTickMs;
-    const uint32_t msPerFrame = (decoder_.header().fps > 0) ? (1000u / decoder_.header().fps) : 41u;
+    const uint32_t msPerFrame = (decoder_.header().fps > 0) ? (1000u / decoder_.header().fps) : 83u;
 
     while (accumulatedMs_ >= msPerFrame) {
         accumulatedMs_ -= msPerFrame;
@@ -63,7 +61,7 @@ void BadAppleAnimation::tick(AnimationRenderer& renderer, size_t timeSinceLastTi
         }
     }
 
-    // Read frame
+    // Read frame (RGB24: 3 bytes per pixel)
     int rc = decoder_.readFrame(currentFrame_, frameBuf_, sizeof(frameBuf_));
     if (rc < 0) {
         LOG_ERR("Failed to read frame %u: %d", currentFrame_, rc);
@@ -72,19 +70,17 @@ void BadAppleAnimation::tick(AnimationRenderer& renderer, size_t timeSinceLastTi
         return;
     }
 
-    // Render frame: unpack bitpacked pixels using the color declared in the GLIM header.
-    const uint8_t cr = decoder_.header().monoColorR;
-    const uint8_t cg = decoder_.header().monoColorG;
-    const uint8_t cb = decoder_.header().monoColorB;
+    // Render frame: extract RGB per pixel
     for (size_t y = 0; y < renderer.displayHeight(); y++) {
         for (size_t x = 0; x < renderer.displayWidth(); x++) {
-            bool on = GlimDecoder::getPixel(frameBuf_, x, y, renderer.displayWidth());
-            renderer.setPixel(x, y, on ? cr : 0u, on ? cg : 0u, on ? cb : 0u);
+            uint8_t r, g, b;
+            GlimDecoder::getPixelRgb(frameBuf_, x, y, renderer.displayWidth(), r, g, b);
+            renderer.setPixel(x, y, r, g, b);
         }
     }
 }
 
-void BadAppleAnimation::renderError(AnimationRenderer& renderer, size_t timeSinceLastTickMs) {
+void NyanCatAnimation::renderError(AnimationRenderer& renderer, size_t timeSinceLastTickMs) {
     // Clear display
     for (size_t x = 0; x < renderer.displayWidth(); x++) {
         for (size_t y = 0; y < renderer.displayHeight(); y++) {
@@ -92,14 +88,14 @@ void BadAppleAnimation::renderError(AnimationRenderer& renderer, size_t timeSinc
         }
     }
 
-    // Advance scroll offset at the same rate as TextAnimation: 1 pixel per kErrorScrollStepMs
+    // Advance scroll at 1 pixel per kErrorScrollStepMs
     errorScrollAccumMs_ += timeSinceLastTickMs;
     while (errorScrollAccumMs_ >= kErrorScrollStepMs) {
         errorScrollAccumMs_ -= kErrorScrollStepMs;
         errorScrollOffset_--;
     }
 
-    // Render "NO FILE" text using FontAtlas, scrolling right-to-left
+    // Scroll "NO FILE" in rainbow colors (fitting for NyanCat)
     FontAtlas* atlas = FontAtlas::getInstance();
     const char* msg = "NO FILE";
 
@@ -108,15 +104,29 @@ void BadAppleAnimation::renderError(AnimationRenderer& renderer, size_t timeSinc
         int32_t charX =
             errorScrollOffset_ + static_cast<int32_t>(i * FontAtlas::atlasPixelWidthPerChar);
 
-        // Only render if the character is (at least partially) visible on the display
         if (charX + static_cast<int32_t>(FontAtlas::atlasPixelWidthPerChar) >= 0 &&
             charX < static_cast<int32_t>(renderer.displayWidth())) {
+
+            // Cycle through rainbow colors per character
+            static constexpr uint8_t kRainbow[7][3] = {
+                {255,   0,   0},  // red
+                {255, 128,   0},  // orange
+                {255, 255,   0},  // yellow
+                {  0, 255,   0},  // green
+                {  0,   0, 255},  // blue
+                {128,   0, 255},  // indigo
+                {255,   0, 255},  // violet
+            };
+            const uint8_t *col = kRainbow[i % 7];
+
             atlas->PrintChar(c, [&](size_t fontX, size_t fontY, bool filled) {
                 int32_t screenX = charX + static_cast<int32_t>(fontX);
                 if (screenX >= 0 && screenX < static_cast<int32_t>(renderer.displayWidth()) &&
                     fontY < renderer.displayHeight()) {
-                    uint8_t brightness = filled ? 255u : 0u;
-                    renderer.setPixel(screenX, fontY, brightness, brightness, brightness);
+                    renderer.setPixel(screenX, fontY,
+                                      filled ? col[0] : 0u,
+                                      filled ? col[1] : 0u,
+                                      filled ? col[2] : 0u);
                 }
             });
         }

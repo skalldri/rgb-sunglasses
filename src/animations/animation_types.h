@@ -13,4 +13,5 @@ enum class Animation {
     Beat = 8,
     FftBars = 9,
     BadApple = 10,
+    NyanCat  = 11,
 };

@@ -133,5 +133,35 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: ${{ github.workspace }}/twister-out-ci/coverage/coverage.info
+          flags: zephyr
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install Pillow numpy pytest pytest-cov
+
+      - name: Run Python tests
+        run: |
+          pytest tools/tests/ -v \
+            --cov=tools/convert_bad_apple \
+            --cov=tools/convert_gif_to_glim \
+            --cov-report=xml:coverage-python.xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage-python.xml
+          flags: python
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}

@@ -44,6 +44,7 @@ target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG app PRIVATE src/animations/zigzag_a
 target_sources_ifdef(CONFIG_ANIMATION_BEAT    app PRIVATE src/animations/beat_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/animations/fft_bars_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_BAD_APPLE app PRIVATE src/animations/bad_apple_animation.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_NYAN_CAT  app PRIVATE src/animations/nyan_cat_animation.cpp)
 
 if(CONFIG_ANIMATION_BEAT OR CONFIG_ANIMATION_FFT_BARS)
   target_sources(app PRIVATE src/sound/animation_adapters/audio_animations_sound.cpp)
@@ -57,6 +58,7 @@ target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG  app PRIVATE src/bluetooth/animatio
 target_sources_ifdef(CONFIG_ANIMATION_BEAT    app PRIVATE src/bluetooth/animation_adapters/beat_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/bluetooth/animation_adapters/fft_bars_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_BAD_APPLE app PRIVATE src/bluetooth/animation_adapters/bad_apple_animation_bt.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_NYAN_CAT  app PRIVATE src/bluetooth/animation_adapters/nyan_cat_animation_bt.cpp)
 
 target_include_directories(
   app 

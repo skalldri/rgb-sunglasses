@@ -2,9 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# Agent behavior
+## Agent behavior
 - Always use built-in LLM tools to edit files
 - Whenever I say "Remember that" or some similar equivalent, update this file with the information.
+
+## Hardware Revisions
+- The "rgb_sunglasses_dk" board is legacy. We need to retain build support for it, but no new features are added to this board.
+- The "rgb_sunglasses_proto0" board is the latest hardware revision. Always enable new features on the proto0 hardware revision by default. When I ask you to add a new feature, ensure it's enabled on the Proto0 hardware KConfig
 
 ## Build and Test Commands
 
