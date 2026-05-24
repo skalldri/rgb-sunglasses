@@ -12,4 +12,5 @@ enum class Animation {
     MyEyes = 7,
     Beat = 8,
     FftBars = 9,
+    BadApple = 10,
 };

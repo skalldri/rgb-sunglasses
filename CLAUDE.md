@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+# Agent behavior
+- Always use built-in LLM tools to edit files
+- Whenever I say "Remember that" or some similar equivalent, update this file with the information.
+
 ## Build and Test Commands
 
 ```bash

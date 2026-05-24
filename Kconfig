@@ -63,4 +63,14 @@ config ANIMATION_FFT_BARS
 	  Enable the FFT Bars animation. Requires CONFIG_AUDIO=y.
 	  Displays a live bar graph of the four frequency-band energies.
 
+config ANIMATION_BAD_APPLE
+	bool "Enable Bad Apple animation"
+	depends on FAT_FILESYSTEM_ELM
+	default n
+	help
+	  Plays the Bad Apple!! demo on the LED display. Reads frames from
+	  /NAND:/bad_apple.glim on the 4 MB FAT partition (Proto0 only).
+	  Use tools/convert_bad_apple.py to generate the .glim file.
+	  If the file is missing, scrolls "NO FILE" as an error message.
+
 rsource "drivers/Kconfig"
