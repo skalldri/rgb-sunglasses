@@ -1,5 +1,8 @@
 #pragma once
 
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/i2c.h>
+
 struct vm3011_dev_data {
     struct gpio_callback callback;
 };
