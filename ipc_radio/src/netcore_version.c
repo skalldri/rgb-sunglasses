@@ -6,120 +6,80 @@
 
 #include <errno.h>
 #include <string.h>
-#include <zephyr/devicetree.h>
-#include <zephyr/drivers/flash.h>
 #include <zephyr/init.h>
 #include <zephyr/ipc/ipc_service.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/storage/flash_map.h>
+#include <fw_info_bare.h>
+#include <pm_config.h>
+#include <tinycrypt/sha256.h>
 #include <app_version.h>
 #include "netcore_version_protocol.h"
 
 LOG_MODULE_REGISTER(netcore_version, CONFIG_NETCORE_VERSION_LOG_LEVEL);
 
-/*
- * Minimal MCUboot image-header and TLV definitions.
- * We avoid depending on CONFIG_MCUBOOT_BOOTUTIL_LIB (not available on the net
- * core) and instead replicate only the fields we need.
- */
-#define MCUBOOT_IMAGE_MAGIC    0x96f3b83dUL
-#define MCUBOOT_TLV_INFO_MAGIC 0x6907U
-#define MCUBOOT_TLV_SHA256     0x0010U
-
-struct mcuboot_image_header {
-	uint32_t ih_magic;
-	uint32_t ih_load_addr;
-	uint16_t ih_hdr_size;
-	uint16_t ih_protect_tlv_size;
-	uint32_t ih_img_size;
-	uint32_t ih_flags;
-	struct {
-		uint8_t  iv_major;
-		uint8_t  iv_minor;
-		uint16_t iv_revision;
-		uint32_t iv_build_num;
-	} ih_ver;
-	uint32_t _pad1;
-} __packed;
-
-struct mcuboot_tlv_info {
-	uint16_t it_magic;
-	uint16_t it_tlv_tot;
-} __packed;
-
-struct mcuboot_tlv {
-	uint16_t it_type;
-	uint16_t it_len;
-} __packed;
-
 static struct ipc_ept ver_ept;
 
 /**
- * @brief Attempt to read SHA-256 from an MCUboot TLV in slot0_partition.
+ * @brief Compute SHA-256 of the running net core image payload.
  *
- * The image in slot0_partition may be an MCUboot-wrapped image (after OTA) or a
- * b0n-only signed binary (initial programming). If the MCUboot IMAGE_MAGIC is
- * not found the output is left as all-zeros.
+ * The image in the ipc_radio partition is the raw firmware payload written
+ * by PCD during an OTA update (or by the programmer on initial flash). MCUboot
+ * strips its own header and TLV area before calling PCD, so there is never
+ * an IMAGE_MAGIC or TLV at the ipc_radio partition start. Specifically,
+ * nrf53_hooks.c::network_core_update() skips the MCUboot header with:
+ *
+ *   vtable_addr = (uint32_t)hdr + hdr->ih_hdr_size;
+ *   pcd_network_core_update(vtable, hdr->ih_img_size);
+ *
+ * Only hdr->ih_img_size bytes of raw payload are written to net core flash.
+ *
+ * Every b0n-managed net core image embeds a fw_info struct at
+ * CONFIG_FW_INFO_OFFSET (0x200) from the start of the image. fw_info.size
+ * gives the exact byte count of the firmware. The SHA-256 here covers
+ * [PM_IPC_RADIO_ADDRESS, PM_IPC_RADIO_ADDRESS + fw_info.size), i.e. the raw
+ * payload only.
+ *
+ * NOTE: This hash does NOT match the SHA-256 stored in the MCUboot TLV of the
+ * original DFU package. MCUboot's hash covers (header + payload + protected
+ * TLV), whereas ours covers only the payload. The header is permanently
+ * discarded by PCD and cannot be recovered from net core flash. This hash is
+ * still useful as a unique build fingerprint: it will change with every
+ * firmware update. To reproduce it offline, strip the MCUboot header from the
+ * net core .bin (skip the first ih_hdr_size bytes) and compute sha256sum on
+ * the remaining ih_img_size bytes.
+ *
+ * The net core's own internal flash is memory-mapped (XIP), so we can hash
+ * it directly without needing the flash driver.
  */
-static void read_sha256_from_slot0(uint8_t sha256[32])
+static void compute_sha256(uint8_t sha256[32])
 {
-	const struct device *flash_dev = FIXED_PARTITION_DEVICE(ipc_radio);
-	const off_t base = FIXED_PARTITION_OFFSET(ipc_radio);
-	struct mcuboot_image_header hdr;
-	struct mcuboot_tlv_info tlv_info;
-	struct mcuboot_tlv tlv;
-	off_t tlv_start;
-	off_t pos;
-	off_t tlv_end;
-
-	if (!device_is_ready(flash_dev)) {
-		LOG_WRN("Flash device not ready, hash unavailable");
-		return;
-	}
-
-	if (flash_read(flash_dev, base, &hdr, sizeof(hdr)) != 0) {
-		LOG_WRN("Failed to read slot0_partition header");
-		return;
-	}
-
-	if (hdr.ih_magic != MCUBOOT_IMAGE_MAGIC) {
-		/* Initial programming uses b0n format (no MCUboot header). */
-		LOG_DBG("No MCUboot header in slot0_partition (b0n format), hash unavailable");
-		return;
-	}
+	const struct fw_info *finfo;
+	struct tc_sha256_state_struct sha_state;
 
 	/*
-	 * The unprotected TLV area starts after the firmware image payload.
-	 * If a protected TLV block is present it comes first; skip it.
+	 * fw_info_find() searches for the fw_info magic at the allowed offsets
+	 * from PM_IPC_RADIO_ADDRESS (the XIP address of our partition start).
 	 */
-	tlv_start = base + hdr.ih_hdr_size + hdr.ih_img_size + hdr.ih_protect_tlv_size;
-
-	if (flash_read(flash_dev, tlv_start, &tlv_info, sizeof(tlv_info)) != 0) {
+	finfo = fw_info_find(PM_IPC_RADIO_ADDRESS);
+	if (finfo == NULL) {
+		LOG_WRN("fw_info not found in ipc_radio partition, hash unavailable");
 		return;
 	}
 
-	if (tlv_info.it_magic != MCUBOOT_TLV_INFO_MAGIC) {
+	if (finfo->size == 0 || finfo->size > PM_IPC_RADIO_SIZE) {
+		LOG_WRN("fw_info.size=0x%x out of range (max 0x%x), hash unavailable",
+			finfo->size, (uint32_t)PM_IPC_RADIO_SIZE);
 		return;
 	}
 
-	pos = tlv_start + sizeof(tlv_info);
-	tlv_end = tlv_start + tlv_info.it_tlv_tot;
+	LOG_DBG("Computing SHA-256 over %u bytes at 0x%08x", finfo->size, PM_IPC_RADIO_ADDRESS);
 
-	while (pos < tlv_end) {
-		if (flash_read(flash_dev, pos, &tlv, sizeof(tlv)) != 0) {
-			break;
-		}
-		if (tlv.it_type == MCUBOOT_TLV_SHA256 && tlv.it_len == 32) {
-			if (flash_read(flash_dev, pos + sizeof(tlv), sha256, 32) == 0) {
-				LOG_DBG("SHA-256 read successfully from slot0_partition TLV");
-			}
-			return;
-		}
-		pos += sizeof(tlv) + tlv.it_len;
-	}
+	tc_sha256_init(&sha_state);
+	tc_sha256_update(&sha_state, (const uint8_t *)PM_IPC_RADIO_ADDRESS, finfo->size);
+	tc_sha256_final(sha256, &sha_state);
 
-	LOG_DBG("SHA-256 TLV not found in slot0_partition");
+	LOG_DBG("SHA-256 computed successfully");
 }
 
 static void ver_recv_cb(const void *data, size_t len, void *priv)
@@ -139,7 +99,7 @@ static void ver_recv_cb(const void *data, size_t len, void *priv)
 	rsp.revision  = APP_PATCHLEVEL;
 	rsp.build_num = APP_TWEAK;
 
-	read_sha256_from_slot0(rsp.sha256);
+	compute_sha256(rsp.sha256);
 
 	err = ipc_service_send(&ver_ept, &rsp, sizeof(rsp));
 	if (err < 0) {

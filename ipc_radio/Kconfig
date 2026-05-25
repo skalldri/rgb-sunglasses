@@ -69,12 +69,13 @@ endif # IPC_RADIO_BT
 
 config NETCORE_VERSION_IPC
 	bool "IPC netcore version reporting"
-	depends on IPC_SERVICE && FLASH
+	depends on IPC_SERVICE && TINYCRYPT_SHA256
 	help
 	  Registers an IPC endpoint ("NETCORE_VER") that reads the running
-	  image version from slot0_partition and reports it to the app core
-	  on demand. The app core uses this data to populate the net-core
-	  MCUboot image slot exposed to MCUMgr clients.
+	  image version from the embedded fw_info struct and computes the
+	  SHA-256 of the running net core image, then reports both to the
+	  app core on demand. The app core uses this data to populate the
+	  net-core MCUboot image slot exposed to MCUMgr clients.
 
 if NETCORE_VERSION_IPC
 

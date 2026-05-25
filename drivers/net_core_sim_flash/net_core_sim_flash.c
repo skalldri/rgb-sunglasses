@@ -134,6 +134,16 @@ static int net_core_sim_flash_read(const struct device *dev, const off_t offset,
     // Finally, it will try to read the SHA TLV data directly
     else if (offset == tlv_sha_data_offset && len == IMAGE_SHA_LEN) {
 #if defined(CONFIG_NETCORE_VERSION_IPC) && (IMAGE_SHA_LEN == 32)
+        /*
+         * Note: this SHA-256 covers the raw net core image payload only
+         * (from the start of the ipc_radio partition for fw_info.size bytes).
+         * It does NOT match the SHA-256 in the original MCUboot TLV, because
+         * MCUboot's hash also covers the image header and protected TLVs that
+         * PCD strips before writing to net core flash. The hash is still a
+         * reliable build fingerprint and will change with every OTA update.
+         * To reproduce offline: strip ih_hdr_size bytes from the net core .bin,
+         * then compute sha256sum on the remaining ih_img_size bytes.
+         */
         if (netcore_info_valid) {
             memcpy(data, netcore_info.sha256, IMAGE_SHA_LEN);
         } else {
