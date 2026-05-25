@@ -9,6 +9,10 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#ifdef CONFIG_NETCORE_VERSION_IPC
+#include <netcore_version.h>
+#endif
+
 // COPIED FROM
 // zephyr/subsys/mgmt/mcumgr/grp/img_mgmt/include/mgmt/mcumgr/grp/img_mgmt/img_mgmt_priv.h
 #ifdef CONFIG_MCUBOOT_BOOTLOADER_USES_SHA512
@@ -48,18 +52,39 @@ static const struct flash_parameters net_core_sim_flash_parameters = {
 #error "Doesn't work with this option enabled"
 #endif
 
+#ifdef CONFIG_NETCORE_VERSION_IPC
+/*
+ * Snapshot of the net core version, latched on the first successful IPC fetch.
+ * Latching once prevents a version/hash mismatch if MCUMgr reads the header
+ * and the hash in separate calls that straddle the moment the IPC response
+ * arrives.
+ */
+static struct netcore_version_rsp netcore_info;
+static bool netcore_info_valid;
+
+static bool try_latch_netcore_info(void)
+{
+    if (!netcore_info_valid && netcore_version_get(&netcore_info) == 0) {
+        netcore_info_valid = true;
+    }
+    return netcore_info_valid;
+}
+#endif /* CONFIG_NETCORE_VERSION_IPC */
+
 static int net_core_sim_flash_read(const struct device *dev, const off_t offset, void *data,
                                    const size_t len) {
     ARG_UNUSED(dev);
-
-    // Here we should communicate with the network core to read the image info.
-    // For now, return bogus value.
 
     LOG_DBG("Simulated read at offset 0x%lx of length %zu", (long)offset, len);
 
     const off_t tlv_info_offset = PM_MCUBOOT_PAD_SIZE + PM_CPUNET_APP_SIZE;
     const off_t tlv_sha_offset = tlv_info_offset + sizeof(struct image_tlv_info);
     const off_t tlv_sha_data_offset = tlv_sha_offset + sizeof(struct image_tlv);
+
+#ifdef CONFIG_NETCORE_VERSION_IPC
+    /* Latch the IPC snapshot once; fall through to defaults if not ready. */
+    (void)try_latch_netcore_info();
+#endif
 
     if (offset == 0 && len == sizeof(struct image_header)) {
         // They are trying to read the MCUboot image header. Lets give them one!
@@ -71,11 +96,24 @@ static int net_core_sim_flash_read(const struct device *dev, const off_t offset,
         hdr->ih_img_size = PM_CPUNET_APP_SIZE;
         hdr->ih_flags = 0;
 
-        // TODO: Query the real version from the net core?
-        hdr->ih_ver.iv_major = 0;
-        hdr->ih_ver.iv_minor = 0;
-        hdr->ih_ver.iv_revision = 0;
+#ifdef CONFIG_NETCORE_VERSION_IPC
+        if (netcore_info_valid) {
+            hdr->ih_ver.iv_major     = netcore_info.major;
+            hdr->ih_ver.iv_minor     = netcore_info.minor;
+            hdr->ih_ver.iv_revision  = netcore_info.revision;
+            hdr->ih_ver.iv_build_num = netcore_info.build_num;
+        } else {
+            hdr->ih_ver.iv_major     = 0;
+            hdr->ih_ver.iv_minor     = 0;
+            hdr->ih_ver.iv_revision  = 0;
+            hdr->ih_ver.iv_build_num = 0;
+        }
+#else
+        hdr->ih_ver.iv_major     = 0;
+        hdr->ih_ver.iv_minor     = 0;
+        hdr->ih_ver.iv_revision  = 0;
         hdr->ih_ver.iv_build_num = 0;
+#endif
 
         return 0;
     } else if (offset == tlv_info_offset && len == sizeof(struct image_tlv_info)) {
@@ -95,7 +133,15 @@ static int net_core_sim_flash_read(const struct device *dev, const off_t offset,
     }
     // Finally, it will try to read the SHA TLV data directly
     else if (offset == tlv_sha_data_offset && len == IMAGE_SHA_LEN) {
+#if defined(CONFIG_NETCORE_VERSION_IPC) && (IMAGE_SHA_LEN == 32)
+        if (netcore_info_valid) {
+            memcpy(data, netcore_info.sha256, IMAGE_SHA_LEN);
+        } else {
+            memset(data, 0, IMAGE_SHA_LEN);
+        }
+#else
         memset(data, 0xAB, IMAGE_SHA_LEN);  // Fake SHA data
+#endif
         return 0;
     }
     // Due to a bug in MCUmgr's `img_mgmt_read_info()` function, it will try to interpret the SHA

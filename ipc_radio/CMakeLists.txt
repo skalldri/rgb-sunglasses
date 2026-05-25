@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(ipc_radio)
 
-target_include_directories(app PRIVATE ./src)
+target_include_directories(app PRIVATE ./src ../include)
 
 target_sources_ifdef(CONFIG_IPC_RADIO_802154 app PRIVATE src/802154.c)
 
@@ -18,6 +18,8 @@ if(CONFIG_IPC_RADIO_BT_HCI_IPC)
 else()
   target_sources(app PRIVATE src/bt_empty.c)
 endif()
+
+target_sources_ifdef(CONFIG_NETCORE_VERSION_IPC app PRIVATE src/netcore_version.c)
 
 # NORDIC SDK APP START
 target_sources(app PRIVATE

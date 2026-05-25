@@ -67,6 +67,23 @@ config BT_MAX_CONN
 
 endif # IPC_RADIO_BT
 
+config NETCORE_VERSION_IPC
+	bool "IPC netcore version reporting"
+	depends on IPC_SERVICE && FLASH
+	help
+	  Registers an IPC endpoint ("NETCORE_VER") that reads the running
+	  image version from slot0_partition and reports it to the app core
+	  on demand. The app core uses this data to populate the net-core
+	  MCUboot image slot exposed to MCUMgr clients.
+
+if NETCORE_VERSION_IPC
+
+module = NETCORE_VERSION
+module-str = "netcore_version"
+source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
+
+endif # NETCORE_VERSION_IPC
+
 module = IPC_RADIO
 module-str = "ipc_radio"
 source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"

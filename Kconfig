@@ -83,4 +83,21 @@ config ANIMATION_NYAN_CAT
 	  Use tools/convert_gif_to_glim.py to generate the .glim file.
 	  If the file is missing, scrolls "NO FILE" as a rainbow-colored error message.
 
+config NETCORE_VERSION_IPC
+	bool "Query running net core version via IPC"
+	depends on IPC_SERVICE
+	help
+	  Registers an IPC endpoint (NETCORE_VER) on ipc0 at startup.
+	  The net core responds with its running firmware version and
+	  SHA256 hash; the result is cached and surfaced through the
+	  net_core_sim_flash driver so MCUMgr img_list reports real data.
+
+if NETCORE_VERSION_IPC
+
+module = NETCORE_VERSION
+module-str = "netcore_version"
+source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
+
+endif # NETCORE_VERSION_IPC
+
 rsource "drivers/Kconfig"
