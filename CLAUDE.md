@@ -10,6 +10,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The "rgb_sunglasses_dk" board is legacy. We need to retain build support for it, but no new features are added to this board.
 - The "rgb_sunglasses_proto0" board is the latest hardware revision. Always enable new features on the proto0 hardware revision by default. When I ask you to add a new feature, ensure it's enabled on the Proto0 hardware KConfig
 
+## Project vs SDK
+- Files under the `rgb-sunglasses` directory are ours to modify as we please.
+- Files under the `~/ncs` directory are NOT modifyable. They are part of the SDK and can NEVER BE TOUCHED.
+
+## Project applications
+The firwmare is composed for 4 applications:
+- MCUBoot: the appcore's bootloader
+- rgb-sunglasses: the appcore main application
+- b0n: the netcore bootloader
+- ipc_radio: the netcore's main application
+
 ## Build and Test Commands
 
 ```bash
