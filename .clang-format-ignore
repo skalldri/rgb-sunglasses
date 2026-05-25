@@ -1,0 +1,3 @@
+# Opt out VERSION file from clangformatting since it's generated at build time
+# with build-generated VERSION_TWEAK values that shouldn't be reformatted
+VERSION
