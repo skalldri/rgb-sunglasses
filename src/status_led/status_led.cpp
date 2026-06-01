@@ -1,4 +1,5 @@
 #include <status_led/status_led.h>
+#include <status_led/status_led_math.h>
 
 #include <core_config.h>
 #include <zephyr/devicetree.h>
@@ -10,11 +11,6 @@ LOG_MODULE_REGISTER(status_led, LOG_LEVEL_INF);
 #if DT_HAS_ALIAS(led_strip_2)
 
 #include <zephyr/device.h>
-#include <zephyr/drivers/led_strip.h>
-
-#include <cmath>
-#include <cstdint>
-#include <numbers>
 
 #define LED_STRIP_2_NODE DT_ALIAS(led_strip_2)
 #define NUM_STATUS_LEDS  DT_PROP(LED_STRIP_2_NODE, chain_length)
@@ -38,27 +34,6 @@ static struct led_rgb led_buf[NUM_STATUS_LEDS]   = {};
 
 K_MUTEX_DEFINE(status_led_mutex);
 
-static struct led_rgb color_to_rgb(StatusColor color) {
-    switch (color) {
-        case StatusColor::Red:    return {.r = 255, .g = 0,   .b = 0};
-        case StatusColor::Orange: return {.r = 255, .g = 128, .b = 0};
-        case StatusColor::Yellow: return {.r = 255, .g = 255, .b = 0};
-        case StatusColor::Green:  return {.r = 0,   .g = 255, .b = 0};
-        case StatusColor::Blue:   return {.r = 0,   .g = 0,   .b = 255};
-        case StatusColor::Indigo: return {.r = 75,  .g = 0,   .b = 130};
-        case StatusColor::Violet: return {.r = 148, .g = 0,   .b = 211};
-        default:                  return {.r = 0,   .g = 0,   .b = 0};
-    }
-}
-
-static struct led_rgb scale_brightness(struct led_rgb base, uint8_t brightness) {
-    return {
-        .r = static_cast<uint8_t>((base.r * brightness) / 255u),
-        .g = static_cast<uint8_t>((base.g * brightness) / 255u),
-        .b = static_cast<uint8_t>((base.b * brightness) / 255u),
-    };
-}
-
 static void status_led_thread_func(void *, void *, void *);
 
 K_THREAD_DEFINE(status_led_thread, 2048, status_led_thread_func, NULL, NULL, NULL, 7, 0, 0);
@@ -79,7 +54,7 @@ static void status_led_thread_func(void *, void *, void *) {
         k_mutex_lock(&status_led_mutex, K_FOREVER);
 
         for (size_t i = 0; i < NUM_STATUS_LEDS; i++) {
-            struct led_rgb base = color_to_rgb(led_state[i].color);
+            struct led_rgb base = status_led_color_to_rgb(led_state[i].color);
             uint8_t brightness  = 0;
 
             switch (led_state[i].indication) {
@@ -91,25 +66,18 @@ static void status_led_thread_func(void *, void *, void *) {
                     brightness = 255;
                     break;
 
-                case StatusIndication::Blinking: {
-                    uint32_t phase = tick % (BLINK_HALF_PERIOD_TICKS * 2);
-                    brightness     = (phase < BLINK_HALF_PERIOD_TICKS) ? 255u : 0u;
+                case StatusIndication::Blinking:
+                    brightness = status_led_blinking_brightness(tick, BLINK_HALF_PERIOD_TICKS);
                     break;
-                }
 
-                case StatusIndication::Breathing: {
-                    float phase = (2.0f * std::numbers::pi_v<float> * (tick % BREATHE_PERIOD_TICKS)) /
-                                  BREATHE_PERIOD_TICKS;
-                    // Sine goes -1..1; map to 0..255.
-                    float sine = (sinf(phase) + 1.0f) * 0.5f;
-                    brightness = static_cast<uint8_t>(sine * 255.0f);
+                case StatusIndication::Breathing:
+                    brightness = status_led_breathing_brightness(tick, BREATHE_PERIOD_TICKS);
                     break;
-                }
             }
 
             // Apply the global status LED brightness factor from CoreConfig.
             uint8_t scaled = static_cast<uint8_t>(brightness * brightnessScale);
-            led_buf[i]     = scale_brightness(base, scaled);
+            led_buf[i]     = status_led_scale_brightness(base, scaled);
         }
 
         k_mutex_unlock(&status_led_mutex);
