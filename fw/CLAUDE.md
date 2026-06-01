@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The "rgb_sunglasses_proto0" board is the latest hardware revision. Always enable new features on the proto0 hardware revision by default. When I ask you to add a new feature, ensure it's enabled on the Proto0 hardware KConfig
 
 ## Project vs SDK
-- Files under the `rgb-sunglasses` directory are ours to modify as we please.
+- Files under the `fw` directory are ours to modify as we please.
 - Files under the `~/ncs` directory are NOT modifyable. They are part of the SDK and can NEVER BE TOUCHED.
 
 ## Project applications
@@ -25,16 +25,16 @@ The firwmare is composed for 4 applications:
 
 ```bash
 # First time build (pristine, setup build system, very slow! Only run if build folder is empty / nonexistent)
-west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="/workspaces/rgb-sunglasses"
+west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
 
 # Full incremental build (preferred)
-west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses
+west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw
 
 # Run all tests on native simulator
-twister -T /workspaces/rgb-sunglasses/tests -p native_sim
+twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim
 
 # Run a single test suite
-twister -T /workspaces/rgb-sunglasses/tests/animations/animation_registry -p native_sim
+twister -T /workspaces/rgb-sunglasses/fw/tests/animations/animation_registry -p native_sim
 ```
 
 Treat successful `west build` as the primary validation step after any change. The NCS SDK lives at `/root/ncs/v3.1.1`.
@@ -133,7 +133,7 @@ Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suit
 
 ### Scope reminder
 
-Prefer changes under `/workspaces/rgb-sunglasses` (app code). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
+Prefer changes under `/workspaces/rgb-sunglasses/fw` (app code). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
 
 ### Zephyr RTOS
 This project uses the Zephyr RTOS.

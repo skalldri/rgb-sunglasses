@@ -30,8 +30,8 @@ Out of scope (unless needed for compatibility):
 
 ## Success criteria
 1. No UsageFault during boot with normal `CONFIG_MAIN_STACK_SIZE`.
-2. `west build --build-dir /workspaces/rgb-sunglasses/build /workspaces/rgb-sunglasses` passes.
-3. `twister -T /workspaces/rgb-sunglasses/tests -p native_sim` passes.
+2. `west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw` passes.
+3. `twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim` passes.
 4. Public call-site ergonomics remain unchanged:
    - `BtGattServer server(provider1, provider2, ...);`
    - `BT_GATT_SERVER_REGISTER(name, server);`

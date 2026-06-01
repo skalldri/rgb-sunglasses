@@ -1,4 +1,4 @@
 add_overlay_dts(
-    rgb-sunglasses
+    ${DEFAULT_IMAGE}
     overlays/net_core_sim_flash.overlay
     )

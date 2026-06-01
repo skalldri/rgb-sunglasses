@@ -3,10 +3,10 @@
 *~
 
 # build
-/build*/
+build*/
 
 # Test output
-/twister-out*/
+twister-out*/
 
 # Pycache
 __pycache__/
