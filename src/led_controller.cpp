@@ -38,8 +38,8 @@ K_THREAD_DEFINE(led_display_thread, 4096, led_display_thread_func, NULL, NULL, N
 #define LED_STRIP_0_NUM_PIXELS DT_PROP(LED_STRIP_0_NODE_ID, chain_length)
 #define LED_STRIP_1_NUM_PIXELS DT_PROP(LED_STRIP_1_NODE_ID, chain_length)
 
-// Optional third strip (proto0 onboard LEDs)
-#if DT_HAS_ALIAS(led_strip_2)
+// Optional third strip (proto0 onboard LEDs) — omitted when status_led module owns it.
+#if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
 #define LED_STRIP_2_NODE_ID DT_ALIAS(led_strip_2)
 #define LED_STRIP_2_NUM_PIXELS DT_PROP(LED_STRIP_2_NODE_ID, chain_length)
 #endif
@@ -60,7 +60,7 @@ size_t outstandingRenderBuffers =
 // Double-buffered framebuffers for rendering with
 static struct led_rgb led_0[kNumDisplayBuffers][LED_STRIP_0_NUM_PIXELS];
 static struct led_rgb led_1[kNumDisplayBuffers][LED_STRIP_1_NUM_PIXELS];
-#if DT_HAS_ALIAS(led_strip_2)
+#if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
 static struct led_rgb led_2[kNumDisplayBuffers][LED_STRIP_2_NUM_PIXELS];
 #endif
 
@@ -344,7 +344,7 @@ int set_pixel_in_framebuffer(const LedConfig *config, size_t x, size_t y, size_t
 void led_display_thread_func(void *a, void *b, void *c) {
     const struct device *led_strip_0 = DEVICE_DT_GET(LED_STRIP_0_NODE_ID);
     const struct device *led_strip_1 = DEVICE_DT_GET(LED_STRIP_1_NODE_ID);
-#if DT_HAS_ALIAS(led_strip_2)
+#if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
     const struct device *led_strip_2 = DEVICE_DT_GET(LED_STRIP_2_NODE_ID);
 #endif
 
@@ -358,7 +358,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
         return;
     }
 
-#if DT_HAS_ALIAS(led_strip_2)
+#if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
     if (!device_is_ready(led_strip_2)) {
         LOG_ERR("Device %s is not ready", led_strip_2->name);
         return;
@@ -369,7 +369,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
     for (size_t i = 0; i < kNumDisplayBuffers; i++) {
         memset(led_0[i], 0, sizeof(struct led_rgb) * LED_STRIP_0_NUM_PIXELS);
         memset(led_1[i], 0, sizeof(struct led_rgb) * LED_STRIP_1_NUM_PIXELS);
-#if DT_HAS_ALIAS(led_strip_2)
+#if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
         memset(led_2[i], 0, sizeof(struct led_rgb) * LED_STRIP_2_NUM_PIXELS);
 #endif
     }
@@ -399,7 +399,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
 
         led_strip_update_rgb(led_strip_0, led_0[bufferId], LED_STRIP_0_NUM_PIXELS);
         led_strip_update_rgb(led_strip_1, led_1[bufferId], LED_STRIP_1_NUM_PIXELS);
-#if DT_HAS_ALIAS(led_strip_2)
+#if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
         led_strip_update_rgb(led_strip_2, led_2[bufferId], LED_STRIP_2_NUM_PIXELS);
 #endif
 

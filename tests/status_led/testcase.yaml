@@ -1,0 +1,5 @@
+tests:
+  status_led.math:
+    tags: status_led
+    integration_platforms:
+      - native_sim

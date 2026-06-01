@@ -19,4 +19,9 @@ class CoreConfig : public Singleton<CoreConfig>, public ConfigurationProvider {
     float getDisplayRateMs() override;
 
     float getRenderRateMs() override;
+
+    /**
+     * @brief Returns a value between 0 and 1 representing the status LED brightness.
+     */
+    float getStatusLedBrightnessFactor();
 };
