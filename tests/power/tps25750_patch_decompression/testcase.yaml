@@ -1,6 +1,0 @@
-tests:
-  power.tps25750_patch_decompression:
-    platform_allow:
-      - native_sim
-    integration_platforms:
-      - native_sim

@@ -1,0 +1,92 @@
+name: App CI
+
+# React Native / Expo control app under app/. GitHub only runs workflows from
+# the repo-root .github/workflows, so this lives here (not under app/.github).
+# Path-filtered so it only runs when the app changes, mirroring the firmware
+# workflows' fw/** scoping.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-ci.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-ci.yml'
+
+# All run: steps execute inside app/. Note: this does NOT affect `uses:` actions
+# (setup-node cache, upload-artifact) or ${{ github.workspace }} paths, which are
+# always relative to the repo root and therefore need an explicit app/ prefix.
+#
+# CI runs the test suite and a debug Android build to verify the native project
+# still compiles. It deliberately does NOT release-sign: the debug build uses
+# Android's auto-generated debug keystore, so no signing secrets are required.
+# The signed release APK is produced only in app-release.yml, gated on an
+# app-v* tag.
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test -- --ci
+
+  build-android:
+    name: Build Android (debug)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Android native project
+        run: npx expo prebuild --platform android --clean
+
+      - name: Configure Android SDK path
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      # assembleDebug compiles the full native project (RN + native modules) and
+      # is signed with the auto-generated debug keystore, so it needs no secrets.
+      - name: Build debug APK
+        run: cd android && ./gradlew assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb-sunglasses-debug-${{ github.sha }}
+          path: app/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7

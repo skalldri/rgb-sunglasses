@@ -1,5 +1,0 @@
-tests:
-  interfaces.bt_state_observer:
-    tags: interfaces
-    integration_platforms:
-      - native_sim

@@ -3,7 +3,7 @@
 	"tasks": [
 		{
 			"type": "nrf-connect-build",
-			"config": "${workspaceFolder:rgb-sunglasses}/build",
+			"config": "${workspaceFolder:rgb-sunglasses}/fw/build",
 			"runCmake": false,
 			"clean": false,
 			"problemMatcher": [

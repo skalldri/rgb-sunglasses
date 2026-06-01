@@ -1,0 +1,14 @@
+menuconfig NET_CORE_SIM_FLASH
+	bool "Flash simulator"
+	default y
+	depends on DT_HAS_OTHER_NET_CORE_SIM_FLASH_ENABLED
+	select FLASH_HAS_PAGE_LAYOUT
+	select FLASH_HAS_DRIVER_ENABLED
+	select FLASH_SIMULATOR
+	help
+	  Enable the flash simulator.
+
+
+module = NET_CORE_SIM_FLASH
+module-str = net_core_sim_flash
+source "subsys/logging/Kconfig.template.log_config"

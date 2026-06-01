@@ -1,5 +1,0 @@
-tests:
-  interfaces.configuration_provider:
-    tags: interfaces
-    integration_platforms:
-      - native_sim

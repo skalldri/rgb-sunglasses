@@ -1,0 +1,12 @@
+/*
+ * RAM disk for bad_apple_animation filesystem tests.
+ * Mounted at /NAND: to match the hardcoded path in bad_apple_animation.cpp.
+ */
+/ {
+	nand_ramdisk: ramdisk0 {
+		compatible = "zephyr,ram-disk";
+		disk-name = "NAND";
+		sector-size = <512>;
+		sector-count = <256>;
+	};
+};

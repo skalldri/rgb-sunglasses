@@ -9,7 +9,7 @@
 	],
 	"settings": {
 		"nrf-connect.applications": [
-			"."
+			"fw"
 		],
 		"files.associations": {
 			"span": "cpp",
@@ -49,11 +49,11 @@
 			"west": true
 		},
 		"nrf-connect.debugging.bindings": {
-			"${workspaceFolder}/build": "Launch rgb-sunglasses/build",
-			"${workspaceFolder}/build/rgb-sunglasses": "Launch rgb-sunglasses/build/rgb-sunglasses",
-			"${workspaceFolder}/build/b0n": "Launch rgb-sunglasses/build/b0n",
-			"${workspaceFolder}/build/ipc_radio": "Launch rgb-sunglasses/build/ipc_radio",
-			"${workspaceFolder}/build/mcuboot": "Launch rgb-sunglasses/build/mcuboot"
+			"${workspaceFolder}/fw/build": "Launch rgb-sunglasses/build",
+			"${workspaceFolder}/fw/build/fw": "Launch rgb-sunglasses/build/rgb-sunglasses",
+			"${workspaceFolder}/fw/build/b0n": "Launch rgb-sunglasses/build/b0n",
+			"${workspaceFolder}/fw/build/ipc_radio": "Launch rgb-sunglasses/build/ipc_radio",
+			"${workspaceFolder}/fw/build/mcuboot": "Launch rgb-sunglasses/build/mcuboot"
 		}
 	},
 	"launch": {
@@ -63,35 +63,35 @@
 				"type": "nrf-connect",
 				"request": "launch",
 				"name": "Launch rgb-sunglasses/build",
-				"config": "${workspaceFolder}/build",
+				"config": "${workspaceFolder}/fw/build",
 				"runToEntryPoint": "main"
 			},
 			{
 				"type": "nrf-connect",
 				"request": "launch",
 				"name": "Launch rgb-sunglasses/build/rgb-sunglasses",
-				"config": "${workspaceFolder}/build/rgb-sunglasses",
+				"config": "${workspaceFolder}/fw/build/fw",
 				"runToEntryPoint": "main"
 			},
 			{
 				"type": "nrf-connect",
 				"request": "launch",
 				"name": "Launch rgb-sunglasses/build/b0n",
-				"config": "${workspaceFolder}/build/b0n",
+				"config": "${workspaceFolder}/fw/build/b0n",
 				"runToEntryPoint": "main"
 			},
 			{
 				"type": "nrf-connect",
 				"request": "launch",
 				"name": "Launch rgb-sunglasses/build/ipc_radio",
-				"config": "${workspaceFolder}/build/ipc_radio",
+				"config": "${workspaceFolder}/fw/build/ipc_radio",
 				"runToEntryPoint": "main"
 			},
 			{
 				"type": "nrf-connect",
 				"request": "launch",
 				"name": "Launch rgb-sunglasses/build/mcuboot",
-				"config": "${workspaceFolder}/build/mcuboot",
+				"config": "${workspaceFolder}/fw/build/mcuboot",
 				"runToEntryPoint": "main"
 			}
 		]

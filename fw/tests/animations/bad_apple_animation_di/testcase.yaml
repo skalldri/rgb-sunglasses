@@ -1,0 +1,7 @@
+tests:
+  animations.bad_apple_animation_di:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: animations bad_apple
