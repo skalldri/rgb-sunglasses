@@ -1,10 +1,26 @@
-name: CI
+name: App CI
 
+# React Native / Expo control app under app/. GitHub only runs workflows from
+# the repo-root .github/workflows, so this lives here (not under app/.github).
+# Path-filtered so it only runs when the app changes, mirroring the firmware
+# workflows' fw/** scoping.
 on:
   push:
     branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-ci.yml'
   pull_request:
-    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-ci.yml'
+
+# All run: steps execute inside app/. Note: this does NOT affect `uses:` actions
+# (setup-node cache, upload-artifact) or ${{ github.workspace }} paths, which are
+# always relative to the repo root and therefore need an explicit app/ prefix.
+defaults:
+  run:
+    working-directory: app
 
 jobs:
   test:
@@ -17,6 +33,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
+          cache-dependency-path: app/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -35,6 +52,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
+          cache-dependency-path: app/package-lock.json
 
       - uses: actions/setup-java@v4
         with:
@@ -61,7 +79,7 @@ jobs:
       - name: Build release APK
         run: |
           cd android && ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=${{ github.workspace }}/android/app/release.keystore \
+            -Pandroid.injected.signing.store.file=${{ github.workspace }}/app/android/app/release.keystore \
             -Pandroid.injected.signing.store.password=${{ secrets.STORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
@@ -74,5 +92,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rgb-sunglasses-release-${{ github.sha }}
-          path: android/app/build/outputs/apk/release/*.apk
+          path: app/android/app/build/outputs/apk/release/*.apk
           retention-days: 30
