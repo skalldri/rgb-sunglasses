@@ -83,6 +83,15 @@ config ANIMATION_NYAN_CAT
 	  Use tools/convert_gif_to_glim.py to generate the .glim file.
 	  If the file is missing, scrolls "NO FILE" as a rainbow-colored error message.
 
+config STATUS_LED
+	bool "Onboard status LED module (led_strip_2)"
+	depends on LED_STRIP && WS2812_STRIP_SPI
+	default n
+	help
+	  Drives the two onboard WS2812 status LEDs (led_strip_2) from a
+	  dedicated thread with solid, blinking, and breathing animations.
+	  When enabled, led_controller does not manage led_strip_2.
+
 config NETCORE_VERSION_IPC
 	bool "Query running net core version via IPC"
 	depends on IPC_SERVICE

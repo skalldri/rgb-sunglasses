@@ -13,9 +13,11 @@ BtGattAutoReadWriteNotifyCharacteristic<"Display Thread Rate * 1000 (ms)", uint3
     coreDisplayThreadRateMs;
 BtGattAutoReadWriteNotifyCharacteristic<"Render Thread Rate * 1000 (ms)", uint32_t, 11100>
     coreRenderThreadRateMs;
+BtGattAutoReadWriteNotifyCharacteristic<"Status LED Brightness (0-1000)", uint32_t, 20>
+    coreStatusLedBrightness;
 
 BtGattServer coreConfigServer(coreConfigPrimaryService, coreBrightness, coreDisplayThreadRateMs,
-                              coreRenderThreadRateMs);
+                              coreRenderThreadRateMs, coreStatusLedBrightness);
 BT_GATT_SERVER_REGISTER(coreConfigServerStatic, coreConfigServer);
 
 float CoreConfig::getBrightnessFactor() {
@@ -38,4 +40,16 @@ float CoreConfig::getDisplayRateMs() {
 float CoreConfig::getRenderRateMs() {
     uint32_t renderRateUint = coreRenderThreadRateMs;
     return ((float)renderRateUint) / 1000.0f;
+}
+
+float CoreConfig::getStatusLedBrightnessFactor() {
+    uint32_t brightnessUint = coreStatusLedBrightness;
+
+    // Clamp to sane values
+    if (brightnessUint > 1000) {
+        brightnessUint = 1000;
+        coreStatusLedBrightness = 1000;
+    }
+
+    return ((float)brightnessUint) / 1000.0f;
 }

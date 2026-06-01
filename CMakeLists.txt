@@ -60,6 +60,8 @@ target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/bluetooth/animati
 target_sources_ifdef(CONFIG_ANIMATION_BAD_APPLE app PRIVATE src/bluetooth/animation_adapters/bad_apple_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_NYAN_CAT  app PRIVATE src/bluetooth/animation_adapters/nyan_cat_animation_bt.cpp)
 
+target_sources_ifdef(CONFIG_STATUS_LED app PRIVATE src/status_led/status_led.cpp)
+
 target_sources_ifdef(CONFIG_NETCORE_VERSION_IPC app PRIVATE src/netcore_version.c)
 
 target_include_directories(
