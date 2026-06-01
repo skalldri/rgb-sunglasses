@@ -18,6 +18,12 @@ on:
 # All run: steps execute inside app/. Note: this does NOT affect `uses:` actions
 # (setup-node cache, upload-artifact) or ${{ github.workspace }} paths, which are
 # always relative to the repo root and therefore need an explicit app/ prefix.
+#
+# CI runs the test suite and a debug Android build to verify the native project
+# still compiles. It deliberately does NOT release-sign: the debug build uses
+# Android's auto-generated debug keystore, so no signing secrets are required.
+# The signed release APK is produced only in app-release.yml, gated on an
+# app-v* tag.
 defaults:
   run:
     working-directory: app
@@ -42,7 +48,7 @@ jobs:
         run: npm test -- --ci
 
   build-android:
-    name: Build Android Release
+    name: Build Android (debug)
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -73,24 +79,14 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
-      - name: Decode release keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
+      # assembleDebug compiles the full native project (RN + native modules) and
+      # is signed with the auto-generated debug keystore, so it needs no secrets.
+      - name: Build debug APK
+        run: cd android && ./gradlew assembleDebug
 
-      - name: Build release APK
-        run: |
-          cd android && ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=${{ github.workspace }}/app/android/app/release.keystore \
-            -Pandroid.injected.signing.store.password=${{ secrets.STORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
-
-      - name: Remove keystore
-        if: always()
-        run: rm -f android/app/release.keystore
-
-      - name: Upload release APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: rgb-sunglasses-release-${{ github.sha }}
-          path: app/android/app/build/outputs/apk/release/*.apk
-          retention-days: 30
+          name: rgb-sunglasses-debug-${{ github.sha }}
+          path: app/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
