@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python tools/generate_nyan_cat_glim.py --output /tmp/nyan_cat2.glim)",
+      "Bash(lcov --list /tmp/twister-coverage/coverage.info)",
+      "Bash(python3 *)",
+      "Bash(find *)"
+    ],
+    "additionalDirectories": [
+      "/workspaces/rgb-sunglasses"
+    ]
+  }
+}
