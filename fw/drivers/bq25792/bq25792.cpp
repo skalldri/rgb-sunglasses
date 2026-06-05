@@ -146,6 +146,16 @@ int bq25792_dump_charge_parameters(const struct device *dev) {
     return 0;
 }
 
+int bq25792_get_charge_status(const struct device *dev, uint8_t *chg_stat) {
+    if (!dev || !chg_stat) {
+        return -EINVAL;
+    }
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
+    BQ25792_CHARGER_STATUS_1 reg(cfg);
+    *chg_stat = (uint8_t)reg.get<BQ25792_CHARGER_STATUS_1_CHG_STAT>(0, true /* read from hw */);
+    return 0;
+}
+
 int bq25792_set_charge_enable(const struct device *dev, bool enabled) {
     const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
     BQ25792_CHARGER_CONTROL_0 chargerControl0(cfg);

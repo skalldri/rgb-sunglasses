@@ -21,8 +21,10 @@ LOG_MODULE_REGISTER(status_led, LOG_LEVEL_INF);
 // Blinking: 500 ms on, 500 ms off (1 Hz).
 #define BLINK_HALF_PERIOD_TICKS (500 / STATUS_LED_UPDATE_INTERVAL_MS)
 
-// Breathing: full sine cycle over 2000 ms (0.5 Hz).
-#define BREATHE_PERIOD_TICKS (2000 / STATUS_LED_UPDATE_INTERVAL_MS)
+// Breathing: full sine cycle over 2000 ms (0.5 Hz, slow).
+#define BREATHE_PERIOD_TICKS      (2000 / STATUS_LED_UPDATE_INTERVAL_MS)
+// Fast breathing: full sine cycle over 1000 ms (1 Hz, fast).
+#define FAST_BREATHE_PERIOD_TICKS (1000 / STATUS_LED_UPDATE_INTERVAL_MS)
 
 struct StatusLedState {
     StatusIndication indication;
@@ -72,6 +74,10 @@ static void status_led_thread_func(void *, void *, void *) {
 
                 case StatusIndication::Breathing:
                     brightness = status_led_breathing_brightness(tick, BREATHE_PERIOD_TICKS);
+                    break;
+
+                case StatusIndication::FastBreathing:
+                    brightness = status_led_breathing_brightness(tick, FAST_BREATHE_PERIOD_TICKS);
                     break;
             }
 
@@ -137,8 +143,11 @@ static int cmd_status_led_set(const struct shell *shell, size_t argc, char **arg
         indication = StatusIndication::Blinking;
     } else if (strcmp(argv[2], "breathe") == 0) {
         indication = StatusIndication::Breathing;
+    } else if (strcmp(argv[2], "fast_breathe") == 0) {
+        indication = StatusIndication::FastBreathing;
     } else {
-        shell_error(shell, "Unknown indication '%s' (use: off, solid, blink, breathe)", argv[2]);
+        shell_error(shell, "Unknown indication '%s' (use: off, solid, blink, breathe, fast_breathe)",
+                    argv[2]);
         return -EINVAL;
     }
 
@@ -171,7 +180,7 @@ static int cmd_status_led_set(const struct shell *shell, size_t argc, char **arg
 
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_status_led,
     SHELL_CMD_ARG(set, NULL,
-                  "Set LED status: <led_id> <off|solid|blink|breathe> "
+                  "Set LED status: <led_id> <off|solid|blink|breathe|fast_breathe> "
                   "<red|orange|yellow|green|blue|indigo|violet>",
                   cmd_status_led_set, 4, 0),
     SHELL_SUBCMD_SET_END);

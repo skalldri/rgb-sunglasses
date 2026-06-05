@@ -10,6 +10,7 @@
 
 #if defined(CONFIG_BQ25792)
 #include <zephyr/drivers/bq25792/bq25792.h>
+#include <status_led/status_led.h>
 #endif
 
 #if defined(CONFIG_FLASH)
@@ -88,6 +89,52 @@ static int init_check_and_enable_3v3(void) {
 
 SYS_INIT(init_check_and_enable_3v3, APPLICATION, 0);
 #endif  // CONFIG_SOC_NRF5340_CPUAPP
+
+#if defined(CONFIG_BQ25792)
+
+static void charger_status_thread_func(void *, void *, void *);
+
+K_THREAD_DEFINE(charger_status_thread, 1024, charger_status_thread_func, NULL, NULL, NULL, 7, 0,
+                0);
+
+static void charger_status_thread_func(void *, void *, void *) {
+    if (!device_is_ready(bq)) {
+        LOG_ERR("BQ25792 not ready; charger status LED disabled");
+        return;
+    }
+
+    while (true) {
+        uint8_t chg_stat = 0;
+        if (bq25792_get_charge_status(bq, &chg_stat) == 0) {
+            StatusIndication indication;
+            StatusColor       color = StatusColor::Green;
+
+            switch (chg_stat) {
+                case 1: /* Trickle charge */
+                case 2: /* Pre-charge */
+                    indication = StatusIndication::Breathing;
+                    break;
+                case 3: /* Fast charge (CC) */
+                case 4: /* Taper charge (CV) */
+                    indication = StatusIndication::FastBreathing;
+                    break;
+                case 6: /* Top-off timer active */
+                case 7: /* Charge termination done */
+                    indication = StatusIndication::Solid;
+                    break;
+                default: /* 0 = not charging, 5 = reserved */
+                    indication = StatusIndication::Off;
+                    break;
+            }
+
+            status_led_set(0, indication, color);
+        }
+
+        k_msleep(500);
+    }
+}
+
+#endif /* CONFIG_BQ25792 */
 
 #if defined(CONFIG_SHELL)
 #include <zephyr/shell/shell.h>
