@@ -637,8 +637,30 @@ using BQ25792_CHARGER_STATUS_0 =
 #define BQ25792_REG_CHARGER_STATUS_1_ADDR 0x1C
 static const char CHARGER_STATUS_1_NAME[] = "CHARGER_STATUS_1";
 
+class BQ25792_CHG_STAT_UnitConversion {
+   public:
+    static inline const char *unit() { return ""; }
+
+    static inline int64_t conversion(uint32_t val) { return val; }
+
+    static inline const char *label(uint32_t val) {
+        static const char *const names[] = {
+            "Not Charging",
+            "Trickle Charge",
+            "Pre-charge",
+            "Fast charge (CC mode)",
+            "Taper Charge (CV mode)",
+            "Reserved",
+            "Top-off Timer Active Charging",
+            "Charge Termination Done",
+        };
+        return (val < 8) ? names[val] : "Unknown";
+    }
+};
+
 static const char CHG_STAT_NAME[] = "CHG_STAT";
-using BQ25792_CHARGER_STATUS_1_CHG_STAT = RegisterField<CHG_STAT_NAME, 5, 3>;
+using BQ25792_CHARGER_STATUS_1_CHG_STAT =
+    RegisterField<CHG_STAT_NAME, 5, 3, BQ25792_CHG_STAT_UnitConversion>;
 
 static const char VBUS_STAT_NAME[] = "VBUS_STAT";
 using BQ25792_CHARGER_STATUS_1_VBUS_STAT = RegisterField<VBUS_STAT_NAME, 1, 4>;
