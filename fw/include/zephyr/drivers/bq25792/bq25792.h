@@ -30,6 +30,27 @@ int bq25792_dump_charge_parameters(const struct device* dev);
 int bq25792_set_charge_enable(const struct device* dev, bool enabled);
 
 /**
+ * @brief Callback type invoked from the BQ25792 interrupt handler.
+ *
+ * Called in ISR context — keep it short; no I2C or blocking calls.
+ */
+typedef void (*bq25792_irq_callback_t)(const struct device *dev, void *user_data);
+
+/**
+ * @brief Register a callback to be invoked when the BQ25792 INT pin fires.
+ *
+ * Only one callback may be registered at a time; calling this again replaces
+ * the previous registration. Pass NULL to clear the callback.
+ *
+ * @param dev       BQ25792 device pointer.
+ * @param cb        Callback function, or NULL.
+ * @param user_data Opaque pointer passed through to @p cb.
+ * @return 0 on success, -ENODEV if @p dev is NULL.
+ */
+int bq25792_register_irq_callback(const struct device *dev, bq25792_irq_callback_t cb,
+                                   void *user_data);
+
+/**
  * @brief Read the CHG_STAT field from CHARGER_STATUS_1.
  *
  * @param dev      BQ25792 device pointer.
