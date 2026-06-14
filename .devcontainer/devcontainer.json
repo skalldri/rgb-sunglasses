@@ -28,9 +28,15 @@
     "runArgs": [
         "--privileged"
     ],
+    // Runs on the Windows host before the container starts: attaches the forwarded USB
+    // device via usbipd and loads the cdc-acm / usb-storage kernel modules into the shared
+    // WSL2 kernel. See .devcontainer/USB.md (one-time `usbipd bind` is the only manual step).
+    "initializeCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File .devcontainer/scripts/host-usb-init.ps1",
     "forwardPorts": [
         8081
     ],
+    // Diagnostic only: report whether the device's serial ports showed up in the container.
+    "postStartCommand": "bash -lc 'if ls /dev/ttyACM* >/dev/null 2>&1; then echo \"[usb] CDC-ACM ports: $(ls /dev/ttyACM*)\"; else echo \"[usb] No /dev/ttyACM* yet. Device: $(lsusb | grep -i 2fe3 || echo not-detected). If plugged in, make sure you ran the one-time \\\"usbipd bind\\\" - see .devcontainer/USB.md.\"; fi'",
     "postCreateCommand": {
         "jlink": "dpkg -i /jlink/JLink_Linux.deb",
         "python": "pip install lz4 yaspin tqdm Pillow",

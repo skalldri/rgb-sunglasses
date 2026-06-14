@@ -26,3 +26,7 @@ container.
   ADB (phone and container on the same network) and run the Expo dev-client — see
   [`app/README.md`](app/README.md#developing-in-the-devcontainer-android).
   iOS native builds require macOS/Xcode and are not supported in the container.
+- **USB device (serial + mass storage):** the board's CDC-ACM serial ports and
+  mass-storage volume are forwarded into the container from Windows via `usbipd`.
+  This is automatic after a one-time `usbipd bind` — see
+  [`.devcontainer/USB.md`](.devcontainer/USB.md).
