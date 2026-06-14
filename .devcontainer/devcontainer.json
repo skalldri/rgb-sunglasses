@@ -34,6 +34,7 @@
     "postCreateCommand": {
         "jlink": "dpkg -i /jlink/JLink_Linux.deb",
         "python": "pip install lz4 yaspin tqdm Pillow",
-        "app": "cd /workspaces/rgb-sunglasses/app && npm install"
+        "app": "cd /workspaces/rgb-sunglasses/app && npm install",
+        "claude": "npm install -g @anthropic-ai/claude-code"
     }
 }
