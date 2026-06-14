@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "execbro": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "react-native-ai-devtools@latest"
+      ],
+      "env": {}
+    }
+  }
+}
