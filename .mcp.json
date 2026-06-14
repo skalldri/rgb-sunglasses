@@ -8,6 +8,12 @@
         "react-native-ai-devtools@latest"
       ],
       "env": {}
+    },
+    "serial": {
+      "type": "stdio",
+      "command": "serial_mcp",
+      "args": [],
+      "env": {}
     }
   }
 }

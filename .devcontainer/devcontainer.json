@@ -41,7 +41,7 @@
     "postStartCommand": "bash -lc 'if ls /dev/ttyACM* >/dev/null 2>&1; then echo \"[usb] CDC-ACM ports: $(ls /dev/ttyACM*)\"; else echo \"[usb] No /dev/ttyACM* yet. Device: $(lsusb | grep -i 2fe3 || echo not-detected). If plugged in, make sure you ran the one-time \\\"usbipd bind\\\" - see .devcontainer/USB.md.\"; fi'",
     "postCreateCommand": {
         "jlink": "dpkg -i /jlink/JLink_Linux.deb",
-        "python": "pip install lz4 yaspin tqdm Pillow",
+        "python": "pip install lz4 yaspin tqdm Pillow serial-mcp-server",
         "app": "cd /workspaces/rgb-sunglasses/app && npm install",
         "claude": "npm install -g @anthropic-ai/claude-code"
     }
