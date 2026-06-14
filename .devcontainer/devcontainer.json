@@ -31,7 +31,9 @@
     // Runs on the Windows host before the container starts: attaches the forwarded USB
     // device via usbipd and loads the cdc-acm / usb-storage kernel modules into the shared
     // WSL2 kernel. See .devcontainer/USB.md (one-time `usbipd bind` is the only manual step).
-    "initializeCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File .devcontainer/scripts/host-usb-init.ps1",
+    // The `|| exit 0` keeps this non-blocking everywhere: on non-Windows hosts (macOS,
+    // Linux, Codespaces) `powershell` doesn't exist, and we must not fail container creation.
+    "initializeCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File .devcontainer/scripts/host-usb-init.ps1 || exit 0",
     "forwardPorts": [
         8081
     ],

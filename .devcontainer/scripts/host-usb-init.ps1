@@ -28,15 +28,20 @@
 #>
 [CmdletBinding()]
 param(
-    # Hardware IDs (VID:PID) to attach. RGB Sunglasses by default; add '1366:0101' to also
-    # forward the SEGGER J-Link debug probe.
-    [string[]] $HardwareIds = @('2fe3:0001'),
+    # Hardware IDs (VID:PID) to attach: RGB Sunglasses board and the SEGGER J-Link debug
+    # probe. Each is only attached if it is actually connected *and* bound (shared) - a
+    # missing or unbound device is skipped with a warning, never an error.
+    [string[]] $HardwareIds = @('2fe3:0001', '1366:0101'),
 
     # Kernel modules to load into the shared WSL2 kernel.
     [string[]] $Modules = @('cdc-acm', 'usb-storage', 'vhci-hcd', 'usbip-host')
 )
 
 $ErrorActionPreference = 'Continue'
+
+# USB setup is best-effort: never let an unexpected error block the container from opening.
+# (Write-Warn isn't defined yet when this could first fire, so use Write-Host here.)
+trap { Write-Host "[usb-init] WARNING: unexpected error: $($_.Exception.Message)"; exit 0 }
 
 function Write-Info($m) { Write-Host "[usb-init] $m" }
 function Write-Warn($m) { Write-Host "[usb-init] WARNING: $m" -ForegroundColor Yellow }

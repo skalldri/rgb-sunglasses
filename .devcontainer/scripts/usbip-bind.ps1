@@ -16,9 +16,9 @@
 #>
 [CmdletBinding()]
 param(
-    # Hardware IDs (VID:PID) to bind. RGB Sunglasses by default; add '1366:0101' for the
-    # SEGGER J-Link debug probe.
-    [string[]] $HardwareIds = @('2fe3:0001')
+    # Hardware IDs (VID:PID) to bind: RGB Sunglasses board and the SEGGER J-Link debug probe.
+    # A device that isn't plugged in is reported and skipped (bind it later when connected).
+    [string[]] $HardwareIds = @('2fe3:0001', '1366:0101')
 )
 
 $ErrorActionPreference = 'Stop'

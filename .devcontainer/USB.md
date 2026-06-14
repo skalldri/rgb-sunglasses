@@ -12,7 +12,9 @@ the one-time setup is.
    .\.devcontainer\scripts\usbip-bind.ps1
    ```
 
-   (equivalently: `usbipd bind --hardware-id 2fe3:0001`)
+   This binds both the board (`2fe3:0001`) and the SEGGER J-Link (`1366:0101`); a device
+   that isn't plugged in is just skipped. (Equivalently:
+   `usbipd bind --hardware-id 2fe3:0001` and `usbipd bind --hardware-id 1366:0101`.)
 
 2. Open the repo in **Windows VS Code** → **Reopen in Container**. Everything else is
    automatic. After it starts you should have `/dev/ttyACM*` and a new `/dev/sd*` disk.
@@ -43,15 +45,17 @@ Windows ──usbipd──▶ WSL2 kernel (shared) ──▶ Docker Desktop cont
 > The only thing that can't be automated is the initial `usbipd bind`: Windows requires
 > administrator rights to share a USB device. It's persistent, so it's truly one-time.
 
-## Forwarding the J-Link too (optional)
+## The J-Link debug probe
 
-To also forward the SEGGER J-Link debug probe (`1366:0101`), bind it once and pass both IDs
-to the init script (edit the `$HardwareIds` defaults in the two scripts, or bind it and let
-the auto-attach pick it up):
+The SEGGER J-Link (`1366:0101`) is forwarded the same way and is included by default in both
+scripts, so `usbipd-bind.ps1` binds it and the container auto-attaches it whenever it's
+connected. This makes the probe available to the nRF Connect / J-Link tooling **inside the
+container** for flashing and debugging (it won't be visible to Windows-side tools while
+attached). If you don't have a J-Link, nothing happens — it's just skipped.
 
-```powershell
-usbipd bind --hardware-id 1366:0101
-```
+To forward only the board and leave the J-Link on Windows, pass an explicit list, e.g.
+`usbipd bind --hardware-id 2fe3:0001` and run the init script with
+`-HardwareIds 2fe3:0001`.
 
 ## Verify (inside the container)
 
