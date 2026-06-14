@@ -16,7 +16,9 @@
                 "cschlosser.doxdocgen",
                 "expo.vscode-expo-tools",
                 "dbaeumer.vscode-eslint",
-                "esbenp.prettier-vscode"
+                "esbenp.prettier-vscode",
+                "Anthropic.claude-code",
+                "ms-vscode.vscode-websearchforcopilot"
             ]
         }
     },
