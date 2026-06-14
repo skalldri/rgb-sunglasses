@@ -28,9 +28,6 @@
     "runArgs": [
         "--privileged"
     ],
-    "mounts": [
-        "source=/dev/bus/usb,target=/dev/bus/usb,type=bind"
-    ],
     "forwardPorts": [
         8081
     ],

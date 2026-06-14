@@ -86,67 +86,79 @@ Go), so the dev loop targets a real Android device over `adb`.
 
 ### How the phone reaches the container
 
-The container runs its own `adb` server. Because the adb server lives in the container,
-`adb reverse` points the phone's `localhost:8081` at the container's Metro — no LAN exposure or
-Expo tunnel needed.
+The container runs its own `adb` server. `adb reverse` points the phone's `localhost:8081` at the
+container's Metro — no LAN exposure or Expo tunnel needed. The recommended connection method is
+wireless ADB; the phone and container only need to be on the same network.
 
-#### Wired (default, via usbipd-win)
+#### Wireless (recommended)
 
-The phone's USB is passed from Windows into WSL2 and on into the container through the
-`/dev/bus/usb` mount declared in `.devcontainer/devcontainer.json` (the container already runs
-`--privileged`). This is the primary, recommended workflow.
+No USB passthrough or usbipd required. Two sub-approaches depending on Android version.
 
-**One-time setup on Windows** (install [usbipd-win](https://github.com/dorssel/usbipd-win), then
-in an **admin** PowerShell):
+**Android 11+ — no USB needed at all:**
 
-```powershell
-usbipd list                          # find the phone's BUSID
-usbipd bind   --busid <BUSID>        # one-time per device
-```
+1. On the phone: *Settings > Developer Options > Wireless Debugging* — toggle it on.
+2. Tap *Pair device with pairing code*; note the **IP address**, **pair port**, and **pairing
+   code** shown on screen.
+3. Inside the container, pair once:
+   ```bash
+   adb pair <phone-ip>:<pair-port>
+   # enter the 6-digit pairing code when prompted
+   ```
+4. Back on the phone, the *Wireless Debugging* screen shows a separate **IP address & Port** for
+   the debug connection (different from the pair port). Use that port to connect:
+   ```bash
+   app/scripts/adb-connect.sh <phone-ip> <debug-port>
+   ```
 
-**Each session, on Windows** (attach the phone into WSL2 *before* opening/rebuilding the
-container so `/dev/bus/usb` exists):
+**Older Android (Android 10 and below) — USB required once per boot to enable TCP/IP mode:**
 
-```powershell
-usbipd attach --wsl --busid <BUSID>
-```
+1. Connect the phone via USB to the host machine with USB debugging enabled.
+2. On the host (not inside the container): `adb tcpip 5555`
+3. Unplug USB. Find the phone IP under *Settings > About phone > Status > IP address*.
+4. Inside the container:
+   ```bash
+   app/scripts/adb-connect.sh <phone-ip>
+   ```
 
-> The `/dev/bus/usb` bind mount requires that path to exist in WSL2 when the container starts.
-> If no device has been attached, the directory may be absent and the container will fail to
-> start — attach the phone first. Detach later with `usbipd detach --busid <BUSID>`.
-
-**Each session, inside the container:**
+**After connecting (either approach), build and run:**
 
 ```bash
-# reverse-forward Metro for the already-attached USB device
-app/scripts/adb-connect.sh
-
-# then build/install the dev-client and start Metro
 cd app
 npx expo run:android      # first run, or after native/plugin/permission changes
 # subsequent JS-only sessions:
 npx expo start --dev-client
 ```
 
-Editing `.ts`/`.tsx` triggers fast refresh on the phone over the adb channel.
+Editing `.ts`/`.tsx` triggers fast refresh on the phone over the adb tunnel.
 
-#### Wireless (fallback, via TCP/IP)
+#### Wired (fallback, via usbipd-win)
 
-If USB passthrough isn't viable, use wireless debugging instead. One-time per phone (on the host,
-phone on USB, Developer Options enabled):
+USB passthrough from Windows → WSL2 → container using
+[usbipd-win](https://github.com/dorssel/usbipd-win). This is more fragile than wireless and
+requires the phone to be attached before the container starts.
 
-```bash
-adb tcpip 5555
+**One-time setup on Windows** (admin PowerShell):
+
+```powershell
+usbipd list                          # find the phone's BUSID
+usbipd bind   --busid <BUSID>        # one-time per device
 ```
 
-Then unplug, find the phone IP under *Settings > About phone > Status > IP address*, and inside
-the container run:
+**Each session, on Windows** (attach *before* opening or rebuilding the container):
 
-```bash
-app/scripts/adb-connect.sh <phone-ip>
+```powershell
+usbipd attach --wsl --busid <BUSID>
 ```
 
-Make sure no other `adb` server (e.g. on the host) is holding the device.
+**Each session, inside the container:**
+
+```bash
+app/scripts/adb-connect.sh
+
+cd app
+npx expo run:android
+# or: npx expo start --dev-client
+```
 
 ## Key Files
 

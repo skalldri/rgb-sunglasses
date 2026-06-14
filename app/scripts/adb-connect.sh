@@ -9,18 +9,22 @@
 #
 # Two modes:
 #
-#   Wired (default, via usbipd-win):
+#   Wireless (recommended — phone and container on the same network):
+#
+#     Android 11+: enable Wireless Debugging in Developer Options.
+#       Pair once:  adb pair <phone-ip>:<pair-port>   (enter pairing code)
+#       Then:       ./scripts/adb-connect.sh <phone-ip> <debug-port>
+#
+#     Older Android: with phone on USB on the host run `adb tcpip 5555`, then:
+#       ./scripts/adb-connect.sh <phone-ip>
+#
+#   Wired (fallback, via usbipd-win):
 #     On Windows, attach the phone's USB into WSL2 first:
 #       usbipd list
 #       usbipd bind   --busid <BUSID>      # one-time, admin shell
 #       usbipd attach --wsl --busid <BUSID>
-#     The container sees it through the /dev/bus/usb mount. Then just run:
+#     Then run without arguments:
 #       ./scripts/adb-connect.sh
-#
-#   Wireless (fallback, via TCP/IP):
-#     One-time per phone (on the host, phone on USB):  adb tcpip 5555
-#     Find the phone IP in Settings > About phone > Status > IP address, then:
-#       ./scripts/adb-connect.sh <phone-ip> [adb-port]
 #
 # Usage:
 #     ./scripts/adb-connect.sh [phone-ip] [adb-port=5555] [metro-port=8081]
@@ -47,8 +51,9 @@ echo "Connected devices:"
 adb devices
 
 if ! adb get-state >/dev/null 2>&1; then
-    echo "error: no device detected. For wired mode, attach the phone with 'usbipd attach --wsl'" >&2
-    echo "       on Windows first; for wireless, pass the phone IP as the first argument." >&2
+    echo "error: no device detected." >&2
+    echo "  Wireless: pass the phone IP (and port for Android 11+) as arguments." >&2
+    echo "  Wired:    attach the phone with 'usbipd attach --wsl' on Windows first." >&2
     exit 1
 fi
 
