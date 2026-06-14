@@ -69,10 +69,84 @@ npm run start
 ```bash
 npm run android
 # or
-npm run ios
+npm run ios   # macOS only — not supported in the devcontainer
 ```
 
 Note: BLE features require a native/dev build. Do not assume Expo Go supports the full BLE workflow.
+
+## Developing in the Devcontainer (Android)
+
+The repo's devcontainer (`.devcontainer/`) ships the firmware toolchain **and** a React Native
+Android toolchain (Node, JDK 17, Android SDK/NDK), so you can build and run the Android app
+without leaving the container. BLE only works on a **physical phone** (not an emulator or Expo
+Go), so the dev loop targets a real Android device over `adb`.
+
+> **iOS is not supported in the devcontainer.** iOS native builds require macOS/Xcode; build and
+> run the iOS app on a Mac instead.
+
+### How the phone reaches the container
+
+The container runs its own `adb` server. Because the adb server lives in the container,
+`adb reverse` points the phone's `localhost:8081` at the container's Metro — no LAN exposure or
+Expo tunnel needed.
+
+#### Wired (default, via usbipd-win)
+
+The phone's USB is passed from Windows into WSL2 and on into the container through the
+`/dev/bus/usb` mount declared in `.devcontainer/devcontainer.json` (the container already runs
+`--privileged`). This is the primary, recommended workflow.
+
+**One-time setup on Windows** (install [usbipd-win](https://github.com/dorssel/usbipd-win), then
+in an **admin** PowerShell):
+
+```powershell
+usbipd list                          # find the phone's BUSID
+usbipd bind   --busid <BUSID>        # one-time per device
+```
+
+**Each session, on Windows** (attach the phone into WSL2 *before* opening/rebuilding the
+container so `/dev/bus/usb` exists):
+
+```powershell
+usbipd attach --wsl --busid <BUSID>
+```
+
+> The `/dev/bus/usb` bind mount requires that path to exist in WSL2 when the container starts.
+> If no device has been attached, the directory may be absent and the container will fail to
+> start — attach the phone first. Detach later with `usbipd detach --busid <BUSID>`.
+
+**Each session, inside the container:**
+
+```bash
+# reverse-forward Metro for the already-attached USB device
+app/scripts/adb-connect.sh
+
+# then build/install the dev-client and start Metro
+cd app
+npx expo run:android      # first run, or after native/plugin/permission changes
+# subsequent JS-only sessions:
+npx expo start --dev-client
+```
+
+Editing `.ts`/`.tsx` triggers fast refresh on the phone over the adb channel.
+
+#### Wireless (fallback, via TCP/IP)
+
+If USB passthrough isn't viable, use wireless debugging instead. One-time per phone (on the host,
+phone on USB, Developer Options enabled):
+
+```bash
+adb tcpip 5555
+```
+
+Then unplug, find the phone IP under *Settings > About phone > Status > IP address*, and inside
+the container run:
+
+```bash
+app/scripts/adb-connect.sh <phone-ip>
+```
+
+Make sure no other `adb` server (e.g. on the host) is holding the device.
 
 ## Key Files
 
