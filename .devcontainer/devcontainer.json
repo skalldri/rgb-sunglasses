@@ -28,12 +28,12 @@
     "runArgs": [
         "--privileged"
     ],
-    // Runs on the Windows host before the container starts: attaches the forwarded USB
-    // device via usbipd and loads the cdc-acm / usb-storage kernel modules into the shared
-    // WSL2 kernel. See .devcontainer/USB.md (one-time `usbipd bind` is the only manual step).
-    // The `|| exit 0` keeps this non-blocking everywhere: on non-Windows hosts (macOS,
-    // Linux, Codespaces) `powershell` doesn't exist, and we must not fail container creation.
-    "initializeCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File .devcontainer/scripts/host-usb-init.ps1 || exit 0",
+    // Runs before the container starts. With Docker Desktop + "Clone in Container Volume",
+    // this executes inside docker-desktop WSL2 (not on the Windows host), so we use a
+    // shell script instead of PowerShell. docker-desktop is the WSL2 kernel host, so
+    // modprobe works there directly. usbipd is attempted via Windows interop (best-effort).
+    // See .devcontainer/USB.md for the one-time `usbipd bind` step.
+    "initializeCommand": "/bin/sh .devcontainer/scripts/host-usb-init.sh",
     "forwardPorts": [
         8081
     ],

@@ -29,6 +29,8 @@ The drivers are present in the kernel but were never **loaded** — they are not
   serial/storage interfaces.
 - `/lib/modules` **does not exist inside the container**, so you cannot `modprobe` from
   inside it.
+- `modprobe` **does** work in the `docker-desktop` WSL2 distro (confirmed by user). That
+  distro is the kernel host and ships the matching `.ko` files.
 
 ## Environment decisions (from the user)
 
@@ -37,29 +39,41 @@ The drivers are present in the kernel but were never **loaded** — they are not
 - Accepted a **one-time** manual `usbipd bind` (Windows requires admin to share a USB
   device; the bind is persistent across reboots).
 
-## Why the fix must touch the host (and how it stays hands-off)
+## Where initializeCommand actually runs (critical finding from first test)
 
-A Docker Desktop container can't load modules itself: the kernel and `usbipd` live on the
-host, and Docker Desktop's container host (the minimal `docker-desktop` distro) ships no
-`/lib/modules`, so the usual `-v /lib/modules:/lib/modules` + in-container `modprobe` finds
-nothing. The module load and the usbipd attach must run on the host.
+When using **"Clone Repository in Container Volume"** (the typical Docker Desktop + VS Code
+flow), VS Code routes `initializeCommand` through the `docker-desktop` WSL2 distro, not the
+Windows host. The startup log shows:
 
-The dev-container spec's **`initializeCommand`** runs on the host automatically every time
-the container is created/started, before it boots. We use it to attach the device and load
-the modules into the shared WSL2 kernel. Because the container is `--privileged`, the
-resulting `/dev` nodes (created in the shared devtmpfs) are then visible inside it.
+```
+Start: Run: /bin/sh -c powershell ... host-usb-init.ps1 || exit 0
+/bin/sh: powershell: not found
+```
 
-All distros in the WSL2 VM share one kernel, so `modprobe` run in a regular WSL2 distro
-(which ships the matching `.ko` files — it already loaded `vhci_hcd`) loads the driver
-globally, including for the Docker Desktop container.
+VS Code on Windows connects to docker-desktop via `wsl -d docker-desktop /bin/sh -c ...`,
+and the devcontainer CLI is bootstrapped inside a minimal Docker container there. The
+`initializeCommand` is run in that context — where `powershell` (the Linux package) doesn't
+exist.
+
+**This means**:
+- `initializeCommand` must be a shell (`/bin/sh`) script, not a PowerShell script.
+- `docker-desktop` **does ship `/lib/modules`** for the running kernel (confirmed: the user
+  ran `modprobe cdc_acm` there manually and it worked). So `modprobe` can be called directly
+  from `initializeCommand` without needing a separate "real" WSL2 distro.
+- `usbipd` (a Windows process) can be reached via Windows interop (`usbipd.exe`) if Docker
+  Desktop has interop enabled in docker-desktop — this is best-effort and not guaranteed.
+
+The previous plan assumed docker-desktop had no `/lib/modules` and that `initializeCommand`
+ran on Windows. Both assumptions were wrong.
 
 ## What was implemented
 
 | File | Change |
 |------|--------|
-| `.devcontainer/scripts/host-usb-init.ps1` | **New.** Run by `initializeCommand` on the Windows host. For each target device: checks it's bound, starts a hidden `usbipd attach --auto-attach` (re-attaches after replug), then `modprobe -a cdc-acm usb-storage vhci-hcd usbip-host` via a real (non-`docker-desktop`) WSL2 distro. Best-effort: a script-scope `trap` + early `exit 0` paths ensure it never blocks the container. |
+| `.devcontainer/scripts/host-usb-init.sh` | **New (replaces .ps1 as initializeCommand).** Shell script that runs in docker-desktop. Calls `modprobe -a cdc-acm usb-storage vhci-hcd usbip-host` directly, then attempts `usbipd.exe attach --wsl --auto-attach` via Windows interop (best-effort; skipped with a warning if interop is unavailable). Always exits 0. |
+| `.devcontainer/scripts/host-usb-init.ps1` | **Kept for manual use.** Can be run from Windows PowerShell directly for initial `usbipd` bind+attach setup, but is no longer the `initializeCommand` entry point (it never ran there — see above). |
 | `.devcontainer/scripts/usbip-bind.ps1` | **New.** One-time elevated helper: `usbipd bind` for each device. Checks for admin + usbipd. |
-| `.devcontainer/devcontainer.json` | **Edited.** Added `initializeCommand` (with `\|\| exit 0` so non-Windows hosts without `powershell` don't fail container creation) and a diagnostic `postStartCommand`. Kept `--privileged` and the existing `postCreateCommand`. |
+| `.devcontainer/devcontainer.json` | **Edited.** `initializeCommand` now calls `host-usb-init.sh` (shell script). Diagnostic `postStartCommand` unchanged. Kept `--privileged` and the existing `postCreateCommand`. |
 | `.devcontainer/USB.md` | **New.** User-facing runbook. |
 | `README.md` | **Edited.** Added a USB bullet linking to `USB.md`. |
 
@@ -75,6 +89,7 @@ flash & debug (it won't be visible to Windows-side tools while attached).
   so it captured the *pre-hardening* versions).
 - `4620006` "Forward J-Link too; make USB init non-blocking" — adds J-Link to defaults;
   `|| exit 0`; script-scope `trap`.
+- (pending) Switch `initializeCommand` to `host-usb-init.sh`; add `modprobe` fix.
 
 ## Open items / next steps
 
@@ -105,10 +120,14 @@ flash & debug (it won't be visible to Windows-side tools while attached).
 
 ## Key gotchas to remember
 
-- **`initializeCommand` failing aborts container creation** — hence `|| exit 0` and the
-  `trap`. Keep all paths exit-0.
-- The WSL distro used for `modprobe` must be a real one (not `docker-desktop`); the script
-  picks the first non-`docker-desktop` distro from `wsl -l -q`.
+- **`initializeCommand` runs in docker-desktop, not Windows**, when using "Clone in
+  Container Volume". Use a shell script, not PowerShell.
+- **docker-desktop has `/lib/modules`** — `modprobe` works there directly. The earlier
+  assumption that it didn't was wrong.
+- **`usbipd.exe` via Windows interop** may or may not be available in docker-desktop
+  depending on Docker Desktop version and interop settings. Treat it as best-effort.
+- **`initializeCommand` script must always exit 0** — failure aborts container creation.
+  `host-usb-init.sh` is written to always exit 0.
 - `usbipd bind` genuinely cannot be automated (Windows admin requirement); it's persistent,
   so it's truly one-time.
 - `devcontainer.json` is JSONC (comments allowed); validate by stripping `//` lines before
