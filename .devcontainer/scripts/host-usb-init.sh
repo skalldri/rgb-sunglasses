@@ -1,33 +1,19 @@
 #!/bin/sh
-# Runs as devcontainer initializeCommand.
+# Runs as devcontainer initializeCommand on whatever host shell VS Code invokes.
 #
-# When using "Clone Repository in Container Volume" (the Docker Desktop + VS Code flow),
-# initializeCommand is executed inside the docker-desktop WSL2 distro via
-#   wsl -d docker-desktop /bin/sh -c ...
-# NOT on the Windows host. PowerShell is therefore unavailable here.
+# NOTE: modprobe is NOT run here. Kernel modules (cdc-acm, usb-storage, vhci-hcd,
+# usbip-host) are loaded persistently inside docker-desktop via /etc/wsl.conf [boot].
+# Run .devcontainer/scripts/setup-wsl-modules.ps1 once from PowerShell to install that.
 #
-# docker-desktop IS the WSL2 kernel host, so modprobe works directly and affects all
-# WSL2 distros + privileged Docker containers that share the same kernel.
-#
-# usbipd attach is attempted via Windows interop (usbipd.exe). Windows interop may be
-# disabled in docker-desktop; if so, the attach step is skipped with a warning and the
+# usbipd attach is attempted via Windows interop (usbipd.exe). If unavailable, the
 # user can run it manually from Windows PowerShell (see USB.md).
 
 HW_IDS="2fe3:0001 1366:0101"
-MODULES="cdc-acm usb-storage vhci-hcd usbip-host"
 
 log()  { printf '[usb-init] %s\n' "$*"; }
 warn() { printf '[usb-init] WARNING: %s\n' "$*"; }
 
-# --- 1. Load kernel modules ----------------------------------------------------------
-log "loading USB kernel modules: $MODULES"
-if modprobe -a $MODULES 2>/dev/null; then
-    log "kernel modules loaded."
-else
-    warn "modprobe returned non-zero (modules may already be loaded, or unavailable in this environment)."
-fi
-
-# --- 2. usbipd auto-attach via Windows interop (best-effort) -------------------------
+# --- 1. usbipd auto-attach via Windows interop (best-effort) -------------------------
 if command -v usbipd.exe >/dev/null 2>/dev/null; then
     log "Windows interop available; starting usbipd auto-attach..."
     for hwid in $HW_IDS; do
