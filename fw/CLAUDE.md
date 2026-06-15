@@ -140,6 +140,34 @@ This project uses the Zephyr RTOS.
 
 Read the documentation directly from /root/ncs/v3.1.1/zephyr/doc
 
+## Serial Console (Zephyr Shell)
+
+The dev board exposes a Zephyr RTOS shell over USB-CDC-ACM:
+
+- **Port**: `/dev/ttyACM0`, **baud**: 115200
+- **Prompt**: `uart:~$` (appears after the boot log completes)
+
+### Using the `mcp__serial__*` tools
+
+**Wait for boot before sending commands.** Boot log output interleaves with shell echoed input and causes `command not found` errors. Wait until `uart:~$` appears before issuing any shell commands.
+
+**Sending newlines correctly.** `serial_write` with `data: "\r\n"` sends the four literal characters `\`, `r`, `\`, `n` — not a CR+LF. Always use one of these instead:
+```jsonc
+// Option 1 — append_newline flag (preferred)
+{ "data": "kernel version", "append_newline": true }
+
+// Option 2 — explicit hex
+{ "data": "kernel version\r", "as": "hex" }   // hex-encode the CR separately
+```
+
+### Useful shell commands
+
+```
+kernel version          # print Zephyr/NCS version
+kernel threads          # list all threads and their stack usage
+bt connect              # (if shell BT commands are enabled)
+```
+
 ## Build Failures
 
 If a build fails, prefer to read the log files instead of building it again.

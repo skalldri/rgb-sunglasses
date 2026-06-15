@@ -89,3 +89,87 @@ RGB colors are uint32 with lower 24 bits as 0xRRGGBB (little-endian). See [color
 
 ## Testing Device Without Hardware
 Connect to any BLE device with custom services to test UI rendering logic. The app gracefully handles missing descriptors by falling back to UUIDs.
+
+## Autonomous Agent Notes (Claude / MCP)
+
+### BLE Pairing — Ask the User
+First-time pairing requires accepting Android system prompts that are too timing-sensitive for autonomous handling:
+1. After tapping CONNECT in the app, Android shows a **"Pairing request"** notification in the status bar shade.
+2. The user must swipe down → tap **"Pair & connect"** → tap **"Pair"** on the confirmation dialog.
+3. All of this must happen before Android times out waiting for user input and drops the connection (`BT_HCI_ERR_REMOTE_USER_TERM_CONN`, disconnect reason 19).
+
+**Rule:** If a device has never been paired, ask the user to watch for and accept the Android pairing prompts themselves. Once paired, subsequent connections complete automatically without any prompts.
+
+### Launching the App
+`npx expo run:android` is a blocking command — always run it as a background task. Use `--device Pixel_9_Pro` (the model name, not the ADB IP:port format):
+```bash
+npx expo run:android --device Pixel_9_Pro
+```
+Poll `http://localhost:8081/status` until Metro reports `packager-status:running` before trying to interact with the app.
+
+### MCP Coordinate Systems
+Three coordinate spaces exist and are NOT interchangeable:
+
+| Tool / context | Space | Dimensions |
+|---|---|---|
+| `android_screenshot()` delivered image | **screenshot px** | 896 × 2000 |
+| `tap(x, y)` | **screenshot px** | same — pass coords directly from screenshot |
+| `inspect_at_point(x, y)` | **dp** (logical pixels) | ~427 × 953 |
+| ADB `input tap` / `native=true` | **raw device px** | 960 × 2142 |
+
+**Converting screenshot px → dp** (needed for `inspect_at_point`):
+```
+dp = (screenshot_px × 960/896) / 2.25
+   ≈ screenshot_px × 0.476
+```
+Device density is 360 dpi → pixel ratio = 360/160 = **2.25**.
+
+**Status bar**: 153 screenshot px (68 dp) at the top. App content starts below this. `measureInWindow` dp coordinates are relative to the content area (y=0 is below the status bar).
+
+**Practical rule**: get coordinates from the screenshot for `tap()`. Convert to dp for `inspect_at_point()`. Don't mix them up.
+
+### Toggling Switch (Boolean) Characteristics
+`Switch` components use `onValueChange`, not `onPress`, so they cannot be triggered via `tap()` by component name or coordinates. Instead, walk the React fiber tree and call the component's `onWrite` prop directly:
+
+```javascript
+// In execute_in_app:
+(function() {
+  var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  var fiberRoots = hook.getFiberRoots(1);
+  var firstRoot = null;
+  fiberRoots.forEach(function(r) { if (!firstRoot) firstRoot = r; });
+
+  var target = null;
+  var queue = [firstRoot.current];
+  while (queue.length > 0) {
+    var fiber = queue.shift();
+    if (!fiber) continue;
+    var name = fiber.type && (fiber.type.displayName || fiber.type.name || '');
+    if (name === 'CharacteristicBoolean') {
+      var props = fiber.memoizedProps || {};
+      if (props.charUuid === 'TARGET-UUID-HERE') { target = props; break; }
+    }
+    if (fiber.child) queue.push(fiber.child);
+    if (fiber.sibling) queue.push(fiber.sibling);
+  }
+
+  // onWrite signature: (charUuid, encodedNewValue, encodedPreviousValue)
+  // true  → 'AQ=='  (btoa of byte 0x01)
+  // false → 'AA=='  (btoa of byte 0x00)
+  target.onWrite('TARGET-UUID-HERE', 'AQ==', target.charInfo.value);
+  return 'done';
+})()
+```
+
+**UUID scheme for animation boolean characteristics:**
+- Service UUID: `BT_ANIMATION_SERVICE_UUID(anim_id)` = `12345678-1234-5678-{anim_id<<8:04x}-56789abd0000`
+- `Animation::Rainbow = 5` → service `0500`, Is Active (3rd char, index 2) → `12345678-1234-5678-0500-56789abd0002`
+- Find current value first: iterate `CharacteristicBoolean` fibers, read `charInfo.value` (`AA==`=false, `AQ==`=true)
+- Animation enum values are in `fw/src/animations/animation_types.h`
+
+### BLE Optimistic UI and Notification Behaviour
+The app uses optimistic updates: the UI reflects the new value immediately, then reverts if the BLE write returns an error. After a successful write, the **device sends back BLE notifications** with its actual characteristic values. These notifications go through `updateCharValue()` in the Bluetooth context and override the optimistic state with whatever the device actually holds.
+
+Practical implications:
+- A write that succeeds in the app may still show a different value if the device sends a notification with a different (e.g., clamped or normalised) value shortly after.
+- Characteristic values that are not persisted in NVS reset to firmware defaults after a device reboot.

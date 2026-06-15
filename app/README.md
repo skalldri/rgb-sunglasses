@@ -69,10 +69,96 @@ npm run start
 ```bash
 npm run android
 # or
-npm run ios
+npm run ios   # macOS only — not supported in the devcontainer
 ```
 
 Note: BLE features require a native/dev build. Do not assume Expo Go supports the full BLE workflow.
+
+## Developing in the Devcontainer (Android)
+
+The repo's devcontainer (`.devcontainer/`) ships the firmware toolchain **and** a React Native
+Android toolchain (Node, JDK 17, Android SDK/NDK), so you can build and run the Android app
+without leaving the container. BLE only works on a **physical phone** (not an emulator or Expo
+Go), so the dev loop targets a real Android device over `adb`.
+
+> **iOS is not supported in the devcontainer.** iOS native builds require macOS/Xcode; build and
+> run the iOS app on a Mac instead.
+
+### How the phone reaches the container
+
+The container runs its own `adb` server. `adb reverse` points the phone's `localhost:8081` at the
+container's Metro — no LAN exposure or Expo tunnel needed. The recommended connection method is
+wireless ADB; the phone and container only need to be on the same network.
+
+#### Wireless (recommended)
+
+No USB passthrough or usbipd required. Two sub-approaches depending on Android version.
+
+**Android 11+ — no USB needed at all:**
+
+1. On the phone: *Settings > Developer Options > Wireless Debugging* — toggle it on.
+2. Tap *Pair device with pairing code*; note the **IP address**, **pair port**, and **pairing
+   code** shown on screen.
+3. Inside the container, pair once:
+   ```bash
+   adb pair <phone-ip>:<pair-port>
+   # enter the 6-digit pairing code when prompted
+   ```
+4. Back on the phone, the *Wireless Debugging* screen shows a separate **IP address & Port** for
+   the debug connection (different from the pair port). Use that port to connect:
+   ```bash
+   app/scripts/adb-connect.sh <phone-ip> <debug-port>
+   ```
+
+**Older Android (Android 10 and below) — USB required once per boot to enable TCP/IP mode:**
+
+1. Connect the phone via USB to the host machine with USB debugging enabled.
+2. On the host (not inside the container): `adb tcpip 5555`
+3. Unplug USB. Find the phone IP under *Settings > About phone > Status > IP address*.
+4. Inside the container:
+   ```bash
+   app/scripts/adb-connect.sh <phone-ip>
+   ```
+
+**After connecting (either approach), build and run:**
+
+```bash
+cd app
+npx expo run:android      # first run, or after native/plugin/permission changes
+# subsequent JS-only sessions:
+npx expo start --dev-client
+```
+
+Editing `.ts`/`.tsx` triggers fast refresh on the phone over the adb tunnel.
+
+#### Wired (fallback, via usbipd-win)
+
+USB passthrough from Windows → WSL2 → container using
+[usbipd-win](https://github.com/dorssel/usbipd-win). This is more fragile than wireless and
+requires the phone to be attached before the container starts.
+
+**One-time setup on Windows** (admin PowerShell):
+
+```powershell
+usbipd list                          # find the phone's BUSID
+usbipd bind   --busid <BUSID>        # one-time per device
+```
+
+**Each session, on Windows** (attach *before* opening or rebuilding the container):
+
+```powershell
+usbipd attach --wsl --busid <BUSID>
+```
+
+**Each session, inside the container:**
+
+```bash
+app/scripts/adb-connect.sh
+
+cd app
+npx expo run:android
+# or: npx expo start --dev-client
+```
 
 ## Key Files
 
