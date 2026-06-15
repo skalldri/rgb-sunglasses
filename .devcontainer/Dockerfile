@@ -31,3 +31,12 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools \
         "build-tools;35.0.0" \
         "ndk;27.1.12297006" \
         "cmake;3.22.1"
+
+# Rust toolchain (via rustup) — needed for adb-wireless and other cargo tools.
+# apt's cargo is too old (1.75) to build edition2024 crates.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:${PATH}
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain stable \
+ && cargo install adb-wireless

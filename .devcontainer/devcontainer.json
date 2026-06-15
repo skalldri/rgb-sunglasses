@@ -26,7 +26,8 @@
         "ACCEPT_JLINK_LICENSE": "1"
     },
     "runArgs": [
-        "--privileged"
+        "--privileged",
+        "--network=host"
     ],
     // Runs before the container starts. With Docker Desktop + "Clone in Container Volume",
     // this executes inside docker-desktop WSL2 (not on the Windows host), so we use a
