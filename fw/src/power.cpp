@@ -92,6 +92,17 @@ SYS_INIT(init_check_and_enable_3v3, APPLICATION, 0);
 
 #if defined(CONFIG_BQ25792)
 
+enum class Bq25792ChargeStatus : uint8_t {
+    NotCharging           = 0,
+    TrickleCharge         = 1,
+    PreCharge             = 2,
+    FastChargeCC          = 3,
+    TaperChargeCV         = 4,
+    Reserved              = 5,
+    TopOffTimerActive     = 6,
+    ChargeTerminationDone = 7,
+};
+
 static void charger_status_thread_func(void *, void *, void *);
 
 K_THREAD_DEFINE(charger_status_thread, 1024, charger_status_thread_func, NULL, NULL, NULL, 7, 0,
@@ -106,28 +117,34 @@ static void charger_status_thread_func(void *, void *, void *) {
     while (true) {
         uint8_t chg_stat = 0;
         if (bq25792_get_charge_status(bq, &chg_stat) == 0) {
-            StatusIndication indication;
-            StatusColor       color = StatusColor::Green;
+#if defined(CONFIG_STATUS_LED)
+            StatusIndication       indication;
+            StatusColor            color  = StatusColor::Green;
+            Bq25792ChargeStatus    status = static_cast<Bq25792ChargeStatus>(chg_stat);
 
-            switch (chg_stat) {
-                case 1: /* Trickle charge */
-                case 2: /* Pre-charge */
+            switch (status) {
+                case Bq25792ChargeStatus::TrickleCharge:
+                    [[fallthrough]];
+                case Bq25792ChargeStatus::PreCharge:
                     indication = StatusIndication::Breathing;
                     break;
-                case 3: /* Fast charge (CC) */
-                case 4: /* Taper charge (CV) */
+                case Bq25792ChargeStatus::FastChargeCC:
+                    [[fallthrough]];
+                case Bq25792ChargeStatus::TaperChargeCV:
                     indication = StatusIndication::FastBreathing;
                     break;
-                case 6: /* Top-off timer active */
-                case 7: /* Charge termination done */
+                case Bq25792ChargeStatus::TopOffTimerActive:
+                    [[fallthrough]];
+                case Bq25792ChargeStatus::ChargeTerminationDone:
                     indication = StatusIndication::Solid;
                     break;
-                default: /* 0 = not charging, 5 = reserved */
+                default: /* NotCharging, Reserved */
                     indication = StatusIndication::Off;
                     break;
             }
 
             status_led_set(0, indication, color);
+#endif /* CONFIG_STATUS_LED */
         }
 
         k_msleep(500);
