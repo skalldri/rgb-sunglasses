@@ -8,8 +8,9 @@
 enum class StatusIndication {
     Off,
     Solid,
-    Blinking,   // 1 Hz square wave: 500 ms on / 500 ms off
-    Breathing,  // 0.5 Hz sine-wave brightness envelope over a 2 s period
+    Blinking,      // 1 Hz square wave: 500 ms on / 500 ms off
+    Breathing,     // 0.5 Hz sine-wave brightness envelope over a 2 s period (slow)
+    FastBreathing, // 1 Hz sine-wave brightness envelope over a 1 s period (fast)
 };
 
 /**

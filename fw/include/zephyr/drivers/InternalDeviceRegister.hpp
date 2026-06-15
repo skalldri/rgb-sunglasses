@@ -48,6 +48,14 @@ class RegisterField {
     static const char *getUnit() { return UnitConversion::unit(); }
 
     static int64_t conversion(uint32_t val) { return UnitConversion::conversion(val); }
+
+    // Forward label() from UnitConversion when it exists (detected via has_label trait)
+    template <typename UC = UnitConversion>
+    static auto label(uint32_t val) -> decltype(UC::label(val)) {
+        return UC::label(val);
+    }
+
+    using UnitConversionType = UnitConversion;
 };
 
 /*
@@ -83,6 +91,14 @@ struct are_unique_impl<> : std::true_type
 template <typename... Ts>
 using are_unique = are_unique_impl<Ts...>;
 */
+
+// Trait: detect whether a UnitConversion class provides a label(uint32_t) static method.
+// When present, dumpHelper prints the label string instead of the numeric value + unit.
+template <typename T, typename = void>
+struct has_label : std::false_type {};
+
+template <typename T>
+struct has_label<T, std::void_t<decltype(T::label(uint32_t{}))>> : std::true_type {};
 
 template <const char *name, size_t registerWidth, typename U, typename... Us>
 class DeviceRegister {
@@ -294,8 +310,12 @@ class I2CDeviceRegister : public DeviceRegister<name, registerWidth, U, Us...> {
         /*static_assert(is_RegisterField<T>::value,
                       "T must be of type RegisterField");*/
 
-        LOG_INF("\t%s: %lld %s", T::getName(),
-                T::conversion(this->template getRegFieldFromStorage<T>()), T::getUnit());
+        uint32_t raw = this->template getRegFieldFromStorage<T>();
+        if constexpr (has_label<typename T::UnitConversionType>::value) {
+            LOG_INF("\t%s: %s", T::getName(), T::label(raw));
+        } else {
+            LOG_INF("\t%s: %lld %s", T::getName(), T::conversion(raw), T::getUnit());
+        }
     }
 
    private:

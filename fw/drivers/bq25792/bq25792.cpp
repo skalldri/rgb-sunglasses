@@ -5,6 +5,7 @@
 #include <zephyr/logging/log.h>
 
 #include "bq25792_init.h"
+#include "bq25792_irq.h"
 
 LOG_MODULE_REGISTER(bq25792, LOG_LEVEL_INF);
 
@@ -146,10 +147,42 @@ int bq25792_dump_charge_parameters(const struct device *dev) {
     return 0;
 }
 
+int bq25792_get_charge_status(const struct device *dev, uint8_t *chg_stat) {
+    if (!dev || !chg_stat) {
+        return -EINVAL;
+    }
+    const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
+    BQ25792_CHARGER_STATUS_1 reg(cfg);
+    *chg_stat = (uint8_t)reg.get<BQ25792_CHARGER_STATUS_1_CHG_STAT>(0, true /* read from hw */);
+    return 0;
+}
+
 int bq25792_set_charge_enable(const struct device *dev, bool enabled) {
     const struct bq25792_dev_config *cfg = (const struct bq25792_dev_config *)dev->config;
     BQ25792_CHARGER_CONTROL_0 chargerControl0(cfg);
     LOG_INF("Setting EN_CHG to %u", enabled ? 1 : 0);
     chargerControl0.set<BQ25792_CHARGER_CONTROL_0_EN_CHG>(enabled ? 1 : 0, true /* flush */);
     return 0;
+}
+
+int bq25792_register_irq_callback(const struct device *dev, bq25792_irq_callback_t cb,
+                                   void *user_data) {
+    if (!dev) {
+        return -ENODEV;
+    }
+
+    struct bq25792_dev_data *data = (struct bq25792_dev_data *)dev->data;
+    data->irq_cb = cb;
+    data->irq_cb_user_data = user_data;
+    return 0;
+}
+
+void bq25792_irq(const struct device *port, struct gpio_callback *cb, gpio_port_pins_t pins) {
+    struct bq25792_dev_data *data = CONTAINER_OF(cb, struct bq25792_dev_data, callback);
+
+    LOG_INF("BQ25792 interrupt received!");
+
+    if (data->irq_cb) {
+        data->irq_cb(data->dev, data->irq_cb_user_data);
+    }
 }
