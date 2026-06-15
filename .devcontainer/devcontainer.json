@@ -3,11 +3,6 @@
     "build": {
         "dockerfile": "Dockerfile"
     },
-    "features": {
-        "ghcr.io/devcontainers/features/node:1": {
-            "version": "lts"
-        }
-    },
     "customizations": {
         "vscode": {
             "extensions": [
@@ -44,6 +39,8 @@
         "jlink": "dpkg -i /jlink/JLink_Linux.deb",
         "python": "pip install lz4 yaspin tqdm Pillow serial-mcp-server",
         "app": "cd /workspaces/rgb-sunglasses/app && npm install",
-        "claude": "npm install -g @anthropic-ai/claude-code"
+        "claude": "npm install -g @anthropic-ai/claude-code",
+        "android-ndk": "[ -n \"$CI\" ] || sdkmanager --install \"ndk;27.1.12297006\" \"cmake;3.22.1\"",
+        "adb-wireless": "[ -n \"$CI\" ] || cargo install --jobs 1 adb-wireless"
     }
 }
