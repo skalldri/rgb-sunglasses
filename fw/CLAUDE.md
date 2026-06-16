@@ -140,11 +140,23 @@ This project uses the Zephyr RTOS.
 
 Read the documentation directly from /root/ncs/v3.1.1/zephyr/doc
 
+## Hardware Environment
+
+Run `/check-hardware` at the start of any session to discover what's available. The skill checks lsusb for the dev board, verifies the TTY ports, and checks for a connected Android device via ADB.
+
 ## Serial Console (Zephyr Shell)
 
-The dev board exposes a Zephyr RTOS shell over USB-CDC-ACM:
+The dev board exposes two USB-CDC-ACM ports:
 
-- **Port**: `/dev/ttyACM0`, **baud**: 115200
+| Port | Role | Baud |
+|------|------|------|
+| `/dev/ttyACM0` | Zephyr interactive shell (`uart:~$` prompt) | 115200 |
+| `/dev/ttyACM1` | MCUmgr UART transport (firmware updates) | 115200 |
+
+A SEGGER J-Link (VID:PID `1366:0101`) may also be connected for advanced operations (reflashing MCUboot, GDB debugging). Probe it with `echo "Exit" > /tmp/jlink_probe.jlink && JLinkExe -CommandFile /tmp/jlink_probe.jlink 2>&1`. Healthy output includes `Connecting to J-Link via USB...O.K.` and `VTref≥3.0V`.
+
+**If both ports are missing despite the board showing up in `lsusb`**, the `cdc_acm` kernel module is not loaded in the WSL docker-desktop VM. Run `wsl -d docker-desktop -- modprobe cdc_acm` from Windows, then replug the board.
+
 - **Prompt**: `uart:~$` (appears after the boot log completes)
 
 ### Using the `mcp__serial__*` tools
