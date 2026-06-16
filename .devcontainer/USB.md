@@ -37,8 +37,9 @@ Windows ──usbipd──▶ WSL2 kernel (shared) ──▶ Docker Desktop cont
   runs on the Windows host every time the container starts and:
   1. starts a hidden `usbipd attach --auto-attach` for the device (attaches now, and
      re-attaches automatically after a replug);
-  2. runs `modprobe -a cdc-acm usb-storage vhci-hcd usbip-host` inside a real WSL2 distro,
-     loading the drivers into the shared kernel.
+  2. runs `modprobe -a cdc-acm usb-storage vhci-hcd usbip-host` inside the `docker-desktop`
+     WSL2 distro, loading the drivers into the shared kernel. (`modprobe` is a kernel call
+     and doesn't write to the filesystem, so the read-only restriction doesn't apply.)
 - Because the container runs `--privileged`, the resulting `/dev/ttyACM*` and `/dev/sd*`
   nodes (created in the shared devtmpfs) are visible inside it.
 
@@ -82,9 +83,6 @@ sudo mkdir -p /mnt/dev && sudo mount /dev/sdX1 /mnt/dev   # replace sdX1 with th
   `/lib/modules`. The standard WSL2 kernel ships `cdc-acm`/`usb-storage`, so this is rare;
   if it happens, build the module against the WSL2 kernel source — see
   <https://github.com/rohzb/wsl2-usb-devices>.
-- **No general-purpose WSL distro.** The init script skips module loading if only the
-  `docker-desktop` distro exists. Install one: `wsl --install -d Ubuntu`.
-
 ## References
 
 - usbipd-win WSL support: <https://github.com/dorssel/usbipd-win/wiki/WSL-support>
