@@ -51,6 +51,16 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools \
         "platforms;android-35" \
         "build-tools;35.0.0"
 
+# mcumgr CLI — firmware management over UART/BLE (SMP protocol).
+# Requires Go; we install a pinned Go toolchain, build mcumgr, then remove Go
+# to keep the layer lean.
+RUN curl -fsSL https://go.dev/dl/go1.26.4.linux-amd64.tar.gz \
+        | tar -C /usr/local -xz \
+    && GOPATH=/tmp/gobuild /usr/local/go/bin/go install \
+        github.com/apache/mynewt-mcumgr-cli/mcumgr@latest \
+    && mv /tmp/gobuild/bin/mcumgr /usr/local/bin/mcumgr \
+    && rm -rf /usr/local/go /tmp/gobuild
+
 # Rust toolchain (via rustup) — needed for adb-wireless and other cargo tools.
 # apt's cargo is too old (1.75) to build edition2024 crates.
 # cargo install adb-wireless is deferred to postCreateCommand to avoid

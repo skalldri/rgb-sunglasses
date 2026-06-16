@@ -12,32 +12,53 @@ echo ""
 if lsusb 2>/dev/null | grep -qi "$BOARD_VID_PID"; then
     echo "Dev board (2fe3:0001): DETECTED"
 
-    ACM0_OK=0; ACM1_OK=0
-    [ -e /dev/ttyACM0 ] && ACM0_OK=1
-    [ -e /dev/ttyACM1 ] && ACM1_OK=1
+    # WSL2/udev sometimes fails to create /dev nodes for CDC-ACM interfaces even
+    # though they appear in sysfs after a firmware reset. Create any that are missing.
+    for sysdev in /sys/class/tty/ttyACM*; do
+        node="/dev/$(basename "$sysdev")"
+        if [ ! -e "$node" ]; then
+            maj_min=$(cat "$sysdev/dev" 2>/dev/null) || continue
+            maj=${maj_min%:*}; min=${maj_min#*:}
+            mknod "$node" c "$maj" "$min" 2>/dev/null && chmod 666 "$node" || true
+        fi
+    done
 
-    if [ $ACM0_OK -eq 1 ]; then
-        echo "  /dev/ttyACM0: OK  [Zephyr shell, 115200 baud]"
+    # Identify shell vs MCUmgr port from sysfs USB interface number.
+    # The board always puts the Zephyr shell on USB interface x.0 and the MCUmgr
+    # UART transport on interface x.2. Port numbers can shift after a reset.
+    SHELL_PORT=""; MCUMGR_PORT=""
+    for sysdev in /sys/class/tty/ttyACM*; do
+        node="/dev/$(basename "$sysdev")"
+        iface_path=$(readlink -f "$sysdev/device" 2>/dev/null)
+        iface_suffix=$(echo "$iface_path" | grep -oE '\.[0-9]+$')
+        case "$iface_suffix" in
+            .0) SHELL_PORT="$node" ;;
+            .2) MCUMGR_PORT="$node" ;;
+        esac
+    done
+
+    if [ -n "$SHELL_PORT" ]; then
+        echo "  $SHELL_PORT: OK  [Zephyr shell, 115200 baud]"
     else
-        echo "  /dev/ttyACM0: MISSING"
+        echo "  Zephyr shell port: NOT FOUND"
     fi
 
-    if [ $ACM1_OK -eq 1 ]; then
-        echo "  /dev/ttyACM1: OK  [MCUmgr firmware update, 115200 baud]"
+    if [ -n "$MCUMGR_PORT" ]; then
+        echo "  $MCUMGR_PORT: OK  [MCUmgr firmware update, 115200 baud]"
     else
-        echo "  /dev/ttyACM1: MISSING"
+        echo "  MCUmgr port: NOT FOUND (board may still be booting)"
     fi
 
-    if [ $ACM0_OK -eq 0 ] || [ $ACM1_OK -eq 0 ]; then
-        echo "  [!] TTYs missing despite board being on USB."
+    if [ -z "$SHELL_PORT" ] && [ -z "$MCUMGR_PORT" ]; then
+        echo "  [!] No usable TTYs found despite board being on USB."
         echo "  [!] Fix: run in a Windows terminal:"
         echo "  [!]   wsl -d docker-desktop -- modprobe cdc_acm"
         echo "  [!] Then unplug and replug the board."
     fi
 else
     echo "Dev board (2fe3:0001): NOT DETECTED"
-    echo "  /dev/ttyACM0: N/A"
-    echo "  /dev/ttyACM1: N/A"
+    echo "  Zephyr shell port: N/A"
+    echo "  MCUmgr port: N/A"
 fi
 
 echo ""

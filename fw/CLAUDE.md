@@ -180,6 +180,105 @@ kernel threads          # list all threads and their stack usage
 bt connect              # (if shell BT commands are enabled)
 ```
 
+## MCUmgr
+
+`mcumgr` is installed in the devcontainer (built from source during image build). The MCUmgr port is always USB interface x.2 — run `/check-hardware` to find the current port (it shifts after resets; see WSL2 note below).
+
+```bash
+# Run /check-hardware first to identify the current MCUmgr port (may be ttyACM1, ttyACM2, etc.)
+CONN="--conntype serial --connstring dev=/dev/ttyACM2,baud=115200"  # example — verify with /check-hardware
+
+mcumgr $CONN image list       # list firmware images
+mcumgr $CONN echo "hello"     # connectivity check
+mcumgr $CONN reset            # soft-reset the device
+```
+
+### Image layout
+
+The board exposes two images via MCUmgr (confirmed from `image list`):
+
+| image | Slot | Core |
+|-------|------|------|
+| 0 | 0 | App core (rgb-sunglasses) |
+| 1 | 0 | Net core (ipc_radio) |
+
+Both currently report `version: 0.0.0` — the build version string is not yet wired up.
+
+### Firmware update flow
+
+```bash
+CONN="--conntype serial --connstring dev=/dev/ttyACM1,baud=115200"
+
+# 1. Upload the signed image (~678 KiB at ~3.5 KiB/s over serial = ~3-4 minutes, be patient)
+mcumgr $CONN image upload fw/build/fw/zephyr/zephyr.signed.bin
+
+# 2. Get the hash of the uploaded image (slot 1 of image 0)
+mcumgr $CONN image list
+
+# 3. Mark it for test boot
+mcumgr $CONN image test <hash>
+
+# 4. Reset — MCUboot will boot the new image
+mcumgr $CONN reset
+
+# 5. Wait ~15 seconds for the board to re-enumerate on USB before issuing further commands
+#    /dev/ttyACM* disappears during reset and takes noticeably longer than expected to return.
+```
+
+After a successful test boot, run `image confirm` (or let the app confirm via BLE) to make it permanent. If the device fails to boot, MCUboot reverts to the previous image automatically.
+
+### Commands
+
+```bash
+mcumgr $CONN taskstat      # list all threads with stack/runtime info
+mcumgr $CONN stat list     # list stat groups (e.g. flash_sim_stats)
+mcumgr $CONN stat read flash_sim_stats
+```
+
+- `taskstat` requires `CONFIG_THREAD_MONITOR=y`, `CONFIG_MCUMGR_GRP_OS_TASKSTAT=y`, and a large-enough TX FIFO on the CDC-ACM mcumgr port (see DTS note below). All three are set on proto0.
+- `shell exec` — returns status=8 (ENOTSUP); the Zephyr shell is on ACM0, not the MCUmgr transport
+
+### CDC-ACM TX FIFO (why `hw-flow-control` matters)
+
+The `zephyr,cdc-acm-uart` driver's `poll_out` silently **drops bytes** when the TX ring buffer is full and `hw-flow-control` is NOT set. With the default 1024-byte FIFO a multi-frame `taskstat` response (~1850 wire bytes) overflows mid-stream and the client times out.
+
+Fix applied in `rgb_sunglasses_proto0_nrf5340_cpuapp_common.dts`:
+```dts
+cdc_acm_uart1: cdc_acm_uart1 {
+    compatible = "zephyr,cdc-acm-uart";
+    hw-flow-control;      /* poll_out blocks instead of dropping */
+    tx-fifo-size = <4096>;
+};
+```
+
+`hw-flow-control` makes `poll_out` sleep 1 ms and retry when the buffer is full. `tx-fifo-size = 4096` is large enough to hold a full taskstat response without blocking at all.
+
+### WSL2 / udev: ttyACM node numbering can shift
+
+After a firmware reset, the board re-enumerates as a new USB device. The Linux kernel assigns the next available ACM minor numbers — if the previous ttyACM0 node wasn't cleaned up, the new device gets ttyACM1/ttyACM2 instead. Additionally, WSL2's udev sometimes fails to create /dev nodes for new ACM interfaces even though they appear in sysfs.
+
+**If mcumgr times out after a reset:**
+```bash
+# Check sysfs for all registered ACM devices
+ls /sys/class/tty/ttyACM*
+
+# Create any missing /dev nodes
+for d in /sys/class/tty/ttyACM*; do
+    n=$(basename $d)
+    maj_min=$(cat $d/dev)
+    maj=${maj_min%:*}; min=${maj_min#*:}
+    [ -e /dev/$n ] || mknod /dev/$n c $maj $min && chmod 666 /dev/$n
+done
+
+# Determine which port is mcumgr by trying each one
+for p in /dev/ttyACM*; do
+    echo -n "$p: "
+    mcumgr --conntype serial --connstring dev=$p,baud=115200 echo ping 2>&1 | head -1
+done
+```
+
+The mcumgr port is whichever responds to `echo`. Update `CONN` accordingly.
+
 ## Build Failures
 
 If a build fails, prefer to read the log files instead of building it again.
