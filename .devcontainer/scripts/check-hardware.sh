@@ -75,6 +75,7 @@ if lsusb 2>/dev/null | grep -qi "$JLINK_VID_PID"; then
     rm -f /tmp/jlink_probe.jlink
 
     if echo "$JLINK_OUT" | grep -q "Connecting to J-Link via USB...O.K."; then
+        SERIAL=$(echo "$JLINK_OUT" | grep -oE 'S/N: [0-9]+' | grep -oE '[0-9]+' | head -n 1 || true)
         VTREF=$(echo "$JLINK_OUT" | grep -oE 'VTref=[0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)
         if [ -n "$VTREF" ]; then
             if awk "BEGIN{exit !($VTREF >= 3.0)}"; then
@@ -84,6 +85,9 @@ if lsusb 2>/dev/null | grep -qi "$JLINK_VID_PID"; then
             fi
         else
             echo "  Status: OK  [USB connected, VTref not reported]"
+        fi
+        if [ -n "$SERIAL" ]; then
+            echo "  Serial: $SERIAL  (use with: west flash --dev-id $SERIAL)"
         fi
     else
         echo "  Status: WARN  [USB present but J-Link Commander did not connect]"
