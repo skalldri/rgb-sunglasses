@@ -67,12 +67,15 @@ echo ""
 if lsusb 2>/dev/null | grep -qi "$JLINK_VID_PID"; then
     echo "J-Link (1366:0101): DETECTED"
 
-    JLINK_OUT=$(echo "Exit" > /tmp/jlink_probe.jlink && \
+    # JLinkExe only opens the USB connection lazily, on the first command that
+    # needs it - with just "Exit" in the command file it never connects at all,
+    # so the probe must include a command (ShowHWStatus) that forces the connect.
+    JLINK_OUT=$(printf 'ShowHWStatus\nExit\n' > /tmp/jlink_probe.jlink && \
                 timeout 10 JLinkExe -CommandFile /tmp/jlink_probe.jlink 2>&1 || true)
     rm -f /tmp/jlink_probe.jlink
 
     if echo "$JLINK_OUT" | grep -q "Connecting to J-Link via USB...O.K."; then
-        VTREF=$(echo "$JLINK_OUT" | grep -oE 'VTref=[0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' || true)
+        VTREF=$(echo "$JLINK_OUT" | grep -oE 'VTref=[0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)
         if [ -n "$VTREF" ]; then
             if awk "BEGIN{exit !($VTREF >= 3.0)}"; then
                 echo "  Status: OK  [USB connected, VTref=${VTREF}V — target powered]"
