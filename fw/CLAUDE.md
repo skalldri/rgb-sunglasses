@@ -153,13 +153,19 @@ The dev board exposes two USB-CDC-ACM ports:
 | `/dev/ttyACM0` | Zephyr interactive shell (`uart:~$` prompt) | 115200 |
 | `/dev/ttyACM1` | MCUmgr UART transport (firmware updates) | 115200 |
 
-A SEGGER J-Link (VID:PID `1366:0101`) may also be connected for advanced operations (reflashing MCUboot, GDB debugging). Probe it with `echo "Exit" > /tmp/jlink_probe.jlink && JLinkExe -CommandFile /tmp/jlink_probe.jlink 2>&1`. Healthy output includes `Connecting to J-Link via USB...O.K.` and `VTref≥3.0V`.
+A SEGGER J-Link (VID:PID `1366:0101`) may also be connected for advanced operations (reflashing MCUboot, GDB debugging). `/check-hardware` probes it and prints status, VTref, and serial number. See [Flashing via J-Link](#flashing-via-j-link-fast-path) below for the fast flash path.
+
+Note: `JLinkExe -CommandFile` only opens the USB connection lazily, on the first command that actually needs it — a command file containing just `Exit` never touches USB at all. The probe (and `jlink-flash.sh`) use `ShowHWStatus` to force the connect; that banner is also where the `S/N:` serial number comes from.
 
 **If both ports are missing despite the board showing up in `lsusb`**, the `cdc_acm` kernel module is not loaded in the WSL docker-desktop VM. Run `wsl -d docker-desktop -- modprobe cdc_acm` from Windows, then replug the board.
 
 - **Prompt**: `uart:~$` (appears after the boot log completes)
 
 ### Using the `mcp__serial__*` tools
+
+**Always use the `mcp__serial__*` MCP tools to interact with the Zephyr shell.** Never shell out via Bash to read/write `/dev/ttyACM0` directly (e.g. `cat`/`echo` redirects, `screen`, `picocom`) — it races with the MCP server's background reader thread for ownership of the port and produces garbled/lost data.
+
+**Graduate working shell interactions into serial MCP plugins.** Once you've figured out how to reliably drive a shell subsystem over raw `serial_write`/`serial_read_until` — correct command syntax, response parsing, any device-specific quirks — don't keep repeating that raw sequence in future sessions. Write or extend a plugin under `.serial_mcp/plugins/` (use `serial_plugin_template` to scaffold, `serial_plugin_load`/`serial_plugin_reload` to pick it up) so the next interaction is a single typed tool call instead of hand-rolled read/write. `rgb_sunglasses.py` (see below) is the first instance of this pattern, for the `anim` subsystem — add new plugin files (or new tools in the existing one) the same way for other shell subsystems as they come up.
 
 **Wait for boot before sending commands.** Boot log output interleaves with shell echoed input and causes `command not found` errors. Wait until `uart:~$` appears before issuing any shell commands.
 
@@ -172,6 +178,36 @@ A SEGGER J-Link (VID:PID `1366:0101`) may also be connected for advanced operati
 { "data": "kernel version\r", "as": "hex" }   // hex-encode the CR separately
 ```
 
+### Animation shell control — the `rgb_sunglasses` serial MCP plugin
+
+The `anim` shell command (`anim get` / `anim set <name>` / `anim indicator clear`,
+defined in `src/pattern_controller.cpp`) is exposed as a serial MCP plugin at
+`.serial_mcp/plugins/rgb_sunglasses.py` — prefer it over hand-rolled
+`serial_write`/`serial_read_until` calls, which are error-prone (see the prompt
+redraw quirk below). Requires `SERIAL_MCP_PLUGINS=rgb_sunglasses` in `.mcp.json`'s
+`serial` server env (already set); reconnect via `/mcp` after enabling. As other
+shell subsystems get plugin coverage, add their tools to this same file (or a
+new file under `.serial_mcp/plugins/`) and update `SERIAL_MCP_PLUGINS` accordingly.
+
+Tools: `rgb_sunglasses.get_animation`, `rgb_sunglasses.set_animation` (name one of
+`none, zigzag, text, rainbow, my_eyes, beat, fft_bars, bad_apple, nyan_cat`),
+`rgb_sunglasses.clear_indicator`.
+
+**Always clear the active BT indicator before starting an animation.** A BT
+indicator (advertising/connecting/pairing overlay) overrides whatever animation
+is set and will visually hide it. `rgb_sunglasses.set_animation` already does
+this automatically (calls `clear_indicator` before `anim set` and verifies via
+`anim get`) — don't bypass it by calling the shell directly.
+
+**Zephyr shell prompt redraw quirk:** the shell redraws `uart:~$` after *every*
+async log line (BT notifications, GLIM decoder logs, etc.), not just after a
+command finishes. A naive `read_until("uart:~$ ")` can match a stale redraw left
+over from a previous command's delayed logging, before the current command's
+own echo has even arrived — this caused a real false-failure during testing.
+The plugin works around it by flushing the input buffer before each write, then
+accumulating `read_until` chunks until the command's own echo is found followed
+by a prompt (see `_run_command` in the plugin file).
+
 ### Useful shell commands
 
 ```
@@ -179,6 +215,55 @@ kernel version          # print Zephyr/NCS version
 kernel threads          # list all threads and their stack usage
 bt connect              # (if shell BT commands are enabled)
 ```
+
+## USB Flash Disk (`/NAND:` — GLIM/animation assets)
+
+The dev board exposes a 4 MiB FAT filesystem over USB Mass Storage (SCSI Bulk-Only,
+interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts at
+`/NAND:` (`src/storage/storage.cpp`; LUN registered in `src/usb/usb_init.c` as
+`USBD_DEFINE_MSC_LUN(nand, "NAND", "RGB-SG", "FlashDisk", "0.00")`). It's how
+`bad_apple.glim`, `nyan_cat.glim`, and similar assets get onto the device (see
+`fw/tools/convert_bad_apple.py`, `generate_nyan_cat_glim.py`).
+
+**Finding and mounting it from the devcontainer:**
+```bash
+# It enumerates as a SCSI disk alongside the container's own disks — identify it
+# by the SCSI string, not a fixed /dev/sdX (the letter shifts based on what else
+# is attached).
+dmesg | grep -A2 "RGB-SG"       # confirms detection, e.g. "scsi 1:0:0:0: Direct-Access RGB-SG FlashDisk"
+lsblk                            # cross-reference the ~4 MiB size to find the device node, e.g. /dev/sdg
+blkid /dev/sdg                   # TYPE="vfat" confirms it's the right one
+
+mkdir -p /mnt/sunglasses-fs
+mount -o rw /dev/sdg /mnt/sunglasses-fs
+cp bad_apple.glim nyan_cat.glim /mnt/sunglasses-fs/
+sync
+umount /mnt/sunglasses-fs
+rmdir /mnt/sunglasses-fs
+```
+
+**The board will not see new/changed files until it's reset.** After unmounting,
+reset via mcumgr (`mcumgr --conntype serial --connstring dev=/dev/ttyACM1,baud=115200 reset`)
+or a physical reset — the firmware's own FAT mount has to be re-established before
+`bad_apple`/`nyan_cat` (or anything else that opens `/NAND:`) can see newly-copied
+files. Wait ~15s for `ttyACM*` to re-enumerate, then re-run `/check-hardware` before
+issuing more serial commands.
+
+## Flashing via J-Link (fast path)
+
+When `/check-hardware` reports the J-Link `Status: OK`, prefer flashing over it instead of the slow MCUmgr/UART upload path below.
+
+```bash
+fw/scripts/jlink-flash.sh                  # uses fw/build by default
+fw/scripts/jlink-flash.sh /path/to/build    # explicit build dir
+fw/scripts/jlink-flash.sh -- --skip-rebuild # extra args forwarded to `west flash`
+```
+
+`jlink-flash.sh` auto-detects the attached J-Link's serial number and runs `west flash -d <build-dir> --dev-id <serial>` — no need to hardcode or look up `--dev-id` yourself. `/check-hardware` also prints the serial directly under the J-Link section (`Serial: ...`) if you need it for some other tool.
+
+- This triggers a `west build` rebuild-check first (fast no-op if nothing changed), then flashes via the **`nrfutil` runner** (not raw `JLinkExe`) — it programs both `merged_CPUNET.hex` (netcore) and `merged.hex` (appcore), each with erase → program → verify → reset.
+- Typical total time: ~30-45s, plus ~15s for USB re-enumeration afterward. Re-run `/check-hardware` to confirm both ttyACM ports are back before issuing further serial/mcumgr commands.
+- This is the only way to reflash the bootloader (MCUboot/b0n); MCUmgr can only update the application images.
 
 ## MCUmgr
 

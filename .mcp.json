@@ -13,7 +13,9 @@
       "type": "stdio",
       "command": "serial_mcp",
       "args": [],
-      "env": {}
+      "env": {
+        "SERIAL_MCP_PLUGINS": "rgb_sunglasses"
+      }
     }
   }
 }
