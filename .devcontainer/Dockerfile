@@ -1,9 +1,6 @@
 FROM ghcr.io/skalldri/nrf-connect-sdk-docker:3.1.1
 RUN /lib/systemd/systemd-udevd --daemon
 RUN apt-get update && apt-get install -y --no-install-recommends lcov ffmpeg && rm -rf /var/lib/apt/lists/*
-
-# yt-dlp — used by fw/tools/convert_bad_apple.py to fetch source video for GLIM conversion.
-RUN pip install --no-cache-dir yt-dlp
 RUN mkdir -p /jlink
 RUN wget --post-data="accept_license_agreement=accepted&submit=Download+software" -O /jlink/JLink_Linux.deb https://www.segger.com/downloads/jlink/JLink_Linux_V860_x86_64.deb
 

@@ -110,11 +110,16 @@ async def _run_command(state: SerialState, connection_id: str, cmd: str,
     finishes. A single read_until(prompt) can therefore match a stale
     prompt-redraw left over from a *previous* command's delayed logging,
     before this command's own echo has even arrived. To avoid that:
-      1. Flush the input buffer right before writing, so old noise is gone.
+      1. Send Ctrl+C to cancel any text already sitting in the shell's own
+         input line editor (e.g. a stray boot-log fragment like "rf: Preinit"
+         that lands there right after a reset, before we ever write anything)
+         and flush the host-side input buffer, so old noise is gone on both
+         ends.
       2. Accumulate read_until(prompt) chunks until we find our own echoed
          command followed by a prompt — that's guaranteed to be our response,
          not a stray redraw.
     """
+    await handle_write(state, {"connection_id": connection_id, "data": "03", "as": "hex"})
     await handle_flush(state, {"connection_id": connection_id, "what": "input"})
     await handle_write(state, {
         "connection_id": connection_id,

@@ -208,6 +208,22 @@ The plugin works around it by flushing the input buffer before each write, then
 accumulating `read_until` chunks until the command's own echo is found followed
 by a prompt (see `_run_command` in the plugin file).
 
+**Stray input right after a board reset:** a boot-log fragment (e.g. `rf: Preinit`)
+can land in the shell's own input line editor before the first command is ever
+sent, corrupting it (observed as `command not found` on the very first call after
+reset). `_run_command` sends Ctrl+C before every command to cancel whatever's
+sitting in the line editor, not just on the first call — cheap and fully general.
+
+**Reusing an existing animation slot for arbitrary content:** `NyanCatAnimation`
+(and any other Rgb24-format animation) is a generic GLIM player — it reads
+geometry/frame-count from the file header rather than hardcoding anything
+cat-specific, so overwriting `/NAND:/nyan_cat.glim` with unrelated RGB24 content
+and running `anim set nyan_cat` plays that content instead. This is the fast path
+for trying out new footage without a firmware rebuild; see
+`tools/convert_video_to_glim.py`. `BadAppleAnimation` is mono-only and cannot be
+reused this way. The original asset is preserved at the git-tracked `fw/nyan_cat.glim`
+— recopy it to `/NAND:/nyan_cat.glim` (then reset) to restore Nyan Cat.
+
 ### Useful shell commands
 
 ```
