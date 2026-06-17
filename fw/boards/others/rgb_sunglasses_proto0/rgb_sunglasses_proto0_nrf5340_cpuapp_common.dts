@@ -397,6 +397,13 @@ zephyr_udc0: &usbd {
 
 	cdc_acm_uart1: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
+		/* hw-flow-control makes poll_out block instead of silently dropping bytes
+		 * when the TX FIFO is full. Required for large SMP responses (taskstat etc.)
+		 * that exceed the default 1024-byte FIFO before USB drains it.
+		 * tx-fifo-size is set large enough to hold a full taskstat response (~2 KB)
+		 * without ever needing to block. */
+		hw-flow-control;
+		tx-fifo-size = <4096>;
 	};
 };
 

@@ -17,6 +17,15 @@ RUN wget --post-data="accept_license_agreement=accepted&submit=Download+software
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openjdk-17-jdk-headless unzip curl \
     && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV ANDROID_HOME=/opt/android-sdk
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
@@ -41,6 +50,16 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools \
         "platform-tools" \
         "platforms;android-35" \
         "build-tools;35.0.0"
+
+# mcumgr CLI — firmware management over UART/BLE (SMP protocol).
+# Requires Go; we install a pinned Go toolchain, build mcumgr, then remove Go
+# to keep the layer lean.
+RUN curl -fsSL https://go.dev/dl/go1.26.4.linux-amd64.tar.gz \
+        | tar -C /usr/local -xz \
+    && GOPATH=/tmp/gobuild /usr/local/go/bin/go install \
+        github.com/apache/mynewt-mcumgr-cli/mcumgr@latest \
+    && mv /tmp/gobuild/bin/mcumgr /usr/local/bin/mcumgr \
+    && rm -rf /usr/local/go /tmp/gobuild
 
 # Rust toolchain (via rustup) — needed for adb-wireless and other cargo tools.
 # apt's cargo is too old (1.75) to build edition2024 crates.
