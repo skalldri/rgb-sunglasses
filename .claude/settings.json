@@ -1,4 +1,13 @@
 {
+  "permissions": {
+    "allow": [
+      "Skill(check-software)",
+      "Skill(check-hardware)",
+      "Bash(adb pair *)",
+      "Bash(adb devices *)",
+      "Bash(adb connect *)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
