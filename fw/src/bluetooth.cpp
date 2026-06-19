@@ -264,13 +264,22 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason) {
     LOG_INF("Pairing failed conn: %s, reason %d", addr, reason);
 }
 
+static void bond_deleted(uint8_t id, const bt_addr_le_t *peer) {
+    char addr[BT_ADDR_LE_STR_LEN];
+
+    bt_addr_le_to_str(peer, addr, sizeof(addr));
+
+    LOG_INF("Bond deleted: id %u, peer %s", id, addr);
+}
+
 static struct bt_conn_auth_cb conn_auth_callbacks = {
     .passkey_display = auth_passkey_display,
     .cancel = auth_cancel,
 };
 
 static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {.pairing_complete = pairing_complete,
-                                                               .pairing_failed = pairing_failed};
+                                                               .pairing_failed = pairing_failed,
+                                                               .bond_deleted = bond_deleted};
 #else
 static struct bt_conn_auth_cb conn_auth_callbacks;
 static struct bt_conn_auth_info_cb conn_auth_info_callbacks;

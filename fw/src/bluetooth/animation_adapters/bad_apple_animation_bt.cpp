@@ -10,9 +10,15 @@ BtGattPrimaryService<kBadAppleConfigServiceUuid> badApplePrimaryService;
 using BadAppleIsActiveCharacteristic = IsActiveCharacteristic<Animation::BadApple>;
 BadAppleIsActiveCharacteristic badAppleIsActive;
 
+constexpr BtGattString<24> kBadAppleAnimationName = makeBtGattString<24>("Bad Apple");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kBadAppleAnimationName>
+    badAppleAnimationName;
+
 BtGattServer badAppleConfigServer(
     badApplePrimaryService,
-    badAppleIsActive);
+    badAppleIsActive,
+    badAppleAnimationName);
 BT_GATT_SERVER_REGISTER(badAppleConfigServerStatic, badAppleConfigServer);
 
 using BadAppleAnimationIsActive = AnimationIsActiveBinding<Animation::BadApple>;

@@ -12,7 +12,12 @@ BtGattAutoReadWriteCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}>
 using BeatIsActiveCharacteristic = IsActiveCharacteristic<Animation::Beat>;
 BeatIsActiveCharacteristic beatIsActive;
 
-BtGattServer beatConfigServer(beatPrimaryService, beatColor, beatIsActive);
+constexpr BtGattString<24> kBeatAnimationName = makeBtGattString<24>("Beat");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kBeatAnimationName>
+    beatAnimationName;
+
+BtGattServer beatConfigServer(beatPrimaryService, beatColor, beatIsActive, beatAnimationName);
 BT_GATT_SERVER_REGISTER(beatConfigServerStatic, beatConfigServer);
 
 namespace {

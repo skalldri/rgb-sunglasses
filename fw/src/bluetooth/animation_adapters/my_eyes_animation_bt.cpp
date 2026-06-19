@@ -78,12 +78,17 @@ BtGattAutoReadWriteCharacteristic<"Slot 19", BtGattString<MyEyesAnimation::kMaxE
 using MyEyesIsActiveCharacteristic = IsActiveCharacteristic<Animation::MyEyes>;
 MyEyesIsActiveCharacteristic myEyesIsActive;
 
+constexpr BtGattString<24> kMyEyesAnimationName = makeBtGattString<24>("MyEyes");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kMyEyesAnimationName>
+    myEyesAnimationName;
+
 BtGattServer myEyesConfigServer(myEyesPrimaryService, myEyesBlinkSpeedMs, myEyesColor, myEyesUpNext,
                                 myEyesSlot0, myEyesSlot1, myEyesSlot2, myEyesSlot3, myEyesSlot4,
                                 myEyesSlot5, myEyesSlot6, myEyesSlot7, myEyesSlot8, myEyesSlot9,
                                 myEyesSlot10, myEyesSlot11, myEyesSlot12, myEyesSlot13,
                                 myEyesSlot14, myEyesSlot15, myEyesSlot16, myEyesSlot17,
-                                myEyesSlot18, myEyesSlot19, myEyesIsActive);
+                                myEyesSlot18, myEyesSlot19, myEyesIsActive, myEyesAnimationName);
 BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
 using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes>;

@@ -13,8 +13,13 @@ BtGattAutoReadWriteCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}>
 using ZigZagIsActiveCharacteristic = IsActiveCharacteristic<Animation::ZigZag>;
 ZigZagIsActiveCharacteristic zigzagIsActive;
 
+constexpr BtGattString<24> kZigZagAnimationName = makeBtGattString<24>("ZigZag");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kZigZagAnimationName>
+    zigzagAnimationName;
+
 BtGattServer zigzagConfigServer(zigzagPrimaryService, zigzagStepTimeMs, zigzagColor,
-                                zigzagIsActive);
+                                zigzagIsActive, zigzagAnimationName);
 BT_GATT_SERVER_REGISTER(zigzagConfigServerStatic, zigzagConfigServer);
 
 namespace {

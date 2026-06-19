@@ -77,11 +77,16 @@ BtGattAutoReadWriteCharacteristic<"Slot 19", BtGattString<TextAnimation::kMaxMsg
 using TextIsActiveCharacteristic = IsActiveCharacteristic<Animation::Text>;
 TextIsActiveCharacteristic textIsActive;
 
+constexpr BtGattString<24> kTextAnimationName = makeBtGattString<24>("Text");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kTextAnimationName>
+    textAnimationName;
+
 BtGattServer textConfigServer(textPrimaryService, textStepTimeMs, textColor, textUpNext, textSlot0,
                               textSlot1, textSlot2, textSlot3, textSlot4, textSlot5, textSlot6,
                               textSlot7, textSlot8, textSlot9, textSlot10, textSlot11, textSlot12,
                               textSlot13, textSlot14, textSlot15, textSlot16, textSlot17,
-                              textSlot18, textSlot19, textIsActive);
+                              textSlot18, textSlot19, textIsActive, textAnimationName);
 BT_GATT_SERVER_REGISTER(textConfigServerStatic, textConfigServer);
 
 namespace {

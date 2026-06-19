@@ -21,6 +21,19 @@ struct BtGattStringTraits<BtGattString<N>> {
     static constexpr size_t kMaxLen = N;
 };
 
+// Converts a C string literal into a null-terminated BtGattString<OutN>, for use as a
+// characteristic's compile-time default value.
+template <size_t OutN, size_t InN>
+constexpr BtGattString<OutN> makeBtGattString(const char (&str)[InN]) {
+    BtGattString<OutN> out = {};
+    size_t copyLen = InN < out.size() ? InN : out.size();
+    for (size_t i = 0; i < copyLen; i++) {
+        out[i] = str[i];
+    }
+    out[out.size() - 1] = '\0';
+    return out;
+}
+
 struct BtGattColor {
     constexpr BtGattColor() = default;
     constexpr BtGattColor(uint32_t raw) : value(raw) {}

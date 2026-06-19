@@ -2,12 +2,14 @@ import {
     getCharacteristicName,
     getDescriptorName,
     getServiceName,
+    UUID_ANIMATION_NAME_CHARACTERISTIC,
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { bleManager } from "@/hooks/ble-manager";
+import { decodeUtf8FromBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useEffect, useRef, useState } from "react";
 
@@ -42,6 +44,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             const characteristicsByService: Record<string, Record<string, CharacteristicInfo>> = {};
             const characteristics: Record<string, CharacteristicInfo> = {};
             const serviceCharacteristics: Record<string, string[]> = {};
+            const serviceDisplayNames: Record<string, string> = {};
 
             if (services) {
                 for (const service of services) {
@@ -95,6 +98,10 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                             console.log(`Could not read characteristic ${getCharacteristicName(characteristic.uuid)}:`, error);
                         }
 
+                        if (characteristic.uuid === UUID_ANIMATION_NAME_CHARACTERISTIC && charInfo.value) {
+                            serviceDisplayNames[service.uuid] = decodeUtf8FromBase64(charInfo.value);
+                        }
+
                         characteristicInfos[characteristic.uuid] = charInfo;
                         characteristics[characteristic.uuid] = charInfo;
                         charUuids.push(characteristic.uuid);
@@ -114,6 +121,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 characteristicsByService,
                 characteristics,
                 serviceCharacteristics,
+                serviceDisplayNames,
             });
 
             // Set up monitors for all notifiable characteristics except SMP

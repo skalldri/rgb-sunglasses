@@ -15,6 +15,11 @@ export const KnownServiceIds: { [key: string]: string } = {
     "deadbeef-1234-5678-1234-56789abcdef0": "Text Animation Now Playing Service",
 };
 
+// Fixed characteristic UUID, identical across every animation service, exposing that
+// animation's human-readable name. Must match kAnimationNameCharacteristicUuid in
+// fw/src/bluetooth/bt_service_cpp.h.
+export const UUID_ANIMATION_NAME_CHARACTERISTIC = "12345678-1234-5678-aaaa-56789abd0000";
+
 export const KnownCharacteristicIds: { [key: string]: string } = {
     "00002a05-0000-1000-8000-00805f9b34fb": "Service Changed Characteristic",
     "00002a00-0000-1000-8000-00805f9b34fb": "Device Name Characteristic",
