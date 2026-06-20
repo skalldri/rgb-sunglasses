@@ -2,7 +2,10 @@
 #include <animations/glim_player_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
+#include <settings/persistent_value_registry.h>
+#include <settings/persistent_value_store.h>
 #include <storage/glim_registry.h>
+#include <zephyr/sys/util_macro.h>
 
 #include <algorithm>
 #include <cstring>
@@ -144,6 +147,9 @@ class GlimSelectionCharacteristic
         }
         sSelectedIndex = index;
         this->operator=(buildGlimSelectionValue(index));
+        if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_store::request_save();
+        }
     }
 
     static size_t sSelectedIndex;
@@ -168,9 +174,79 @@ class GlimLoopModeCharacteristic
             return;
         }
         this->operator=(buildLoopModeValue(mode));
+        if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_store::request_save();
+        }
     }
 };
 GlimLoopModeCharacteristic glimLoopMode;
+
+namespace {
+
+constexpr const char *kGlimSelectionKey = "glim_player/selected_name";
+constexpr const char *kGlimLoopModeKey = "glim_player/loop_mode";
+
+// glim_registry hasn't scanned /NAND:/glim yet when settings_load() runs (that happens in
+// bluetooth_init, before pattern_controller_thread_func's glim_registry::init() call - see
+// the SYS_INIT ordering notes in fw/CLAUDE.md), so a loaded selection can't be resolved to
+// an index here. Stash the raw name and resolve it once the registry is populated, in
+// glim_player_animation_bind_default_bt_dependencies() below.
+char sLoadedGlimSelectionName[glim_registry::kMaxNameLen] = {};
+bool sGlimSelectionWasLoaded = false;
+
+GlimLoopMode sLoadedGlimLoopMode = GlimLoopMode::LoopOne;
+bool sGlimLoopModeWasLoaded = false;
+
+void glimSelectionDoLoad(void *, const void *data, size_t len) {
+    size_t copyLen = std::min(len, sizeof(sLoadedGlimSelectionName) - 1);
+    memcpy(sLoadedGlimSelectionName, data, copyLen);
+    sLoadedGlimSelectionName[copyLen] = '\0';
+    sGlimSelectionWasLoaded = true;
+}
+
+void glimSelectionDoSave(void *) {
+    size_t index = GlimSelectionCharacteristic::sSelectedIndex;
+    if (index >= glim_registry::count()) {
+        return;
+    }
+    const char *name = glim_registry::name(index);
+    persistent_value_store::save_value(kGlimSelectionKey, name, strlen(name) + 1);
+}
+
+void glimLoopModeDoLoad(void *, const void *data, size_t len) {
+    char name[kGlimLoopModeMaxLen] = {};
+    size_t copyLen = std::min(len, sizeof(name) - 1);
+    memcpy(name, data, copyLen);
+    name[copyLen] = '\0';
+
+    GlimLoopMode mode;
+    if (loopModeFromName(name, &mode)) {
+        sLoadedGlimLoopMode = mode;
+        sGlimLoopModeWasLoaded = true;
+    }
+}
+
+void glimLoopModeDoSave(void *) {
+    char selected[kGlimLoopModeMaxLen];
+    firstDropdownToken(glimLoopMode.value().data(), selected, sizeof(selected));
+    persistent_value_store::save_value(kGlimLoopModeKey, selected, strlen(selected) + 1);
+}
+
+struct GlimPersistenceRegistrar {
+    GlimPersistenceRegistrar() {
+        // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
+        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
+        if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_register(kGlimSelectionKey, nullptr, glimSelectionDoLoad,
+                                                glimSelectionDoSave);
+            persistent_value_registry_register(kGlimLoopModeKey, nullptr, glimLoopModeDoLoad,
+                                                glimLoopModeDoSave);
+        }
+    }
+};
+[[maybe_unused]] GlimPersistenceRegistrar sGlimPersistenceRegistrar;
+
+}  // namespace
 
 using GlimPlayerIsActiveCharacteristic = IsActiveCharacteristic<Animation::GlimPlayer>;
 GlimPlayerIsActiveCharacteristic glimPlayerIsActive;
@@ -197,6 +273,9 @@ class ConcreteGlimSelectionSource : public GlimSelectionSource {
         }
         GlimSelectionCharacteristic::sSelectedIndex = index;
         glimSelection = buildGlimSelectionValue(index);
+        if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_store::request_save();
+        }
     }
 };
 
@@ -242,12 +321,24 @@ struct GlimPlayerIsActiveBindingRegistrar {
 void glim_player_animation_bind_default_bt_dependencies() {
     // Seed the selection/loop-mode characteristics now that glim_registry has scanned
     // /NAND:/glim (glim_registry::init() runs earlier in pattern_controller_thread_func(),
-    // before animation_registry_register_defaults() reaches this call).
-    GlimSelectionCharacteristic::sSelectedIndex = 0;
-    if (glim_registry::count() > 0) {
-        glimSelection = buildGlimSelectionValue(0);
+    // before animation_registry_register_defaults() reaches this call). If a selection was
+    // persisted, resolve its file name to an index now (this is the first point at which
+    // glim_registry is actually populated) - fall back to index 0 if the named file is no
+    // longer present.
+    size_t initialIndex = 0;
+    if (sGlimSelectionWasLoaded) {
+        size_t found = findGlimIndexByName(sLoadedGlimSelectionName);
+        if (found != kInvalidGlimIndex) {
+            initialIndex = found;
+        }
     }
-    glimLoopMode = buildLoopModeValue(GlimLoopMode::LoopOne);
+    GlimSelectionCharacteristic::sSelectedIndex = initialIndex;
+    if (glim_registry::count() > 0) {
+        glimSelection = buildGlimSelectionValue(initialIndex);
+    }
+
+    glimLoopMode =
+        buildLoopModeValue(sGlimLoopModeWasLoaded ? sLoadedGlimLoopMode : GlimLoopMode::LoopOne);
 
     GlimPlayerAnimation::getInstance()->setDependencies(sDefaultGlimPlayerDeps);
 }
@@ -318,6 +409,9 @@ static int cmd_glim_set_loop_mode(const struct shell *shell, size_t argc, char *
     }
 
     glimLoopMode = buildLoopModeValue(mode);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        persistent_value_store::request_save();
+    }
     return 0;
 }
 

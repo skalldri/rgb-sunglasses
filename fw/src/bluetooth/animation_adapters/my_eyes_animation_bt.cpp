@@ -2,6 +2,7 @@
 #include <animations/my_eyes_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
+#include <bluetooth/persistent_characteristic.h>
 
 #include <cstring>
 
@@ -9,70 +10,73 @@ constexpr bt_uuid_128 kMyEyesConfigServiceUuid =
     BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::MyEyes));
 
 BtGattPrimaryService<kMyEyesConfigServiceUuid> myEyesPrimaryService;
-BtGattAutoReadWriteCharacteristic<"Blink Speed Ms", uint32_t, 100> myEyesBlinkSpeedMs;
-BtGattAutoReadWriteCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> myEyesColor;
-BtGattAutoReadWriteNotifyCharacteristic<"Up Next", uint32_t, 0> myEyesUpNext;
+BtGattPersistentCharacteristic<"my_eyes/blink_speed_ms", "Blink Speed Ms", false, uint32_t, 100>
+    myEyesBlinkSpeedMs;
+BtGattPersistentCharacteristic<"my_eyes/color", "Color", false, BtGattColor,
+                               BtGattColor{0xFFFFFFFF}>
+    myEyesColor;
+BtGattPersistentCharacteristic<"my_eyes/up_next", "Up Next", true, uint32_t, 0> myEyesUpNext;
 
 constexpr BtGattString<MyEyesAnimation::kMaxEyeLen> kEmptyEyeSlot = {};
-BtGattAutoReadWriteCharacteristic<"Slot 0", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot0", "Slot 0", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot0;
-BtGattAutoReadWriteCharacteristic<"Slot 1", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot1", "Slot 1", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot1;
-BtGattAutoReadWriteCharacteristic<"Slot 2", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot2", "Slot 2", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot2;
-BtGattAutoReadWriteCharacteristic<"Slot 3", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot3", "Slot 3", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot3;
-BtGattAutoReadWriteCharacteristic<"Slot 4", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot4", "Slot 4", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot4;
-BtGattAutoReadWriteCharacteristic<"Slot 5", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot5", "Slot 5", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot5;
-BtGattAutoReadWriteCharacteristic<"Slot 6", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot6", "Slot 6", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot6;
-BtGattAutoReadWriteCharacteristic<"Slot 7", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot7", "Slot 7", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot7;
-BtGattAutoReadWriteCharacteristic<"Slot 8", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot8", "Slot 8", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot8;
-BtGattAutoReadWriteCharacteristic<"Slot 9", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot9", "Slot 9", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot9;
-BtGattAutoReadWriteCharacteristic<"Slot 10", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot10", "Slot 10", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot10;
-BtGattAutoReadWriteCharacteristic<"Slot 11", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot11", "Slot 11", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot11;
-BtGattAutoReadWriteCharacteristic<"Slot 12", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot12", "Slot 12", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot12;
-BtGattAutoReadWriteCharacteristic<"Slot 13", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot13", "Slot 13", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot13;
-BtGattAutoReadWriteCharacteristic<"Slot 14", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot14", "Slot 14", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot14;
-BtGattAutoReadWriteCharacteristic<"Slot 15", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot15", "Slot 15", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot15;
-BtGattAutoReadWriteCharacteristic<"Slot 16", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot16", "Slot 16", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot16;
-BtGattAutoReadWriteCharacteristic<"Slot 17", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot17", "Slot 17", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot17;
-BtGattAutoReadWriteCharacteristic<"Slot 18", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot18", "Slot 18", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot18;
-BtGattAutoReadWriteCharacteristic<"Slot 19", BtGattString<MyEyesAnimation::kMaxEyeLen>,
-                                  kEmptyEyeSlot>
+BtGattPersistentCharacteristic<"my_eyes/slot19", "Slot 19", false,
+                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot19;
 
 using MyEyesIsActiveCharacteristic = IsActiveCharacteristic<Animation::MyEyes>;

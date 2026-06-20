@@ -24,6 +24,8 @@ target_sources(
     src/power.cpp
     src/bluetooth.cpp
     src/core_config.cpp
+    src/settings/persistent_value_registry.cpp
+    src/settings/persistent_value_store.cpp
     src/animations/bt_animations.cpp
     src/animations/null_animation.cpp
     src/animations/text_animation.cpp

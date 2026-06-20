@@ -2,13 +2,16 @@
 #include <animations/rainbow_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
+#include <bluetooth/persistent_characteristic.h>
 
 constexpr bt_uuid_128 kRainbowConfigServiceUuid =
     BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Rainbow));
 
 BtGattPrimaryService<kRainbowConfigServiceUuid> rainbowPrimaryService;
-BtGattAutoReadWriteCharacteristic<"Step Time Ms", uint32_t, 100> rainbowStepTimeMs;
-BtGattAutoReadWriteCharacteristic<"Rainbow Width Pixels", uint32_t, 5> rainbowWidthPix;
+BtGattPersistentCharacteristic<"rainbow/step_time_ms", "Step Time Ms", false, uint32_t, 100>
+    rainbowStepTimeMs;
+BtGattPersistentCharacteristic<"rainbow/width_pixels", "Rainbow Width Pixels", false, uint32_t, 5>
+    rainbowWidthPix;
 
 using RainbowIsActiveCharacteristic = IsActiveCharacteristic<Animation::Rainbow>;
 RainbowIsActiveCharacteristic rainbowIsActive;

@@ -1,4 +1,5 @@
 #include <bluetooth/bt_service_cpp.h>
+#include <bluetooth/persistent_characteristic.h>
 #include <core_config.h>
 #include <zephyr/logging/log.h>
 
@@ -8,12 +9,16 @@ constexpr bt_uuid_128 kCoreConfigServiceUuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, CoreConfig::kServiceIdNum, 0x56789abc0000));
 
 BtGattPrimaryService<kCoreConfigServiceUuid> coreConfigPrimaryService;
-BtGattAutoReadWriteNotifyCharacteristic<"Brightness (0-1000)", uint32_t, 20> coreBrightness;
-BtGattAutoReadWriteNotifyCharacteristic<"Display Thread Rate * 1000 (ms)", uint32_t, 33300>
+BtGattPersistentCharacteristic<"core/brightness", "Brightness (0-1000)", true, uint32_t, 20>
+    coreBrightness;
+BtGattPersistentCharacteristic<"core/display_thread_rate_ms", "Display Thread Rate * 1000 (ms)",
+                                true, uint32_t, 33300>
     coreDisplayThreadRateMs;
-BtGattAutoReadWriteNotifyCharacteristic<"Render Thread Rate * 1000 (ms)", uint32_t, 11100>
+BtGattPersistentCharacteristic<"core/render_thread_rate_ms", "Render Thread Rate * 1000 (ms)",
+                                true, uint32_t, 11100>
     coreRenderThreadRateMs;
-BtGattAutoReadWriteNotifyCharacteristic<"Status LED Brightness (0-1000)", uint32_t, 20>
+BtGattPersistentCharacteristic<"core/status_led_brightness", "Status LED Brightness (0-1000)",
+                                true, uint32_t, 20>
     coreStatusLedBrightness;
 
 BtGattServer coreConfigServer(coreConfigPrimaryService, coreBrightness, coreDisplayThreadRateMs,

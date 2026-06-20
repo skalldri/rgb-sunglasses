@@ -2,12 +2,14 @@
 #include <animations/beat_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
+#include <bluetooth/persistent_characteristic.h>
 
 constexpr bt_uuid_128 kBeatConfigServiceUuid =
     BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Beat));
 
 BtGattPrimaryService<kBeatConfigServiceUuid> beatPrimaryService;
-BtGattAutoReadWriteCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> beatColor;
+BtGattPersistentCharacteristic<"beat/color", "Color", false, BtGattColor, BtGattColor{0xFFFFFFFF}>
+    beatColor;
 
 using BeatIsActiveCharacteristic = IsActiveCharacteristic<Animation::Beat>;
 BeatIsActiveCharacteristic beatIsActive;
