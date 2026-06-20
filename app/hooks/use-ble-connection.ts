@@ -109,13 +109,25 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                             console.log(`Could not read characteristic ${getCharacteristicName(characteristic.uuid)}:`, error);
                         }
 
-                        if (characteristic.uuid === UUID_ANIMATION_NAME_CHARACTERISTIC && charInfo.value) {
-                            serviceDisplayNames[service.uuid] = decodeUtf8FromBase64(charInfo.value);
-                        }
-
                         characteristicInfos[characteristic.uuid] = charInfo;
-                        characteristics[characteristic.uuid] = charInfo;
-                        charUuids.push(characteristic.uuid);
+
+                        if (characteristic.uuid === UUID_ANIMATION_NAME_CHARACTERISTIC) {
+                            // This UUID is intentionally reused across every animation service (see
+                            // constants/bluetooth.ts), so it must not go into the flat characteristics
+                            // map or serviceCharacteristics: both are keyed/searched by UUID alone and
+                            // would collide across services, making characteristic-to-service lookups
+                            // ambiguous. Its value is only ever needed here, to derive the display name.
+                            if (charInfo.value) {
+                                try {
+                                    serviceDisplayNames[service.uuid] = decodeUtf8FromBase64(charInfo.value).replace(/\0+$/, '');
+                                } catch (error) {
+                                    console.log(`Could not decode animation name for service ${service.uuid}:`, error);
+                                }
+                            }
+                        } else {
+                            characteristics[characteristic.uuid] = charInfo;
+                            charUuids.push(characteristic.uuid);
+                        }
                     }
 
                     characteristicsByService[service.uuid] = characteristicInfos;

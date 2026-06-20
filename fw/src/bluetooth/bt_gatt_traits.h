@@ -22,15 +22,18 @@ struct BtGattStringTraits<BtGattString<N>> {
 };
 
 // Converts a C string literal into a null-terminated BtGattString<OutN>, for use as a
-// characteristic's compile-time default value.
+// characteristic's compile-time default value. Always leaves room for the terminating '\0',
+// truncating the copied content (rather than clobbering the last already-copied byte) if the
+// literal doesn't fit.
 template <size_t OutN, size_t InN>
 constexpr BtGattString<OutN> makeBtGattString(const char (&str)[InN]) {
+    static_assert(OutN > 0, "makeBtGattString requires a non-empty output buffer");
     BtGattString<OutN> out = {};
-    size_t copyLen = InN < out.size() ? InN : out.size();
+    size_t copyLen = InN < OutN - 1 ? InN : OutN - 1;
     for (size_t i = 0; i < copyLen; i++) {
         out[i] = str[i];
     }
-    out[out.size() - 1] = '\0';
+    out[copyLen] = '\0';
     return out;
 }
 
