@@ -63,25 +63,18 @@ config ANIMATION_FFT_BARS
 	  Enable the FFT Bars animation. Requires CONFIG_AUDIO=y.
 	  Displays a live bar graph of the four frequency-band energies.
 
-config ANIMATION_BAD_APPLE
-	bool "Enable Bad Apple animation"
+config ANIMATION_GLIM_PLAYER
+	bool "Enable Glim Player animation"
 	depends on FAT_FILESYSTEM_ELM
 	default n
 	help
-	  Plays the Bad Apple!! demo on the LED display. Reads frames from
-	  /NAND:/bad_apple.glim on the 4 MB FAT partition (Proto0 only).
-	  Use tools/convert_bad_apple.py to generate the .glim file.
-	  If the file is missing, scrolls "NO FILE" as an error message.
-
-config ANIMATION_NYAN_CAT
-	bool "Enable Nyan Cat animation"
-	depends on FAT_FILESYSTEM_ELM
-	default n
-	help
-	  Plays the Nyan Cat animation on the LED display. Reads RGB24 frames from
-	  /NAND:/nyan_cat.glim on the 4 MB FAT partition (Proto0 only).
-	  Use tools/convert_gif_to_glim.py to generate the .glim file.
-	  If the file is missing, scrolls "NO FILE" as a rainbow-colored error message.
+	  Plays any .glim file found under /NAND:/glim on the 4 MB FAT partition
+	  (Proto0 only). The file is picked via BLE (a generic "drop-down list"
+	  characteristic) or a button press; looping behavior (loop one file,
+	  play all files in sequence, or stop after one) is also BLE-selectable.
+	  Use tools/convert_bad_apple.py / tools/convert_gif_to_glim.py to
+	  generate .glim files. If no files are found, scrolls "NO FILE" as a
+	  rainbow-colored error message.
 
 config STATUS_LED
 	bool "Onboard status LED module (led_strip_2)"

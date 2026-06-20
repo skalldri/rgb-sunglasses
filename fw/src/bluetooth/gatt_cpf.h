@@ -34,3 +34,8 @@
 
 // Extra CPF values, specific to RGB Sunglasses project
 #define BLE_GATT_CPF_FORMAT_RGB888 0xE0  // 3 bytes: R, G, B
+
+// \n-separated list of valid options as a string; the currently-selected option is always
+// listed first. Write the bare text of one of the listed options (no separators) to select it.
+// Instructs the app to render a drop-down picker instead of a free-text/numeric input.
+#define BLE_GATT_CPF_FORMAT_DROPDOWN_LIST 0xE1

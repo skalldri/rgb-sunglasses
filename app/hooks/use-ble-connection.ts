@@ -1,4 +1,5 @@
 import {
+    BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
     getCharacteristicName,
     getDescriptorName,
     getServiceName,
@@ -41,7 +42,17 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             // change that adds/removes services or characteristics shifts attribute handles for
             // everything declared after the change, so a stale cache makes Android read descriptors
             // by the wrong handle (GATT_INVALID_HANDLE) until it's refreshed.
-            const deviceConnection = await bleManager.connectToDevice(macAddress, { refreshGatt: "OnConnected" });
+            //
+            // requestMTU: without this, the connection stays at the default ATT_MTU (23 bytes, ~20
+            // bytes usable). bt_gatt_notify() can't fragment a value across multiple PDUs the way
+            // long writes/reads can, so any notified value over ~20 bytes (e.g. the dropdown-list
+            // characteristics) silently fails firmware-side ("No ATT channel for MTU ...", a warning
+            // only - no error surfaces to the app). 247 matches the common BLE 4.2+ default data
+            // length and comfortably covers every current notifiable characteristic's payload.
+            const deviceConnection = await bleManager.connectToDevice(macAddress, {
+                refreshGatt: "OnConnected",
+                requestMTU: 247,
+            });
             await deviceConnection.discoverAllServicesAndCharacteristics();
             const services = await deviceConnection.services();
 
@@ -178,7 +189,25 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
 
                             if (characteristic && characteristic.value) {
                                 console.log(`📡 Notification received for ${charName}: ${characteristic.value}`);
-                                updateCharValue(charUuid, characteristic.value);
+
+                                if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_DROPDOWN_LIST) {
+                                    // Dropdown-list characteristics only notify their first
+                                    // option (the new selection), not the full canonical
+                                    // "selected\nothers..." list - bt_gatt_notify can't fragment
+                                    // a value across multiple ATT PDUs the way a read can, so
+                                    // notifying the whole list would scale notify payload size
+                                    // (and failure risk) with the total option count instead of
+                                    // with what actually changed. Re-read to get the full,
+                                    // correctly-ordered value instead of trusting the notified
+                                    // bytes directly. See fw/CLAUDE.md (BtGattNotifyTraits).
+                                    characteristic.read()
+                                        .then(read => {
+                                            if (read.value) updateCharValue(charUuid, read.value);
+                                        })
+                                        .catch(err => console.log(`Failed to re-read ${charName} after notification:`, err));
+                                } else {
+                                    updateCharValue(charUuid, characteristic.value);
+                                }
                             }
                         });
 

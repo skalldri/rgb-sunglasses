@@ -141,6 +141,30 @@ describe('BluetoothProvider', () => {
     });
   });
 
+  it('skips the optimistic value update when skipOptimisticUpdate is set, without affecting success/progress reporting', async () => {
+    const getApi = setupProvider();
+    const writeWithResponse = jest.fn(async () => undefined);
+
+    act(() => {
+      getApi().setSelectedDevice(buildSelectedDevice(writeWithResponse, btoa('stable')));
+    });
+
+    let result = false;
+    await act(async () => {
+      result = await getApi().writeToCharacteristic('char-1', btoa('written'), { skipOptimisticUpdate: true });
+    });
+    expect(result).toBe(true);
+    expect(writeWithResponse).toHaveBeenCalledWith(btoa('written'));
+
+    await waitFor(() => {
+      const charInfo = getApi().getCharacteristicInfo('char-1');
+      expect(charInfo?.isUpdateInProgress).toBe(false);
+      // Local value is untouched: a real device (e.g. one backing a dropdown-list
+      // characteristic) may store/notify something other than the bare written bytes.
+      expect(charInfo?.value).toBe(btoa('stable'));
+    });
+  });
+
   it('updateCharValue updates mapped characteristic values', async () => {
     const getApi = setupProvider();
     const writeWithResponse = jest.fn(async () => undefined);

@@ -1,7 +1,7 @@
 tests:
-  animations.nyan_cat_animation_di:
+  animations.glim_player_animation_di:
     platform_allow:
       - native_sim
     integration_platforms:
       - native_sim
-    tags: animations nyan_cat
+    tags: animations glim

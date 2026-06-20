@@ -71,6 +71,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 - `src/bluetooth/bt_service_cpp.h` — C++23 compile-time GATT server assembler. `BtGattServer<Providers...>` collects `BtGattAttributeProvider` objects, assigns auto UUIDs in provider-declaration order, and flattens them to a `bt_gatt_attr[]` backed by a `std::array`. Use `BT_GATT_SERVER_REGISTER(name, server)` to register with Zephyr.
   - Characteristic aliases: `BtGattReadWriteCharacteristic`, `BtGattReadNotifyCharacteristic`, `BtGattAutoReadWriteCharacteristic`, etc.
   - Write hooks: if a characteristic class defines `onWrite(const T&)`, it is called automatically after each successful remote write.
+  - **`notify()` only sends the actual string length for string-backed types (`BtGattString<N>`/`BtGattDropdownList<N>`), matching `read()`'s `strnlen()`-based length** — not `sizeof(storage_)` (the full fixed-capacity buffer). A `bt_gatt_notify()` call cannot fragment a value across multiple ATT PDUs the way long writes/reads can; the whole payload must fit in one packet bounded by the connection's negotiated ATT MTU. Before this was fixed, a `BtGattDropdownList<512>` characteristic (e.g. `GlimSelectionCharacteristic`) always tried to notify the full 512-byte buffer regardless of how short the actual string content was, so every notify failed (`bt_att: No ATT channel for MTU ...` / `Notify failed: -12`) even with a 2-file (~28-byte) selection list — a real bug, not a hypothetical. On failure, `notify()` now logs the characteristic's `Description` and attempted payload length so an MTU-related failure can be traced to which characteristic caused it without guessing. The app side also needs an adequately large negotiated MTU in the first place — see `requestMTU` in `app/CLAUDE.md`'s Known Issues section.
 - `src/animations/bt_animations.{h,cpp}` — BT-aware animation classes for the visual BT status indicators (advertising pulse, connecting flash, pairing code display). These are intentionally mixed-concern; they are the correct place to keep BT in animation code.
 - `src/animations/animation_is_active_binding.h` — BT-free template that bridges the registry's `setActive` callback to a GATT characteristic setter; also routes remote BLE writes back to `pattern_controller_change_to_animation`.
 - `src/animations/animation_is_active_characteristic.h` — `IsActiveCharacteristic<A>`: a `BtGattAutoCharacteristicExt` subclass that hooks `onWrite` to `AnimationIsActiveBinding<A>::onRemoteActiveChange`.
@@ -79,6 +80,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 - `src/bluetooth/bt_state_observer.h` — `BtStateObserver`: pure abstract observer; `bluetooth.cpp` calls through this instead of including `pattern_controller.h` / `bt_animations.h`. Register with `bluetooth_register_state_observer()`.
 - `src/configuration_provider.h` — `ConfigurationProvider`: abstract interface over `CoreConfig` singleton (getBrightnessFactor, getDisplayRateMs, getRenderRateMs). `CoreConfig` inherits from it. Injected into `led_controller` and `pattern_controller` via setter functions; lazy fallback to `CoreConfig::getInstance()` if not set.
 - `src/button_event_listener.h` + `src/buttons.h` — `ButtonEventListener`: `onButtonPressed(size_t buttonId)`. Dispatch is ISR-safe: GPIO interrupt → `K_MSGQ_DEFINE` → `k_work` → listener on work-queue thread. Register with `buttons_register_listener()`. Button IDs 0–3 = sw0–sw3; ID 4 = wake button.
+  - **Physical layout (proto0, a directional grid):** button 0 = Up, button 1 = Left, button 2 = Right, button 3 = Down. The devicetree labels in `boards/others/rgb_sunglasses_proto0/rgb_sunglasses_proto0_nrf5340_cpuapp_common.dts` reflect this (e.g. "Push button 1 (Up)"), but the `sw0`–`sw3` aliases themselves are unchanged. When wiring button behavior for a new animation, use this mapping rather than guessing — e.g. `GlimPlayerAnimation` (`src/animations/glim_player_animation.cpp`) uses button 0 (Up) to advance to the next GLIM file and button 3 (Down) to go to the previous one; buttons 1/2 (Left/Right) are intentionally unassigned there.
 
 **Important: `CoreConfig` getters are non-const.** `getBrightnessFactor()` writes back to clamp the value against the BT characteristic range. Any abstract interface it implements must therefore declare those methods without `const`, otherwise `CoreConfig` becomes abstract and `Singleton<CoreConfig>` fails to instantiate.
 
@@ -214,15 +216,18 @@ sent, corrupting it (observed as `command not found` on the very first call afte
 reset). `_run_command` sends Ctrl+C before every command to cancel whatever's
 sitting in the line editor, not just on the first call — cheap and fully general.
 
-**Reusing an existing animation slot for arbitrary content:** `NyanCatAnimation`
-(and any other Rgb24-format animation) is a generic GLIM player — it reads
-geometry/frame-count from the file header rather than hardcoding anything
-cat-specific, so overwriting `/NAND:/nyan_cat.glim` with unrelated RGB24 content
-and running `anim set nyan_cat` plays that content instead. This is the fast path
-for trying out new footage without a firmware rebuild; see
-`tools/convert_video_to_glim.py`. `BadAppleAnimation` is mono-only and cannot be
-reused this way. The original asset is preserved at the git-tracked `fw/nyan_cat.glim`
-— recopy it to `/NAND:/nyan_cat.glim` (then reset) to restore Nyan Cat.
+**Trying out new GLIM content:** `GlimPlayerAnimation` (`anim set glim_player`) replaced the
+old per-file `bad_apple`/`nyan_cat` animations — it enumerates every `.glim` file under
+`/NAND:/glim` on boot (`glim_registry`) and can play any of them, picked via BLE (a
+generic "drop-down list" characteristic, see `glim_player_animation_bt.cpp`), the
+`glim` shell command (`glim list` / `glim select <index>` / `glim get_selected` /
+`glim set_loop_mode <mode>`), or a button press (sw0 cycles to the next file). It reads
+geometry/frame-count/pixel-format (mono `Raw` or `Rgb24`) from each file's own header
+rather than hardcoding anything, so trying new footage is just a matter of dropping a
+new `.glim` file into `/NAND:/glim/` and resetting — no firmware rebuild needed; see
+`tools/convert_video_to_glim.py` / `tools/convert_bad_apple.py` / `tools/convert_gif_to_glim.py`
+to generate one. The original Nyan Cat asset is preserved at the git-tracked
+`fw/nyan_cat.glim` — copy it into `/NAND:/glim/` (then reset) to make it selectable again.
 
 ### Useful shell commands
 
@@ -379,6 +384,8 @@ done
 ```
 
 The mcumgr port is whichever responds to `echo`. Update `CONN` accordingly.
+
+**This also breaks already-open `mcp__serial__*` connections, not just mcumgr.** After flashing via J-Link (`jlink-flash.sh` resets the board) or any other board reset, an existing `mcp__serial__*` connection_id to the Zephyr shell goes stale: the first write after the reset fails with an I/O error (`[Errno 5] Input/output error`), and `serial_open` on the *same path* then fails with `[Errno 6] No such device or address` because the board re-enumerated under a new ttyACM minor number (the old path's underlying device is just gone). Fix: `serial_close` the stale connection_id, re-run `/check-hardware` (or the `ls`/`mknod` loop above) to find the shell's *new* port, then `serial_open` on that new path. Don't retry the old connection_id or the old path — it will keep failing.
 
 ## Build Failures
 

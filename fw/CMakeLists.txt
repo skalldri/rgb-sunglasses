@@ -20,6 +20,7 @@ target_sources(
     src/led_controller.cpp
     src/pattern_controller.cpp
     src/buttons.cpp
+    src/buttons/animation_adapters/button_animation_source.cpp
     src/power.cpp
     src/bluetooth.cpp
     src/core_config.cpp
@@ -38,13 +39,13 @@ target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/sound.cpp)
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/audio_dsp.cpp)
 target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/storage.cpp)
 target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_decoder.cpp)
+target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_registry.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_MY_EYES app PRIVATE src/animations/my_eyes_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/animations/rainbow_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG app PRIVATE src/animations/zigzag_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_BEAT    app PRIVATE src/animations/beat_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/animations/fft_bars_animation.cpp)
-target_sources_ifdef(CONFIG_ANIMATION_BAD_APPLE app PRIVATE src/animations/bad_apple_animation.cpp)
-target_sources_ifdef(CONFIG_ANIMATION_NYAN_CAT  app PRIVATE src/animations/nyan_cat_animation.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_GLIM_PLAYER app PRIVATE src/animations/glim_player_animation.cpp)
 
 if(CONFIG_ANIMATION_BEAT OR CONFIG_ANIMATION_FFT_BARS)
   target_sources(app PRIVATE src/sound/animation_adapters/audio_animations_sound.cpp)
@@ -57,8 +58,7 @@ target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/bluetooth/animatio
 target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG  app PRIVATE src/bluetooth/animation_adapters/zigzag_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_BEAT    app PRIVATE src/bluetooth/animation_adapters/beat_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/bluetooth/animation_adapters/fft_bars_animation_bt.cpp)
-target_sources_ifdef(CONFIG_ANIMATION_BAD_APPLE app PRIVATE src/bluetooth/animation_adapters/bad_apple_animation_bt.cpp)
-target_sources_ifdef(CONFIG_ANIMATION_NYAN_CAT  app PRIVATE src/bluetooth/animation_adapters/nyan_cat_animation_bt.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_GLIM_PLAYER app PRIVATE src/bluetooth/animation_adapters/glim_player_animation_bt.cpp)
 
 target_sources_ifdef(CONFIG_STATUS_LED app PRIVATE src/status_led/status_led.cpp)
 

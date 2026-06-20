@@ -44,7 +44,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # indicator-only states and are not settable directly.
 SETTABLE_ANIMATIONS = [
     "none", "zigzag", "text", "rainbow", "my_eyes", "beat", "fft_bars",
-    "bad_apple", "nyan_cat",
+    "glim_player",
 ]
 
 TOOLS = [
@@ -87,6 +87,48 @@ TOOLS = [
                 "connection_id": {"type": "string"},
             },
             "required": ["connection_id"],
+        },
+    ),
+    Tool(
+        name="rgb_sunglasses.glim_list",
+        description=(
+            "List the .glim files discovered under /NAND:/glim by the Glim Player "
+            "animation (`glim list`), marking the currently selected one."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+            },
+            "required": ["connection_id"],
+        },
+    ),
+    Tool(
+        name="rgb_sunglasses.glim_select",
+        description="Select a Glim Player file by its registry index (`glim select <index>`).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "index": {"type": "integer", "minimum": 0},
+            },
+            "required": ["connection_id", "index"],
+        },
+    ),
+    Tool(
+        name="rgb_sunglasses.glim_set_loop_mode",
+        description=(
+            "Set the Glim Player's loop mode (`glim set_loop_mode <mode>`): loop_one "
+            "(replay the selected file), play_all (advance through all files), or "
+            "stop_after_one (freeze on the last frame)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "mode": {"type": "string", "enum": ["loop_one", "play_all", "stop_after_one"]},
+            },
+            "required": ["connection_id", "mode"],
         },
     ),
 ]
@@ -192,8 +234,35 @@ async def handle_get_animation(state: SerialState, args: dict) -> dict:
     return _ok(animation=output.strip())
 
 
+async def handle_glim_list(state: SerialState, args: dict) -> dict:
+    connection_id = args["connection_id"]
+    output = await _run_command(state, connection_id, "glim list")
+    return _ok(files=output)
+
+
+async def handle_glim_select(state: SerialState, args: dict) -> dict:
+    connection_id = args["connection_id"]
+    index = args["index"]
+    output = await _run_command(state, connection_id, f"glim select {index}")
+    if "error" in output.lower() or "invalid" in output.lower():
+        return _err("glim_select_failed", output or "unknown error")
+    return _ok(selected=index)
+
+
+async def handle_glim_set_loop_mode(state: SerialState, args: dict) -> dict:
+    connection_id = args["connection_id"]
+    mode = args["mode"]
+    output = await _run_command(state, connection_id, f"glim set_loop_mode {mode}")
+    if "error" in output.lower() or "unknown" in output.lower():
+        return _err("glim_set_loop_mode_failed", output or "unknown error")
+    return _ok(loop_mode=mode)
+
+
 HANDLERS = {
     "rgb_sunglasses.clear_indicator": handle_clear_indicator,
     "rgb_sunglasses.set_animation": handle_set_animation,
     "rgb_sunglasses.get_animation": handle_get_animation,
+    "rgb_sunglasses.glim_list": handle_glim_list,
+    "rgb_sunglasses.glim_select": handle_glim_select,
+    "rgb_sunglasses.glim_set_loop_mode": handle_glim_set_loop_mode,
 }
