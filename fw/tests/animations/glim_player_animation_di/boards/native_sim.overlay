@@ -1,6 +1,6 @@
 /*
- * RAM disk for nyan_cat_animation filesystem tests.
- * Mounted at /NAND: to match the hardcoded path in nyan_cat_animation.cpp.
+ * RAM disk for glim_player_animation filesystem tests.
+ * Mounted at /NAND: to match glim_registry::kDirectory's hardcoded prefix.
  */
 / {
 	nand_ramdisk: ramdisk0 {

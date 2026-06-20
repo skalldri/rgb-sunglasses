@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import {
+    BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
     BLE_GATT_CPF_FORMAT_UTF8S,
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
@@ -85,7 +86,10 @@ describe('useBleConnection', () => {
 
         await act(async () => { await result.current.connect(); });
 
-        expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledWith('AA:BB:CC', { refreshGatt: 'OnConnected' });
+        expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledWith('AA:BB:CC', {
+            refreshGatt: 'OnConnected',
+            requestMTU: 247,
+        });
     });
 
     it('connect() parses CUD and CPF descriptors into CharacteristicInfo', async () => {
@@ -179,6 +183,44 @@ describe('useBleConnection', () => {
         act(() => { monitorCallback(null, { value: btoa('new-value') }); });
 
         expect(ctx.updateCharValue).toHaveBeenCalledWith('char-notify', btoa('new-value'));
+    });
+
+    it('monitor callback re-reads dropdown-list characteristics instead of trusting the notified value', async () => {
+        const char = makeCharacteristic('char-dropdown', {
+            notifiable: true,
+            readValue: btoa('Option B\nOption A'),
+        });
+        char.read = jest.fn(async () => ({ value: btoa('Option A\nOption B') }));
+        const service = makeService('svc-1', [char], {
+            'char-dropdown': [
+                {
+                    uuid: UUID_CPF_DESCRIPTOR,
+                    read: jest.fn(async () => ({
+                        value: btoa(String.fromCharCode(BLE_GATT_CPF_FORMAT_DROPDOWN_LIST, 0, 0, 0, 0, 0, 0)),
+                    })),
+                },
+            ],
+        });
+        const deviceConn = makeDeviceConnection([service]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        const monitorCallback = char.monitor.mock.calls[0][0];
+
+        // The notified value is just the bare new selection (no separators) - not the full
+        // canonical list. The callback must re-read rather than pass this straight through.
+        // The real react-native-ble-plx monitor callback passes back the same Characteristic
+        // instance (with .read() available), just with an updated .value - mirror that here.
+        await act(async () => { await monitorCallback(null, { ...char, value: btoa('Option A') }); });
+
+        expect(char.read).toHaveBeenCalled();
+        await waitFor(() => {
+            expect(ctx.updateCharValue).toHaveBeenCalledWith('char-dropdown', btoa('Option A\nOption B'));
+        });
+        expect(ctx.updateCharValue).not.toHaveBeenCalledWith('char-dropdown', btoa('Option A'));
     });
 
     it('connect() registers a disconnect listener', async () => {

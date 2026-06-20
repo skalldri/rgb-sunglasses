@@ -8,6 +8,10 @@
 #include <led_controller.h>
 #include <pattern_controller.h>
 #include <zephyr/init.h>
+
+#if defined(CONFIG_FAT_FILESYSTEM_ELM)
+#include <storage/glim_registry.h>
+#endif
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
@@ -102,6 +106,12 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     BtAdvertisingAnimation::getInstance()->init();
     BtConnectingAnimation::getInstance()->init();
     BtPairingAnimation::getInstance()->init();
+
+#if defined(CONFIG_FAT_FILESYSTEM_ELM)
+    // Must run before animation_registry_register_defaults(), which seeds the Glim Player's
+    // BLE selection characteristic from whatever this discovers.
+    glim_registry::init();
+#endif
 
     ret = animation_registry_register_defaults();
     if (ret) {
@@ -220,16 +230,10 @@ int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t 
                                     ((float)blue) * sBrightnessForFrame);
 }
 
-#if defined(CONFIG_ANIMATION_BAD_APPLE)
-#define BAD_APPLE_SHELL_SUBCMD , (bad_apple, 10, "Bad Apple!! animation (plays from /NAND:/bad_apple.glim)")
+#if defined(CONFIG_ANIMATION_GLIM_PLAYER)
+#define GLIM_PLAYER_SHELL_SUBCMD , (glim_player, 10, "Glim Player animation (plays files from /NAND:/glim, see the 'glim' shell command)")
 #else
-#define BAD_APPLE_SHELL_SUBCMD
-#endif
-
-#if defined(CONFIG_ANIMATION_NYAN_CAT)
-#define NYAN_CAT_SHELL_SUBCMD , (nyan_cat, 11, "Nyan Cat animation (plays from /NAND:/nyan_cat.glim)")
-#else
-#define NYAN_CAT_SHELL_SUBCMD
+#define GLIM_PLAYER_SHELL_SUBCMD
 #endif
 
 #if defined(CONFIG_SHELL)
@@ -285,14 +289,9 @@ static int cmd_anim_get(const struct shell *shell, size_t argc, char **argv) {
         case Animation::FftBars:
             name = "fft_bars";
             break;
-#if defined(CONFIG_ANIMATION_BAD_APPLE)
-        case Animation::BadApple:
-            name = "bad_apple";
-            break;
-#endif
-#if defined(CONFIG_ANIMATION_NYAN_CAT)
-        case Animation::NyanCat:
-            name = "nyan_cat";
+#if defined(CONFIG_ANIMATION_GLIM_PLAYER)
+        case Animation::GlimPlayer:
+            name = "glim_player";
             break;
 #endif
         default:
@@ -309,8 +308,7 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_anim_set, cmd_anim_set, (none, 0, "No animation
                              (rainbow, 5, "Rainbow animation"), (my_eyes, 7, "My Eyes animation"),
                              (beat, 8, "Beat animation (per-band flash on beat detection)"),
                              (fft_bars, 9, "FFT Bars animation (live frequency bar graph)")
-                             BAD_APPLE_SHELL_SUBCMD
-                             NYAN_CAT_SHELL_SUBCMD);
+                             GLIM_PLAYER_SHELL_SUBCMD);
 
 static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argc);

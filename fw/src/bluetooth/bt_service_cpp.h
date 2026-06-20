@@ -427,9 +427,26 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
             }
 
             // printk("NOTIFY: %p\n", attr);
-            int ret = bt_gatt_notify(NULL, attr, &storage_, sizeof(storage_));
+            // BtGattNotifyTraits controls how much of storage_ actually gets sent - by default
+            // the full string length (matching read()), but BtGattDropdownList<N> overrides
+            // this to just its first token, since notify (unlike read) can't fragment across
+            // multiple ATT PDUs and must fit within the connection's negotiated MTU. See
+            // BtGattNotifyTraits in bt_gatt_traits.h for the full rationale.
+            int ret;
+            size_t payloadLen = BtGattNotifyTraits<T>::length(storage_);
+            if constexpr (BtGattStringTraits<T>::kIsString) {
+                ret = bt_gatt_notify(NULL, attr, storage_.data(), payloadLen);
+            } else {
+                ret = bt_gatt_notify(NULL, attr, &storage_, payloadLen);
+            }
             if (ret != 0) {
-                printk("Notify failed: %d\n", ret);
+                // Names the characteristic so an MTU-related failure (the kernel's own
+                // "No ATT channel for MTU ..." / "No buffer available" warnings don't say which
+                // characteristic triggered them) can be traced back to its Description without
+                // guessing. ret == -ENOMEM here most often means the payload (payloadLen + 3-byte
+                // ATT header) exceeds the connection's negotiated ATT MTU.
+                printk("Notify failed for \"%s\": %d (payload %zu bytes)\n", Description.value,
+                      ret, payloadLen);
             } else {
                 // printk("Notify succeeded\n");
             }

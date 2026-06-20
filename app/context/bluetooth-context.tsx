@@ -32,7 +32,11 @@ type BluetoothContextType = {
     setSelectedDevice: (device: BluetoothContextDevice | null) => void;
     isScanning: boolean;
     setIsScanning: (scanning: boolean) => void;
-    writeToCharacteristic: (charUuid: string, newEncodedValue: string) => Promise<boolean>;
+    writeToCharacteristic: (
+        charUuid: string,
+        newEncodedValue: string,
+        options?: { skipOptimisticUpdate?: boolean }
+    ) => Promise<boolean>;
     getCharacteristicInfo: (charUuid: string) => CharacteristicInfo | null;
     updateCharValue: (charUuid: string, newValue: string) => void;
     // Monitor subscription management (persists across navigation)
@@ -119,9 +123,22 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         updateCharFields(charUuid, { isUpdateInProgress: inProgress });
     }, [updateCharFields]);
 
-    // Write to a characteristic and update context state
-    // Returns true on success, false on failure
-    const writeToCharacteristic = useCallback(async (charUuid: string, newEncodedValue: string): Promise<boolean> => {
+    // Write to a characteristic and update context state.
+    // Returns true on success, false on failure.
+    //
+    // skipOptimisticUpdate: most characteristics' written value IS their new stored value, so
+    // assuming that locally (before any notification round-trip) is a safe, responsive default.
+    // That assumption breaks for characteristics whose firmware deliberately stores something
+    // different from what was written (e.g. the generic dropdown-list format: the client writes
+    // just the bare selected option, but the device reorders it server-side into the full
+    // "selected\nother\nother2" list and notifies that back) — applying the optimistic value
+    // there clobbers the real device state with a single truncated option. Callers that know
+    // their characteristic's write value isn't its canonical stored value should pass this.
+    const writeToCharacteristic = useCallback(async (
+        charUuid: string,
+        newEncodedValue: string,
+        options?: { skipOptimisticUpdate?: boolean }
+    ): Promise<boolean> => {
         const charInfo = getCharacteristicInfo(charUuid);
         if (!charInfo) {
             console.log(`Characteristic ${charUuid} not found`);
@@ -132,7 +149,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
-            updateCharValue(charUuid, newEncodedValue);
+            if (!options?.skipOptimisticUpdate) {
+                updateCharValue(charUuid, newEncodedValue);
+            }
             return true;
         } catch (error) {
             console.log(`Error writing value to characteristic ${charUuid}: ${error}`);

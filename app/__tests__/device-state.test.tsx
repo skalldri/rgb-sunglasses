@@ -6,6 +6,7 @@ import DeviceStateScreen from '@/app/(tabs)/device-state';
 import {
   BLE_GATT_CPF_FORMAT_BOOLEAN,
   BLE_GATT_CPF_FORMAT_CUSTOM_COLOR,
+  BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
   BLE_GATT_CPF_FORMAT_UINT32,
   BLE_GATT_CPF_FORMAT_UTF8S,
 } from '@/constants/bluetooth';
@@ -170,6 +171,28 @@ describe('DeviceStateScreen', () => {
 
     const { getByText } = render(<DeviceStateScreen />);
     expect(getByText('Pick Color')).toBeTruthy();
+  });
+
+  it('renders an inline dropdown for drop-down list characteristics', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildSelectedDevice([
+        {
+          uuid: 'dropdown-char',
+          cpfFormat: BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
+          value: encodeUtf8ToBase64('Loop One\nPlay All\nStop After One'),
+        },
+      ]),
+      writeToCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getByText, queryByText } = render(<DeviceStateScreen />);
+    expect(getByText('Loop One')).toBeTruthy();
+    // Collapsed by default: the other options aren't rendered until tapped open.
+    expect(queryByText('Play All')).toBeNull();
+
+    fireEvent.press(getByText('Loop One'));
+    expect(getByText('Play All')).toBeTruthy();
+    expect(getByText('Stop After One')).toBeTruthy();
   });
 
   it('syncs pendingValues when a BLE notification updates a characteristic value', async () => {

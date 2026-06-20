@@ -1,7 +1,7 @@
 tests:
-  animations.bad_apple_animation_di:
+  storage.glim_registry:
     platform_allow:
       - native_sim
     integration_platforms:
       - native_sim
-    tags: animations bad_apple
+    tags: storage glim

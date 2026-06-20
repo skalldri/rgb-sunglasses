@@ -68,6 +68,12 @@ export const BLE_GATT_CPF_FORMAT_STRUCT = 0x1B;
 
 export const BLE_GATT_CPF_FORMAT_CUSTOM_COLOR = 0xE0; // Custom format for RGB color value (not standard)
 
+// Custom format for a drop-down selection list (not standard). Value is a \n-separated string
+// of valid options, with the currently-selected option listed first. Write the bare text of one
+// of the listed options (no separators) to select it. Must match BLE_GATT_CPF_FORMAT_DROPDOWN_LIST
+// in fw/src/bluetooth/gatt_cpf.h.
+export const BLE_GATT_CPF_FORMAT_DROPDOWN_LIST = 0xE1;
+
 export function getServiceName(serviceId: string): string {
     return KnownServiceIds[serviceId] || serviceId;
 }

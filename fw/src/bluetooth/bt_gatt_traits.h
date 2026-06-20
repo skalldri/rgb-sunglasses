@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 template <size_t N>
 using BtGattString = std::array<char, N>;
@@ -36,6 +37,71 @@ constexpr BtGattString<OutN> makeBtGattString(const char (&str)[InN]) {
     out[copyLen] = '\0';
     return out;
 }
+
+// Wire-compatible string value for a "drop-down list" characteristic (see
+// BLE_GATT_CPF_FORMAT_DROPDOWN_LIST in gatt_cpf.h): \n-separated valid options, selected
+// option listed first. A distinct type (not just BtGattString<N>) so it can carry its own
+// BtGattCpfTraits specialization below instead of UTF8S.
+//
+// Composition, not inheritance: std::array's comparison operators are free templates that
+// deduce their template arguments from the exact argument type, so they would not bind to a
+// type that merely derives from std::array. Forwarding .data()/operator[]/==/!= explicitly
+// keeps this a drop-in fit for BtGattCharacteristicCommon's read()/write(), which only ever
+// call those operations on the storage object for string-like types.
+template <size_t N>
+struct BtGattDropdownList {
+    BtGattString<N> value{};
+
+    constexpr char *data() { return value.data(); }
+    constexpr const char *data() const { return value.data(); }
+    constexpr char &operator[](size_t i) { return value[i]; }
+    constexpr const char &operator[](size_t i) const { return value[i]; }
+    constexpr bool operator==(const BtGattDropdownList &other) const { return value == other.value; }
+    constexpr bool operator!=(const BtGattDropdownList &other) const { return value != other.value; }
+};
+
+template <size_t N>
+struct BtGattStringTraits<BtGattDropdownList<N>> {
+    static constexpr bool kIsString = true;
+    static constexpr size_t kMaxLen = N;
+};
+
+// Controls how many bytes notify() actually transmits, independent of what read() returns.
+// Defaults to mirroring read()'s behavior (the full string content for string-backed types via
+// strnlen, or the whole fixed-size value otherwise) - safe for any type whose entire current
+// value is exactly what remote clients need on every change.
+//
+// BtGattDropdownList<N> overrides this to notify only its first "\n"-delimited token (the
+// currently-selected option), not the full "Selected\nOther\nOther2..." list: bt_gatt_notify()
+// sends one ATT PDU bounded by the connection's negotiated MTU and cannot fragment like a long
+// write/read can, so notifying the whole list makes notify cost (and failure risk) scale with
+// the total option count instead of with what actually changed (just the selection). The full
+// canonical list is still rebuilt and stored on every selection change - read() still returns
+// it correctly - it's just not what gets pushed via notify. A client must treat any notification
+// on a dropdown-list characteristic as "go re-read", not as the new value directly; see the
+// matching app-side handling in use-ble-connection.ts.
+template <typename T>
+struct BtGattNotifyTraits {
+    static size_t length(const T &value) {
+        if constexpr (BtGattStringTraits<T>::kIsString) {
+            return strnlen(value.data(), BtGattStringTraits<T>::kMaxLen);
+        } else {
+            return sizeof(value);
+        }
+    }
+};
+
+template <size_t N>
+struct BtGattNotifyTraits<BtGattDropdownList<N>> {
+    static size_t length(const BtGattDropdownList<N> &value) {
+        const char *data = value.value.data();
+        const char *newline = static_cast<const char *>(memchr(data, '\n', N));
+        if (newline != nullptr) {
+            return static_cast<size_t>(newline - data);
+        }
+        return strnlen(data, N);
+    }
+};
 
 struct BtGattColor {
     constexpr BtGattColor() = default;
@@ -162,5 +228,13 @@ struct BtGattCpfTraits<BtGattColor> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_RGB888,
+    };
+};
+
+template <size_t N>
+struct BtGattCpfTraits<BtGattDropdownList<N>> {
+    static constexpr bool kSupported = true;
+    static constexpr bt_gatt_cpf kValue = {
+        .format = BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
     };
 };
