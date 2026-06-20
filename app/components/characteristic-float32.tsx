@@ -16,7 +16,7 @@ export function CharacteristicFloat32({ charUuid, charInfo, pendingValue, onChan
             style={styles.textInput}
             placeholder="Enter number"
             placeholderTextColor="#888"
-            keyboardType="numeric"
+            keyboardType="decimal-pad"
             editable={!charInfo.isUpdateInProgress}
             value={pendingValue}
             onChangeText={(text) => {

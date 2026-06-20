@@ -83,6 +83,13 @@ export function decodeFloat32FromBase64(encodedValue: string): number {
   return new DataView(buffer).getFloat32(0, true /* littleEndian */);
 }
 
+// float32 only carries ~7 significant decimal digits; stringifying a raw decoded value
+// surfaces binary-rounding noise (e.g. 0.004999999888241291 instead of 0.005). Round-tripping
+// through toPrecision strips that noise for display without losing real precision.
+export function formatFloat32(value: number): string {
+  return String(parseFloat(value.toPrecision(7)));
+}
+
 export function encodeColorToBase64(color: RgbColor): string {
   return btoa(String.fromCharCode(color.b & 0xff, color.g & 0xff, color.r & 0xff, 0));
 }

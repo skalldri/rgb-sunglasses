@@ -7,7 +7,7 @@ import { CharacteristicUtf8 } from "@/components/characteristic-utf8";
 import { ThemedText } from "@/components/themed-text";
 import { BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_DROPDOWN_LIST, BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S, getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
-import { decodeFloat32FromBase64, decodeUint32FromBase64, decodeUtf8FromBase64 } from "@/services/ble-value-codec";
+import { decodeFloat32FromBase64, decodeUint32FromBase64, decodeUtf8FromBase64, formatFloat32 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { Link } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
@@ -70,7 +70,7 @@ export default function DeviceStateScreen() {
                     }
                 } else if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32 && charInfo.value) {
                     try {
-                        initialValues[charUuid] = String(decodeFloat32FromBase64(charInfo.value));
+                        initialValues[charUuid] = formatFloat32(decodeFloat32FromBase64(charInfo.value));
                     } catch (e) {
                         console.log(`Error decoding FLOAT32 value for ${charUuid}:`, e);
                     }
@@ -101,7 +101,7 @@ export default function DeviceStateScreen() {
                     const decoded = String(decodeUint32FromBase64(charInfo.value));
                     if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
                 } else if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32) {
-                    const decoded = String(decodeFloat32FromBase64(charInfo.value));
+                    const decoded = formatFloat32(decodeFloat32FromBase64(charInfo.value));
                     if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
                 }
             } catch (e) { /* ignore decode errors */ }
@@ -143,7 +143,7 @@ export default function DeviceStateScreen() {
                 return String(decodeUint32FromBase64(encodedValue));
             }
             if (cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32) {
-                return String(decodeFloat32FromBase64(encodedValue));
+                return formatFloat32(decodeFloat32FromBase64(encodedValue));
             }
             if (cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S) {
                 return decodeUtf8FromBase64(encodedValue);
