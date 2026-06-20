@@ -1,12 +1,12 @@
 
+// Services with no firmware-introspectable name (no "Animation Name" characteristic), so their
+// display name has to come from a static map. Animation services are deliberately NOT listed
+// here: they're named live via UUID_ANIMATION_NAME_CHARACTERISTIC (see use-ble-connection.ts),
+// which is the whole point of issue #39 — a hardcoded entry here would go stale the moment
+// firmware adds/renames an animation, exactly like this map silently did for Bad Apple/Nyan Cat
+// before that fix landed.
 export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0001-56789abc0000": "Core Config Service",
-    "12345678-1234-5678-0100-56789abd0000": "ZigZag Animation Service",
-    "12345678-1234-5678-0200-56789abd0000": "Text Animation Service",
-    "12345678-1234-5678-0500-56789abd0000": "Rainbow Animation Service",
-    "12345678-1234-5678-0700-56789abd0000": "MyEyes Animation Service",
-    "12345678-1234-5678-0800-56789abd0000": "Beat Animation Service",
-    "12345678-1234-5678-0900-56789abd0000": "FFT Bars Animation Service",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
