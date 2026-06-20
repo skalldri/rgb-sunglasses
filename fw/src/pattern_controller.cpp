@@ -107,9 +107,11 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     BtConnectingAnimation::getInstance()->init();
     BtPairingAnimation::getInstance()->init();
 
-#if defined(CONFIG_FAT_FILESYSTEM_ELM)
+#if defined(CONFIG_ANIMATION_GLIM_PLAYER)
     // Must run before animation_registry_register_defaults(), which seeds the Glim Player's
-    // BLE selection characteristic from whatever this discovers.
+    // BLE selection characteristic from whatever this discovers. Gated on the animation itself
+    // (not just CONFIG_FAT_FILESYSTEM_ELM) - glim_registry is only used by Glim Player, so a
+    // build that enables FAT for some other reason shouldn't pay for this filesystem scan.
     glim_registry::init();
 #endif
 

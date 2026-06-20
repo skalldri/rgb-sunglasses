@@ -4,6 +4,7 @@
 #include <bluetooth/bt_service_cpp.h>
 #include <storage/glim_registry.h>
 
+#include <algorithm>
 #include <cstring>
 
 #if defined(CONFIG_SHELL)
@@ -84,6 +85,16 @@ bool loopModeFromName(const char *name, GlimLoopMode *outMode) {
         }
     }
     return false;
+}
+
+// A dropdown-list characteristic's stored value is the canonical "Selected\nOther\nOther2..."
+// list, not the bare selected name - copies just the first "\n"-delimited token into out.
+void firstDropdownToken(const char *canonicalValue, char *out, size_t outCap) {
+    const char *newline = strchr(canonicalValue, '\n');
+    size_t len = newline ? static_cast<size_t>(newline - canonicalValue) : strlen(canonicalValue);
+    len = std::min(len, outCap - 1);
+    memcpy(out, canonicalValue, len);
+    out[len] = '\0';
 }
 
 BtGattDropdownList<kGlimLoopModeMaxLen> buildLoopModeValue(GlimLoopMode mode) {
@@ -192,8 +203,15 @@ class ConcreteGlimSelectionSource : public GlimSelectionSource {
 class ConcreteGlimLoopModeSource : public GlimLoopModeSource {
    public:
     GlimLoopMode get() const override {
+        // glimLoopMode's stored value is the full canonical "Selected\nOther\nOther2..." list
+        // (e.g. "Loop One\nPlay All\nStop After One"), not the bare selected name - extract just
+        // the first token before comparing, or this never matches and silently stays stuck on
+        // the GlimLoopMode::LoopOne fallback below regardless of what's actually selected.
+        char selected[kGlimLoopModeMaxLen];
+        firstDropdownToken(glimLoopMode.value().data(), selected, sizeof(selected));
+
         GlimLoopMode mode;
-        if (loopModeFromName(glimLoopMode.value().data(), &mode)) {
+        if (loopModeFromName(selected, &mode)) {
             return mode;
         }
         return GlimLoopMode::LoopOne;

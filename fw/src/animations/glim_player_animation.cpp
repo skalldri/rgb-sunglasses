@@ -158,12 +158,24 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
         return;
     }
 
+    // The file's own width/height (already verified above to be <= the display's) are the
+    // frame buffer's actual stride/extent - using renderer.displayWidth()/Height() instead
+    // would misinterpret the buffer's layout whenever a file is smaller than the display,
+    // reading past the decoded frame data. Pixels outside the file's declared dimensions
+    // (when the file is smaller than the display) are rendered black.
+    const size_t frameWidth = decoder_.header().width;
+    const size_t frameHeight = decoder_.header().height;
+
     if (decoder_.header().format == GlimDecoder::FrameFormat::Rgb24) {
         for (size_t y = 0; y < renderer.displayHeight(); y++) {
             for (size_t x = 0; x < renderer.displayWidth(); x++) {
-                uint8_t r, g, b;
-                GlimDecoder::getPixelRgb(frameBuf_, x, y, renderer.displayWidth(), r, g, b);
-                renderer.setPixel(x, y, r, g, b);
+                if (x < frameWidth && y < frameHeight) {
+                    uint8_t r, g, b;
+                    GlimDecoder::getPixelRgb(frameBuf_, x, y, frameWidth, r, g, b);
+                    renderer.setPixel(x, y, r, g, b);
+                } else {
+                    renderer.setPixel(x, y, 0, 0, 0);
+                }
             }
         }
     } else {
@@ -173,8 +185,12 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
         const uint8_t cb = decoder_.header().monoColorB;
         for (size_t y = 0; y < renderer.displayHeight(); y++) {
             for (size_t x = 0; x < renderer.displayWidth(); x++) {
-                bool on = GlimDecoder::getPixel(frameBuf_, x, y, renderer.displayWidth());
-                renderer.setPixel(x, y, on ? cr : 0u, on ? cg : 0u, on ? cb : 0u);
+                if (x < frameWidth && y < frameHeight) {
+                    bool on = GlimDecoder::getPixel(frameBuf_, x, y, frameWidth);
+                    renderer.setPixel(x, y, on ? cr : 0u, on ? cg : 0u, on ? cb : 0u);
+                } else {
+                    renderer.setPixel(x, y, 0, 0, 0);
+                }
             }
         }
     }

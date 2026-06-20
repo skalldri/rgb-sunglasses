@@ -143,6 +143,32 @@ void writeRgb24Glim(const char *name, const uint8_t (*colors)[3], uint32_t frame
     fs_close(&f);
 }
 
+/* Writes an RGB24 GLIM smaller than the test renderer's 40x12 display, with one uniform-color
+ * frame sized exactly width*height*3 bytes (not kWidth*kHeight*3) - the file's own dimensions
+ * are the frame buffer's real stride/extent. */
+void writeSmallRgb24Glim(const char *name, uint16_t width, uint16_t height, uint8_t r, uint8_t g,
+                         uint8_t b) {
+    char path[64];
+    snprintf(path, sizeof(path), "%s/%s", glim_registry::kDirectory, name);
+
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC), "setup: create %s", path);
+    writeHeader(&f, 3 /* Rgb24 */, 24, width, height, 1, 0, 0, 0);
+
+    const size_t frameBytes = static_cast<size_t>(width) * height * 3u;
+    uint8_t *frame = (uint8_t *)k_malloc(frameBytes);
+    zassert_not_null(frame, "k_malloc failed");
+    for (size_t i = 0; i < frameBytes; i += 3) {
+        frame[i] = r;
+        frame[i + 1] = g;
+        frame[i + 2] = b;
+    }
+    zassert_equal(fs_write(&f, frame, frameBytes), (ssize_t)frameBytes);
+    k_free(frame);
+    fs_close(&f);
+}
+
 /* Writes a mono (Raw) GLIM with a single all-on frame using the given header color. */
 void writeMonoGlim(const char *name, uint8_t mr, uint8_t mg, uint8_t mb, uint8_t fps = 24) {
     char path[64];
@@ -274,6 +300,43 @@ ZTEST(glim_player_animation_di_io, test_opens_selected_file_and_renders_rgb24) {
     zassert_false(anim->inErrorState_, "Must not be in error state when file is present");
     zassert_true(anim->decoder_.isOpen());
     zassert_true(allPixelsMatch(10, 20, 30), "All pixels should equal frame 0's color");
+    anim->setActive(false);
+}
+
+/* A GLIM file declaring dimensions smaller than the display must render only its own pixels
+ * in the top-left corner and black everywhere else - not read past the (smaller) frame buffer
+ * using the display's width as the stride. */
+ZTEST(glim_player_animation_di_io, test_smaller_than_display_renders_only_declared_pixels) {
+    reset_nand();
+    writeSmallRgb24Glim("a.glim", 4, 4, 10, 20, 30);
+    glim_registry::init();
+    zassert_equal(glim_registry::count(), 1u);
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = 0;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    resetPixels();
+    anim->tick(renderer, 1);
+    zassert_false(anim->inErrorState_, "Smaller-than-display files must be valid, not an error");
+
+    for (size_t x = 0; x < kWidth; x++) {
+        for (size_t y = 0; y < kHeight; y++) {
+            if (x < 4 && y < 4) {
+                zassert_true(sPixels[x][y].r == 10 && sPixels[x][y].g == 20 &&
+                                 sPixels[x][y].b == 30,
+                             "Pixel (%zu,%zu) within the declared 4x4 frame must match its color",
+                             x, y);
+            } else {
+                zassert_true(sPixels[x][y].isBlack(),
+                             "Pixel (%zu,%zu) outside the declared 4x4 frame must be black", x, y);
+            }
+        }
+    }
     anim->setActive(false);
 }
 

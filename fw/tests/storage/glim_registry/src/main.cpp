@@ -68,7 +68,17 @@ static void nand_fs_teardown(void *) {
     }
 }
 
-ZTEST_SUITE(glim_registry_di, NULL, nand_fs_setup, NULL, NULL, nand_fs_teardown);
+// Reformats the filesystem before every test so each test starts from a clean, empty mount
+// regardless of execution order (ztest does not guarantee tests run in source-file order) and
+// regardless of what an earlier test left behind.
+static void nand_fs_before(void *) {
+    zassert_true(s_nand_ready, "setup() must have mounted the filesystem");
+    zassert_ok(fs_unmount(&s_nand_mnt));
+    zassert_ok(fs_mkfs(FS_FATFS, (uintptr_t)"NAND", NULL, 0));
+    zassert_ok(fs_mount(&s_nand_mnt));
+}
+
+ZTEST_SUITE(glim_registry_di, NULL, nand_fs_setup, nand_fs_before, NULL, nand_fs_teardown);
 
 /* init() must create /NAND:/glim if it doesn't exist yet, and discover files placed inside it
  * (skipping subdirectories), and full_path()/out-of-range accessors must behave correctly. */
@@ -103,4 +113,20 @@ ZTEST(glim_registry_di, test_full_lifecycle) {
                     "Out-of-range name() must return nullptr");
     zassert_false(glim_registry::full_path(glim_registry::count(), path, sizeof(path)),
                   "Out-of-range full_path() must return false");
+}
+
+/* Only files with a ".glim" extension should be discovered - anything else dropped into the
+ * directory (READMEs, stray files, etc.) must not show up as a selectable option. */
+ZTEST(glim_registry_di, test_filters_non_glim_files) {
+    glim_registry::init();
+
+    createEmptyFile("/NAND:/glim/video.glim");
+    createEmptyFile("/NAND:/glim/README.txt");
+    createEmptyFile("/NAND:/glim/noextension");
+
+    glim_registry::init();
+    zassert_equal(glim_registry::count(), 1u, "Only .glim files must be discovered");
+    zassert_true(containsName("video.glim"));
+    zassert_false(containsName("README.txt"));
+    zassert_false(containsName("noextension"));
 }

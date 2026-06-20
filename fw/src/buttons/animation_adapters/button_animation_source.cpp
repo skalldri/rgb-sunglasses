@@ -5,8 +5,8 @@
 #include <animations/glim_player_animation.h>
 #endif
 
-#include <algorithm>
-#include <iterator>
+#include <atomic>
+#include <cstdint>
 
 namespace {
 constexpr size_t kMaxButtons = 5;  // sw0-sw3 (0-3) + wake button (4)
@@ -26,27 +26,29 @@ class ButtonAnimationSource : public AnimationButtonSource, public ButtonEventLi
     // Runs on the button work-queue thread (see buttons.cpp).
     void onButtonPressed(size_t buttonId) override {
         if (buttonId < kMaxButtons) {
-            pending_[buttonId] = true;
+            pending_.fetch_or(static_cast<uint32_t>(1) << buttonId, std::memory_order_relaxed);
         }
     }
 
     // Runs on the calling animation's thread (the pattern-controller render thread).
     void update() override {
-        std::copy(std::begin(pending_), std::end(pending_), std::begin(snapshot_));
-        std::fill(std::begin(pending_), std::end(pending_), false);
+        // Atomically grab and clear the pending bitmask. snapshot_ itself is only ever
+        // written/read from this single thread, so it needs no synchronization.
+        snapshot_ = pending_.exchange(0, std::memory_order_relaxed);
     }
 
     bool wasPressed(size_t buttonId) const override {
-        return buttonId < kMaxButtons && snapshot_[buttonId];
+        return buttonId < kMaxButtons && (snapshot_ & (static_cast<uint32_t>(1) << buttonId)) != 0;
     }
 
    private:
-    // No lock: pending_/snapshot_ are plain bools written from one thread and read from
-    // another. A press landing right at a tick boundary may be seen one tick early/late, the
-    // same small cross-thread tolerance already accepted elsewhere in this codebase (e.g. BT
-    // characteristic-backed animation parameters read directly from tick()).
-    bool pending_[kMaxButtons] = {};
-    bool snapshot_[kMaxButtons] = {};
+    // A plain bool array here would be a data race (undefined behavior in C++, not just a
+    // "tick early/late" tolerance issue) since onButtonPressed() (button work-queue thread) and
+    // update()/wasPressed() (pattern-controller thread) access it concurrently with no
+    // synchronization. An atomic bitmask makes the cross-thread handoff well-defined; a press
+    // landing right at a tick boundary may still be seen one tick early/late, which is fine.
+    std::atomic<uint32_t> pending_{0};
+    uint32_t snapshot_ = 0;
 };
 
 ButtonAnimationSource sButtonAnimationSource;

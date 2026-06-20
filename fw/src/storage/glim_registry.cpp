@@ -13,6 +13,17 @@ namespace glim_registry {
 namespace {
 std::array<char[kMaxNameLen], kMaxFiles> sNames = {};
 size_t sCount = 0;
+
+constexpr const char *kGlimExtension = ".glim";
+
+bool hasGlimExtension(const char *fileName) {
+    size_t nameLen = strlen(fileName);
+    size_t extLen = strlen(kGlimExtension);
+    if (nameLen < extLen) {
+        return false;
+    }
+    return strcmp(fileName + (nameLen - extLen), kGlimExtension) == 0;
+}
 }  // namespace
 
 void init() {
@@ -46,6 +57,10 @@ void init() {
         }
 
         if (entry.type != FS_DIR_ENTRY_FILE) {
+            continue;
+        }
+
+        if (!hasGlimExtension(entry.name)) {
             continue;
         }
 
