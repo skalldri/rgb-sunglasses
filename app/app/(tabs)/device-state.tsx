@@ -1,12 +1,13 @@
 import { CharacteristicBoolean } from "@/components/characteristic-boolean";
 import { CharacteristicColor } from "@/components/characteristic-color";
 import { CharacteristicDropdown } from "@/components/characteristic-dropdown";
+import { CharacteristicFloat32 } from "@/components/characteristic-float32";
 import { CharacteristicUint32 } from "@/components/characteristic-uint32";
 import { CharacteristicUtf8 } from "@/components/characteristic-utf8";
 import { ThemedText } from "@/components/themed-text";
-import { BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_DROPDOWN_LIST, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S, getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE } from "@/constants/bluetooth";
+import { BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_DROPDOWN_LIST, BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S, getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
-import { decodeUint32FromBase64, decodeUtf8FromBase64 } from "@/services/ble-value-codec";
+import { decodeFloat32FromBase64, decodeUint32FromBase64, decodeUtf8FromBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { Link } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
@@ -67,6 +68,12 @@ export default function DeviceStateScreen() {
                     } catch (e) {
                         console.log(`Error decoding UINT32 value for ${charUuid}:`, e);
                     }
+                } else if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32 && charInfo.value) {
+                    try {
+                        initialValues[charUuid] = String(decodeFloat32FromBase64(charInfo.value));
+                    } catch (e) {
+                        console.log(`Error decoding FLOAT32 value for ${charUuid}:`, e);
+                    }
                 }
             });
         });
@@ -92,6 +99,9 @@ export default function DeviceStateScreen() {
                     if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
                 } else if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UINT32) {
                     const decoded = String(decodeUint32FromBase64(charInfo.value));
+                    if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
+                } else if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32) {
+                    const decoded = String(decodeFloat32FromBase64(charInfo.value));
                     if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
                 }
             } catch (e) { /* ignore decode errors */ }
@@ -131,6 +141,9 @@ export default function DeviceStateScreen() {
         try {
             if (cpfFormat === BLE_GATT_CPF_FORMAT_UINT32) {
                 return String(decodeUint32FromBase64(encodedValue));
+            }
+            if (cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32) {
+                return String(decodeFloat32FromBase64(encodedValue));
             }
             if (cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S) {
                 return decodeUtf8FromBase64(encodedValue);
@@ -180,6 +193,17 @@ export default function DeviceStateScreen() {
         if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UINT32) {
             return (
                 <CharacteristicUint32
+                    charUuid={charUuid}
+                    charInfo={charInfo}
+                    pendingValue={pendingValues[charUuid] ?? ''}
+                    onChangeText={(uuid, text) => setPendingValues(prev => ({ ...prev, [uuid]: text }))}
+                    onWrite={writeCharValue}
+                />
+            );
+        }
+        if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32) {
+            return (
+                <CharacteristicFloat32
                     charUuid={charUuid}
                     charInfo={charInfo}
                     pendingValue={pendingValues[charUuid] ?? ''}

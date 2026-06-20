@@ -11,7 +11,10 @@
 #include <zephyr/fs/fs.h>
 #include <zephyr/logging/log.h>
 
+#include <algorithm>
+
 #include "audio_dsp.h"
+#include "sound.h"
 
 /* ── Adaptive Gain Control ───────────────────────────────────────────────────
  * Adjusts PDM hardware gain to keep the RMS signal level inside a target
@@ -22,12 +25,40 @@
  * Thresholds calibrated to the actual microphone output. RMS measured with
  * active music: 0.015–0.025 (sparse due to gaps between notes).
  * Target window [0.005, 0.008] keeps signal quiet to prevent FFT saturation.
- * All threshold values are tunable via shell commands. */
-static float s_agc_target_low = 0.005f;  /* increase gain when quieter than this */
-static float s_agc_target_high = 0.008f; /* decrease gain when louder than this  */
-#define AGC_GAIN_MIN 0x00                /* −20 dB (PDM GAINL/GAINR register floor)        */
-#define AGC_GAIN_MAX 0x50                /* +20 dB (PDM GAINL/GAINR register ceiling)      */
-static uint8_t s_agc_rate_limit = 10;    /* minimum frames between gain steps (~320 ms) */
+ * All threshold values are tunable via shell commands and (see audio_config.cpp) BT. */
+#define AGC_GAIN_MIN 0x00 /* −20 dB (PDM GAINL/GAINR register floor)   */
+#define AGC_GAIN_MAX 0x50 /* +20 dB (PDM GAINL/GAINR register ceiling) */
+
+namespace {
+/* Default AgcConfigProvider: identical defaults/clamps to the historical static
+ * variables this replaces, used until sound_set_agc_config_provider() injects the real
+ * BT-backed implementation (see audio_dsp_bind_default_bt_dependencies() below). */
+class DefaultAgcConfigProvider : public AgcConfigProvider {
+   public:
+    float getTargetLow() override { return targetLow_; }
+    void setTargetLow(float value) override { targetLow_ = std::clamp(value, 0.001f, 0.1f); }
+
+    float getTargetHigh() override { return targetHigh_; }
+    void setTargetHigh(float value) override { targetHigh_ = std::clamp(value, 0.001f, 0.2f); }
+
+    uint32_t getRateLimitFrames() override { return rateLimitFrames_; }
+    void setRateLimitFrames(uint32_t value) override {
+        rateLimitFrames_ = std::clamp<uint32_t>(value, 1, 100);
+    }
+
+   private:
+    float targetLow_ = 0.005f;
+    float targetHigh_ = 0.008f;
+    uint32_t rateLimitFrames_ = 10;
+};
+
+DefaultAgcConfigProvider sDefaultAgcProvider;
+AgcConfigProvider *sAgcProvider = &sDefaultAgcProvider;
+}  // namespace
+
+void sound_set_agc_config_provider(AgcConfigProvider *provider) {
+    sAgcProvider = provider ? provider : &sDefaultAgcProvider;
+}
 
 /* PDM gain register pointers — set once in configure_pdm(), used by AGC loop. */
 static volatile uint32_t *s_gain_l;
@@ -227,6 +258,7 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
     }
 
     audio_dsp_init();
+    audio_dsp_bind_default_bt_dependencies();
     uint32_t seq = 0;
 
     while (true) {
@@ -259,16 +291,17 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
         }
         s_smoothed_rms = sum_rms / (float)AGC_HISTORY_LEN;
 
-        /* Check for gain adjustment every s_agc_rate_limit frames. */
+        /* Check for gain adjustment every getRateLimitFrames() frames. */
         s_agc_frames_since++;
-        if (s_agc_frames_since >= s_agc_rate_limit) {
+        if (static_cast<uint32_t>(s_agc_frames_since) >= sAgcProvider->getRateLimitFrames()) {
             bool gain_changed = false;
 
             /* Use smoothed RMS (1-second average) for stable decisions. */
-            if (s_smoothed_rms < s_agc_target_low && s_agc_gain < AGC_GAIN_MAX) {
+            if (s_smoothed_rms < sAgcProvider->getTargetLow() && s_agc_gain < AGC_GAIN_MAX) {
                 s_agc_gain++;
                 gain_changed = true;
-            } else if (s_smoothed_rms > s_agc_target_high && s_agc_gain > AGC_GAIN_MIN) {
+            } else if (s_smoothed_rms > sAgcProvider->getTargetHigh() &&
+                       s_agc_gain > AGC_GAIN_MIN) {
                 s_agc_gain--;
                 gain_changed = true;
             }
@@ -551,14 +584,15 @@ static int cmd_sound_agc_status(const struct shell *shell, size_t argc, char **a
     shell_print(shell, "  Smoothed RMS (1s): %.4f | Instantaneous: %.4f", (double)s_smoothed_rms,
                 (double)s_latest_rms);
     shell_print(shell, "  Peak: %d (%.4f norm)", s_latest_peak, (double)peak_norm);
-    shell_print(shell, "  Target window: [%.4f, %.4f] | Rate limit: %d frames",
-                (double)s_agc_target_low, (double)s_agc_target_high, s_agc_rate_limit);
+    shell_print(shell, "  Target window: [%.4f, %.4f] | Rate limit: %u frames",
+                (double)sAgcProvider->getTargetLow(), (double)sAgcProvider->getTargetHigh(),
+                sAgcProvider->getRateLimitFrames());
     return 0;
 }
 
 static int cmd_sound_agc_target_low(const struct shell *shell, size_t argc, char **argv) {
     if (argc == 1) {
-        shell_print(shell, "AGC target low: %.4f", (double)s_agc_target_low);
+        shell_print(shell, "AGC target low: %.4f", (double)sAgcProvider->getTargetLow());
         return 0;
     }
     if (argc != 2) {
@@ -570,14 +604,14 @@ static int cmd_sound_agc_target_low(const struct shell *shell, size_t argc, char
         shell_error(shell, "Value must be in range [0.001, 0.1]");
         return -EINVAL;
     }
-    s_agc_target_low = val;
+    sAgcProvider->setTargetLow(val);
     shell_print(shell, "AGC target low set to %.4f", (double)val);
     return 0;
 }
 
 static int cmd_sound_agc_target_high(const struct shell *shell, size_t argc, char **argv) {
     if (argc == 1) {
-        shell_print(shell, "AGC target high: %.4f", (double)s_agc_target_high);
+        shell_print(shell, "AGC target high: %.4f", (double)sAgcProvider->getTargetHigh());
         return 0;
     }
     if (argc != 2) {
@@ -589,28 +623,28 @@ static int cmd_sound_agc_target_high(const struct shell *shell, size_t argc, cha
         shell_error(shell, "Value must be in range [0.001, 0.2]");
         return -EINVAL;
     }
-    s_agc_target_high = val;
+    sAgcProvider->setTargetHigh(val);
     shell_print(shell, "AGC target high set to %.4f", (double)val);
     return 0;
 }
 
 static int cmd_sound_agc_rate(const struct shell *shell, size_t argc, char **argv) {
     if (argc == 1) {
-        shell_print(shell, "AGC rate limit: %d frames (~%d ms)", s_agc_rate_limit,
-                    s_agc_rate_limit * 32);
+        shell_print(shell, "AGC rate limit: %u frames (~%u ms)", sAgcProvider->getRateLimitFrames(),
+                    sAgcProvider->getRateLimitFrames() * 32);
         return 0;
     }
     if (argc != 2) {
         shell_error(shell, "Usage: sound agc rate [<frames>]");
         return -EINVAL;
     }
-    uint8_t val = (uint8_t)strtoul(argv[1], NULL, 10);
+    uint32_t val = (uint32_t)strtoul(argv[1], NULL, 10);
     if (val < 1 || val > 100) {
         shell_error(shell, "Value must be in range [1, 100] frames");
         return -EINVAL;
     }
-    s_agc_rate_limit = val;
-    shell_print(shell, "AGC rate limit set to %d frames (~%d ms)", val, val * 32);
+    sAgcProvider->setRateLimitFrames(val);
+    shell_print(shell, "AGC rate limit set to %u frames (~%u ms)", val, val * 32);
     return 0;
 }
 
@@ -622,8 +656,8 @@ static int cmd_sound_rms(const struct shell *shell, size_t argc, char **argv) {
     shell_print(shell, "Smoothed RMS (1s): %.4f", (double)s_smoothed_rms);
     shell_print(shell, "Instantaneous RMS: %.4f | Peak: %d (%.4f norm)", (double)s_latest_rms,
                 s_latest_peak, (double)peak_norm);
-    shell_print(shell, "Target window: [%.4f, %.4f]", (double)s_agc_target_low,
-                (double)s_agc_target_high);
+    shell_print(shell, "Target window: [%.4f, %.4f]", (double)sAgcProvider->getTargetLow(),
+                (double)sAgcProvider->getTargetHigh());
     return 0;
 }
 

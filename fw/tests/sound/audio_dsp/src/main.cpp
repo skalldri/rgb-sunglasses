@@ -140,4 +140,49 @@ ZTEST(audio_dsp, test_sustained_tone_fires_beat_at_most_once) {
                  "sustained tone should trigger beat at most once; fired %d times", beats_fired);
 }
 
+/* ── Test 6: Injected AudioDspConfigProvider actually changes behavior ──────
+ * Mirrors test_beat_fires_on_energy_step's scenario (silent history, then a loud bass
+ * onset), but with an absurdly high BeatAlpha injected via audio_dsp_set_config_provider().
+ * The same onset that reliably fires a beat with default parameters must NOT fire one
+ * here, proving audio_dsp_process() actually reads from the injected provider rather
+ * than the compiled-in defaults. Resets to the default provider (nullptr) at the end so
+ * this doesn't leak into any other test in this suite. */
+namespace {
+class FakeAudioDspConfigProvider : public AudioDspConfigProvider {
+   public:
+    float getFluxGamma() override { return 1000.0f; }
+    float getBeatFluxFloor() override { return 0.005f; }
+    float getBeatAlpha() override { return 1000.0f; /* practically unreachable threshold */ }
+    uint32_t getBeatRefractoryFrames() override { return 5; }
+};
+}  // namespace
+
+ZTEST(audio_dsp, test_custom_config_provider_overrides_defaults) {
+    FakeAudioDspConfigProvider fakeProvider;
+    audio_dsp_set_config_provider(&fakeProvider);
+
+    audio_dsp_init();
+
+    int16_t pcm[AUDIO_FFT_SIZE];
+    struct audio_analysis_result result;
+
+    make_silence(pcm);
+    for (int i = 0; i < HISTORY_LEN; i++) {
+        audio_dsp_process(pcm, i, &result);
+    }
+
+    make_100hz_sine(pcm);
+    bool beat_fired = false;
+    for (int i = 0; i < BEAT_REFRACTORY + 2; i++) {
+        audio_dsp_process(pcm, HISTORY_LEN + i, &result);
+        if (result.beat[0]) {
+            beat_fired = true;
+        }
+    }
+
+    audio_dsp_set_config_provider(NULL);
+
+    zassert_false(beat_fired, "beat[0] should not fire with an injected BeatAlpha=1000 threshold");
+}
+
 ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, NULL, NULL);

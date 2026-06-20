@@ -73,6 +73,10 @@ void FftBarsAnimation::setAudioSource(AnimationAudioSource &source) {
     audioSource_ = &source;
 }
 
+void FftBarsAnimation::setConfigSource(FftVisualizationConfigSource &source) {
+    configSource_ = &source;
+}
+
 void FftBarsAnimation::init() {
     for (size_t b = 0; b < kMaxDisplayBuckets; b++) {
         smoothed_[b] = 0.0f;
@@ -96,6 +100,10 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
 
     audioSource_->update();
 
+    const float smoothingCoeff =
+        configSource_ ? configSource_->getSmoothingCoeff() : kSmoothingCoeff;
+    const float energyScale = configSource_ ? configSource_->getEnergyScale() : kEnergyScale;
+
     size_t numBuckets = audioSource_->numDisplayBuckets();
     if (numBuckets > kMaxDisplayBuckets) {
         numBuckets = kMaxDisplayBuckets;
@@ -104,7 +112,7 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     /* Update smoothed energies with exponential moving average. */
     for (size_t bucket = 0; bucket < numBuckets; bucket++) {
         float energy = audioSource_->getDisplayBucketEnergy(bucket);
-        smoothed_[bucket] = kSmoothingCoeff * energy + (1.0f - kSmoothingCoeff) * smoothed_[bucket];
+        smoothed_[bucket] = smoothingCoeff * energy + (1.0f - smoothingCoeff) * smoothed_[bucket];
     }
 
     /* Mirrored layout: the left half of the display shows buckets low→high
@@ -118,7 +126,7 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     }
 
     for (size_t bucket = 0; bucket < bucketsPerHalf; bucket++) {
-        float fraction = smoothed_[bucket] * kEnergyScale;
+        float fraction = smoothed_[bucket] * energyScale;
         if (fraction > 1.0f) {
             fraction = 1.0f;
         }

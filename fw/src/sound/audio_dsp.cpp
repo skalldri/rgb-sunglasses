@@ -8,6 +8,9 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include <algorithm>
+#include <cstdint>
+
 LOG_MODULE_REGISTER(audio_dsp);
 
 #define NUM_FFT_SAMPLES AUDIO_FFT_SIZE
@@ -24,11 +27,26 @@ LOG_MODULE_REGISTER(audio_dsp);
  * Advantages over Level 2 (raw energy threshold):
  *   - Detects onset (change in energy), not sustained loudness → no false beats on held notes.
  *   - Log compression (GAMMA=1000) equalises sensitivity across quiet and loud passages.
- *   - Works across rock, jazz, acoustic music, not just bass-heavy EDM. */
-#define FLUX_GAMMA 1000.0f     /* log-compression factor: log1p(GAMMA * energy) */
-#define BEAT_FLUX_FLOOR 0.005f /* minimum flux to prevent false positives on silence */
-#define BEAT_ALPHA 3.5f        /* threshold multiplier: mean + alpha * sigma */
-#define BEAT_REFRACTORY 5      /* minimum frames between beats per band (~160 ms) */
+ *   - Works across rock, jazz, acoustic music, not just bass-heavy EDM.
+ *
+ * Tunable at runtime via AudioDspConfigProvider (see audio_dsp.h) - BT-exposed in the real
+ * firmware (fw/src/sound/audio_config.cpp), defaulted below for tests/no-provider-injected. */
+namespace {
+class DefaultAudioDspConfigProvider : public AudioDspConfigProvider {
+   public:
+    float getFluxGamma() override { return 1000.0f; }
+    float getBeatFluxFloor() override { return 0.005f; }
+    float getBeatAlpha() override { return 3.5f; }
+    uint32_t getBeatRefractoryFrames() override { return 5; }
+};
+
+DefaultAudioDspConfigProvider sDefaultProvider;
+AudioDspConfigProvider *sProvider = &sDefaultProvider;
+}  // namespace
+
+void audio_dsp_set_config_provider(AudioDspConfigProvider *provider) {
+    sProvider = provider ? provider : &sDefaultProvider;
+}
 
 /* Sub-band bin boundaries (512-pt FFT at 16 kHz, bin width = 31.25 Hz).
  * Band 0 bass:    bins  1– 6  →  31– 200 Hz (kick drum)
@@ -128,6 +146,12 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
     /* 4. Aggregate into sub-bands and run Level 3 spectral-flux beat detection. */
     out->seq = seq;
 
+    const float32_t fluxGamma = sProvider->getFluxGamma();
+    const float32_t beatFluxFloor = sProvider->getBeatFluxFloor();
+    const float32_t beatAlpha = sProvider->getBeatAlpha();
+    const uint8_t beatRefractory =
+        static_cast<uint8_t>(std::min<uint32_t>(sProvider->getBeatRefractoryFrames(), UINT8_MAX));
+
     for (int b = 0; b < NUM_BANDS; b++) {
         /* 4a. Mean power across band bins (same as before; kept in band_energy
          *     for display and diagnostic use). */
@@ -141,7 +165,7 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
         /* 4b. Log-compress and compute half-wave-rectified spectral flux.
          *     flux = max(0, log1p(GAMMA*energy) - log1p(GAMMA*prev_energy))
          *     On the first frame there is no previous state, so flux = 0. */
-        float32_t log_e = log1pf(FLUX_GAMMA * energy);
+        float32_t log_e = log1pf(fluxGamma * energy);
         float32_t flux = 0.0f;
         if (!s_first_frame && log_e > s_prev_log_energy[b]) {
             flux = log_e - s_prev_log_energy[b];
@@ -161,10 +185,10 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
 
         /* 4d. Beat: flux spike above adaptive threshold and noise floor. */
         bool beat = false;
-        if (s_refractory[b] == 0 && flux > BEAT_FLUX_FLOOR &&
-            flux > flux_mean + BEAT_ALPHA * flux_sigma) {
+        if (s_refractory[b] == 0 && flux > beatFluxFloor &&
+            flux > flux_mean + beatAlpha * flux_sigma) {
             beat = true;
-            s_refractory[b] = BEAT_REFRACTORY;
+            s_refractory[b] = beatRefractory;
         } else if (s_refractory[b] > 0) {
             s_refractory[b]--;
         }

@@ -43,6 +43,7 @@ target_sources(
 
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/sound.cpp)
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/audio_dsp.cpp)
+target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/audio_config.cpp)
 target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/storage.cpp)
 target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_decoder.cpp)
 target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_registry.cpp)
