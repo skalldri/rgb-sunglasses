@@ -2,12 +2,16 @@
 #include <settings/persistent_value_registry.h>
 #include <string.h>
 #include <sys/types.h>
+#include <zephyr/logging/log.h>
 
 // When the feature is disabled (e.g. CONFIG_APP_PERSIST_BT_CONFIG=n on
-// rgb_sunglasses_dk), compile out the fixed-size entry table entirely rather than just
-// leaving it unreferenced - every call site that populates it is itself gated by
+// rgb_sunglasses_dk), compile out the fixed-size entry table (and the log module that
+// reports failures touching it) entirely rather than just leaving them unreferenced -
+// every call site that populates the table is itself gated by
 // IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG), so these stubs are never invoked there.
 #if defined(CONFIG_APP_PERSIST_BT_CONFIG)
+
+LOG_MODULE_REGISTER(persistent_value_registry, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace {
 struct PersistentValueRegistryEntry {
@@ -35,14 +39,18 @@ ssize_t findRegistryIndex(const char *key) {
 int persistent_value_registry_register(const char *key, void *target, PersistentValueLoadFn load,
                                        PersistentValueSaveFn save) {
     if (!key || !load || !save) {
+        LOG_ERR("Refusing to register persisted value with a null key/load/save");
         return -EINVAL;
     }
 
     if (findRegistryIndex(key) >= 0) {
+        LOG_ERR("Persisted value '%s' is already registered", key);
         return -EEXIST;
     }
 
     if (sRegistryCount >= kMaxRegistryEntries) {
+        LOG_ERR("Persisted value table is full (max %zu) - dropping '%s'", kMaxRegistryEntries,
+                key);
         return -ENOMEM;
     }
 

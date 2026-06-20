@@ -5,7 +5,6 @@
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
 #include <storage/glim_registry.h>
-#include <zephyr/sys/printk.h>
 #include <zephyr/sys/util_macro.h>
 
 #include <algorithm>
@@ -237,17 +236,12 @@ struct GlimPersistenceRegistrar {
     GlimPersistenceRegistrar() {
         // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
+        // Failures are logged inside persistent_value_registry_register() itself.
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            int err = persistent_value_registry_register(kGlimSelectionKey, nullptr,
-                                                         glimSelectionDoLoad, glimSelectionDoSave);
-            if (err) {
-                printk("Failed to register glim selection persistence (err: %d)\n", err);
-            }
-            err = persistent_value_registry_register(kGlimLoopModeKey, nullptr, glimLoopModeDoLoad,
-                                                     glimLoopModeDoSave);
-            if (err) {
-                printk("Failed to register glim loop mode persistence (err: %d)\n", err);
-            }
+            persistent_value_registry_register(kGlimSelectionKey, nullptr, glimSelectionDoLoad,
+                                               glimSelectionDoSave);
+            persistent_value_registry_register(kGlimLoopModeKey, nullptr, glimLoopModeDoLoad,
+                                               glimLoopModeDoSave);
         }
     }
 };

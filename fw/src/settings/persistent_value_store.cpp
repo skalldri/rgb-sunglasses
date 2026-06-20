@@ -1,17 +1,19 @@
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
 #include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
-#include <zephyr/sys/printk.h>
 
 #include <cstdio>
 
 // When the feature is disabled (e.g. CONFIG_APP_PERSIST_BT_CONFIG=n on
-// rgb_sunglasses_dk), compile out the debounce work item and shared settings handler
-// entirely rather than just leaving them unused - every call site that would trigger
-// them is itself gated by IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG), so the stubs below
-// are never invoked there.
+// rgb_sunglasses_dk), compile out the debounce work item, shared settings handler, and
+// the log module that reports save failures entirely rather than just leaving them
+// unused - every call site that would trigger them is itself gated by
+// IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG), so the stubs below are never invoked there.
 #if defined(CONFIG_APP_PERSIST_BT_CONFIG)
+
+LOG_MODULE_REGISTER(persistent_value_store, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace {
 
@@ -48,7 +50,7 @@ void save_value(const char *key, const void *data, size_t len) {
 
     int err = settings_save_one(fullKey, data, len);
     if (err) {
-        printk("Failed to save persisted value '%s' (err: %d)\n", fullKey, err);
+        LOG_ERR("Failed to save persisted value '%s' (err: %d)", fullKey, err);
     }
 }
 

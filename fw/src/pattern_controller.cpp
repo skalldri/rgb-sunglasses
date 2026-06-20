@@ -95,13 +95,11 @@ struct LastActiveAnimationRegistrar {
     LastActiveAnimationRegistrar() {
         // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
+        // Failures are logged inside persistent_value_registry_register() itself.
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            int err = persistent_value_registry_register(kLastActiveAnimationKey, nullptr,
-                                                         lastActiveAnimationDoLoad,
-                                                         lastActiveAnimationDoSave);
-            if (err) {
-                LOG_ERR("Failed to register last-active-animation persistence (err: %d)", err);
-            }
+            persistent_value_registry_register(kLastActiveAnimationKey, nullptr,
+                                               lastActiveAnimationDoLoad,
+                                               lastActiveAnimationDoSave);
         }
     }
 };

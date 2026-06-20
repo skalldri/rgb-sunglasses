@@ -4,7 +4,6 @@
 #include <bluetooth/bt_service_cpp.h>
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
-#include <zephyr/sys/printk.h>
 #include <zephyr/sys/util_macro.h>
 
 #include <algorithm>
@@ -37,12 +36,10 @@ class BtGattPersistentCharacteristic
     BtGattPersistentCharacteristic() {
         // Discarded entirely (no doLoad/doSave codegen, no registry call) when
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
+        // Failures (duplicate/overflow) are logged inside persistent_value_registry_register()
+        // itself, which already has the key for context - no need to duplicate that here.
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            int err = persistent_value_registry_register(Key.value, this, &doLoad, &doSave);
-            if (err) {
-                printk("Failed to register persisted characteristic '%s' (err: %d)\n", Key.value,
-                       err);
-            }
+            persistent_value_registry_register(Key.value, this, &doLoad, &doSave);
         }
     }
 
