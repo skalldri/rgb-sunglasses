@@ -37,7 +37,11 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     async function connect(): Promise<void> {
         setIsConnecting(true);
         try {
-            const deviceConnection = await bleManager.connectToDevice(macAddress);
+            // Android persists a handle-based GATT attribute cache per bonded device. Any firmware
+            // change that adds/removes services or characteristics shifts attribute handles for
+            // everything declared after the change, so a stale cache makes Android read descriptors
+            // by the wrong handle (GATT_INVALID_HANDLE) until it's refreshed.
+            const deviceConnection = await bleManager.connectToDevice(macAddress, { refreshGatt: "OnConnected" });
             await deviceConnection.discoverAllServicesAndCharacteristics();
             const services = await deviceConnection.services();
 
@@ -68,7 +72,14 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
 
                         for (const descriptor of descriptors) {
                             console.log(`Descriptor UUID: ${getDescriptorName(descriptor.uuid)}`);
-                            const readDescriptor = await descriptor.read();
+
+                            let readDescriptor;
+                            try {
+                                readDescriptor = await descriptor.read();
+                            } catch (error) {
+                                console.log(`Could not read descriptor ${getDescriptorName(descriptor.uuid)}:`, error);
+                                continue;
+                            }
                             console.log(`Descriptor Value: ${readDescriptor.value}`);
 
                             if (descriptor.uuid === UUID_CUD_DESCRIPTOR) {
@@ -195,6 +206,15 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             console.log('Pairing complete');
         } catch (error) {
             console.error(`Connection failed for ${macAddress}:`, error);
+            // Discovery can fail partway through, after the native BLE link is already
+            // established. Without an explicit disconnect here, the device is left connected
+            // at the OS level (so it stops advertising) while the app still thinks it's
+            // unconnected, making it impossible to scan for or reconnect to.
+            try {
+                await bleManager.cancelDeviceConnection(macAddress);
+            } catch (disconnectError) {
+                console.log(`Error cancelling connection for ${macAddress}:`, disconnectError);
+            }
         } finally {
             if (isMountedRef.current) setIsConnecting(false);
         }
