@@ -13,8 +13,13 @@ BtGattAutoReadWriteCharacteristic<"Rainbow Width Pixels", uint32_t, 5> rainbowWi
 using RainbowIsActiveCharacteristic = IsActiveCharacteristic<Animation::Rainbow>;
 RainbowIsActiveCharacteristic rainbowIsActive;
 
+constexpr BtGattString<24> kRainbowAnimationName = makeBtGattString<24>("Rainbow");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kRainbowAnimationName>
+    rainbowAnimationName;
+
 BtGattServer rainbowConfigServer(rainbowPrimaryService, rainbowStepTimeMs, rainbowWidthPix,
-                                 rainbowIsActive);
+                                 rainbowIsActive, rainbowAnimationName);
 BT_GATT_SERVER_REGISTER(rainbowConfigServerStatic, rainbowConfigServer);
 
 namespace {

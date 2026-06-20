@@ -2,12 +2,14 @@ import {
     getCharacteristicName,
     getDescriptorName,
     getServiceName,
+    UUID_ANIMATION_NAME_CHARACTERISTIC,
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { bleManager } from "@/hooks/ble-manager";
+import { decodeUtf8FromBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useEffect, useRef, useState } from "react";
 
@@ -35,13 +37,18 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     async function connect(): Promise<void> {
         setIsConnecting(true);
         try {
-            const deviceConnection = await bleManager.connectToDevice(macAddress);
+            // Android persists a handle-based GATT attribute cache per bonded device. Any firmware
+            // change that adds/removes services or characteristics shifts attribute handles for
+            // everything declared after the change, so a stale cache makes Android read descriptors
+            // by the wrong handle (GATT_INVALID_HANDLE) until it's refreshed.
+            const deviceConnection = await bleManager.connectToDevice(macAddress, { refreshGatt: "OnConnected" });
             await deviceConnection.discoverAllServicesAndCharacteristics();
             const services = await deviceConnection.services();
 
             const characteristicsByService: Record<string, Record<string, CharacteristicInfo>> = {};
             const characteristics: Record<string, CharacteristicInfo> = {};
             const serviceCharacteristics: Record<string, string[]> = {};
+            const serviceDisplayNames: Record<string, string> = {};
 
             if (services) {
                 for (const service of services) {
@@ -65,7 +72,14 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
 
                         for (const descriptor of descriptors) {
                             console.log(`Descriptor UUID: ${getDescriptorName(descriptor.uuid)}`);
-                            const readDescriptor = await descriptor.read();
+
+                            let readDescriptor;
+                            try {
+                                readDescriptor = await descriptor.read();
+                            } catch (error) {
+                                console.log(`Could not read descriptor ${getDescriptorName(descriptor.uuid)}:`, error);
+                                continue;
+                            }
                             console.log(`Descriptor Value: ${readDescriptor.value}`);
 
                             if (descriptor.uuid === UUID_CUD_DESCRIPTOR) {
@@ -96,8 +110,24 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                         }
 
                         characteristicInfos[characteristic.uuid] = charInfo;
-                        characteristics[characteristic.uuid] = charInfo;
-                        charUuids.push(characteristic.uuid);
+
+                        if (characteristic.uuid === UUID_ANIMATION_NAME_CHARACTERISTIC) {
+                            // This UUID is intentionally reused across every animation service (see
+                            // constants/bluetooth.ts), so it must not go into the flat characteristics
+                            // map or serviceCharacteristics: both are keyed/searched by UUID alone and
+                            // would collide across services, making characteristic-to-service lookups
+                            // ambiguous. Its value is only ever needed here, to derive the display name.
+                            if (charInfo.value) {
+                                try {
+                                    serviceDisplayNames[service.uuid] = decodeUtf8FromBase64(charInfo.value).replace(/\0+$/, '');
+                                } catch (error) {
+                                    console.log(`Could not decode animation name for service ${service.uuid}:`, error);
+                                }
+                            }
+                        } else {
+                            characteristics[characteristic.uuid] = charInfo;
+                            charUuids.push(characteristic.uuid);
+                        }
                     }
 
                     characteristicsByService[service.uuid] = characteristicInfos;
@@ -114,6 +144,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 characteristicsByService,
                 characteristics,
                 serviceCharacteristics,
+                serviceDisplayNames,
             });
 
             // Set up monitors for all notifiable characteristics except SMP
@@ -187,6 +218,15 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             console.log('Pairing complete');
         } catch (error) {
             console.error(`Connection failed for ${macAddress}:`, error);
+            // Discovery can fail partway through, after the native BLE link is already
+            // established. Without an explicit disconnect here, the device is left connected
+            // at the OS level (so it stops advertising) while the app still thinks it's
+            // unconnected, making it impossible to scan for or reconnect to.
+            try {
+                await bleManager.cancelDeviceConnection(macAddress);
+            } catch (disconnectError) {
+                console.log(`Error cancelling connection for ${macAddress}:`, disconnectError);
+            }
         } finally {
             if (isMountedRef.current) setIsConnecting(false);
         }

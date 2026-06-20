@@ -1,19 +1,27 @@
 
+// Services with no firmware-introspectable name (no "Animation Name" characteristic), so their
+// display name has to come from a static map. Animation services are deliberately NOT listed
+// here: they're named live via UUID_ANIMATION_NAME_CHARACTERISTIC (see use-ble-connection.ts),
+// which is the whole point of issue #39 — a hardcoded entry here would go stale the moment
+// firmware adds/renames an animation, exactly like this map silently did for Bad Apple/Nyan Cat
+// before that fix landed.
 export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0001-56789abc0000": "Core Config Service",
-    "12345678-1234-5678-0100-56789abd0000": "ZigZag Animation Service",
-    "12345678-1234-5678-0200-56789abd0000": "Text Animation Service",
-    "12345678-1234-5678-0500-56789abd0000": "Rainbow Animation Service",
-    "12345678-1234-5678-0700-56789abd0000": "MyEyes Animation Service",
-    "12345678-1234-5678-0800-56789abd0000": "Beat Animation Service",
-    "12345678-1234-5678-0900-56789abd0000": "FFT Bars Animation Service",
-    "12345678-1234-5678-1234-56789abcdef0": "Badge Name Service",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
     "00001800-0000-1000-8000-00805f9b34fb": "Generic Access Service",
-    "deadbeef-1234-5678-1234-56789abcdef0": "Text Animation Now Playing Service",
 };
+
+// Fixed characteristic UUID, identical across every animation service, exposing that
+// animation's human-readable name. Must match kAnimationNameCharacteristicUuid in
+// fw/src/bluetooth/bt_service_cpp.h.
+export const UUID_ANIMATION_NAME_CHARACTERISTIC = "12345678-1234-5678-aaaa-56789abd0000";
+
+// Base GATT/GAP services every BLE peripheral exposes. Not useful to display in the device
+// state UI, so device-state.tsx filters services with these UUIDs out of the render loop.
+export const UUID_GENERIC_ATTRIBUTE_SERVICE = "00001801-0000-1000-8000-00805f9b34fb";
+export const UUID_GENERIC_ACCESS_SERVICE = "00001800-0000-1000-8000-00805f9b34fb";
 
 export const KnownCharacteristicIds: { [key: string]: string } = {
     "00002a05-0000-1000-8000-00805f9b34fb": "Service Changed Characteristic",

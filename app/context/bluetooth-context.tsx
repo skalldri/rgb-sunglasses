@@ -20,6 +20,10 @@ export type BluetoothContextDevice = {
     characteristics: Record<string, CharacteristicInfo>;
     // Map of service UUID to array of characteristic UUIDs for rendering order
     serviceCharacteristics: Record<string, string[]>;
+    // Map of service UUID to its firmware-reported display name (e.g. animation services),
+    // populated during discovery from the "Animation Name" characteristic. Optional since
+    // older fixtures/devices may not have it.
+    serviceDisplayNames?: Record<string, string>;
     mcuMgrClient?: McuMgrClient;
 };
 

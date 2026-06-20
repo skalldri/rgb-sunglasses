@@ -5,15 +5,6 @@
 
 #include <cstring>
 
-constexpr bt_uuid_128 kNowPlayingServiceUuid =
-    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0xdeadbeef, 0x1234, 0x5678, 0x1234, 0x56789abcdef0));
-BtGattPrimaryService<kNowPlayingServiceUuid> nowPlayingPrimaryService;
-
-BtGattAutoReadNotifyCharacteristic<"Now Playing", uint32_t, 0> nowPlayingCharacteristic;
-
-BtGattServer nowPlayingServer(nowPlayingPrimaryService, nowPlayingCharacteristic);
-BT_GATT_SERVER_REGISTER(nowPlayingServerStatic, nowPlayingServer);
-
 constexpr bt_uuid_128 kTextConfigServiceUuid =
     BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Text));
 
@@ -77,11 +68,19 @@ BtGattAutoReadWriteCharacteristic<"Slot 19", BtGattString<TextAnimation::kMaxMsg
 using TextIsActiveCharacteristic = IsActiveCharacteristic<Animation::Text>;
 TextIsActiveCharacteristic textIsActive;
 
+constexpr BtGattString<24> kTextAnimationName = makeBtGattString<24>("Text");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kTextAnimationName>
+    textAnimationName;
+
+BtGattAutoReadNotifyCharacteristic<"Now Playing", uint32_t, 0> nowPlayingCharacteristic;
+
 BtGattServer textConfigServer(textPrimaryService, textStepTimeMs, textColor, textUpNext, textSlot0,
                               textSlot1, textSlot2, textSlot3, textSlot4, textSlot5, textSlot6,
                               textSlot7, textSlot8, textSlot9, textSlot10, textSlot11, textSlot12,
                               textSlot13, textSlot14, textSlot15, textSlot16, textSlot17,
-                              textSlot18, textSlot19, textIsActive);
+                              textSlot18, textSlot19, textIsActive, textAnimationName,
+                              nowPlayingCharacteristic);
 BT_GATT_SERVER_REGISTER(textConfigServerStatic, textConfigServer);
 
 namespace {
@@ -108,7 +107,7 @@ struct TextIsActiveBindingRegistrar {
 
 [[maybe_unused]] TextIsActiveBindingRegistrar sTextIsActiveBindingRegistrar;
 
-const char *kStaticMessages[TextAnimation::kNumStringSlots] = {
+const char* kStaticMessages[TextAnimation::kNumStringSlots] = {
     "LIFE IS MADE OF LITTLE MOMENTS LIKE THIS",
     "WE ARE ALL WE NEED",
     "SO LONG AND THANKS FOR ALL THE FISH",
@@ -132,7 +131,7 @@ const char *kStaticMessages[TextAnimation::kNumStringSlots] = {
 };
 
 namespace {
-static const char *getTextSlot(size_t slot) {
+static const char* getTextSlot(size_t slot) {
     switch (slot) {
         case 0:
             return textSlot0.value().data();
@@ -179,7 +178,7 @@ static const char *getTextSlot(size_t slot) {
     }
 }
 
-static void setTextSlot(size_t slot, const char *value) {
+static void setTextSlot(size_t slot, const char* value) {
     BtGattString<TextAnimation::kMaxMsgLen> storage = {};
     strncpy(storage.data(), value, TextAnimation::kMaxMsgLen - 1);
 
@@ -249,7 +248,7 @@ static void setTextSlot(size_t slot, const char *value) {
 
 class TextSlotSource : public TextAnimationSlotSource {
    public:
-    const char *getStringFromSlot(size_t slot) const override { return getTextSlot(slot); }
+    const char* getStringFromSlot(size_t slot) const override { return getTextSlot(slot); }
 };
 
 class TextUpNextSource : public TextAnimationUpNextSource {

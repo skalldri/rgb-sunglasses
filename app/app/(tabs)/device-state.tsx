@@ -3,7 +3,7 @@ import { CharacteristicColor } from "@/components/characteristic-color";
 import { CharacteristicUint32 } from "@/components/characteristic-uint32";
 import { CharacteristicUtf8 } from "@/components/characteristic-utf8";
 import { ThemedText } from "@/components/themed-text";
-import { BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S, getCharacteristicName, getServiceName } from "@/constants/bluetooth";
+import { BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S, getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { decodeUint32FromBase64, decodeUtf8FromBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
@@ -49,6 +49,10 @@ export default function DeviceStateScreen() {
         const initialValues: Record<string, string> = {};
         Object.entries(selectedDevice.characteristicsByService).forEach(([serviceUuid, chars]) => {
             Object.entries(chars).forEach(([charUuid, charInfo]) => {
+                // Animation Name reuses the same characteristic UUID across every animation
+                // service, which collides with this flat-by-charUuid map. It's surfaced via the
+                // service header instead, so skip it here (see device-state.tsx render loop).
+                if (charUuid === UUID_ANIMATION_NAME_CHARACTERISTIC) return;
                 // Only initialize for text/numeric inputs (not boolean or color)
                 if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S && charInfo.value) {
                     try {
@@ -203,15 +207,21 @@ export default function DeviceStateScreen() {
 
                 <ScrollView contentContainerStyle={styles.scrollContent}>
                     {
-                        selectedDevice?.services.map((service, index) => {
+                        (selectedDevice?.services ?? [])
+                            .filter(service => service.uuid !== UUID_GENERIC_ATTRIBUTE_SERVICE && service.uuid !== UUID_GENERIC_ACCESS_SERVICE)
+                            .map((service, index, visibleServices) => {
                             return (
                                 <View key={service.uuid + `- service - details - ` + String(index)}>
                                     <ThemedText
                                         key={service.uuid + `- ` + String(index)}>
-                                        {getServiceName(service.uuid)}
+                                        {selectedDevice?.serviceDisplayNames?.[service.uuid] ?? getServiceName(service.uuid)}
                                     </ThemedText>
 
                                     {Object.entries(selectedDevice?.characteristicsByService[service.uuid] ?? {}).map(([charUuid, charInfo], charIndex) => {
+                                        // Already surfaced as the service header above; this UUID is shared
+                                        // across every animation service, so skip the generic row for it.
+                                        if (charUuid === UUID_ANIMATION_NAME_CHARACTERISTIC) return null;
+
                                         const isMcuMgrCharacteristic = service.uuid === SMP_SERVICE_UUID && charUuid === SMP_CHARACTERISTIC_UUID;
 
                                         // Get animated color for this characteristic
@@ -246,7 +256,7 @@ export default function DeviceStateScreen() {
                                         );
                                     })}
 
-                                    {index < (selectedDevice?.services.length ?? 0) - 1 && (
+                                    {index < visibleServices.length - 1 && (
                                         <View style={styles.separator} />
                                     )}
                                 </View>

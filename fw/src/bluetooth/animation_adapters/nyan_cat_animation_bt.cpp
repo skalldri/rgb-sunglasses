@@ -10,9 +10,15 @@ BtGattPrimaryService<kNyanCatConfigServiceUuid> nyanCatPrimaryService;
 using NyanCatIsActiveCharacteristic = IsActiveCharacteristic<Animation::NyanCat>;
 NyanCatIsActiveCharacteristic nyanCatIsActive;
 
+constexpr BtGattString<24> kNyanCatAnimationName = makeBtGattString<24>("Nyan Cat");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kNyanCatAnimationName>
+    nyanCatAnimationName;
+
 BtGattServer nyanCatConfigServer(
     nyanCatPrimaryService,
-    nyanCatIsActive);
+    nyanCatIsActive,
+    nyanCatAnimationName);
 BT_GATT_SERVER_REGISTER(nyanCatConfigServerStatic, nyanCatConfigServer);
 
 using NyanCatAnimationIsActive = AnimationIsActiveBinding<Animation::NyanCat>;

@@ -30,6 +30,16 @@ constexpr bt_uuid_128 composeAutoCharacteristicUuid(const bt_uuid_128 &serviceUu
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, ((uint16_t)(anim_id) << 8), \
                                         0x56789abd0000))
 
+/**
+ * @brief Fixed UUID for the "Animation Name" characteristic, reused identically across every
+ * animation's BtGattServer. Group 4 (0xaaaa) is chosen to never collide with any anim_id<<8
+ * used by BT_ANIMATION_SERVICE_UUID (anim_id only ranges 0-11 today), and characteristic UUIDs
+ * are not required to be globally unique across services — only within one — so reusing the
+ * same literal in 8 different services is valid GATT.
+ */
+constexpr bt_uuid_128 kAnimationNameCharacteristicUuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0xaaaa, 0x56789abd0000));
+
 // Helper to check if all tuple elements are bt_gatt_attr
 template <typename Tuple, size_t... Is>
 constexpr bool allAttrsAreGattAttr(std::index_sequence<Is...>) {

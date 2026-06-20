@@ -11,7 +11,12 @@ BtGattPrimaryService<kFftBarsConfigServiceUuid> fftBarsPrimaryService;
 using FftBarsIsActiveCharacteristic = IsActiveCharacteristic<Animation::FftBars>;
 FftBarsIsActiveCharacteristic fftBarsIsActive;
 
-BtGattServer fftBarsConfigServer(fftBarsPrimaryService, fftBarsIsActive);
+constexpr BtGattString<24> kFftBarsAnimationName = makeBtGattString<24>("FFT Bars");
+BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
+                             kFftBarsAnimationName>
+    fftBarsAnimationName;
+
+BtGattServer fftBarsConfigServer(fftBarsPrimaryService, fftBarsIsActive, fftBarsAnimationName);
 BT_GATT_SERVER_REGISTER(fftBarsConfigServerStatic, fftBarsConfigServer);
 
 using FftBarsAnimationIsActive = AnimationIsActiveBinding<Animation::FftBars>;

@@ -1,6 +1,4 @@
-#include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/bt_state_observer.h>
-#include <bluetooth/gatt_cpf.h>
 #include <bluetooth/services/nsms.h>
 #include <errno.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -23,43 +21,9 @@ void bluetooth_register_state_observer(BtStateObserver *observer) {
     sBtStateObserver = observer;
 }
 
-#define DEVICE_NAME CONFIG_BT_DEVICE_NAME
-
 static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 };
-
-constexpr bt_uuid_128 kNameServiceUuid =
-    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef0));
-
-constexpr bt_uuid_128 kNameCharacteristicUuid =
-    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abcdef1));
-
-template <size_t N>
-constexpr BtGattString<255> makeDefaultBadgeName(const char (&name)[N]) {
-    BtGattString<255> out = {};
-
-    size_t copyLen = N;
-    if (copyLen > out.size()) {
-        copyLen = out.size();
-    }
-
-    for (size_t i = 0; i < copyLen; i++) {
-        out[i] = name[i];
-    }
-
-    out[out.size() - 1] = '\0';
-    return out;
-}
-
-constexpr BtGattString<255> kDefaultBadgeName = makeDefaultBadgeName(DEVICE_NAME);
-
-BtGattPrimaryService<kNameServiceUuid> namePrimaryService;
-BtGattReadWriteCharacteristic<kNameCharacteristicUuid, "Badge Name", BtGattString<255>,
-                              kDefaultBadgeName>
-    badgeName;
-BtGattServer nameServer(namePrimaryService, badgeName);
-BT_GATT_SERVER_REGISTER(nameServerStatic, nameServer);
 
 // We cannot simply use BT_LE_ADV_CONN directly here, because C++ and C have slightly different
 // semantics about taking the address of a temporary. We will reconstruct the same values as
@@ -264,13 +228,22 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason) {
     LOG_INF("Pairing failed conn: %s, reason %d", addr, reason);
 }
 
+static void bond_deleted(uint8_t id, const bt_addr_le_t *peer) {
+    char addr[BT_ADDR_LE_STR_LEN];
+
+    bt_addr_le_to_str(peer, addr, sizeof(addr));
+
+    LOG_INF("Bond deleted: id %u, peer %s", id, addr);
+}
+
 static struct bt_conn_auth_cb conn_auth_callbacks = {
     .passkey_display = auth_passkey_display,
     .cancel = auth_cancel,
 };
 
 static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {.pairing_complete = pairing_complete,
-                                                               .pairing_failed = pairing_failed};
+                                                               .pairing_failed = pairing_failed,
+                                                               .bond_deleted = bond_deleted};
 #else
 static struct bt_conn_auth_cb conn_auth_callbacks;
 static struct bt_conn_auth_info_cb conn_auth_info_callbacks;

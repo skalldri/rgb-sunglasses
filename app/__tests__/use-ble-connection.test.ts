@@ -85,7 +85,7 @@ describe('useBleConnection', () => {
 
         await act(async () => { await result.current.connect(); });
 
-        expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledWith('AA:BB:CC');
+        expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledWith('AA:BB:CC', { refreshGatt: 'OnConnected' });
     });
 
     it('connect() parses CUD and CPF descriptors into CharacteristicInfo', async () => {

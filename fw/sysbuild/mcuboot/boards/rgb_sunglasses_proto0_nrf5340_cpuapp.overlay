@@ -1,0 +1,45 @@
+/*
+ * MCUboot never compiles in the SPI or LED_STRIP drivers (no firmware reason to touch the
+ * WS2812 strips while in the bootloader), so the 3 LED data-in pins are left completely
+ * unmanaged for MCUboot's whole runtime: on a cold boot they float, and on a warm reset
+ * (e.g. the `mcumgr reset` that follows a DFU `image test`) the nRF53's GPIO peripheral
+ * retains whatever direction/level the app last drove them to, since only a power-on/
+ * brownout reset clears GPIO state. Either way a WS2812 strip can read this as a steady
+ * "on" signal and pull max-brightness current for the bootloader's entire boot window
+ * (including the ~500ms CONFIG_BOOT_SERIAL_DETECT_DELAY wait), risking a brownout.
+ *
+ * GPIO hogs (CONFIG_GPIO_HOGS, auto-enabled by the presence of `gpio-hog` nodes) force
+ * these 3 pins to a driven-low GPIO output very early in boot (SYS_INIT priority 41),
+ * independent of the SPI/LED_STRIP drivers, so the data lines are held low for MCUboot's
+ * entire runtime regardless of how it was entered.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+&gpio0 {
+	led_din_1_safe_low: led_din_1_safe_low {
+		/* P0.29 = LED_DIN_1 (led_strip_spi_1 / SPI4 MOSI) */
+		gpio-hog;
+		gpios = <29 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "led-din-1-safe-low";
+	};
+};
+
+&gpio1 {
+	led_din_safe_low: led_din_safe_low {
+		/* P1.05 = LED_DIN (led_strip_spi_0 / SPI1 MOSI) */
+		gpio-hog;
+		gpios = <5 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "led-din-safe-low";
+	};
+
+	led_din_2_safe_low: led_din_2_safe_low {
+		/* P1.01 = LED_DIN_2, onboard LEDs (led_strip_spi_2 / SPI2 MOSI) */
+		gpio-hog;
+		gpios = <1 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "led-din-2-safe-low";
+	};
+};

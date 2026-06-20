@@ -383,3 +383,24 @@ The mcumgr port is whichever responds to `echo`. Update `CONN` accordingly.
 ## Build Failures
 
 If a build fails, prefer to read the log files instead of building it again.
+
+## Per-image Kconfig/devicetree overlays (sysbuild)
+
+This is a sysbuild project with 4 images sharing one board-level devicetree. To scope a change to a single image (e.g. MCUboot only), use sysbuild's per-image config directory convention, not `fw/conf/<board>/sysbuild.cmake`:
+
+```
+fw/sysbuild/<image-name>/prj.conf                          # per-image Kconfig fragment
+fw/sysbuild/<image-name>/boards/<board>.conf                # per-image, per-board Kconfig fragment
+fw/sysbuild/<image-name>/boards/<board>.overlay              # per-image, per-board devicetree overlay
+```
+e.g. `fw/sysbuild/mcuboot/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.overlay` only applies to the MCUboot image. These are auto-discovered by Zephyr's CMake — no wiring needed beyond creating the file in the right place.
+
+**`add_overlay_dts(${DEFAULT_IMAGE}, ...)` in `fw/conf/<board>/sysbuild.cmake` targets the main "fw" app image, not MCUboot.** `${DEFAULT_IMAGE}` is sysbuild's default/main image, which is `fw` in this project. Don't reach for this mechanism when you actually want to target MCUboot, b0n, or ipc_radio — use the per-image `sysbuild/<image-name>/` directory above instead.
+
+**A newly-added overlay file may not be picked up without a `--pristine` rebuild.** Zephyr's overlay auto-discovery (`zephyr_file(CONF_FILES ... DTC_OVERLAY_FILE ...)`) is gated behind `if(NOT DEFINED DTC_OVERLAY_FILE)` — if a prior configure already ran and cached `DTC_OVERLAY_FILE` (even as an empty string) in `build/<image>/CMakeCache.txt`, the auto-discovery block is permanently skipped on every subsequent incremental build, even after adding the right file in the right place. If a new overlay doesn't seem to take effect, check `grep DTC_OVERLAY_FILE build/<image>/CMakeCache.txt` — if it's defined-but-empty, do a full `--pristine` rebuild instead of debugging the overlay content.
+
+## MCUboot and LED data pins (GPIO retention across warm resets)
+
+MCUboot never links the SPI/LED_STRIP drivers, so the 3 WS2812 data-in pins (P0.29, P1.05, P1.01 — see `fw/docs/proto0-board-pinout.md`) are left completely unmanaged during MCUboot's runtime. On the nRF53, GPIO peripheral state (direction/level) is retained across a CPU/software (warm) reset — only a power-on/brownout reset clears it. So if the app was driving a data line high before a warm reset (e.g. the `sys_reboot(SYS_REBOOT_WARM)` that follows MCUmgr's `image test`/`reset`), MCUboot inherits that stuck-high state, and a WS2812 strip can read it as a steady "on" signal and pull max-brightness current for the entire bootloader boot window — risking a brownout that prevents boot entirely.
+
+Fixed via Zephyr's built-in GPIO hogs feature (`CONFIG_GPIO_HOGS`, auto-enabled by the presence of `gpio-hog` devicetree nodes): see `fw/sysbuild/mcuboot/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.overlay`. It forces all 3 pins to a driven-low GPIO output very early in boot (`SYS_INIT` priority 41), independent of any driver, for MCUboot's entire runtime. If you add more LED data pins in future hardware revisions, extend this overlay too.
