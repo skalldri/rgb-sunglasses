@@ -2,13 +2,17 @@
 #include <animations/zigzag_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
+#include <bluetooth/persistent_characteristic.h>
 
 constexpr bt_uuid_128 kZigZagConfigServiceUuid =
     BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::ZigZag));
 
 BtGattPrimaryService<kZigZagConfigServiceUuid> zigzagPrimaryService;
-BtGattAutoReadWriteCharacteristic<"Step Time Ms", uint32_t, 200> zigzagStepTimeMs;
-BtGattAutoReadWriteCharacteristic<"Color", BtGattColor, BtGattColor{0xFFFFFFFF}> zigzagColor;
+BtGattPersistentCharacteristic<"zigzag/step_time_ms", "Step Time Ms", false, uint32_t, 200>
+    zigzagStepTimeMs;
+BtGattPersistentCharacteristic<"zigzag/color", "Color", false, BtGattColor,
+                               BtGattColor{0xFFFFFFFF}>
+    zigzagColor;
 
 using ZigZagIsActiveCharacteristic = IsActiveCharacteristic<Animation::ZigZag>;
 ZigZagIsActiveCharacteristic zigzagIsActive;

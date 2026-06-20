@@ -1,0 +1,10 @@
+source "Kconfig.zephyr"
+
+config APP_PERSIST_BT_CONFIG
+	bool "Persist BT-settable configuration via the Settings subsystem"
+	default y
+	help
+	  Mirrors the symbol of the same name in fw/Kconfig - this test exercises
+	  persistent_value_registry.cpp directly, outside the main fw application's
+	  Kconfig tree, so it needs its own definition to compile in the real
+	  implementation rather than the disabled-feature stubs.

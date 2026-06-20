@@ -1,0 +1,19 @@
+source "Kconfig.zephyr"
+
+config APP_PERSIST_BT_CONFIG
+	bool "Persist BT-settable configuration via the Settings subsystem"
+	default y
+	help
+	  Mirrors the symbol of the same name in fw/Kconfig - this test exercises
+	  persistent_value_store.cpp directly, outside the main fw application's
+	  Kconfig tree, so it needs its own definition to compile in the real
+	  implementation rather than the disabled-feature stubs.
+
+config APP_SETTINGS_SAVE_DEBOUNCE_MS
+	int "Debounce interval (ms) before persisting a changed config value"
+	default 1000
+	depends on SETTINGS
+	help
+	  Mirrors the symbol of the same name in fw/Kconfig - this test exercises
+	  persistent_value_store.cpp directly, outside the main fw application's
+	  Kconfig tree, so it needs its own definition.

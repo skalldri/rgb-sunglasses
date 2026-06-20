@@ -1,0 +1,7 @@
+tests:
+  settings.persistent_value_store:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    filter: dt_label_with_parent_compat_enabled("storage_partition", "fixed-partitions")

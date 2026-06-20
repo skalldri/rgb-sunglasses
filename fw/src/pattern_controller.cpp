@@ -7,6 +7,8 @@
 #include <core_config.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
+#include <settings/persistent_value_registry.h>
+#include <settings/persistent_value_store.h>
 #include <zephyr/init.h>
 
 #if defined(CONFIG_FAT_FILESYSTEM_ELM)
@@ -15,6 +17,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
+
+#include <cstring>
 
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
 
@@ -64,6 +68,44 @@ Indicator currentIndicator = Indicator::None;
 Animation currentAnimation = Animation::None;
 
 float sBrightnessForFrame = 0.1f;
+
+namespace {
+
+constexpr const char *kLastActiveAnimationKey = "core/last_active_animation";
+
+Animation sLoadedAnimation = Animation::None;
+bool sAnimationWasLoaded = false;
+
+void lastActiveAnimationDoLoad(void *, const void *data, size_t len) {
+    if (len != sizeof(uint32_t)) {
+        return;
+    }
+    uint32_t raw;
+    memcpy(&raw, data, sizeof(raw));
+    sLoadedAnimation = static_cast<Animation>(raw);
+    sAnimationWasLoaded = true;
+}
+
+void lastActiveAnimationDoSave(void *) {
+    uint32_t raw = static_cast<uint32_t>(currentAnimation);
+    persistent_value_store::save_value(kLastActiveAnimationKey, &raw, sizeof(raw));
+}
+
+struct LastActiveAnimationRegistrar {
+    LastActiveAnimationRegistrar() {
+        // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
+        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
+        // Failures are logged inside persistent_value_registry_register() itself.
+        if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_register(kLastActiveAnimationKey, nullptr,
+                                               lastActiveAnimationDoLoad,
+                                               lastActiveAnimationDoSave);
+        }
+    }
+};
+[[maybe_unused]] LastActiveAnimationRegistrar sLastActiveAnimationRegistrar;
+
+}  // namespace
 
 BaseAnimation *getIndicator(Indicator indicator) {
     switch (indicator) {
@@ -122,8 +164,17 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         animation_registry_init_registered();
     }
 
-    // Start in the ZigZag animation
-    pattern_controller_change_to_animation(Animation::ZigZag);
+    // Resume whatever animation was active before the last power-cycle, if any was
+    // persisted and is still registered (e.g. its CONFIG_ANIMATION_* might have been
+    // disabled in a later firmware build) - otherwise fall back to ZigZag. Safe to read
+    // sLoadedAnimation/sAnimationWasLoaded here with no synchronization: settings_load()
+    // (SYS_INIT APPLICATION prio 1, in bluetooth_init) always completes before this
+    // K_THREAD_DEFINE thread starts.
+    Animation startupAnimation = Animation::ZigZag;
+    if (sAnimationWasLoaded && getAnimation(sLoadedAnimation)) {
+        startupAnimation = sLoadedAnimation;
+    }
+    pattern_controller_change_to_animation(startupAnimation);
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -220,6 +271,10 @@ int pattern_controller_change_to_animation(Animation animation) {
 
     currentAnimation = animation;
 
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        persistent_value_store::request_save();
+    }
+
     return 0;
 }
 
@@ -233,7 +288,9 @@ int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t 
 }
 
 #if defined(CONFIG_ANIMATION_GLIM_PLAYER)
-#define GLIM_PLAYER_SHELL_SUBCMD , (glim_player, 10, "Glim Player animation (plays files from /NAND:/glim, see the 'glim' shell command)")
+#define GLIM_PLAYER_SHELL_SUBCMD \
+    , (glim_player, 10,          \
+       "Glim Player animation (plays files from /NAND:/glim, see the 'glim' shell command)")
 #else
 #define GLIM_PLAYER_SHELL_SUBCMD
 #endif
@@ -310,7 +367,7 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_anim_set, cmd_anim_set, (none, 0, "No animation
                              (rainbow, 5, "Rainbow animation"), (my_eyes, 7, "My Eyes animation"),
                              (beat, 8, "Beat animation (per-band flash on beat detection)"),
                              (fft_bars, 9, "FFT Bars animation (live frequency bar graph)")
-                             GLIM_PLAYER_SHELL_SUBCMD);
+                                 GLIM_PLAYER_SHELL_SUBCMD);
 
 static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argc);
