@@ -4,6 +4,7 @@
 #include <bluetooth/bt_service_cpp.h>
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
+#include <zephyr/sys/printk.h>
 #include <zephyr/sys/util_macro.h>
 
 #include <algorithm>
@@ -25,8 +26,8 @@
 template <StringLiteral Key, StringLiteral Description, bool Notify, typename T, T Default>
 class BtGattPersistentCharacteristic
     : public BtGattAutoCharacteristicExt<
-          BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>, Description,
-          Notify, false /* ReadOnly: persisted values are always read/write */, T, Default> {
+          BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>, Description, Notify,
+          false /* ReadOnly: persisted values are always read/write */, T, Default> {
    public:
     using Base = BtGattAutoCharacteristicExt<
         BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>, Description, Notify,
@@ -37,7 +38,11 @@ class BtGattPersistentCharacteristic
         // Discarded entirely (no doLoad/doSave codegen, no registry call) when
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            persistent_value_registry_register(Key.value, this, &doLoad, &doSave);
+            int err = persistent_value_registry_register(Key.value, this, &doLoad, &doSave);
+            if (err) {
+                printk("Failed to register persisted characteristic '%s' (err: %d)\n", Key.value,
+                       err);
+            }
         }
     }
 

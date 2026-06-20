@@ -5,6 +5,7 @@
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
 #include <storage/glim_registry.h>
+#include <zephyr/sys/printk.h>
 #include <zephyr/sys/util_macro.h>
 
 #include <algorithm>
@@ -128,8 +129,8 @@ size_t findGlimIndexByName(const char *name) {
 BtGattPrimaryService<kGlimPlayerConfigServiceUuid> glimPlayerPrimaryService;
 
 class GlimSelectionCharacteristic
-    : public BtGattAutoCharacteristicExt<GlimSelectionCharacteristic, "Glim Selection", true,
-                                         false, BtGattDropdownList<kGlimSelectionMaxLen>,
+    : public BtGattAutoCharacteristicExt<GlimSelectionCharacteristic, "Glim Selection", true, false,
+                                         BtGattDropdownList<kGlimSelectionMaxLen>,
                                          BtGattDropdownList<kGlimSelectionMaxLen>{}> {
    public:
     using Base = BtGattAutoCharacteristicExt<GlimSelectionCharacteristic, "Glim Selection", true,
@@ -237,10 +238,16 @@ struct GlimPersistenceRegistrar {
         // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            persistent_value_registry_register(kGlimSelectionKey, nullptr, glimSelectionDoLoad,
-                                                glimSelectionDoSave);
-            persistent_value_registry_register(kGlimLoopModeKey, nullptr, glimLoopModeDoLoad,
-                                                glimLoopModeDoSave);
+            int err = persistent_value_registry_register(kGlimSelectionKey, nullptr,
+                                                         glimSelectionDoLoad, glimSelectionDoSave);
+            if (err) {
+                printk("Failed to register glim selection persistence (err: %d)\n", err);
+            }
+            err = persistent_value_registry_register(kGlimLoopModeKey, nullptr, glimLoopModeDoLoad,
+                                                     glimLoopModeDoSave);
+            if (err) {
+                printk("Failed to register glim loop mode persistence (err: %d)\n", err);
+            }
         }
     }
 };
@@ -420,7 +427,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
     SHELL_CMD_ARG(select, NULL, "Select a GLIM file by index", cmd_glim_select, 2, 0),
     SHELL_CMD(get_selected, NULL, "Print the currently selected GLIM file", cmd_glim_get_selected),
     SHELL_CMD_ARG(set_loop_mode, NULL, "Set loop mode (loop_one|play_all|stop_after_one)",
-                 cmd_glim_set_loop_mode, 2, 0),
+                  cmd_glim_set_loop_mode, 2, 0),
     SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(glim, &sub_glim, "Glim player commands", NULL);

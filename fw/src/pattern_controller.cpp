@@ -96,9 +96,12 @@ struct LastActiveAnimationRegistrar {
         // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            persistent_value_registry_register(kLastActiveAnimationKey, nullptr,
-                                                lastActiveAnimationDoLoad,
-                                                lastActiveAnimationDoSave);
+            int err = persistent_value_registry_register(kLastActiveAnimationKey, nullptr,
+                                                         lastActiveAnimationDoLoad,
+                                                         lastActiveAnimationDoSave);
+            if (err) {
+                LOG_ERR("Failed to register last-active-animation persistence (err: %d)", err);
+            }
         }
     }
 };
@@ -287,7 +290,9 @@ int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t 
 }
 
 #if defined(CONFIG_ANIMATION_GLIM_PLAYER)
-#define GLIM_PLAYER_SHELL_SUBCMD , (glim_player, 10, "Glim Player animation (plays files from /NAND:/glim, see the 'glim' shell command)")
+#define GLIM_PLAYER_SHELL_SUBCMD \
+    , (glim_player, 10,          \
+       "Glim Player animation (plays files from /NAND:/glim, see the 'glim' shell command)")
 #else
 #define GLIM_PLAYER_SHELL_SUBCMD
 #endif
@@ -364,7 +369,7 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_anim_set, cmd_anim_set, (none, 0, "No animation
                              (rainbow, 5, "Rainbow animation"), (my_eyes, 7, "My Eyes animation"),
                              (beat, 8, "Beat animation (per-band flash on beat detection)"),
                              (fft_bars, 9, "FFT Bars animation (live frequency bar graph)")
-                             GLIM_PLAYER_SHELL_SUBCMD);
+                                 GLIM_PLAYER_SHELL_SUBCMD);
 
 static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argc);

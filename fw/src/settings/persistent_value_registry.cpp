@@ -3,6 +3,12 @@
 #include <string.h>
 #include <sys/types.h>
 
+// When the feature is disabled (e.g. CONFIG_APP_PERSIST_BT_CONFIG=n on
+// rgb_sunglasses_dk), compile out the fixed-size entry table entirely rather than just
+// leaving it unreferenced - every call site that populates it is itself gated by
+// IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG), so these stubs are never invoked there.
+#if defined(CONFIG_APP_PERSIST_BT_CONFIG)
+
 namespace {
 struct PersistentValueRegistryEntry {
     const char *key;
@@ -27,7 +33,7 @@ ssize_t findRegistryIndex(const char *key) {
 }  // namespace
 
 int persistent_value_registry_register(const char *key, void *target, PersistentValueLoadFn load,
-                                        PersistentValueSaveFn save) {
+                                       PersistentValueSaveFn save) {
     if (!key || !load || !save) {
         return -EINVAL;
     }
@@ -51,7 +57,7 @@ int persistent_value_registry_register(const char *key, void *target, Persistent
 }
 
 int persistent_value_registry_dispatch_load(const char *name, size_t len, settings_read_cb read_cb,
-                                             void *cb_arg) {
+                                            void *cb_arg) {
     for (size_t i = 0; i < sRegistryCount; i++) {
         const char *next = nullptr;
         if (!settings_name_steq(name, sRegistry[i].key, &next) || next) {
@@ -88,3 +94,24 @@ void persistent_value_registry_reset() {
 size_t persistent_value_registry_count() {
     return sRegistryCount;
 }
+
+#else  // !CONFIG_APP_PERSIST_BT_CONFIG
+
+int persistent_value_registry_register(const char *, void *, PersistentValueLoadFn,
+                                       PersistentValueSaveFn) {
+    return -ENOSYS;
+}
+
+int persistent_value_registry_dispatch_load(const char *, size_t, settings_read_cb, void *) {
+    return -ENOENT;
+}
+
+void persistent_value_registry_save_all() {}
+
+void persistent_value_registry_reset() {}
+
+size_t persistent_value_registry_count() {
+    return 0;
+}
+
+#endif  // CONFIG_APP_PERSIST_BT_CONFIG

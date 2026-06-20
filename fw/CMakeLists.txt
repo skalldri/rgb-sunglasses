@@ -24,6 +24,10 @@ target_sources(
     src/power.cpp
     src/bluetooth.cpp
     src/core_config.cpp
+    # Always compiled, like every other source in this list - CONFIG_APP_PERSIST_BT_CONFIG
+    # gates their *contents* (see the #if in each .cpp), not whether they're built, since
+    # other unconditionally-compiled callers (e.g. pattern_controller.cpp) reference their
+    # public API regardless of the Kconfig setting.
     src/settings/persistent_value_registry.cpp
     src/settings/persistent_value_store.cpp
     src/animations/bt_animations.cpp
