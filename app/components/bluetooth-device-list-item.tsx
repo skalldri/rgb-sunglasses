@@ -10,40 +10,60 @@ interface Props {
 }
 
 export default function BluetoothDeviceListItem({ deviceName, macAddress }: Props) {
-    const { selectedDevice } = useBluetooth();
+    const { selectedDevice, discoveryProgress } = useBluetooth();
     const { isConnecting, connect, disconnect } = useBleConnection(macAddress, deviceName);
     const router = useRouter();
 
     const isSelected = selectedDevice?.mac === macAddress;
 
     return (
-        <View style={styles.container}>
-            <ThemedText style={styles.deviceName}>{deviceName}</ThemedText>
-            <ThemedText style={styles.macAddress}>{macAddress}</ThemedText>
-            <View style={styles.buttonContainer}>
-                <Button
-                    title={isSelected ? "Disconnect" : "Connect"}
-                    disabled={isConnecting}
-                    onPress={async () => {
-                        if (isSelected) {
-                            await disconnect();
-                        } else {
-                            await connect();
-                            router.navigate('/(tabs)/device-state');
-                        }
-                    }}
-                />
-                {isConnecting && (
-                    <View style={styles.loadingOverlay}>
-                        <ActivityIndicator size="small" color="#fff" />
-                    </View>
-                )}
+        <View style={styles.outer}>
+            <View style={styles.container}>
+                <ThemedText style={styles.deviceName}>{deviceName}</ThemedText>
+                <ThemedText style={styles.macAddress}>{macAddress}</ThemedText>
+                <View style={styles.buttonContainer}>
+                    <Button
+                        title={isSelected ? "Disconnect" : "Connect"}
+                        disabled={isConnecting}
+                        onPress={async () => {
+                            if (isSelected) {
+                                await disconnect();
+                            } else {
+                                await connect();
+                                router.navigate('/(tabs)/device-state');
+                            }
+                        }}
+                    />
+                    {isConnecting && !discoveryProgress && (
+                        <View style={styles.loadingOverlay}>
+                            <ActivityIndicator size="small" color="#fff" />
+                        </View>
+                    )}
+                </View>
             </View>
+            {isConnecting && discoveryProgress && (
+                <View style={styles.progressContainer}>
+                    <View style={styles.progressTrack}>
+                        <View
+                            style={[
+                                styles.progressFill,
+                                { width: `${Math.min(100, (discoveryProgress.current / Math.max(1, discoveryProgress.total)) * 100)}%` },
+                            ]}
+                        />
+                    </View>
+                    <ThemedText style={styles.progressLabel}>
+                        {`Querying characteristics: ${discoveryProgress.current}/${discoveryProgress.total}`}
+                    </ThemedText>
+                </View>
+            )}
         </View>
     );
 }
 
 const styles = StyleSheet.create({
+    outer: {
+        gap: 4,
+    },
     container: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -68,5 +88,23 @@ const styles = StyleSheet.create({
         bottom: 0,
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    progressContainer: {
+        gap: 2,
+    },
+    progressTrack: {
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#3a3a3a',
+        overflow: 'hidden',
+    },
+    progressFill: {
+        height: '100%',
+        backgroundColor: '#4499ff',
+        borderRadius: 3,
+    },
+    progressLabel: {
+        fontSize: 11,
+        opacity: 0.7,
     },
 });

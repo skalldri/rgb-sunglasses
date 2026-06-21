@@ -13,6 +13,7 @@ import { bleManager } from "@/hooks/ble-manager";
 import { decodeUtf8FromBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useEffect, useRef, useState } from "react";
+import { ConnectionPriority } from "react-native-ble-plx";
 
 interface UseBleConnectionResult {
     isConnecting: boolean;
@@ -21,7 +22,7 @@ interface UseBleConnectionResult {
 }
 
 export function useBleConnection(macAddress: string, deviceName: string): UseBleConnectionResult {
-    const { selectedDevice, setSelectedDevice, updateCharValue, monitorSubscriptions, disconnectSubscription } =
+    const { selectedDevice, setSelectedDevice, updateCharValue, monitorSubscriptions, disconnectSubscription, setDiscoveryProgress } =
         useBluetooth();
 
     const [isConnecting, setIsConnecting] = useState(false);
@@ -53,6 +54,20 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 refreshGatt: "OnConnected",
                 requestMTU: 247,
             });
+
+            // Discovery below does ~170+ sequential GATT reads (one per characteristic/descriptor -
+            // can't be parallelized, Android only allows one outstanding GATT op per connection).
+            // Without this, the connection runs at the OS default interval (~30-50ms), making every
+            // one of those reads slow. High priority requests ~7.5-15ms instead. Android-only effect
+            // (see fw/src/bluetooth.cpp's matching bt_conn_le_param_update for the firmware-side
+            // request); non-fatal if it fails, discovery just runs at whatever interval is already
+            // negotiated.
+            try {
+                await deviceConnection.requestConnectionPriority(ConnectionPriority.High);
+            } catch (error) {
+                console.log(`Could not request high connection priority for ${macAddress}:`, error);
+            }
+
             await deviceConnection.discoverAllServicesAndCharacteristics();
             const services = await deviceConnection.services();
 
@@ -62,8 +77,20 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             const serviceDisplayNames: Record<string, string> = {};
 
             if (services) {
-                for (const service of services) {
-                    const serviceChars = await deviceConnection.characteristicsForService(service.uuid);
+                // Pre-pass: characteristicsForService() just returns metadata already gathered by
+                // discoverAllServicesAndCharacteristics() above (no extra ATT round-trips), so doing
+                // it once upfront lets us show real "N of M characteristics" progress for the actual
+                // per-characteristic read loop below, instead of only an indeterminate spinner.
+                const serviceCharsList = await Promise.all(
+                    services.map(service => deviceConnection.characteristicsForService(service.uuid))
+                );
+                const totalCharacteristics = serviceCharsList.reduce((sum, chars) => sum + chars.length, 0);
+                let processedCharacteristics = 0;
+                setDiscoveryProgress({ current: 0, total: totalCharacteristics });
+
+                for (let i = 0; i < services.length; i++) {
+                    const service = services[i];
+                    const serviceChars = serviceCharsList[i];
                     const characteristicInfos: Record<string, CharacteristicInfo> = {};
                     const charUuids: string[] = [];
 
@@ -82,6 +109,14 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                         };
 
                         for (const descriptor of descriptors) {
+                            // CCC just reflects local notification-subscription state (always 0x0000
+                            // here, before connect() ever subscribes via characteristic.monitor()
+                            // below) - the read result was never stored or used, only logged. Skip
+                            // it to save one ATT round-trip per notifiable characteristic.
+                            if (descriptor.uuid === UUID_CCC_DESCRIPTOR) {
+                                continue;
+                            }
+
                             console.log(`Descriptor UUID: ${getDescriptorName(descriptor.uuid)}`);
 
                             let readDescriptor;
@@ -103,12 +138,6 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                 charInfo.cpfFormat = decoded.charCodeAt(0);
                                 const hex = Array.from(decoded, char => char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
                                 console.log(`CPF Descriptor Value (hex): ${hex}`);
-                            }
-
-                            if (descriptor.uuid === UUID_CCC_DESCRIPTOR) {
-                                const decoded = atob(readDescriptor.value || '');
-                                const hex = Array.from(decoded, char => char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
-                                console.log(`CCC Descriptor Value (hex): ${hex}`);
                             }
                         }
 
@@ -139,6 +168,9 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                             characteristics[characteristic.uuid] = charInfo;
                             charUuids.push(characteristic.uuid);
                         }
+
+                        processedCharacteristics++;
+                        setDiscoveryProgress({ current: processedCharacteristics, total: totalCharacteristics });
                     }
 
                     characteristicsByService[service.uuid] = characteristicInfos;
@@ -257,6 +289,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 console.log(`Error cancelling connection for ${macAddress}:`, disconnectError);
             }
         } finally {
+            setDiscoveryProgress(null);
             if (isMountedRef.current) setIsConnecting(false);
         }
     }

@@ -43,11 +43,13 @@ describe('BluetoothDeviceListItem', () => {
   function setupMocks({
     selectedMac = null as string | null,
     isConnecting = false,
+    discoveryProgress = null as { current: number; total: number } | null,
     connect = jest.fn(async () => {}),
     disconnect = jest.fn(async () => {}),
   } = {}) {
     (BluetoothContext.useBluetooth as jest.Mock).mockReturnValue({
       selectedDevice: selectedMac ? { mac: selectedMac } : null,
+      discoveryProgress,
     });
     (BleConnectionHook.useBleConnection as jest.Mock).mockReturnValue({
       isConnecting,
@@ -99,10 +101,19 @@ describe('BluetoothDeviceListItem', () => {
     });
   });
 
-  it('shows ActivityIndicator when isConnecting', () => {
+  it('shows ActivityIndicator when isConnecting and discovery progress is not yet known', () => {
     setupMocks({ isConnecting: true });
     const { UNSAFE_getByType } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
     const { ActivityIndicator } = require('react-native');
     expect(UNSAFE_getByType(ActivityIndicator)).toBeTruthy();
+  });
+
+  it('shows a progress bar with current/total once discovery progress is known', () => {
+    setupMocks({ isConnecting: true, discoveryProgress: { current: 12, total: 48 } });
+    const { getByText, UNSAFE_queryByType } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
+    const { ActivityIndicator } = require('react-native');
+
+    expect(getByText('Querying characteristics: 12/48')).toBeTruthy();
+    expect(UNSAFE_queryByType(ActivityIndicator)).toBeNull();
   });
 });
