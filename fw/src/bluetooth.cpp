@@ -103,6 +103,13 @@ void bt_thread_func(void *a, void *b, void *c);
 
 K_THREAD_DEFINE(bt_thread, 8096, bt_thread_func, NULL, NULL, NULL, 6, 0, 0);
 
+// Diagnostic-only (issue #41 investigation): tracks the currently connected peer so the
+// `bt_conn_info` shell command (below) can report live LE connection parameters on demand,
+// and so le_param_updated() can log the *actual* negotiated interval (vs. the interval we
+// merely requested via bt_conn_le_param_update) with a timestamp, to verify whether the
+// fast-interval request has converged by the time the app's GATT discovery walk runs.
+static struct bt_conn *s_active_conn = NULL;
+
 static void connected(struct bt_conn *conn, uint8_t err) {
     if (err) {
         LOG_ERR("Connection failed (err %u)", err);
@@ -113,6 +120,11 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
     LOG_INF("Connected to %s", addr);
+
+    if (s_active_conn) {
+        bt_conn_unref(s_active_conn);
+    }
+    s_active_conn = bt_conn_ref(conn);
 
     // Send an event to the BT thread
     BtThreadCommand cmd;
@@ -141,6 +153,11 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
     LOG_INF("Disconnected (reason %u)", reason);
 
+    if (s_active_conn == conn) {
+        bt_conn_unref(s_active_conn);
+        s_active_conn = NULL;
+    }
+
     BtThreadCommand cmd;
     cmd.event = BtThreadEvent::DISCONNECTION;
 
@@ -153,6 +170,20 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     if (ret) {
         LOG_ERR("Failed to put Bluetooth disconnection event on thread msgq!");
     }
+}
+
+// Fires whenever the LE connection's actual parameters change - including the response to
+// our own bt_conn_le_param_update(&fast_conn_param) call in
+// bt_state_connecting_handle_command() below. This is the ground truth for "did the fast
+// interval actually take effect, and when" - bt_conn_le_param_update() only sends a request,
+// it doesn't tell us when (or whether) the peer actually applied it.
+static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t latency,
+                             uint16_t timeout) {
+    // interval/timeout are in 1.25ms/10ms units respectively (Core spec); avoid float printf
+    // (CONFIG_CBPRINTF_FP_SUPPORT isn't guaranteed enabled) by computing hundredths of a ms by hand.
+    LOG_INF("LE conn param updated: interval=%u units (%u.%02ums), latency=%u, timeout=%u units (%ums)",
+            interval, (interval * 125) / 100, (interval * 125) % 100, latency, timeout,
+            timeout * 10);
 }
 
 #if IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED)
@@ -185,6 +216,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 BT_CONN_CB_DEFINE(conn_callbacks) = {
     .connected = connected,
     .disconnected = disconnected,
+    .le_param_updated = le_param_updated,
 #if IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED)
     .security_changed = security_changed,
 #endif
@@ -688,3 +720,36 @@ SHELL_STATIC_SUBCMD_SET_CREATE(serial_cmds,
                                          cmd_serial_print),
                                SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(serial, &serial_cmds, "Serial number commands", NULL);
+
+// Diagnostic-only (issue #41 investigation): prints the *actual* current LE connection
+// parameters on demand, so they can be polled mid-discovery to verify whether the fast
+// interval requested by bt_conn_le_param_update() has converged. See le_param_updated()
+// above for the complementary "log it the moment it changes" half of this investigation.
+static int cmd_bt_conn_info(const struct shell *sh, size_t argc, char **argv) {
+    if (!s_active_conn) {
+        shell_print(sh, "No active BLE connection");
+        return 0;
+    }
+
+    struct bt_conn_info info;
+    int ret = bt_conn_get_info(s_active_conn, &info);
+    if (ret) {
+        shell_error(sh, "bt_conn_get_info failed: %d", ret);
+        return ret;
+    }
+
+    if (info.type != BT_CONN_TYPE_LE) {
+        shell_print(sh, "Active connection is not LE (type %d)", info.type);
+        return 0;
+    }
+
+    shell_print(sh, "LE connection interval: %u units (%u.%02ums)", info.le.interval,
+                (info.le.interval * 125) / 100, (info.le.interval * 125) % 100);
+    shell_print(sh, "LE connection latency: %u", info.le.latency);
+    shell_print(sh, "LE connection supervision timeout: %u units (%ums)", info.le.timeout,
+                info.le.timeout * 10);
+
+    return 0;
+}
+
+SHELL_CMD_REGISTER(bt_conn_info, NULL, "Print current LE connection parameters", cmd_bt_conn_info);
