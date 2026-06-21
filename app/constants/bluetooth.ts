@@ -7,6 +7,7 @@
 // before that fix landed.
 export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0001-56789abc0000": "Core Config Service",
+    "12345678-1234-5678-0002-56789abc0000": "Audio Analysis Config Service",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",

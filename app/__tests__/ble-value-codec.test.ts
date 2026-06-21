@@ -1,12 +1,15 @@
 import {
   decodeBooleanFromBase64,
   decodeColorFromBase64,
+  decodeFloat32FromBase64,
   decodeUint32FromBase64,
   decodeUtf8FromBase64,
   encodeBooleanToBase64,
   encodeColorToBase64,
+  encodeFloat32ToBase64,
   encodeUint32ToBase64,
   encodeUtf8ToBase64,
+  sanitizeFloatInput,
   sanitizeNumericInput,
 } from '@/services/ble-value-codec';
 
@@ -42,6 +45,32 @@ describe('ble-value-codec', () => {
 
   it('throws for invalid uint32 payloads', () => {
     expect(() => decodeUint32FromBase64(btoa('abc'))).toThrow('Invalid uint32 payload length');
+  });
+
+  it('sanitizes float input', () => {
+    expect(sanitizeFloatInput('12.3ab4')).toBe('12.34');
+    expect(sanitizeFloatInput('-0.5')).toBe('-0.5');
+    expect(sanitizeFloatInput('1.2.3')).toBe('1.23');
+    expect(sanitizeFloatInput('--1.5')).toBe('-1.5');
+    expect(sanitizeFloatInput('')).toBe('');
+  });
+
+  it('encodes and decodes float32 values', () => {
+    const encoded = encodeFloat32ToBase64(3.5);
+    expect(decodeFloat32FromBase64(encoded)).toBeCloseTo(3.5, 5);
+
+    const smallEncoded = encodeFloat32ToBase64(0.005);
+    expect(decodeFloat32FromBase64(smallEncoded)).toBeCloseTo(0.005, 5);
+
+    const negativeEncoded = encodeFloat32ToBase64(-20.0);
+    expect(decodeFloat32FromBase64(negativeEncoded)).toBeCloseTo(-20.0, 5);
+
+    const zeroEncoded = encodeFloat32ToBase64(0);
+    expect(decodeFloat32FromBase64(zeroEncoded)).toBe(0);
+  });
+
+  it('throws for invalid float32 payloads', () => {
+    expect(() => decodeFloat32FromBase64(btoa('abc'))).toThrow('Invalid float32 payload length');
   });
 
   it('encodes and decodes color values', () => {

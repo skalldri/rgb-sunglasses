@@ -7,6 +7,7 @@ import {
   BLE_GATT_CPF_FORMAT_BOOLEAN,
   BLE_GATT_CPF_FORMAT_CUSTOM_COLOR,
   BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
+  BLE_GATT_CPF_FORMAT_FLOAT32,
   BLE_GATT_CPF_FORMAT_UINT32,
   BLE_GATT_CPF_FORMAT_UTF8S,
 } from '@/constants/bluetooth';
@@ -14,6 +15,7 @@ import * as BluetoothContext from '@/context/bluetooth-context';
 import {
   encodeBooleanToBase64,
   encodeColorToBase64,
+  encodeFloat32ToBase64,
   encodeUint32ToBase64,
   encodeUtf8ToBase64,
 } from '@/services/ble-value-codec';
@@ -154,6 +156,36 @@ describe('DeviceStateScreen', () => {
 
     await waitFor(() => {
       expect(writeToCharacteristic).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('sanitizes float input and encodes float32 writes on submit', async () => {
+    const writeToCharacteristic = jest.fn(async () => true);
+    const selectedDevice = buildSelectedDevice([
+      {
+        uuid: 'float-char',
+        cpfFormat: BLE_GATT_CPF_FORMAT_FLOAT32,
+        value: encodeFloat32ToBase64(3.5),
+      },
+    ]);
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeToCharacteristic,
+    } as any);
+
+    const { getByPlaceholderText } = render(<DeviceStateScreen />);
+    const input = getByPlaceholderText('Enter number');
+
+    await waitFor(() => {
+      expect(input.props.value).toBe('3.5');
+    });
+
+    fireEvent.changeText(input, '12.3.4ab');
+    fireEvent(input, 'submitEditing');
+
+    await waitFor(() => {
+      expect(writeToCharacteristic).toHaveBeenCalledWith('float-char', encodeFloat32ToBase64(12.34));
     });
   });
 

@@ -2,6 +2,7 @@
 #include <animations/fft_bars_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
+#include <sound/audio_config.h>
 
 constexpr bt_uuid_128 kFftBarsConfigServiceUuid =
     BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::FftBars));
@@ -34,5 +35,5 @@ struct FftBarsIsActiveBindingRegistrar {
 [[maybe_unused]] FftBarsIsActiveBindingRegistrar sFftBarsIsActiveBindingRegistrar;
 
 void fft_bars_animation_bind_default_bt_dependencies() {
-    /* No BT-injected parameters for FftBarsAnimation; colours are fixed. */
+    FftBarsAnimation::getInstance()->setConfigSource(AudioConfig::getInstance());
 }
