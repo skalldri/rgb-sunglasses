@@ -26,6 +26,7 @@ function makeMockBluetooth() {
         selectedDevice: null as any,
         setSelectedDevice: jest.fn(),
         updateCharValue: jest.fn(),
+        setDiscoveryProgress: jest.fn(),
         monitorSubscriptions: { current: [] as any[] },
         disconnectSubscription: { current: null as any },
     };

@@ -27,11 +27,17 @@ export type BluetoothContextDevice = {
     mcuMgrClient?: McuMgrClient;
 };
 
+export type DiscoveryProgress = { current: number; total: number };
+
 type BluetoothContextType = {
     selectedDevice: BluetoothContextDevice | null;
     setSelectedDevice: (device: BluetoothContextDevice | null) => void;
     isScanning: boolean;
     setIsScanning: (scanning: boolean) => void;
+    // Characteristic-query progress during connect()'s discovery walk; null when not connecting
+    // or once discovery has finished. See use-ble-connection.ts.
+    discoveryProgress: DiscoveryProgress | null;
+    setDiscoveryProgress: (progress: DiscoveryProgress | null) => void;
     writeToCharacteristic: (
         charUuid: string,
         newEncodedValue: string,
@@ -50,6 +56,7 @@ const BluetoothContext = createContext<BluetoothContextType | undefined>(undefin
 export function BluetoothProvider({ children }: { children: ReactNode }) {
     const [selectedDevice, setSelectedDevice] = useState<BluetoothContextDevice | null>(null);
     const [isScanning, setIsScanning] = useState<boolean>(false);
+    const [discoveryProgress, setDiscoveryProgress] = useState<DiscoveryProgress | null>(null);
 
     // Use ref to access current device in callbacks without stale closures
     const selectedDeviceRef = useRef<BluetoothContextDevice | null>(null);
@@ -166,12 +173,14 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         setSelectedDevice,
         isScanning,
         setIsScanning,
+        discoveryProgress,
+        setDiscoveryProgress,
         writeToCharacteristic,
         getCharacteristicInfo,
         updateCharValue,
         monitorSubscriptions,
         disconnectSubscription,
-    }), [selectedDevice, isScanning, writeToCharacteristic, getCharacteristicInfo, updateCharValue]);
+    }), [selectedDevice, isScanning, discoveryProgress, writeToCharacteristic, getCharacteristicInfo, updateCharValue]);
 
     return (
         <BluetoothContext.Provider value={contextValue}>
