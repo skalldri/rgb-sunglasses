@@ -32,6 +32,14 @@ static const struct bt_le_adv_param adv_param =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_NAME, BT_GAP_ADV_FAST_INT_MIN_2,
                          BT_GAP_ADV_FAST_INT_MAX_2, NULL);
 
+// Requested once the peer reaches CONNECTED, to cut per-GATT-operation latency during the
+// app's discovery read loop (issue #41). Neither side requests a fast interval otherwise, so
+// the connection runs at the default ~30-50ms (BT_GAP_INIT_CONN_INT_MIN/MAX) for the entire
+// ~170-operation sequential discovery walk. 6-12 (7.5-15ms) mirrors Android's "high priority"
+// connection request; latency=0, timeout=400 (4s) are conventional defaults for a peripheral
+// with no power-sensitivity concerns during this initial handshake.
+static const struct bt_le_conn_param fast_conn_param = BT_LE_CONN_PARAM_INIT(6, 12, 0, 400);
+
 // Storage for runtime-built BT device name (base name + " XXXX" serial suffix)
 static char sBtDeviceName[CONFIG_BT_DEVICE_NAME_MAX + 1];
 
@@ -468,6 +476,12 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
 
             if (cmd->level == REQUIRED_BT_SECURITY_LEVEL) {
                 LOG_DBG("Required security level achieved");
+
+                int ret = bt_conn_le_param_update(ctx->conn, &fast_conn_param);
+                if (ret) {
+                    LOG_WRN("Failed to request fast connection parameters: %d", ret);
+                }
+
                 bt_state_change_to(ctx, BtThreadState::CONNECTED);
             } else {
                 LOG_ERR("Failed to reach required security level %d, got %d instead",

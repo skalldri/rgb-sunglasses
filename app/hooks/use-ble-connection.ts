@@ -13,6 +13,7 @@ import { bleManager } from "@/hooks/ble-manager";
 import { decodeUtf8FromBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useEffect, useRef, useState } from "react";
+import { ConnectionPriority } from "react-native-ble-plx";
 
 interface UseBleConnectionResult {
     isConnecting: boolean;
@@ -53,6 +54,20 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 refreshGatt: "OnConnected",
                 requestMTU: 247,
             });
+
+            // Discovery below does ~170+ sequential GATT reads (one per characteristic/descriptor -
+            // can't be parallelized, Android only allows one outstanding GATT op per connection).
+            // Without this, the connection runs at the OS default interval (~30-50ms), making every
+            // one of those reads slow. High priority requests ~7.5-15ms instead. Android-only effect
+            // (see fw/src/bluetooth.cpp's matching bt_conn_le_param_update for the firmware-side
+            // request); non-fatal if it fails, discovery just runs at whatever interval is already
+            // negotiated.
+            try {
+                await deviceConnection.requestConnectionPriority(ConnectionPriority.High);
+            } catch (error) {
+                console.log(`Could not request high connection priority for ${macAddress}:`, error);
+            }
+
             await deviceConnection.discoverAllServicesAndCharacteristics();
             const services = await deviceConnection.services();
 

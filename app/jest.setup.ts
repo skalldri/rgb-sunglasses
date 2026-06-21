@@ -53,5 +53,10 @@ jest.mock('react-native-ble-plx', () => {
     LogLevel: {
       Verbose: 'Verbose',
     },
+    ConnectionPriority: {
+      Balanced: 0,
+      High: 1,
+      LowPower: 2,
+    },
   };
 });

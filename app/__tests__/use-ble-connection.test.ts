@@ -12,6 +12,7 @@ import * as BluetoothContext from '@/context/bluetooth-context';
 import * as BleHook from '@/hooks/ble-manager';
 import { useBleConnection } from '@/hooks/use-ble-connection';
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from '@/services/mcumgr';
+import { ConnectionPriority } from 'react-native-ble-plx';
 
 jest.mock('@/context/bluetooth-context', () => {
     const actual = jest.requireActual('@/context/bluetooth-context');
@@ -54,6 +55,7 @@ function makeDeviceConnection(services: ReturnType<typeof makeService>[]) {
         characteristicsForService: jest.fn(async (serviceUuid: string) =>
             services.find(s => s.uuid === serviceUuid)?._chars ?? []
         ),
+        requestConnectionPriority: jest.fn(async () => undefined),
     };
 }
 
@@ -90,6 +92,31 @@ describe('useBleConnection', () => {
             refreshGatt: 'OnConnected',
             requestMTU: 247,
         });
+    });
+
+    it('connect() requests a high connection priority before discovery', async () => {
+        const deviceConn = makeDeviceConnection([]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        expect(deviceConn.requestConnectionPriority).toHaveBeenCalledWith(ConnectionPriority.High);
+        expect(deviceConn.discoverAllServicesAndCharacteristics).toHaveBeenCalled();
+    });
+
+    it('connect() proceeds with discovery even if requestConnectionPriority fails', async () => {
+        const deviceConn = makeDeviceConnection([]);
+        (deviceConn.requestConnectionPriority as jest.Mock).mockRejectedValue(new Error('unsupported'));
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        expect(deviceConn.discoverAllServicesAndCharacteristics).toHaveBeenCalled();
+        expect(ctx.setSelectedDevice).toHaveBeenCalled();
     });
 
     it('connect() parses CUD and CPF descriptors into CharacteristicInfo', async () => {
