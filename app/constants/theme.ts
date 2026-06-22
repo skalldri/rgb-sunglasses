@@ -1,31 +1,96 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
+ * Design tokens for the RGB Sunglasses app.
+ *
+ * `Colors` holds the semantic palette for light & dark modes; `useThemeColor` /
+ * `useThemeColors` (app/hooks/use-theme-color.ts) read from it based on the OS color scheme.
+ * The non-color tokens (Spacing, Radii, Typography, Gradients, Shadows) are theme-independent.
+ *
+ * Legacy keys (`text`, `background`, `tint`, `icon`, `tabIconDefault`, `tabIconSelected`) are
+ * kept so existing call sites keep working; new code should prefer the semantic keys.
  */
 
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
-
 export const Colors = {
   light: {
-    text: '#11181C',
-    background: '#fff',
-    tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
+    background: '#F7F7FB',
+    surface: '#FFFFFF',
+    surfaceAlt: '#EFEFF6',
+    text: '#15151B',
+    textPrimary: '#15151B',
+    textSecondary: '#5B5B6B',
+    textMuted: '#8A8A9A',
+    border: '#E2E2EC',
+    tint: '#7C3AED',
+    primary: '#7C3AED',
+    onPrimary: '#FFFFFF',
+    success: '#16A34A',
+    info: '#2563EB',
+    danger: '#DC2626',
+    warning: '#D97706',
+    icon: '#5B5B6B',
+    tabIconDefault: '#8A8A9A',
+    tabIconSelected: '#7C3AED',
+    overlay: 'rgba(15,15,25,0.45)',
   },
   dark: {
-    text: '#ECEDEE',
-    background: '#151718',
-    tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
+    background: '#0B0B12',
+    surface: '#16161F',
+    surfaceAlt: '#1F1F2B',
+    text: '#ECECF4',
+    textPrimary: '#ECECF4',
+    textSecondary: '#A8A8BC',
+    textMuted: '#73738A',
+    border: '#2A2A38',
+    tint: '#A78BFA',
+    primary: '#A78BFA',
+    onPrimary: '#FFFFFF',
+    success: '#22C55E',
+    info: '#60A5FA',
+    danger: '#F87171',
+    warning: '#FBBF24',
+    icon: '#A8A8BC',
+    tabIconDefault: '#73738A',
+    tabIconSelected: '#A78BFA',
+    overlay: 'rgba(0,0,0,0.6)',
   },
-};
+} as const;
+
+export const Spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
+
+export const Radii = { sm: 8, md: 12, lg: 16, xl: 24, pill: 999 } as const;
+
+export const Typography = {
+  display: { fontSize: 34, lineHeight: 40, fontWeight: '800' },
+  title: { fontSize: 28, lineHeight: 34, fontWeight: '700' },
+  heading: { fontSize: 22, lineHeight: 28, fontWeight: '700' },
+  subtitle: { fontSize: 18, lineHeight: 24, fontWeight: '600' },
+  body: { fontSize: 16, lineHeight: 24, fontWeight: '400' },
+  bodyMedium: { fontSize: 16, lineHeight: 24, fontWeight: '600' },
+  caption: { fontSize: 13, lineHeight: 18, fontWeight: '400' },
+  overline: { fontSize: 12, lineHeight: 16, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
+} as const;
+
+/**
+ * Gradient stop arrays for expo-linear-gradient.
+ * `brand` is for the hero only — never overlay small text on the bright cyan stop.
+ * `primary` backs primary buttons; keep white labels >=16px / weight >=600 (AA-large >=3:1).
+ */
+export const Gradients = {
+  brand: ['#7C3AED', '#EC4899', '#22D3EE'],
+  primary: ['#7C3AED', '#DB2777'],
+} as const;
+
+/** Subtle card elevation: iOS uses shadow*, Android uses elevation. */
+export const Shadows = {
+  card: {
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+} as const;
 
 export const Fonts = Platform.select({
   ios: {

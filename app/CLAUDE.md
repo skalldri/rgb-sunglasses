@@ -107,6 +107,9 @@ First-time pairing requires accepting Android system prompts that are too timing
 
 **Rule:** If a device has never been paired, ask the user to watch for and accept the Android pairing prompts themselves. Once paired, subsequent connections complete automatically without any prompts.
 
+### ADB Wireless Pairing State Lives on the Phone, Not the Container
+`adb devices` showing empty does **not** mean the device was never paired. Wireless debugging pairing (the 6-digit code flow) is remembered by the phone; only the TCP connection itself is container-local and drops on container restart. Don't infer "needs full re-pair" from missing local files like `~/.android/known_devices.xml` — those don't reliably reflect pairing state either. Always try `adb connect <ip:port>` first (ask the user for the device's current IP:port from the Wireless debugging screen if unknown); only walk through the full `adb pair` flow if `adb connect` actually fails.
+
 ### Launching the App
 `npx expo run:android` is a blocking command — always run it as a background task. Use `--device Pixel_9_Pro` (the model name, not the ADB IP:port format):
 ```bash
@@ -143,6 +146,12 @@ Device density is 360 dpi → pixel ratio = 360/160 = **2.25**.
 **Status bar**: 153 screenshot px (68 dp) at the top. App content starts below this. `measureInWindow` dp coordinates are relative to the content area (y=0 is below the status bar).
 
 **Practical rule**: get coordinates from the screenshot for `tap()`. Convert to dp for `inspect_at_point()`. Don't mix them up.
+
+### execbro tap coordinates on the OnePlus 9 Pro (LE2125) — read positions from the rendered image, ignore the pressable list
+On this device the `android_screenshot` raw frame is 1080×2412 and is delivered downscaled to 896×2000 (~0.829×). Two gotchas burned several taps in one session:
+- The **pressables list** that `android_screenshot` prints (e.g. `<AppButton/> "Connect" frame:(714,709 ...)`) reports coordinates that are *inflated* relative to the delivered image (values exceed the 2000px delivered height) — passing them to `tap(x,y)` lands high/short and misses.
+- `tap(..., native=true)` does **not** bypass the scaling here — it still multiplies the input by ~1.206, so native taps with raw coords overshoot off-screen.
+- What actually works: **visually read the target's position from the delivered screenshot image and pass those pixel coords to `tap(x, y)` (no `native`)**. The tool multiplies by ~1.206 to hit the real raw pixel, and the crosshair lands at roughly the input coordinate in the displayed image. Fiber/`component=`/`text=` taps also misfired (same conversion bug), so coordinate taps read from the image are the reliable path. If a tap shows `meaningful:false`/no change, nudge using the image, don't trust the pressable-list numbers.
 
 ### Toggling Switch (Boolean) Characteristics
 `Switch` components use `onValueChange`, not `onPress`, so they cannot be triggered via `tap()` by component name or coordinates. Instead, walk the React fiber tree and call the component's `onWrite` prop directly:

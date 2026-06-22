@@ -5,18 +5,28 @@ import { CharacteristicFloat32 } from "@/components/characteristic-float32";
 import { CharacteristicUint32 } from "@/components/characteristic-uint32";
 import { CharacteristicUtf8 } from "@/components/characteristic-utf8";
 import { ThemedText } from "@/components/themed-text";
+import { AppButton } from "@/components/ui/app-button";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Divider } from "@/components/ui/divider";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ListRow } from "@/components/ui/list-row";
+import { Section } from "@/components/ui/section";
 import { BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_DROPDOWN_LIST, BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S, getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE } from "@/constants/bluetooth";
+import { Spacing } from "@/constants/theme";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
+import { useThemeColors } from "@/hooks/use-theme-color";
 import { decodeFloat32FromBase64, decodeUint32FromBase64, decodeUtf8FromBase64, formatFloat32 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { Link } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Button, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from "react-native";
+import { Animated, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 
 export default function DeviceStateScreen() {
     const { selectedDevice, writeToCharacteristic } = useBluetooth();
+    const c = useThemeColors();
 
     // Local state for tracking pending input values (before BLE write)
     const [pendingValues, setPendingValues] = useState<Record<string, string>>({});
@@ -221,77 +231,83 @@ export default function DeviceStateScreen() {
         return null;
     }
 
+    const visibleServices = (selectedDevice?.services ?? [])
+        .filter(service => service.uuid !== UUID_GENERIC_ATTRIBUTE_SERVICE && service.uuid !== UUID_GENERIC_ACCESS_SERVICE);
+
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>
             <KeyboardAvoidingView
                 style={styles.container}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 keyboardVerticalOffset={50}>
-                <ThemedText>
-                    {selectedDevice == null ? "NOT CONNECTED" : selectedDevice.name}
-                </ThemedText>
 
-                <View style={styles.separator} />
+                <View style={styles.header}>
+                    <ThemedText type="heading">Controls</ThemedText>
+                    <Badge
+                        label={selectedDevice == null ? "NOT CONNECTED" : selectedDevice.name}
+                        tone={selectedDevice == null ? 'danger' : 'success'}
+                    />
+                </View>
 
-                <ScrollView contentContainerStyle={styles.scrollContent}>
-                    {
-                        (selectedDevice?.services ?? [])
-                            .filter(service => service.uuid !== UUID_GENERIC_ATTRIBUTE_SERVICE && service.uuid !== UUID_GENERIC_ACCESS_SERVICE)
-                            .map((service, index, visibleServices) => {
+                {selectedDevice == null ? (
+                    <EmptyState
+                        icon="🕶️"
+                        title="Not connected"
+                        subtitle="Open the Connect tab to pair your glasses."
+                        action={
+                            <Link href="/(tabs)/bluetooth" asChild>
+                                <AppButton title="Go to Connect" variant="primary" />
+                            </Link>
+                        }
+                    />
+                ) : (
+                    <ScrollView contentContainerStyle={styles.scrollContent}>
+                        {visibleServices.map((service, index) => {
+                            const characteristics = Object.entries(selectedDevice?.characteristicsByService[service.uuid] ?? {})
+                                .filter(([charUuid]) => charUuid !== UUID_ANIMATION_NAME_CHARACTERISTIC);
+
                             return (
-                                <View key={service.uuid + `- service - details - ` + String(index)}>
-                                    <ThemedText
-                                        key={service.uuid + `- ` + String(index)}>
-                                        {selectedDevice?.serviceDisplayNames?.[service.uuid] ?? getServiceName(service.uuid)}
-                                    </ThemedText>
+                                <Card key={service.uuid + `-service-` + String(index)} style={styles.card}>
+                                    <Section title={selectedDevice?.serviceDisplayNames?.[service.uuid] ?? getServiceName(service.uuid)}>
+                                        {characteristics.map(([charUuid, charInfo], charIndex) => {
+                                            const isMcuMgrCharacteristic = service.uuid === SMP_SERVICE_UUID && charUuid === SMP_CHARACTERISTIC_UUID;
 
-                                    {Object.entries(selectedDevice?.characteristicsByService[service.uuid] ?? {}).map(([charUuid, charInfo], charIndex) => {
-                                        // Already surfaced as the service header above; this UUID is shared
-                                        // across every animation service, so skip the generic row for it.
-                                        if (charUuid === UUID_ANIMATION_NAME_CHARACTERISTIC) return null;
+                                            // Animated status color for this characteristic's label.
+                                            const status = writeStatus[charUuid];
+                                            const fadeValue = fadeAnims.current[charUuid];
+                                            const statusColor = status === 'success' ? c.success
+                                                : status === 'notification' ? c.info
+                                                : c.danger;
+                                            const labelColor = status && fadeValue
+                                                ? fadeValue.interpolate({
+                                                    inputRange: [0, 1],
+                                                    outputRange: [c.textPrimary, statusColor],
+                                                })
+                                                : c.textPrimary;
 
-                                        const isMcuMgrCharacteristic = service.uuid === SMP_SERVICE_UUID && charUuid === SMP_CHARACTERISTIC_UUID;
-
-                                        // Get animated color for this characteristic
-                                        const status = writeStatus[charUuid];
-                                        const fadeValue = fadeAnims.current[charUuid];
-
-                                        // Interpolate color based on status and fade value
-                                        const statusColor = status === 'success' ? '#00ff00'
-                                            : status === 'notification' ? '#4499ff'
-                                            : '#ff0000';
-                                        const textColor = status && fadeValue
-                                            ? fadeValue.interpolate({
-                                                inputRange: [0, 1],
-                                                outputRange: ['#ffffff', statusColor]
-                                            })
-                                            : '#ffffff';
-
-                                        return (
-                                            <View
-                                                key={`${service.uuid} -char - ${charIndex} `}
-                                                style={styles.characteristicRow}>
-                                                <Animated.Text style={[styles.characteristicLabel, { color: textColor }]}>
-                                                    {charInfo.name ?? getCharacteristicName(charUuid)}
-                                                </Animated.Text>
-                                                {isMcuMgrCharacteristic && (
-                                                    <Link href="/firmware-update-modal" asChild>
-                                                        <Button title="Update" onPress={() => { }} />
-                                                    </Link>
-                                                )}
-                                                {renderCharacteristicInput(charUuid, charInfo)}
-                                            </View>
-                                        );
-                                    })}
-
-                                    {index < visibleServices.length - 1 && (
-                                        <View style={styles.separator} />
-                                    )}
-                                </View>
-                            )
-                        })
-                    }
-                </ScrollView>
+                                            return (
+                                                <React.Fragment key={`${service.uuid}-char-${charIndex}`}>
+                                                    {charIndex > 0 && <Divider />}
+                                                    <ListRow
+                                                        label={charInfo.name ?? getCharacteristicName(charUuid)}
+                                                        labelColor={labelColor}
+                                                    >
+                                                        {isMcuMgrCharacteristic && (
+                                                            <Link href="/firmware-update-modal" asChild>
+                                                                <AppButton title="Update" variant="secondary" />
+                                                            </Link>
+                                                        )}
+                                                        {renderCharacteristicInput(charUuid, charInfo)}
+                                                    </ListRow>
+                                                </React.Fragment>
+                                            );
+                                        })}
+                                    </Section>
+                                </Card>
+                            );
+                        })}
+                    </ScrollView>
+                )}
             </KeyboardAvoidingView>
         </SafeAreaView>
     );
@@ -302,23 +318,21 @@ const styles = StyleSheet.create({
         flex: 1,
         overflow: 'hidden',
     },
-    separator: {
-        height: 1,
-        backgroundColor: '#ccc',
-        marginVertical: 16,
-    },
-    scrollContent: {
-        paddingBottom: 0,
-    },
-    characteristicRow: {
+    header: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginLeft: 16,
-        marginVertical: 4,
+        justifyContent: 'space-between',
+        gap: Spacing.sm,
+        paddingHorizontal: Spacing.lg,
+        paddingTop: Spacing.lg,
+        paddingBottom: Spacing.md,
     },
-    characteristicLabel: {
-        fontSize: 12,
-        flexShrink: 1,
-        marginRight: 8,
+    scrollContent: {
+        paddingHorizontal: Spacing.lg,
+        paddingBottom: Spacing.xxl,
+        gap: Spacing.md,
+    },
+    card: {
+        marginBottom: 0,
     },
 });

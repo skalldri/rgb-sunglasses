@@ -1,4 +1,6 @@
+import { Radii, Spacing } from "@/constants/theme";
 import { CharacteristicInfo } from "@/context/bluetooth-context";
+import { useThemeColors } from "@/hooks/use-theme-color";
 import { encodeFloat32ToBase64, sanitizeFloatInput } from "@/services/ble-value-codec";
 import { StyleSheet, TextInput } from "react-native";
 
@@ -11,11 +13,12 @@ interface Props {
 }
 
 export function CharacteristicFloat32({ charUuid, charInfo, pendingValue, onChangeText, onWrite }: Props) {
+    const c = useThemeColors();
     return (
         <TextInput
-            style={styles.textInput}
+            style={[styles.textInput, { color: c.textPrimary, backgroundColor: c.surfaceAlt, borderColor: c.border }]}
             placeholder="Enter number"
-            placeholderTextColor="#888"
+            placeholderTextColor={c.textMuted}
             keyboardType="decimal-pad"
             editable={!charInfo.isUpdateInProgress}
             value={pendingValue}
@@ -40,11 +43,10 @@ export function CharacteristicFloat32({ charUuid, charInfo, pendingValue, onChan
 const styles = StyleSheet.create({
     textInput: {
         borderWidth: 1,
-        borderColor: '#ccc',
-        borderRadius: 4,
-        padding: 4,
+        borderRadius: Radii.md,
+        paddingHorizontal: Spacing.sm,
+        paddingVertical: Spacing.xs,
         flex: 1,
         minWidth: 80,
-        color: '#fff',
     },
 });

@@ -6,18 +6,6 @@ import BluetoothScreen from '@/app/(tabs)/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import * as BleHook from '@/hooks/ble-manager';
 
-jest.mock('@/components/parallax-scroll-view', () => {
-  const React = require('react');
-  const { View } = require('react-native');
-  return function MockParallaxScrollView({ children }: { children: React.ReactNode }) {
-    return <View>{children}</View>;
-  };
-});
-
-jest.mock('expo-image', () => ({
-  Image: () => null,
-}));
-
 jest.mock('@/components/bluetooth-device-list-item', () => {
   const React = require('react');
   const { Text } = require('react-native');
