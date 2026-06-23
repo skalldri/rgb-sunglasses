@@ -19,7 +19,13 @@ class RecordingActivator : public AnimationActivator {
         last.callCount++;
     }
 
+    void deactivateAnimation(Animation id) override {
+        lastDeactivate.lastId = id;
+        lastDeactivate.callCount++;
+    }
+
     ActivatorCall last;
+    ActivatorCall lastDeactivate;
 };
 
 bool sSetterLastValue = false;
@@ -51,14 +57,18 @@ ZTEST(animation_is_active_binding_tests, test_on_remote_active_true_calls_activa
     zassert_equal(activator.last.lastId, kTestAnimation, "Expected correct animation ID");
 }
 
-ZTEST(animation_is_active_binding_tests, test_on_remote_active_false_does_not_call_activator) {
+ZTEST(animation_is_active_binding_tests, test_on_remote_active_false_calls_deactivate) {
     reset_binding();
     RecordingActivator activator;
     TestBinding::registerActivator(&activator);
 
     TestBinding::onRemoteActiveChange(false);
 
-    zassert_equal(activator.last.callCount, 0, "Expected activator NOT called when active==false");
+    zassert_equal(activator.last.callCount, 0,
+                  "Expected changeToAnimation NOT called when active==false");
+    zassert_equal(activator.lastDeactivate.callCount, 1,
+                  "Expected deactivateAnimation called exactly once");
+    zassert_equal(activator.lastDeactivate.lastId, kTestAnimation, "Expected correct animation ID");
 }
 
 ZTEST(animation_is_active_binding_tests, test_on_remote_active_without_activator_is_safe) {

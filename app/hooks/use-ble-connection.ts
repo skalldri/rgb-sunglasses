@@ -36,6 +36,15 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     const isMountedRef = useRef(true);
     useEffect(() => () => { isMountedRef.current = false; }, []);
 
+    // Android reverts an idle connection to a slower interval/priority after a period with no
+    // GATT traffic, even though connect() requested High priority up front (that request only
+    // covers the discovery burst - see the comment at the requestConnectionPriority call below).
+    // The next write after such a gap (e.g. a user toggling "Is Active" after leaving the app
+    // idle for a while) then pays for renegotiation, which can take several seconds instead of
+    // the usual sub-second round trip. Re-requesting High priority periodically keeps the link
+    // from ever being idle long enough for Android to downgrade it.
+    const connectionPriorityKeepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
     async function connect(): Promise<void> {
         setIsConnecting(true);
         try {
@@ -249,6 +258,12 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             });
             console.log(`Set up ${monitorSubscriptions.current.length} characteristic monitors`);
 
+            connectionPriorityKeepAliveRef.current = setInterval(() => {
+                deviceConnection.requestConnectionPriority(ConnectionPriority.High).catch(error => {
+                    console.log(`Could not refresh high connection priority for ${macAddress}:`, error);
+                });
+            }, 15000);
+
             // Register the disconnect listener using selectedDeviceRef so the callback
             // always reads the current mcuMgrClient, not a stale closure snapshot.
             disconnectSubscription.current = bleManager.onDeviceDisconnected(macAddress, (error, device) => {
@@ -258,6 +273,11 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
 
                 if (device && device.id === macAddress) {
                     console.log(`Device disconnected: ${deviceName} (${macAddress})`);
+
+                    if (connectionPriorityKeepAliveRef.current) {
+                        clearInterval(connectionPriorityKeepAliveRef.current);
+                        connectionPriorityKeepAliveRef.current = null;
+                    }
 
                     console.log(`Cleaning up ${monitorSubscriptions.current.length} characteristic monitors on disconnect`);
                     monitorSubscriptions.current.forEach(sub => sub.remove());
@@ -302,6 +322,11 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             if (disconnectSubscription.current) {
                 disconnectSubscription.current.remove();
                 disconnectSubscription.current = null;
+            }
+
+            if (connectionPriorityKeepAliveRef.current) {
+                clearInterval(connectionPriorityKeepAliveRef.current);
+                connectionPriorityKeepAliveRef.current = null;
             }
 
             console.log(`Cleaning up ${monitorSubscriptions.current.length} characteristic monitors`);
