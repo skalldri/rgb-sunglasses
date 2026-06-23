@@ -9,6 +9,15 @@ config APP_PERSIST_BT_CONFIG
 	  Kconfig tree, so it needs its own definition to compile in the real
 	  implementation rather than the disabled-feature stubs.
 
+config APP_PERSIST_WORKQ_STACK_SIZE
+	int "Stack size for the persistent-value-store workqueue"
+	default 2048
+	depends on APP_PERSIST_BT_CONFIG
+	help
+	  The persistent-value-store workqueue is used to debounce writes to
+	  persistent config values (see src/settings/). This option controls the
+	  stack size of that workqueue's thread.
+
 config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	int "Debounce interval (ms) before persisting a changed config value"
 	default 1000
