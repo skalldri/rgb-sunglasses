@@ -1,3 +1,5 @@
+import { METADATA_BLOB_VERSION } from '@/constants/bluetooth';
+
 export type RgbColor = {
   r: number;
   g: number;
@@ -109,4 +111,46 @@ export function decodeColorFromBase64(encodedValue?: string | null): RgbColor {
     g: decoded.charCodeAt(1) & 0xff,
     r: decoded.charCodeAt(2) & 0xff,
   };
+}
+
+export type MetadataBlobEntry = {
+  cpfFormat: number;
+  name: string;
+};
+
+// Decodes the bulk per-service metadata characteristic's value (issue #41 follow-up - see
+// UUID_METADATA_CHARACTERISTIC in constants/bluetooth.ts and MetadataBlobBuilder in
+// fw/src/bluetooth/bt_service_cpp.h for the firmware side that produces this).
+//
+// Wire format: [version: 1 byte][entry_count: 1 byte], then entry_count repetitions of
+// [cpf_format: 1 byte][name_len: 1 byte][name_bytes: name_len bytes, no NUL].
+//
+// Returns null on any version mismatch or malformed/truncated data, which the caller must
+// treat as "fall back to the per-descriptor read path" - never zip a null result positionally.
+// This deliberately does NOT validate entry_count against the service's actual characteristic
+// count (the caller does that, since only it knows how many characteristics exist) - this
+// function only validates that the bytes it was given are internally well-formed.
+export function parseMetadataBlob(encodedValue?: string | null): MetadataBlobEntry[] | null {
+  if (!encodedValue) return null;
+
+  const decoded = atob(encodedValue);
+  if (decoded.length < 2) return null;
+
+  const version = decoded.charCodeAt(0);
+  if (version !== METADATA_BLOB_VERSION) return null;
+
+  const entryCount = decoded.charCodeAt(1);
+  const entries: MetadataBlobEntry[] = [];
+  let pos = 2;
+  for (let i = 0; i < entryCount; i++) {
+    if (pos + 2 > decoded.length) return null;
+    const cpfFormat = decoded.charCodeAt(pos++);
+    const nameLen = decoded.charCodeAt(pos++);
+    if (pos + nameLen > decoded.length) return null;
+    const name = decoded.slice(pos, pos + nameLen);
+    pos += nameLen;
+    entries.push({ cpfFormat, name });
+  }
+
+  return entries;
 }

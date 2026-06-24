@@ -8,10 +8,11 @@ import {
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
     UUID_IS_ACTIVE_CHARACTERISTIC,
+    UUID_METADATA_CHARACTERISTIC,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { bleManager } from "@/hooks/ble-manager";
-import { decodeUtf8FromBase64 } from "@/services/ble-value-codec";
+import { decodeUtf8FromBase64, MetadataBlobEntry, parseMetadataBlob } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useEffect, useRef, useState } from "react";
 import { ConnectionPriority } from "react-native-ble-plx";
@@ -87,7 +88,14 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 const serviceCharsList = await Promise.all(
                     services.map(service => deviceConnection.characteristicsForService(service.uuid))
                 );
-                const totalCharacteristics = serviceCharsList.reduce((sum, chars) => sum + chars.length, 0);
+                // Excludes the bulk metadata characteristic (issue #41 follow-up) from the count:
+                // it's never individually processed in the loop below (see displayChars), so
+                // including it here would make `total` permanently 1 higher than `current` can
+                // ever reach for any service that has one.
+                const totalCharacteristics = serviceCharsList.reduce(
+                    (sum, chars) => sum + chars.filter(c => c.uuid !== UUID_METADATA_CHARACTERISTIC).length,
+                    0
+                );
                 let processedCharacteristics = 0;
                 setDiscoveryProgress({ current: 0, total: totalCharacteristics });
 
@@ -99,10 +107,54 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
 
                     console.log(`START processing Service UUID: ${getServiceName(service.uuid)}`);
 
-                    for (const characteristic of serviceChars) {
-                        const descriptors = await service.descriptorsForCharacteristic(characteristic.uuid);
-                        console.log(`Characteristic: ${getCharacteristicName(characteristic.uuid)}, Descriptors: ${descriptors.length}`);
+                    // The bulk metadata characteristic (issue #41 follow-up) is an app-only
+                    // discovery optimization - never shown in the UI, same treatment as
+                    // UUID_ANIMATION_NAME_CHARACTERISTIC below, just excluded entirely rather
+                    // than redirected into serviceDisplayNames.
+                    const metadataCharacteristic = serviceChars.find(c => c.uuid === UUID_METADATA_CHARACTERISTIC);
+                    const displayChars = serviceChars.filter(c => c.uuid !== UUID_METADATA_CHARACTERISTIC);
 
+                    // Bulk-read fast path: one ATT read for this service's CUD names + CPF
+                    // formats instead of two descriptor reads per characteristic. Falls back to
+                    // the unchanged per-descriptor path below on any read failure, version
+                    // mismatch, or entry-count mismatch (see parseMetadataBlob() for what counts
+                    // as malformed) - services without this characteristic (e.g. the third-party
+                    // McuMgr service, or any board built with CONFIG_APP_BT_METADATA_CHARACTERISTIC
+                    // disabled) take the fallback path automatically, with zero special-casing.
+                    //
+                    // ORDERING ASSUMPTION: this zips bulkMetadata[j] to displayChars[j]
+                    // positionally, which assumes characteristicsForService() returns
+                    // characteristics in firmware GATT declaration order. This holds because ATT
+                    // "Read By Type" (used internally by characteristic discovery) is spec-required
+                    // to return attributes in ascending handle order, and handles are assigned in
+                    // exactly the order BtGattServer's Providers... pack is declared - see
+                    // MetadataBlobBuilder's doc comment in fw/src/bluetooth/bt_service_cpp.h for the
+                    // full rationale. The one UNVERIFIED link in this chain is react-native-ble-plx's
+                    // Android module: it must pass the native BluetoothGatt discovery result through
+                    // to characteristicsForService() without any client-side re-sort (e.g. by UUID
+                    // string) - a library version bump, not an ATT spec violation, is the one way
+                    // this guarantee could silently break. Note the entry-count check below catches
+                    // a COUNT mismatch but NOT a same-count reordering - that residual risk is
+                    // accepted (see the plan for issue #41's metadata-characteristic follow-up).
+                    let bulkMetadata: MetadataBlobEntry[] | null = null;
+                    if (metadataCharacteristic) {
+                        try {
+                            const read = await metadataCharacteristic.read();
+                            bulkMetadata = parseMetadataBlob(read.value);
+                        } catch (error) {
+                            console.log(`Could not read bulk metadata characteristic for ${getServiceName(service.uuid)}:`, error);
+                        }
+
+                        if (bulkMetadata && bulkMetadata.length !== displayChars.length) {
+                            console.log(
+                                `Bulk metadata count mismatch for ${getServiceName(service.uuid)}: got ${bulkMetadata.length}, expected ${displayChars.length}. Falling back to per-descriptor reads.`
+                            );
+                            bulkMetadata = null;
+                        }
+                    }
+
+                    for (let j = 0; j < displayChars.length; j++) {
+                        const characteristic = displayChars[j];
                         const charInfo: CharacteristicInfo = {
                             characteristic,
                             value: null,
@@ -111,36 +163,45 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                             isUpdateInProgress: false,
                         };
 
-                        for (const descriptor of descriptors) {
-                            // CCC just reflects local notification-subscription state (always 0x0000
-                            // here, before connect() ever subscribes via characteristic.monitor()
-                            // below) - the read result was never stored or used, only logged. Skip
-                            // it to save one ATT round-trip per notifiable characteristic.
-                            if (descriptor.uuid === UUID_CCC_DESCRIPTOR) {
-                                continue;
-                            }
+                        if (bulkMetadata) {
+                            charInfo.name = bulkMetadata[j].name;
+                            charInfo.cpfFormat = bulkMetadata[j].cpfFormat;
+                            console.log(`Characteristic: ${getCharacteristicName(characteristic.uuid)} (from bulk metadata): name="${charInfo.name}", cpfFormat=${charInfo.cpfFormat}`);
+                        } else {
+                            const descriptors = await service.descriptorsForCharacteristic(characteristic.uuid);
+                            console.log(`Characteristic: ${getCharacteristicName(characteristic.uuid)}, Descriptors: ${descriptors.length}`);
 
-                            console.log(`Descriptor UUID: ${getDescriptorName(descriptor.uuid)}`);
+                            for (const descriptor of descriptors) {
+                                // CCC just reflects local notification-subscription state (always 0x0000
+                                // here, before connect() ever subscribes via characteristic.monitor()
+                                // below) - the read result was never stored or used, only logged. Skip
+                                // it to save one ATT round-trip per notifiable characteristic.
+                                if (descriptor.uuid === UUID_CCC_DESCRIPTOR) {
+                                    continue;
+                                }
 
-                            let readDescriptor;
-                            try {
-                                readDescriptor = await descriptor.read();
-                            } catch (error) {
-                                console.log(`Could not read descriptor ${getDescriptorName(descriptor.uuid)}:`, error);
-                                continue;
-                            }
-                            console.log(`Descriptor Value: ${readDescriptor.value}`);
+                                console.log(`Descriptor UUID: ${getDescriptorName(descriptor.uuid)}`);
 
-                            if (descriptor.uuid === UUID_CUD_DESCRIPTOR) {
-                                charInfo.name = atob(readDescriptor.value || '');
-                                console.log(`CUD Descriptor Value (decoded): ${charInfo.name}`);
-                            }
+                                let readDescriptor;
+                                try {
+                                    readDescriptor = await descriptor.read();
+                                } catch (error) {
+                                    console.log(`Could not read descriptor ${getDescriptorName(descriptor.uuid)}:`, error);
+                                    continue;
+                                }
+                                console.log(`Descriptor Value: ${readDescriptor.value}`);
 
-                            if (descriptor.uuid === UUID_CPF_DESCRIPTOR) {
-                                const decoded = atob(readDescriptor.value || '');
-                                charInfo.cpfFormat = decoded.charCodeAt(0);
-                                const hex = Array.from(decoded, char => char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
-                                console.log(`CPF Descriptor Value (hex): ${hex}`);
+                                if (descriptor.uuid === UUID_CUD_DESCRIPTOR) {
+                                    charInfo.name = atob(readDescriptor.value || '');
+                                    console.log(`CUD Descriptor Value (decoded): ${charInfo.name}`);
+                                }
+
+                                if (descriptor.uuid === UUID_CPF_DESCRIPTOR) {
+                                    const decoded = atob(readDescriptor.value || '');
+                                    charInfo.cpfFormat = decoded.charCodeAt(0);
+                                    const hex = Array.from(decoded, char => char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
+                                    console.log(`CPF Descriptor Value (hex): ${hex}`);
+                                }
                             }
                         }
 
