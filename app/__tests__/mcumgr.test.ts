@@ -261,6 +261,10 @@ describe('McuMgrClient protocol behavior', () => {
       {},
       1000
     );
+    // sendRequest() queues onto requestChain (see mcumgr.ts), so the actual SMP exchange (and
+    // its responseResolver/responseRejecter setup) starts one microtask later than the call
+    // above - flush that before destroying, or destroy() would find nothing pending yet.
+    await Promise.resolve();
     client.destroy();
 
     await expect(requestPromise).rejects.toThrow('Client destroyed');
@@ -643,6 +647,9 @@ describe('McuMgrClient initialize behavior', () => {
       1000
     );
     const assertion = expect(requestPromise).rejects.toEqual({ message: 'SMP failed' });
+    // See the comment in the "cleans up pending responses when destroyed" test above - the
+    // responseRejecter isn't set until requestChain's queued microtask runs.
+    await Promise.resolve();
     monitorCallback?.({ message: 'SMP failed' }, null);
     await assertion;
   });

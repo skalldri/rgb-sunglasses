@@ -303,6 +303,17 @@ export class McuMgrClient {
     private responseRejecter: ((error: Error) => void) | null = null;
     private monitorSubscription: any = null;
     private isDestroyed: boolean = false;
+    // Serializes every SMP exchange. The device (and this class) can only track one
+    // in-flight request at a time - responseResolver/responseRejecter are single slots,
+    // not a queue keyed by sequence number. Two overlapping sendRequest() calls (e.g. the
+    // firmware-update modal's "Refresh" button firing getImageState()+getSlotInfo() without
+    // awaiting either) would otherwise have the second call's resolver silently clobber the
+    // first's, so the first request's response either gets misrouted to the wrong promise or
+    // never arrives at all - it just sits until its own 5s timeout fires
+    // ("SMP request timeout after Xms"). Chaining every call onto this promise (regardless of
+    // whether the previous one resolved or rejected) guarantees only one exchange is ever in
+    // flight, so callers can call sendRequest()-based methods without manually sequencing them.
+    private requestChain: Promise<unknown> = Promise.resolve();
 
     constructor(device: Device) {
         this.device = device;
@@ -442,9 +453,28 @@ export class McuMgrClient {
     }
 
     /**
-     * Send an SMP request and wait for response
+     * Send an SMP request and wait for response.
+     *
+     * Queues onto requestChain so overlapping calls (from any caller) are serialized into
+     * one-at-a-time SMP exchanges - see the requestChain field comment for why this is required.
      */
-    private async sendRequest(
+    private sendRequest(
+        op: SmpOp,
+        group: SmpGroup,
+        command: number,
+        payload: any,
+        timeout: number = 5000
+    ): Promise<any> {
+        const run = () => this.doSendRequest(op, group, command, payload, timeout);
+        const result = this.requestChain.then(run, run);
+        // Swallow rejections here so one failed request doesn't poison the chain for whatever
+        // is queued after it - `result` (returned below) still carries the real outcome to the
+        // original caller.
+        this.requestChain = result.catch(() => undefined);
+        return result;
+    }
+
+    private async doSendRequest(
         op: SmpOp,
         group: SmpGroup,
         command: number,
