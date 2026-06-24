@@ -188,12 +188,12 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         return device.characteristicsByService?.[serviceUuid]?.[charUuid] ?? null;
     }, []);
 
-    // Service-aware sibling of updateCharFields/updateCharValue: patches characteristicsByService
-    // directly by the given serviceUuid instead of reverse-searching serviceCharacteristics (the
-    // lookup updateCharFields relies on, which is ambiguous for a charUuid reused across
-    // services). Only patches the flat map too if that charUuid actually lives there (it won't,
-    // for reused-UUID characteristics), so this is safe to use generically.
-    const updateServiceCharacteristicValue = useCallback((serviceUuid: string, charUuid: string, newValue: string) => {
+    // Service-aware sibling of updateCharFields: patches characteristicsByService directly by the
+    // given serviceUuid instead of reverse-searching serviceCharacteristics (the lookup
+    // updateCharFields relies on, which is ambiguous for a charUuid reused across services). Only
+    // patches the flat map too if that charUuid actually lives there (it won't, for reused-UUID
+    // characteristics), so this is safe to use generically.
+    const updateServiceCharacteristicFields = useCallback((serviceUuid: string, charUuid: string, fields: Partial<CharacteristicInfo>) => {
         setSelectedDevice(prevDevice => {
             if (!prevDevice) return null;
 
@@ -201,7 +201,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             if (!existingInService) return prevDevice;
 
             const updatedFlat = prevDevice.characteristics[charUuid]
-                ? { ...prevDevice.characteristics, [charUuid]: { ...prevDevice.characteristics[charUuid], value: newValue } }
+                ? { ...prevDevice.characteristics, [charUuid]: { ...prevDevice.characteristics[charUuid], ...fields } }
                 : prevDevice.characteristics;
 
             return {
@@ -211,12 +211,21 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
                     ...prevDevice.characteristicsByService,
                     [serviceUuid]: {
                         ...prevDevice.characteristicsByService[serviceUuid],
-                        [charUuid]: { ...existingInService, value: newValue },
+                        [charUuid]: { ...existingInService, ...fields },
                     },
                 },
             };
         });
     }, []);
+
+    const updateServiceCharacteristicValue = useCallback((serviceUuid: string, charUuid: string, newValue: string) => {
+        updateServiceCharacteristicFields(serviceUuid, charUuid, { value: newValue });
+    }, [updateServiceCharacteristicFields]);
+
+    // Service-aware sibling of setCharUpdateInProgress.
+    const setServiceCharUpdateInProgress = useCallback((serviceUuid: string, charUuid: string, inProgress: boolean) => {
+        updateServiceCharacteristicFields(serviceUuid, charUuid, { isUpdateInProgress: inProgress });
+    }, [updateServiceCharacteristicFields]);
 
     // Service-aware sibling of writeToCharacteristic, for characteristics whose UUID is
     // intentionally reused across multiple services (e.g. UUID_IS_ACTIVE_CHARACTERISTIC, reused
@@ -239,6 +248,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             return false;
         }
 
+        setServiceCharUpdateInProgress(serviceUuid, charUuid, true);
+
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
             if (!options?.skipOptimisticUpdate) {
@@ -248,8 +259,10 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         } catch (error) {
             console.log(`Error writing value to characteristic ${charUuid} in service ${serviceUuid}: ${error}`);
             return false;
+        } finally {
+            setServiceCharUpdateInProgress(serviceUuid, charUuid, false);
         }
-    }, [getServiceCharacteristicInfo, updateServiceCharacteristicValue]);
+    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue]);
 
     const contextValue = useMemo(() => ({
         selectedDevice,
