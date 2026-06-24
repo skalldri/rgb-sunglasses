@@ -568,6 +568,8 @@ export default function FirmwareUpdateModal() {
                 {/* Only show other sections if no package is loaded */}
                 {!firmwarePackage && (
                     <>
+                        {renderAutoUpdateSection()}
+
                         <ThemedText type="overline" style={styles.sectionTitle}>
                             Current Images
                         </ThemedText>
@@ -616,8 +618,6 @@ export default function FirmwareUpdateModal() {
                                 ))}
                             </>
                         )}
-
-                        {renderAutoUpdateSection()}
 
                         <ThemedText type="overline" style={styles.sectionTitle}>
                             Update Firmware
