@@ -749,6 +749,24 @@ export class McuMgrClient {
         };
     }
 
+    /**
+     * Get OS/Application info from the device.
+     * @param format - Format string controlling what info to return. Use "i" for board name.
+     * @returns The output string from the device (e.g. "rgb_sunglasses_proto0_nrf5340_cpuapp")
+     */
+    async getOsInfo(format: string = 'i'): Promise<string> {
+        const response = await this.sendRequest(
+            SmpOp.READ_REQUEST,
+            SmpGroup.OS,
+            OsCmd.INFO,
+            { format }
+        );
+
+        throwOnSmpError(response, 'OS info error');
+
+        return response.output ?? '';
+    }
+
     // ========================================================================
     // High-Level Firmware Update API
     // ========================================================================

@@ -45,6 +45,13 @@ jest.mock('expo-file-system/next', () => ({
   })),
 }));
 
+jest.mock('expo-file-system/legacy', () => ({
+  cacheDirectory: 'file:///cache/',
+  createDownloadResumable: jest.fn(() => ({
+    downloadAsync: jest.fn(async () => ({ uri: 'file:///cache/firmware-update.zip', status: 200 })),
+  })),
+}));
+
 jest.mock('react-native-ble-plx', () => {
   class BleManager {
     setLogLevel = jest.fn();

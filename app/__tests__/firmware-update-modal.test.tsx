@@ -4,9 +4,34 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import FirmwareUpdateModal from '@/app/firmware-update-modal';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import * as FirmwarePackageService from '@/services/firmware-package';
+import * as GitHubReleases from '@/services/github-releases';
 import * as McuMgrModule from '@/services/mcumgr';
 import * as DocumentPicker from 'expo-document-picker';
+import * as LegacyFS from 'expo-file-system/legacy';
 import { File } from 'expo-file-system/next';
+
+const mockRelease: GitHubReleases.GitHubRelease = {
+  id: 1,
+  tag_name: 'v2.0.0',
+  name: 'Release 2.0.0',
+  published_at: '2026-01-01T00:00:00Z',
+  assets: [
+    {
+      id: 10,
+      name: 'firmware_proto0_v2.0.0.zip',
+      browser_download_url: 'https://example.com/firmware_proto0_v2.0.0.zip',
+      size: 512000,
+      content_type: 'application/zip',
+    },
+    {
+      id: 11,
+      name: 'firmware_dk_v2.0.0.zip',
+      browser_download_url: 'https://example.com/firmware_dk_v2.0.0.zip',
+      size: 512000,
+      content_type: 'application/zip',
+    },
+  ],
+};
 
 type MockClientSpies = {
   initialize: jest.SpyInstance;
@@ -17,6 +42,7 @@ type MockClientSpies = {
   reset: jest.SpyInstance;
   eraseImage: jest.SpyInstance;
   destroy: jest.SpyInstance;
+  getOsInfo: jest.SpyInstance;
 };
 
 const defaultSelectedDevice = {
@@ -73,7 +99,16 @@ function mockClientMethods(overrides?: Partial<Record<keyof MockClientSpies, any
     destroy: jest
       .spyOn(McuMgrModule.McuMgrClient.prototype, 'destroy')
       .mockImplementation(overrides?.destroy ?? (() => undefined)),
+    getOsInfo: jest
+      .spyOn(McuMgrModule.McuMgrClient.prototype, 'getOsInfo')
+      .mockImplementation(overrides?.getOsInfo ?? (async () => 'rgb_sunglasses_proto0_nrf5340_cpuapp')),
   };
+}
+
+function mockGitHub(overrides?: { fetchLatestRelease?: any }) {
+  jest
+    .spyOn(GitHubReleases, 'fetchLatestRelease')
+    .mockImplementation(overrides?.fetchLatestRelease ?? (async () => mockRelease));
 }
 
 describe('FirmwareUpdateModal', () => {
@@ -248,6 +283,104 @@ describe('FirmwareUpdateModal', () => {
     fireEvent.press(await findByText('Start Update'));
 
     expect(await findByText('Upload failed: Uploaded image not found in image state response')).toBeTruthy();
+  });
+
+  describe('auto-update flow', () => {
+    it('shows "Checking for updates" after board is detected', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      // Hold the GitHub call so we can observe the intermediate state
+      jest
+        .spyOn(GitHubReleases, 'fetchLatestRelease')
+        .mockImplementation(() => new Promise(() => {})); // never resolves
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      expect(await findByText('Checking for updates...')).toBeTruthy();
+    });
+
+    it('shows "Up to date" when device version >= GitHub version', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods({
+        getImageState: async () => ({
+          images: [{ image: 0, slot: 0, version: '2.0.0', active: true, confirmed: true }],
+        }),
+      });
+      mockGitHub();
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      expect(await findByText('Up to date (v2.0.0)')).toBeTruthy();
+    });
+
+    it('shows "Update Available" card when device version < GitHub version', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods({
+        getImageState: async () => ({
+          images: [{ image: 0, slot: 0, version: '1.0.0', active: true, confirmed: true }],
+        }),
+      });
+      mockGitHub();
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      expect(await findByText('Update Available')).toBeTruthy();
+      expect(await findByText('Current: v1.0.0')).toBeTruthy();
+      expect(await findByText('Latest: v2.0.0')).toBeTruthy();
+      expect(await findByText('Download Update')).toBeTruthy();
+    });
+
+    it('"Download Update" triggers download and auto-populates firmware package', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods({
+        getImageState: async () => ({
+          images: [{ image: 0, slot: 0, version: '1.0.0', active: true, confirmed: true }],
+        }),
+      });
+      mockGitHub();
+
+      (File as unknown as jest.Mock).mockImplementation(() => ({
+        base64: jest.fn(async () => 'downloaded-base64'),
+      }));
+      jest
+        .spyOn(FirmwarePackageService, 'parseFirmwarePackageFromBase64')
+        .mockResolvedValueOnce({
+          manifest: { name: 'Downloaded Package', files: [], time: 0, 'format-version': 1 },
+          images: [],
+        });
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      fireEvent.press(await findByText('Download Update'));
+
+      await waitFor(() => {
+        expect(LegacyFS.createDownloadResumable).toHaveBeenCalledWith(
+          'https://example.com/firmware_proto0_v2.0.0.zip',
+          'file:///cache/firmware-update.zip',
+          {},
+          expect.any(Function)
+        );
+      });
+      expect(await findByText('Firmware Package: Downloaded Package')).toBeTruthy();
+    });
+
+    it('shows error when board detection fails but manual picker remains accessible', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods({
+        getOsInfo: async () => { throw new Error('SMP timeout'); },
+      });
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      expect(await findByText('Board detection failed: SMP timeout')).toBeTruthy();
+      expect(await findByText('Select Firmware Package (.zip)')).toBeTruthy();
+    });
+
+    it('shows error when GitHub API fails', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({
+        fetchLatestRelease: async () => { throw new Error('Network error'); },
+      });
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      expect(await findByText('Update check failed: Network error')).toBeTruthy();
+    });
   });
 
   it('runs reset, erase, and mark-for-test actions', async () => {
