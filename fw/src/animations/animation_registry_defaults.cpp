@@ -32,6 +32,12 @@ class RegistryActiveStateObserver : public AnimationActiveStateObserver {
 class PatternControllerActivator : public AnimationActivator {
    public:
     void changeToAnimation(Animation id) override { pattern_controller_change_to_animation(id); }
+
+    void deactivateAnimation(Animation id) override {
+        if (pattern_controller_get_current_animation() == id) {
+            pattern_controller_change_to_animation(Animation::None);
+        }
+    }
 };
 
 static RegistryActiveStateObserver sRegistryObserver;

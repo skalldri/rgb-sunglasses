@@ -107,6 +107,9 @@ First-time pairing requires accepting Android system prompts that are too timing
 
 **Rule:** If a device has never been paired, ask the user to watch for and accept the Android pairing prompts themselves. Once paired, subsequent connections complete automatically without any prompts.
 
+### ADB Wireless Pairing State Lives on the Phone, Not the Container
+`adb devices` showing empty does **not** mean the device was never paired. Wireless debugging pairing (the 6-digit code flow) is remembered by the phone; only the TCP connection itself is container-local and drops on container restart. Don't infer "needs full re-pair" from missing local files like `~/.android/known_devices.xml` — those don't reliably reflect pairing state either. Always try `adb connect <ip:port>` first (ask the user for the device's current IP:port from the Wireless debugging screen if unknown); only walk through the full `adb pair` flow if `adb connect` actually fails.
+
 ### Launching the App
 `npx expo run:android` is a blocking command — always run it as a background task. Use `--device Pixel_9_Pro` (the model name, not the ADB IP:port format):
 ```bash
@@ -114,11 +117,13 @@ npx expo run:android --device Pixel_9_Pro
 ```
 Poll `http://localhost:8081/status` until Metro reports `packager-status:running` before trying to interact with the app.
 
-**`npx expo run:android`'s own install step can fail right after its own successful build**: even when the Gradle build prints `BUILD SUCCESSFUL`, the subsequent `Installing .../app-debug.apk` step can fail with `CommandError: No development build (com.autom8ed.rgbsunglassesapp) for this project is installed. Install a development build on the target device and try again.` — happened consistently in this session, not a one-off. Work around it by installing manually and launching separately:
+**Root cause of `CommandError: No development build (com.autom8ed.rgbsunglassesapp) for this project is installed`, and the real fix (not a workaround)**: this project's `plugins/withDevVariant.js` config plugin intentionally injects `applicationIdSuffix ".dev"` into the debug build type (`android/app/build.gradle`) so the debug and release APKs can be installed side-by-side with distinct icons/schemes — the actual installed runtime package id is `com.autom8ed.rgbsunglassesapp.dev`, not the bare `applicationId`. Expo CLI's package-id resolver (`@expo/config-plugins`'s `Package.getApplicationIdAsync()`, called from `AndroidAppIdResolver`) only regexes the literal `applicationId '...'` line out of `build.gradle` — it has no knowledge of per-buildType `applicationIdSuffix`. So `expo run:android` always computes the unsuffixed id, checks whether *that* is installed (`PlatformManager.openProjectInCustomRuntimeAsync` → `isAppInstalledAndIfSoReturnContainerPathForIOSAsync`), finds it isn't (only the suffixed `.dev` one is), and throws — even immediately after its own build+install step succeeded. This will happen on every `expo run:android` invocation as long as `withDevVariant.js`'s suffix exists, build success or not.
+
+Expo CLI has a built-in flag for exactly this situation — `--app-id <appId>` — which makes it check/install/launch the given id instead of guessing one from `build.gradle`:
 ```bash
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+npx expo run:android --device Pixel_9_Pro --app-id com.autom8ed.rgbsunglassesapp.dev
 ```
-then launch the already-installed dev-client app directly (package id has a `.dev` suffix from `applicationIdSuffix ".dev"` in `android/app/build.gradle`, e.g. `com.autom8ed.rgbsunglassesapp.dev`) — use `android_launch_app` or `adb shell am force-stop <pkg> && adb shell monkey -p <pkg> -c android.intent.category.LAUNCHER 1`. Don't pass `--android` to a separately-running `npx expo start` to reconnect Metro — that flag tries to auto-launch generic Expo Go instead of the custom dev-client app that's actually installed.
+This is the correct fix to reach for, not the manual `adb install` + `monkey`/`android_launch_app` dance — that manual path still works as a fallback (e.g. if Metro itself won't start), but `--app-id` fixes the actual CLI invocation so it works end-to-end unattended. Don't pass `--android` to a separately-running `npx expo start` to reconnect Metro — that flag tries to auto-launch generic Expo Go instead of the custom dev-client app that's actually installed.
 
 ### BLE Link Can Get Orphaned by App Reloads, Not Just Discovery Failures
 The "failed per-item BLE read during discovery can orphan the connection" entry in Known Issues & Quirks above covers one trigger. A second, distinct trigger hit repeatedly in this session: reloading the app mid-session (`mcp__execbro__reload_app`, or a firmware-side J-Link reflash/reset while the phone was connected) can leave the **native BLE link** connected at the OS level even though the app's own JS state has been wiped — the device then stops advertising and can't be found by a fresh scan, no matter how long you wait. The fix is the same as the discovery-failure case: `adb shell am force-stop <package>` (then relaunch) so the OS notices the client process is gone and drops the link. Don't waste time waiting longer for the device to reappear in a scan — if `Setting up characteristic monitors...`/a fresh `connect()` cycle hasn't run and the Bluetooth tab is stuck on "Connect to the RGB Sunglasses" with no device listed for more than a few seconds, force-stop immediately.
@@ -143,6 +148,12 @@ Device density is 360 dpi → pixel ratio = 360/160 = **2.25**.
 **Status bar**: 153 screenshot px (68 dp) at the top. App content starts below this. `measureInWindow` dp coordinates are relative to the content area (y=0 is below the status bar).
 
 **Practical rule**: get coordinates from the screenshot for `tap()`. Convert to dp for `inspect_at_point()`. Don't mix them up.
+
+### execbro tap coordinates on the OnePlus 9 Pro (LE2125) — read positions from the rendered image, ignore the pressable list
+On this device the `android_screenshot` raw frame is 1080×2412 and is delivered downscaled to 896×2000 (~0.829×). Two gotchas burned several taps in one session:
+- The **pressables list** that `android_screenshot` prints (e.g. `<AppButton/> "Connect" frame:(714,709 ...)`) reports coordinates that are *inflated* relative to the delivered image (values exceed the 2000px delivered height) — passing them to `tap(x,y)` lands high/short and misses.
+- `tap(..., native=true)` does **not** bypass the scaling here — it still multiplies the input by ~1.206, so native taps with raw coords overshoot off-screen.
+- What actually works: **visually read the target's position from the delivered screenshot image and pass those pixel coords to `tap(x, y)` (no `native`)**. The tool multiplies by ~1.206 to hit the real raw pixel, and the crosshair lands at roughly the input coordinate in the displayed image. Fiber/`component=`/`text=` taps also misfired (same conversion bug), so coordinate taps read from the image are the reliable path. If a tap shows `meaningful:false`/no change, nudge using the image, don't trust the pressable-list numbers.
 
 ### Toggling Switch (Boolean) Characteristics
 `Switch` components use `onValueChange`, not `onPress`, so they cannot be triggered via `tap()` by component name or coordinates. Instead, walk the React fiber tree and call the component's `onWrite` prop directly:

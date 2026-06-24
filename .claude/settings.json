@@ -5,7 +5,9 @@
       "Skill(check-hardware)",
       "Bash(adb pair *)",
       "Bash(adb devices *)",
-      "Bash(adb connect *)"
+      "Bash(adb connect *)",
+      "Bash(.devcontainer/scripts/check-hardware.sh *)",
+      "Bash(.devcontainer/scripts/check-software.sh *)"
     ]
   },
   "hooks": {

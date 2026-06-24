@@ -53,12 +53,21 @@ class AnimationIsActiveBinding {
      * @brief Handles BLE-originated active-state updates.
      *
      * When the remote client writes `true`, the activator switches to this animation.
+     * When the remote client writes `false`, the activator is asked to deactivate this
+     * animation - which is only meaningful (and only takes effect) if this animation is
+     * the one currently active, since the app's Switch can only go from on to off by the
+     * user toggling the currently-active animation's own switch.
      *
      * @param active Remote active value received via BLE write.
      */
     static void onRemoteActiveChange(bool active) {
-        if (active && getInstance()->activator_) {
+        if (!getInstance()->activator_) {
+            return;
+        }
+        if (active) {
             getInstance()->activator_->changeToAnimation(tAnimationId);
+        } else {
+            getInstance()->activator_->deactivateAnimation(tAnimationId);
         }
     }
 

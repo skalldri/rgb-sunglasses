@@ -1,6 +1,12 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { AppButton } from '@/components/ui/app-button';
+import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
+import { ProgressBar } from '@/components/ui/progress-bar';
+import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
+import { useThemeColors } from '@/hooks/use-theme-color';
 import { useMcuMgrClient } from '@/hooks/use-mcumgr-client';
 import {
     calculateOverallUploadProgress,
@@ -14,15 +20,22 @@ import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system/next';
 import { Link } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Button, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 // ============================================================================
 // Component
 // ============================================================================
 
+function flagTone(flag: string): 'success' | 'info' | 'neutral' {
+    if (flag === 'Active' || flag === 'Confirmed' || flag === 'Bootable') return 'success';
+    if (flag === 'Pending' || flag === 'Permanent') return 'info';
+    return 'neutral';
+}
+
 export default function FirmwareUpdateModal() {
     const { selectedDevice, setSelectedDevice } = useBluetooth();
     const { client, isInitializing, error: initError } = useMcuMgrClient(selectedDevice?.device ?? null);
+    const c = useThemeColors();
     const [imageState, setImageState] = useState<ImageSlot[]>([]);
     const [status, setStatus] = useState<string>('');
     const [error, setError] = useState<string>('');
@@ -229,28 +242,32 @@ export default function FirmwareUpdateModal() {
         if (slot.bootable) flags.push('Bootable');
 
         return (
-            <View key={index} style={styles.slotCard}>
+            <Card key={index} style={styles.cardSpacing}>
                 <ThemedText style={styles.slotTitle}>
                     Image {slot.image ?? 0} / Slot {slot.slot}
                 </ThemedText>
-                <ThemedText style={styles.slotDetail}>
+                <ThemedText type="caption">
                     Version: {slot.version}
                 </ThemedText>
-                <ThemedText style={styles.slotDetail}>
+                <ThemedText type="caption">
                     Hash: {formatHash(slot.hash)}
                 </ThemedText>
                 {flags.length > 0 && (
-                    <ThemedText style={styles.slotFlags}>
-                        {flags.join(' | ')}
-                    </ThemedText>
+                    <View style={styles.flagRow}>
+                        {flags.map(flag => (
+                            <Badge key={flag} label={flag} tone={flagTone(flag)} />
+                        ))}
+                    </View>
                 )}
                 {slot.hash && !slot.pending && slot.slot === 1 && (
-                    <Button
+                    <AppButton
                         title="Mark for Test"
+                        variant="secondary"
+                        style={styles.slotButton}
                         onPress={() => handleConfirmImage(slot.hash!)}
                     />
                 )}
-            </View>
+            </Card>
         );
     }
 
@@ -259,45 +276,47 @@ export default function FirmwareUpdateModal() {
 
         return (
             <View style={styles.packagePreview}>
-                <ThemedText type="subtitle" style={styles.sectionTitle}>
+                <ThemedText type="overline" style={styles.sectionTitle}>
                     Firmware Package: {firmwarePackage.manifest.name}
                 </ThemedText>
 
                 {firmwarePackage.images.map((image, idx) => (
-                    <View key={idx} style={styles.firmwareCard}>
-                        <ThemedText style={styles.firmwareTitle}>
+                    <Card key={idx} style={styles.cardSpacing}>
+                        <ThemedText style={[styles.firmwareTitle, { color: c.warning }]}>
                             Image {image.manifest.image_index}: {image.manifest.file}
                         </ThemedText>
-                        <ThemedText style={styles.firmwareDetail}>
+                        <ThemedText type="caption">
                             Type: {image.manifest.type}
                         </ThemedText>
-                        <ThemedText style={styles.firmwareDetail}>
+                        <ThemedText type="caption">
                             Board: {image.manifest.board}
                         </ThemedText>
-                        <ThemedText style={styles.firmwareDetail}>
+                        <ThemedText type="caption">
                             Size: {formatBytes(image.manifest.size)}
                         </ThemedText>
-                        <ThemedText style={styles.firmwareDetail}>
+                        <ThemedText type="caption">
                             Version: {image.parsedHeader?.version || image.manifest.version_MCUBOOT || image.manifest.version || 'Unknown'}
                         </ThemedText>
-                        <ThemedText style={styles.firmwareDetail}>
+                        <ThemedText type="caption">
                             Target Slots: {image.manifest.slot_index_primary} → {image.manifest.slot_index_secondary}
                         </ThemedText>
-                    </View>
+                    </Card>
                 ))}
 
                 <View style={styles.buttonRow}>
-                    <Button
+                    <AppButton
                         title="Cancel"
+                        variant="secondary"
+                        style={styles.rowButton}
                         onPress={handleCancelPackage}
                         disabled={isUploading}
-                        color="#888"
                     />
-                    <Button
+                    <AppButton
                         title={isUploading ? `Uploading (${currentUploadIndex + 1}/${firmwarePackage.images.length})...` : 'Start Update'}
+                        variant="primary"
+                        style={styles.rowButton}
                         onPress={handleStartUpdate}
                         disabled={isUploading || !client}
-                        color="#4CAF50"
                     />
                 </View>
             </View>
@@ -307,28 +326,25 @@ export default function FirmwareUpdateModal() {
     if (isInitializing) {
         return (
             <ThemedView style={styles.container}>
-                <ActivityIndicator size="large" />
-                <ThemedText style={styles.status}>{status || 'Initializing...'}</ThemedText>
+                <ActivityIndicator size="large" color={c.primary} />
+                <ThemedText type="caption" style={styles.status}>{status || 'Initializing...'}</ThemedText>
             </ThemedView>
         );
     }
 
     return (
         <ThemedView style={styles.container}>
-            <ThemedText type="title">Firmware Update</ThemedText>
-
             {error ? (
-                <ThemedText style={styles.error}>{error}</ThemedText>
+                <ThemedText style={[styles.error, { color: c.danger }]}>{error}</ThemedText>
             ) : null}
 
             {status ? (
-                <ThemedText style={styles.status}>{status}</ThemedText>
+                <ThemedText type="caption" style={styles.status}>{status}</ThemedText>
             ) : null}
 
             {isUploading && (
-                <View style={styles.progressContainer}>
-                    <View style={[styles.progressBar, { width: `${uploadProgress}%` }]} />
-                    <ThemedText style={styles.progressText}>{uploadProgress}%</ThemedText>
+                <View style={styles.progressWrap}>
+                    <ProgressBar progress={uploadProgress / 100} label={`${uploadProgress}%`} height={12} />
                 </View>
             )}
 
@@ -339,19 +355,21 @@ export default function FirmwareUpdateModal() {
                 {/* Only show other sections if no package is loaded */}
                 {!firmwarePackage && (
                     <>
-                        <ThemedText type="subtitle" style={styles.sectionTitle}>
+                        <ThemedText type="overline" style={styles.sectionTitle}>
                             Current Images
                         </ThemedText>
 
                         {imageState.length === 0 ? (
-                            <ThemedText style={styles.noImages}>No images found</ThemedText>
+                            <ThemedText type="caption" style={styles.noImages}>No images found</ThemedText>
                         ) : (
                             imageState.map(renderImageSlot)
                         )}
 
                         <View style={styles.buttonRow}>
-                            <Button
+                            <AppButton
                                 title="Refresh"
+                                variant="secondary"
+                                style={styles.rowButton}
                                 onPress={() => {
                                     refreshImageState();
                                     refreshSlotInfo();
@@ -362,57 +380,62 @@ export default function FirmwareUpdateModal() {
 
                         {slotInfo?.images && slotInfo.images.length > 0 && (
                             <>
-                                <ThemedText type="subtitle" style={styles.sectionTitle}>
+                                <ThemedText type="overline" style={styles.sectionTitle}>
                                     Slot Info
                                 </ThemedText>
                                 {slotInfo.images.map((imageInfo, idx) => (
-                                    <View key={idx} style={styles.slotInfoCard}>
+                                    <Card key={idx} style={styles.cardSpacing}>
                                         <ThemedText style={styles.slotTitle}>
                                             Image {imageInfo.image}: {imageInfo.image === 0 ? 'App Firmware' : 'Radio Firmware'}
                                         </ThemedText>
                                         {imageInfo.max_image_size && (
-                                            <ThemedText style={styles.slotDetail}>
+                                            <ThemedText type="caption">
                                                 Max Size: {formatBytes(imageInfo.max_image_size)}
                                             </ThemedText>
                                         )}
                                         {imageInfo.slots?.map((slot, slotIdx) => (
-                                            <ThemedText key={slotIdx} style={styles.slotDetail}>
+                                            <ThemedText key={slotIdx} type="caption">
                                                 Slot {slot.slot}: {formatBytes(slot.size)}
                                                 {slot.upload_image_id !== undefined && ` (upload target: image ${slot.upload_image_id})`}
                                             </ThemedText>
                                         ))}
-                                    </View>
+                                    </Card>
                                 ))}
                             </>
                         )}
 
-                        <ThemedText type="subtitle" style={styles.sectionTitle}>
+                        <ThemedText type="overline" style={styles.sectionTitle}>
                             Update Firmware
                         </ThemedText>
 
                         <View style={styles.buttonRow}>
-                            <Button
+                            <AppButton
                                 title="Select Firmware Package (.zip)"
+                                variant="primary"
+                                style={styles.rowButton}
                                 onPress={handleSelectFirmwarePackage}
                                 disabled={isUploading || !client}
                             />
                         </View>
 
-                        <ThemedText type="subtitle" style={styles.sectionTitle}>
+                        <ThemedText type="overline" style={styles.sectionTitle}>
                             Device Actions
                         </ThemedText>
 
                         <View style={styles.buttonRow}>
-                            <Button
+                            <AppButton
                                 title="Reset Device"
+                                variant="secondary"
+                                style={styles.rowButton}
                                 onPress={handleReset}
                                 disabled={isUploading || !client}
                             />
-                            <Button
+                            <AppButton
                                 title="Erase Slot 1"
+                                variant="danger"
+                                style={styles.rowButton}
                                 onPress={handleEraseSlot}
                                 disabled={isUploading || !client}
-                                color="#ff4444"
                             />
                         </View>
                     </>
@@ -429,109 +452,71 @@ export default function FirmwareUpdateModal() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        padding: 20,
+        padding: Spacing.lg,
     },
     scrollView: {
         flex: 1,
     },
     scrollContent: {
-        paddingBottom: 20,
+        paddingBottom: Spacing.lg,
+        gap: Spacing.xs,
     },
     sectionTitle: {
-        marginTop: 20,
-        marginBottom: 10,
+        marginTop: Spacing.lg,
+        marginBottom: Spacing.sm,
     },
-    slotCard: {
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        borderRadius: 8,
-        padding: 12,
-        marginBottom: 10,
-    },
-    slotInfoCard: {
-        backgroundColor: 'rgba(100,149,237,0.15)',
-        borderRadius: 8,
-        padding: 12,
-        marginBottom: 10,
+    cardSpacing: {
+        marginBottom: Spacing.sm,
+        gap: 2,
     },
     slotTitle: {
         fontWeight: 'bold',
         fontSize: 16,
-        marginBottom: 4,
+        marginBottom: Spacing.xs,
     },
-    slotDetail: {
-        fontSize: 12,
-        opacity: 0.8,
+    flagRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: Spacing.xs,
+        marginTop: Spacing.xs,
     },
-    slotFlags: {
-        fontSize: 11,
-        color: '#4CAF50',
-        marginTop: 4,
+    slotButton: {
+        marginTop: Spacing.sm,
     },
     packagePreview: {
-        marginBottom: 20,
-    },
-    firmwareCard: {
-        backgroundColor: 'rgba(255,193,7,0.15)',
-        borderRadius: 8,
-        padding: 12,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: 'rgba(255,193,7,0.3)',
+        marginBottom: Spacing.lg,
     },
     firmwareTitle: {
         fontWeight: 'bold',
         fontSize: 14,
-        marginBottom: 6,
-        color: '#FFC107',
-    },
-    firmwareDetail: {
-        fontSize: 12,
-        opacity: 0.8,
-        marginBottom: 2,
+        marginBottom: Spacing.xs,
     },
     noImages: {
-        opacity: 0.6,
         fontStyle: 'italic',
     },
     status: {
-        marginTop: 10,
+        marginTop: Spacing.sm,
         textAlign: 'center',
-        opacity: 0.7,
     },
     error: {
-        marginTop: 10,
+        marginTop: Spacing.sm,
         textAlign: 'center',
-        color: '#ff4444',
     },
-    progressContainer: {
-        width: '100%',
-        height: 24,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        borderRadius: 12,
-        marginTop: 10,
-        overflow: 'hidden',
-    },
-    progressBar: {
-        height: '100%',
-        backgroundColor: '#4CAF50',
-        borderRadius: 12,
-    },
-    progressText: {
-        position: 'absolute',
-        width: '100%',
-        textAlign: 'center',
-        lineHeight: 24,
-        fontSize: 12,
+    progressWrap: {
+        marginTop: Spacing.sm,
     },
     buttonRow: {
         flexDirection: 'row',
         justifyContent: 'space-around',
-        marginVertical: 10,
-        gap: 10,
+        marginVertical: Spacing.sm,
+        gap: Spacing.sm,
+    },
+    rowButton: {
+        flex: 1,
     },
     link: {
-        marginTop: 15,
-        paddingVertical: 15,
+        marginTop: Spacing.md,
+        paddingVertical: Spacing.md,
         alignSelf: 'center',
     },
 });

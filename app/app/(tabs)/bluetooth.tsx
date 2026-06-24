@@ -1,12 +1,16 @@
 import BluetoothDeviceListItem from "@/components/bluetooth-device-list-item";
-import ParallaxScrollView from "@/components/parallax-scroll-view";
 import { ThemedText } from "@/components/themed-text";
-import { Image } from 'expo-image';
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Hero } from "@/components/ui/hero";
+import { Screen } from "@/components/ui/screen";
+import { Spacing } from "@/constants/theme";
 import { useCallback, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { useBluetooth } from "@/context/bluetooth-context";
 import { bleManager, requestPermissions } from "@/hooks/ble-manager";
+import { useThemeColors } from "@/hooks/use-theme-color";
 import { useFocusEffect } from "expo-router";
 import { LogLevel } from "react-native-ble-plx";
 
@@ -22,9 +26,10 @@ export default function BluetoothScreen() {
 
     const { isScanning, setIsScanning } = useBluetooth();
     const [devices, setDevices] = useState<BleDevice[]>([]);
+    const c = useThemeColors();
 
     /**
-     * 
+     *
      * @param mac De-duplicate devices
      */
     function isDuplicateDevice(allDevices: BleDevice[], newMac: string) {
@@ -35,7 +40,7 @@ export default function BluetoothScreen() {
         console.log('Starting Bluetooth scan...');
         setIsScanning(true);
         setDevices([]);
-        
+
         const permissionsGranted = await requestPermissions();
         if (!permissionsGranted) {
             console.log('Bluetooth permissions denied');
@@ -103,56 +108,47 @@ export default function BluetoothScreen() {
     );
 
     return (
-        <ParallaxScrollView
-            headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-            headerImage={
-                <Image
-                    source={require('@/assets/images/partial-react-logo.png')}
-                    style={styles.reactLogo}
-                />
-            }
-        >
-            <ThemedText>
-                {`Connect to the RGB Sunglasses`}
-            </ThemedText>
+        <Screen scroll>
+            <Hero title="RGB Sunglasses" subtitle="Connect over Bluetooth" emoji="🕶️" />
 
-            {isScanning && (
-                <ActivityIndicator size="large" style={styles.spinner} />
-            )}
+            <View style={styles.statusRow}>
+                <ThemedText type="overline">Nearby devices</ThemedText>
+                {isScanning && <ActivityIndicator size="small" color={c.primary} />}
+            </View>
 
-            <ScrollView>
-                {devices.map(device => (
-                    <BluetoothDeviceListItem
-                        key={device.mac}
-                        deviceName={device.name}
-                        macAddress={device.mac}
+            {devices.length === 0 ? (
+                isScanning ? (
+                    <ThemedText type="caption">Scanning…</ThemedText>
+                ) : (
+                    <EmptyState
+                        icon="🔍"
+                        title="No glasses found yet"
+                        subtitle="Make sure your glasses are powered on and nearby."
                     />
-                ))}
-
-            </ScrollView>
-
-        </ParallaxScrollView>
+                )
+            ) : (
+                <View style={styles.list}>
+                    {devices.map(device => (
+                        <Card key={device.mac}>
+                            <BluetoothDeviceListItem
+                                deviceName={device.name}
+                                macAddress={device.mac}
+                            />
+                        </Card>
+                    ))}
+                </View>
+            )}
+        </Screen>
     );
 }
 
 const styles = StyleSheet.create({
-    titleContainer: {
+    statusRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        justifyContent: 'space-between',
     },
-    stepContainer: {
-        gap: 8,
-        marginBottom: 8,
-    },
-    spinner: {
-        marginVertical: 16,
-    },
-    reactLogo: {
-        height: 178,
-        width: 290,
-        bottom: 0,
-        left: 0,
-        position: 'absolute',
+    list: {
+        gap: Spacing.md,
     },
 });

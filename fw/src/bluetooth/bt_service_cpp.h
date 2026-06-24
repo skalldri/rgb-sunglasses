@@ -40,6 +40,18 @@ constexpr bt_uuid_128 composeAutoCharacteristicUuid(const bt_uuid_128 &serviceUu
 constexpr bt_uuid_128 kAnimationNameCharacteristicUuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0xaaaa, 0x56789abd0000));
 
+/**
+ * @brief Fixed UUID for the "Is Active" characteristic, reused identically across every
+ * animation's BtGattServer, mirroring kAnimationNameCharacteristicUuid above. Group 0xbbbb is
+ * chosen to never collide with any anim_id<<8 used by BT_ANIMATION_SERVICE_UUID (anim_id only
+ * ranges 0-11 today) nor with group 0xaaaa (Animation Name). Without a fixed UUID, "Is Active"
+ * would get an auto-assigned UUID whose position varies by animation (depends on how many other
+ * characteristics that animation declares before it), making it impossible for the app to find
+ * reliably across animations without hardcoding per-animation positions.
+ */
+constexpr bt_uuid_128 kIsActiveCharacteristicUuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0xbbbb, 0x56789abd0000));
+
 // Helper to check if all tuple elements are bt_gatt_attr
 template <typename Tuple, size_t... Is>
 constexpr bool allAttrsAreGattAttr(std::index_sequence<Is...>) {

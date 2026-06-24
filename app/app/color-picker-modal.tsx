@@ -1,11 +1,15 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { AppButton } from '@/components/ui/app-button';
+import { Card } from '@/components/ui/card';
+import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
+import { useThemeColors } from '@/hooks/use-theme-color';
 import { encodeColorToBase64 } from '@/services/ble-value-codec';
 import Slider from '@react-native-community/slider';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { GestureResponderEvent, Pressable, StyleSheet, View } from 'react-native';
+import { GestureResponderEvent, StyleSheet, View } from 'react-native';
 
 // Convert RGB to HSV
 function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
@@ -63,6 +67,7 @@ export default function ColorPickerModal() {
     const params = useLocalSearchParams();
     const router = useRouter();
     const { writeToCharacteristic } = useBluetooth();
+    const c = useThemeColors();
 
     // Get the characteristic UUID from params
     const charUuid = params.charUuid as string;
@@ -118,26 +123,6 @@ export default function ColorPickerModal() {
         });
     }
 
-    // Generate hue wheel colors for the conic gradient effect using segments
-    const wheelSegments = [];
-    for (let i = 0; i < 360; i += 10) {
-        const [r, g, b] = hsvToRgb(i, 1, 1);
-        wheelSegments.push(
-            <View
-                key={i}
-                style={{
-                    position: 'absolute',
-                    width: WHEEL_SIZE,
-                    height: WHEEL_SIZE,
-                    borderRadius: WHEEL_RADIUS,
-                    backgroundColor: `rgb(${r},${g},${b})`,
-                    opacity: 0.1,
-                    transform: [{ rotate: `${i}deg` }],
-                }}
-            />
-        );
-    }
-
     // Calculate thumb position on wheel
     // Subtract 90° to convert from hue (0° at top) to math angle (0° at right)
     const thumbAngle = ((hue - 90) * Math.PI) / 180;
@@ -147,68 +132,69 @@ export default function ColorPickerModal() {
 
     return (
         <ThemedView style={styles.container}>
-            <ThemedText type="title">Color Picker</ThemedText>
+            <Card style={styles.card}>
+                {/* Hue Wheel */}
+                <View
+                    ref={wheelRef}
+                    style={styles.wheelContainer}
+                    onLayout={measureWheel}
+                    onStartShouldSetResponder={() => true}
+                    onMoveShouldSetResponder={() => true}
+                    onResponderGrant={(e) => { measureWheel(); handleWheelTouch(e); }}
+                    onResponderMove={handleWheelTouch}
+                >
+                    {/* Color wheel built from radial segments */}
+                    <View style={styles.wheel}>
+                        {Array.from({ length: 360 }, (_, i) => {
+                            const [r, g, b] = hsvToRgb(i, 1, 1);
+                            return (
+                                <View
+                                    key={i}
+                                    style={{
+                                        position: 'absolute',
+                                        width: 2,
+                                        height: WHEEL_RADIUS,
+                                        backgroundColor: `rgb(${r},${g},${b})`,
+                                        left: WHEEL_RADIUS - 1,
+                                        top: 0,
+                                        transformOrigin: `1px ${WHEEL_RADIUS}px`,
+                                        transform: [{ rotate: `${i}deg` }],
+                                    }}
+                                />
+                            );
+                        })}
+                        {/* White center overlay for saturation gradient effect */}
+                        <View style={styles.wheelCenterGradient} />
+                    </View>
 
-            {/* Hue Wheel */}
-            <View
-                ref={wheelRef}
-                style={styles.wheelContainer}
-                onLayout={measureWheel}
-                onStartShouldSetResponder={() => true}
-                onMoveShouldSetResponder={() => true}
-                onResponderGrant={(e) => { measureWheel(); handleWheelTouch(e); }}
-                onResponderMove={handleWheelTouch}
-            >
-                {/* Color wheel background using SVG-like approach */}
-                <View style={styles.wheel}>
-                    {/* Create color wheel with radial segments */}
-                    {Array.from({ length: 360 }, (_, i) => {
-                        const [r, g, b] = hsvToRgb(i, 1, 1);
-                        return (
-                            <View
-                                key={i}
-                                style={{
-                                    position: 'absolute',
-                                    width: 2,
-                                    height: WHEEL_RADIUS,
-                                    backgroundColor: `rgb(${r},${g},${b})`,
-                                    left: WHEEL_RADIUS - 1,
-                                    top: 0,
-                                    transformOrigin: `1px ${WHEEL_RADIUS}px`,
-                                    transform: [{ rotate: `${i}deg` }],
-                                }}
-                            />
-                        );
-                    })}
-                    {/* White center overlay for saturation gradient effect */}
-                    <View style={styles.wheelCenterGradient} />
+                    {/* Thumb indicator */}
+                    <View style={[styles.wheelThumb, { left: thumbX, top: thumbY, backgroundColor: colorHex }]} />
                 </View>
 
-                {/* Thumb indicator */}
-                <View style={[styles.wheelThumb, { left: thumbX, top: thumbY, backgroundColor: colorHex }]} />
-            </View>
+                <View style={[styles.colorPreview, { backgroundColor: colorHex, borderColor: c.border }]} />
 
-            <View style={[styles.colorPreview, { backgroundColor: colorHex }]} />
+                <ThemedText style={styles.colorHex}>{colorHex.toUpperCase()}</ThemedText>
 
-            <ThemedText style={styles.colorHex}>{colorHex.toUpperCase()}</ThemedText>
+                <View style={styles.sliderContainer}>
+                    <ThemedText type="caption" style={styles.sliderLabel}>Saturation: {Math.round(saturation * 100)}%</ThemedText>
+                    <Slider
+                        style={styles.slider}
+                        minimumValue={0}
+                        maximumValue={1}
+                        step={0.01}
+                        value={saturation}
+                        onValueChange={(value) => updateColor(hue, value)}
+                        minimumTrackTintColor={colorHex}
+                        maximumTrackTintColor={c.surfaceAlt}
+                        thumbTintColor={colorHex}
+                    />
+                </View>
+            </Card>
 
-            <View style={styles.sliderContainer}>
-                <ThemedText style={styles.sliderLabel}>Saturation: {Math.round(saturation * 100)}%</ThemedText>
-                <Slider
-                    style={styles.slider}
-                    minimumValue={0}
-                    maximumValue={1}
-                    step={0.01}
-                    value={saturation}
-                    onValueChange={(value) => updateColor(hue, value)}
-                    minimumTrackTintColor={colorHex}
-                    maximumTrackTintColor="#666"
-                    thumbTintColor={colorHex}
-                />
-            </View>
-
-            <Pressable
-                style={styles.link}
+            <AppButton
+                title="Done"
+                variant="primary"
+                style={styles.doneButton}
                 onPress={async () => {
                     if (charUuid) {
                         const encoded = encodeColorToBase64({ r: rgb[0], g: rgb[1], b: rgb[2] });
@@ -216,9 +202,7 @@ export default function ColorPickerModal() {
                     }
                     router.back();
                 }}
-            >
-                <ThemedText type="link">Done</ThemedText>
-            </Pressable>
+            />
         </ThemedView>
     );
 }
@@ -228,12 +212,17 @@ const styles = StyleSheet.create({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 20,
+        padding: Spacing.lg,
+        gap: Spacing.lg,
+    },
+    card: {
+        alignItems: 'center',
+        alignSelf: 'stretch',
     },
     wheelContainer: {
         width: WHEEL_SIZE,
         height: WHEEL_SIZE,
-        marginVertical: 20,
+        marginVertical: Spacing.md,
     },
     wheel: {
         width: WHEEL_SIZE,
@@ -267,28 +256,26 @@ const styles = StyleSheet.create({
         width: 80,
         height: 80,
         borderRadius: 40,
-        marginVertical: 10,
+        marginVertical: Spacing.sm,
         borderWidth: 2,
-        borderColor: '#fff',
     },
     colorHex: {
         fontSize: 24,
         fontWeight: 'bold',
-        marginBottom: 10,
+        marginBottom: Spacing.sm,
     },
     sliderContainer: {
         width: '100%',
-        marginVertical: 10,
+        marginVertical: Spacing.sm,
     },
     sliderLabel: {
-        marginBottom: 5,
+        marginBottom: Spacing.xs,
     },
     slider: {
         width: '100%',
         height: 40,
     },
-    link: {
-        marginTop: 20,
-        paddingVertical: 15,
+    doneButton: {
+        alignSelf: 'stretch',
     },
 });

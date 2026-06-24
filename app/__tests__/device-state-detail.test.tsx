@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Animated } from 'react-native';
 
-import DeviceStateScreen from '@/app/(tabs)/device-state';
+import DeviceStateDetailScreen from '@/app/(tabs)/device-state/[serviceUuid]';
 import {
   BLE_GATT_CPF_FORMAT_BOOLEAN,
   BLE_GATT_CPF_FORMAT_CUSTOM_COLOR,
@@ -19,14 +19,16 @@ import {
   encodeUint32ToBase64,
   encodeUtf8ToBase64,
 } from '@/services/ble-value-codec';
+import * as ExpoRouter from 'expo-router';
 
 jest.mock('@react-navigation/bottom-tabs', () => ({
   useBottomTabBarHeight: () => 0,
 }));
 
+const SERVICE_UUID = 'service-1';
+
 function buildSelectedDevice(characters: Array<{ uuid: string; cpfFormat: number; value: string; name?: string }>) {
-  const serviceUuid = 'service-1';
-  const byService: Record<string, any> = { [serviceUuid]: {} };
+  const byService: Record<string, any> = { [SERVICE_UUID]: {} };
   const flat: Record<string, any> = {};
 
   for (const char of characters) {
@@ -37,7 +39,7 @@ function buildSelectedDevice(characters: Array<{ uuid: string; cpfFormat: number
       cpfFormat: char.cpfFormat,
       isUpdateInProgress: false,
     };
-    byService[serviceUuid][char.uuid] = info;
+    byService[SERVICE_UUID][char.uuid] = info;
     flat[char.uuid] = info;
   }
 
@@ -45,16 +47,17 @@ function buildSelectedDevice(characters: Array<{ uuid: string; cpfFormat: number
     name: 'RGB Sunglasses',
     mac: 'AA:BB:CC',
     device: {},
-    services: [{ uuid: serviceUuid }],
+    services: [{ uuid: SERVICE_UUID }],
     characteristicsByService: byService,
     characteristics: flat,
-    serviceCharacteristics: { [serviceUuid]: characters.map(c => c.uuid) },
+    serviceCharacteristics: { [SERVICE_UUID]: characters.map(c => c.uuid) },
   };
 }
 
-describe('DeviceStateScreen', () => {
+describe('DeviceStateDetailScreen', () => {
   beforeEach(() => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(ExpoRouter, 'useLocalSearchParams').mockReturnValue({ serviceUuid: SERVICE_UUID } as any);
     jest.spyOn(Animated, 'timing').mockImplementation(
       () =>
         ({
@@ -67,14 +70,15 @@ describe('DeviceStateScreen', () => {
     jest.restoreAllMocks();
   });
 
-  it('shows NOT CONNECTED when no device is selected', () => {
+  it('shows an empty state when no device is selected', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice: null,
       writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByText } = render(<DeviceStateScreen />);
-    expect(getByText('NOT CONNECTED')).toBeTruthy();
+    const { getByText } = render(<DeviceStateDetailScreen />);
+    expect(getByText('Not available')).toBeTruthy();
   });
 
   it('encodes boolean switch writes using BLE boolean format', async () => {
@@ -90,9 +94,10 @@ describe('DeviceStateScreen', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice,
       writeToCharacteristic,
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByRole } = render(<DeviceStateScreen />);
+    const { getByRole } = render(<DeviceStateDetailScreen />);
     fireEvent(getByRole('switch'), 'valueChange', true);
 
     await waitFor(() => {
@@ -113,9 +118,10 @@ describe('DeviceStateScreen', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice,
       writeToCharacteristic,
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByPlaceholderText } = render(<DeviceStateScreen />);
+    const { getByPlaceholderText } = render(<DeviceStateDetailScreen />);
     const input = getByPlaceholderText('Enter value');
 
     fireEvent.changeText(input, 'new-name');
@@ -139,9 +145,10 @@ describe('DeviceStateScreen', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice,
       writeToCharacteristic,
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByPlaceholderText } = render(<DeviceStateScreen />);
+    const { getByPlaceholderText } = render(<DeviceStateDetailScreen />);
     const input = getByPlaceholderText('Enter number');
 
     fireEvent.changeText(input, '12ab3');
@@ -172,9 +179,10 @@ describe('DeviceStateScreen', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice,
       writeToCharacteristic,
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByPlaceholderText } = render(<DeviceStateScreen />);
+    const { getByPlaceholderText } = render(<DeviceStateDetailScreen />);
     const input = getByPlaceholderText('Enter number');
 
     await waitFor(() => {
@@ -199,9 +207,10 @@ describe('DeviceStateScreen', () => {
         },
       ]),
       writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByText } = render(<DeviceStateScreen />);
+    const { getByText } = render(<DeviceStateDetailScreen />);
     expect(getByText('Pick Color')).toBeTruthy();
   });
 
@@ -215,9 +224,10 @@ describe('DeviceStateScreen', () => {
         },
       ]),
       writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByText, queryByText } = render(<DeviceStateScreen />);
+    const { getByText, queryByText } = render(<DeviceStateDetailScreen />);
     expect(getByText('Loop One')).toBeTruthy();
     // Collapsed by default: the other options aren't rendered until tapped open.
     expect(queryByText('Play All')).toBeNull();
@@ -238,9 +248,10 @@ describe('DeviceStateScreen', () => {
         },
       ]),
       writeToCharacteristic,
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByPlaceholderText, rerender } = render(<DeviceStateScreen />);
+    const { getByPlaceholderText, rerender } = render(<DeviceStateDetailScreen />);
 
     await waitFor(() => {
       expect(getByPlaceholderText('Enter value').props.value).toBe('initial');
@@ -255,9 +266,10 @@ describe('DeviceStateScreen', () => {
         },
       ]),
       writeToCharacteristic,
+      writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    rerender(<DeviceStateScreen />);
+    rerender(<DeviceStateDetailScreen />);
 
     await waitFor(() => {
       expect(getByPlaceholderText('Enter value').props.value).toBe('updated-by-notification');

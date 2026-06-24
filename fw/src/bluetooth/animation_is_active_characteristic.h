@@ -8,15 +8,23 @@
  *
  * Provides the common read/write/notify characteristic shape and forwards
  * remote writes into @ref AnimationIsActiveBinding for the selected animation.
+ *
+ * Uses the fixed kIsActiveCharacteristicUuid (reused identically across every animation's
+ * BtGattServer, like kAnimationNameCharacteristicUuid) rather than an auto-assigned UUID, so the
+ * app can find "Is Active" the same way in every animation service without depending on each
+ * animation's declaration order. See kIsActiveCharacteristicUuid's doc comment in
+ * bt_service_cpp.h for the rationale.
  */
 template <Animation tAnimationId>
 class IsActiveCharacteristic
-    : public BtGattAutoCharacteristicExt<IsActiveCharacteristic<tAnimationId>, "Is Active", true,
-                                         false, bool, false> {
+    : public BtGattCharacteristicCommon<IsActiveCharacteristic<tAnimationId>, "Is Active", true,
+                                        false, bool, false> {
    public:
-    using Base = BtGattAutoCharacteristicExt<IsActiveCharacteristic<tAnimationId>, "Is Active",
-                                             true, false, bool, false>;
+    using Base = BtGattCharacteristicCommon<IsActiveCharacteristic<tAnimationId>, "Is Active",
+                                            true, false, bool, false>;
     using Base::operator=;
+
+    IsActiveCharacteristic() { this->characteristic_uuid_ = kIsActiveCharacteristicUuid; }
 
     /**
      * @brief Updates local characteristic state and emits notify when changed.

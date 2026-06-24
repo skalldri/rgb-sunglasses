@@ -1,7 +1,11 @@
+import { AppButton } from "@/components/ui/app-button";
+import { ProgressBar } from "@/components/ui/progress-bar";
+import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useBleConnection } from "@/hooks/use-ble-connection";
+import { useThemeColors } from "@/hooks/use-theme-color";
 import { useRouter } from "expo-router";
-import { ActivityIndicator, Button, StyleSheet, View } from "react-native";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { ThemedText } from "./themed-text";
 
 interface Props {
@@ -13,17 +17,21 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
     const { selectedDevice, discoveryProgress } = useBluetooth();
     const { isConnecting, connect, disconnect } = useBleConnection(macAddress, deviceName);
     const router = useRouter();
+    const c = useThemeColors();
 
     const isSelected = selectedDevice?.mac === macAddress;
 
     return (
         <View style={styles.outer}>
             <View style={styles.container}>
-                <ThemedText style={styles.deviceName}>{deviceName}</ThemedText>
-                <ThemedText style={styles.macAddress}>{macAddress}</ThemedText>
+                <View style={styles.info}>
+                    <ThemedText type="defaultSemiBold" numberOfLines={1}>{deviceName}</ThemedText>
+                    <ThemedText type="caption">{macAddress}</ThemedText>
+                </View>
                 <View style={styles.buttonContainer}>
-                    <Button
+                    <AppButton
                         title={isSelected ? "Disconnect" : "Connect"}
+                        variant={isSelected ? "secondary" : "primary"}
                         disabled={isConnecting}
                         onPress={async () => {
                             if (isSelected) {
@@ -36,24 +44,17 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
                     />
                     {isConnecting && !discoveryProgress && (
                         <View style={styles.loadingOverlay}>
-                            <ActivityIndicator size="small" color="#fff" />
+                            <ActivityIndicator size="small" color={c.onPrimary} />
                         </View>
                     )}
                 </View>
             </View>
             {isConnecting && discoveryProgress && (
                 <View style={styles.progressContainer}>
-                    <View style={styles.progressTrack}>
-                        <View
-                            style={[
-                                styles.progressFill,
-                                { width: `${Math.min(100, (discoveryProgress.current / Math.max(1, discoveryProgress.total)) * 100)}%` },
-                            ]}
-                        />
-                    </View>
-                    <ThemedText style={styles.progressLabel}>
-                        {`Querying characteristics: ${discoveryProgress.current}/${discoveryProgress.total}`}
-                    </ThemedText>
+                    <ProgressBar
+                        progress={discoveryProgress.current / Math.max(1, discoveryProgress.total)}
+                        label={`Querying characteristics: ${discoveryProgress.current}/${discoveryProgress.total}`}
+                    />
                 </View>
             )}
         </View>
@@ -62,20 +63,17 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
 
 const styles = StyleSheet.create({
     outer: {
-        gap: 4,
+        gap: Spacing.sm,
     },
     container: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
+        gap: Spacing.md,
     },
-    deviceName: {
-        flex: 1,
-    },
-    macAddress: {
-        flex: 1,
-        fontSize: 12,
-        opacity: 0.6,
+    info: {
+        flexShrink: 1,
+        gap: 2,
     },
     buttonContainer: {
         position: 'relative',
@@ -91,20 +89,5 @@ const styles = StyleSheet.create({
     },
     progressContainer: {
         gap: 2,
-    },
-    progressTrack: {
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: '#3a3a3a',
-        overflow: 'hidden',
-    },
-    progressFill: {
-        height: '100%',
-        backgroundColor: '#4499ff',
-        borderRadius: 3,
-    },
-    progressLabel: {
-        fontSize: 11,
-        opacity: 0.7,
     },
 });

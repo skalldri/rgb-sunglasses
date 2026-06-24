@@ -1,4 +1,5 @@
 import { CharacteristicInfo } from "@/context/bluetooth-context";
+import { useThemeColors } from "@/hooks/use-theme-color";
 import { decodeBooleanFromBase64, encodeBooleanToBase64 } from "@/services/ble-value-codec";
 import { Switch } from "react-native";
 
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function CharacteristicBoolean({ charUuid, charInfo, onWrite }: Props) {
+    const c = useThemeColors();
     let displayValue = false;
     if (charInfo.value) {
         try {
@@ -22,6 +24,9 @@ export function CharacteristicBoolean({ charUuid, charInfo, onWrite }: Props) {
         <Switch
             value={displayValue}
             disabled={charInfo.isUpdateInProgress}
+            trackColor={{ true: c.primary, false: c.surfaceAlt }}
+            thumbColor={c.surface}
+            ios_backgroundColor={c.surfaceAlt}
             onValueChange={(value) => {
                 const previousValue = charInfo.value ?? '';
                 const encoded = encodeBooleanToBase64(value);

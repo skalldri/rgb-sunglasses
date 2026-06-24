@@ -1,4 +1,6 @@
+import { Radii, Spacing } from "@/constants/theme";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
+import { useThemeColors } from "@/hooks/use-theme-color";
 import { decodeUtf8FromBase64, encodeUtf8ToBase64 } from "@/services/ble-value-codec";
 import { useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
@@ -11,6 +13,7 @@ interface Props {
 
 export function CharacteristicDropdown({ charUuid, charInfo }: Props) {
     const { writeToCharacteristic } = useBluetooth();
+    const c = useThemeColors();
     const [isOpen, setIsOpen] = useState(false);
 
     let options: string[] = [];
@@ -35,7 +38,7 @@ export function CharacteristicDropdown({ charUuid, charInfo }: Props) {
     return (
         <View style={styles.container}>
             <Pressable
-                style={styles.trigger}
+                style={[styles.trigger, { backgroundColor: c.surfaceAlt, borderColor: c.border }]}
                 onPress={() => setIsOpen(prev => !prev)}
                 accessibilityRole="button"
                 accessibilityLabel={`${selected}, tap to change`}
@@ -44,9 +47,13 @@ export function CharacteristicDropdown({ charUuid, charInfo }: Props) {
                 <ThemedText style={styles.caret}>{isOpen ? '▲' : '▼'}</ThemedText>
             </Pressable>
             {isOpen && (
-                <View style={styles.optionsList}>
+                <View style={[styles.optionsList, { backgroundColor: c.surface, borderColor: c.border }]}>
                     {options.map(option => (
-                        <Pressable key={option} style={styles.option} onPress={() => selectOption(option)}>
+                        <Pressable
+                            key={option}
+                            style={[styles.option, { borderTopColor: c.border }]}
+                            onPress={() => selectOption(option)}
+                        >
                             <ThemedText style={option === selected ? styles.selectedOptionText : styles.optionText}>
                                 {option}
                             </ThemedText>
@@ -67,30 +74,27 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
         borderWidth: 1,
-        borderColor: '#ccc',
-        borderRadius: 6,
-        paddingVertical: 8,
-        paddingHorizontal: 12,
+        borderRadius: Radii.md,
+        paddingVertical: Spacing.sm,
+        paddingHorizontal: Spacing.md,
     },
     selectedText: {
         fontSize: 14,
     },
     caret: {
         fontSize: 10,
-        marginLeft: 8,
+        marginLeft: Spacing.sm,
     },
     optionsList: {
         borderWidth: 1,
-        borderColor: '#ccc',
         borderTopWidth: 0,
-        borderBottomLeftRadius: 6,
-        borderBottomRightRadius: 6,
+        borderBottomLeftRadius: Radii.md,
+        borderBottomRightRadius: Radii.md,
     },
     option: {
-        paddingVertical: 10,
-        paddingHorizontal: 12,
+        paddingVertical: Spacing.sm + 2,
+        paddingHorizontal: Spacing.md,
         borderTopWidth: 1,
-        borderTopColor: '#ccc',
     },
     optionText: {
         fontSize: 14,

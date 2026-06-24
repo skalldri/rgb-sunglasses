@@ -11,6 +11,14 @@ if (!global.btoa) {
 
 jest.mock('react-native-reanimated', () => require('react-native-reanimated/mock'));
 
+// Render the gradient as a plain View in tests so kit components (Hero, AppButton,
+// ProgressBar) mount without the native module.
+jest.mock('expo-linear-gradient', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return { LinearGradient: ({ children, ...props }: any) => React.createElement(View, props, children) };
+});
+
 jest.mock('expo-router', () => {
   const React = require('react');
   return {

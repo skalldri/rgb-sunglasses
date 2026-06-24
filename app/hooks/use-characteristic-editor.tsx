@@ -4,19 +4,26 @@ import { CharacteristicDropdown } from "@/components/characteristic-dropdown";
 import { CharacteristicFloat32 } from "@/components/characteristic-float32";
 import { CharacteristicUint32 } from "@/components/characteristic-uint32";
 import { CharacteristicUtf8 } from "@/components/characteristic-utf8";
-import { ThemedText } from "@/components/themed-text";
-import { BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_DROPDOWN_LIST, BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S, getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE } from "@/constants/bluetooth";
+import {
+    BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
+    BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S,
+    UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_IS_ACTIVE_CHARACTERISTIC,
+} from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
+import { useThemeColors } from "@/hooks/use-theme-color";
 import { decodeFloat32FromBase64, decodeUint32FromBase64, decodeUtf8FromBase64, formatFloat32 } from "@/services/ble-value-codec";
-import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
-import { Link } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Button, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Animated } from "react-native";
 
-
-export default function DeviceStateScreen() {
-    const { selectedDevice, writeToCharacteristic } = useBluetooth();
+/**
+ * Shared characteristic read/write/decode/animate logic, lifted out of the old single-page
+ * device-state screen so the per-service detail page ([serviceUuid].tsx) can reuse it unchanged.
+ * Operates on the whole selectedDevice (not just one service) - the "only re-init on device
+ * change" guard already works fine globally, and this keeps the extraction mechanical/low-risk.
+ */
+export function useCharacteristicEditor() {
+    const { selectedDevice, writeToCharacteristic, writeServiceCharacteristic } = useBluetooth();
+    const c = useThemeColors();
 
     // Local state for tracking pending input values (before BLE write)
     const [pendingValues, setPendingValues] = useState<Record<string, string>>({});
@@ -30,10 +37,6 @@ export default function DeviceStateScreen() {
     // Track animation values for color fade
     const fadeAnims = useRef<Record<string, Animated.Value>>({});
 
-    if (selectedDevice != null) {
-        console.log(`Connected to device: ${selectedDevice.name} `);
-    }
-
     // Initialize pendingValues only when device changes (not on every characteristic update)
     useEffect(() => {
         if (!selectedDevice) {
@@ -44,7 +47,6 @@ export default function DeviceStateScreen() {
 
         // Only initialize if this is a new device
         if (selectedDevice.mac === initializedDeviceId) {
-            console.log(`Device ${selectedDevice.mac} already initialized, skipping`);
             return;
         }
 
@@ -53,7 +55,7 @@ export default function DeviceStateScreen() {
             Object.entries(chars).forEach(([charUuid, charInfo]) => {
                 // Animation Name reuses the same characteristic UUID across every animation
                 // service, which collides with this flat-by-charUuid map. It's surfaced via the
-                // service header instead, so skip it here (see device-state.tsx render loop).
+                // service header instead, so skip it here (see device-state render loop).
                 if (charUuid === UUID_ANIMATION_NAME_CHARACTERISTIC) return;
                 // Only initialize for text/numeric inputs (not boolean or color)
                 if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S && charInfo.value) {
@@ -155,12 +157,17 @@ export default function DeviceStateScreen() {
         }
     }
 
-    // Helper to write characteristic value to BLE with UI feedback
-    async function writeCharValue(charUuid: string, newEncodedValue: string, previousEncodedValue: string) {
-        const success = await writeToCharacteristic(charUuid, newEncodedValue);
+    // Helper to write characteristic value to BLE with UI feedback. serviceUuid is required so
+    // UUID_IS_ACTIVE_CHARACTERISTIC (reused across services) can be routed through the
+    // service-aware write path instead of the ambiguous flat-map one.
+    async function writeCharValue(serviceUuid: string, charUuid: string, newEncodedValue: string, previousEncodedValue: string) {
+        const success = charUuid === UUID_IS_ACTIVE_CHARACTERISTIC
+            ? await writeServiceCharacteristic(serviceUuid, charUuid, newEncodedValue)
+            : await writeToCharacteristic(charUuid, newEncodedValue);
 
-        // Get the characteristic info using the flat lookup
-        const charInfo = selectedDevice?.characteristics?.[charUuid] ?? null;
+        const charInfo = charUuid === UUID_IS_ACTIVE_CHARACTERISTIC
+            ? selectedDevice?.characteristicsByService?.[serviceUuid]?.[charUuid] ?? null
+            : selectedDevice?.characteristics?.[charUuid] ?? null;
 
         if (success) {
             const decodedValue = decodeValueForInput(charInfo?.cpfFormat ?? null, newEncodedValue, charUuid);
@@ -175,9 +182,15 @@ export default function DeviceStateScreen() {
         }
     }
 
-    function renderCharacteristicInput(charUuid: string, charInfo: CharacteristicInfo) {
+    function renderCharacteristicInput(serviceUuid: string, charUuid: string, charInfo: CharacteristicInfo) {
         if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_BOOLEAN) {
-            return <CharacteristicBoolean charUuid={charUuid} charInfo={charInfo} onWrite={writeCharValue} />;
+            return (
+                <CharacteristicBoolean
+                    charUuid={charUuid}
+                    charInfo={charInfo}
+                    onWrite={(uuid, encoded, previous) => writeCharValue(serviceUuid, uuid, encoded, previous)}
+                />
+            );
         }
         if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S) {
             return (
@@ -186,7 +199,7 @@ export default function DeviceStateScreen() {
                     charInfo={charInfo}
                     pendingValue={pendingValues[charUuid] ?? ''}
                     onChangeText={(uuid, text) => setPendingValues(prev => ({ ...prev, [uuid]: text }))}
-                    onWrite={writeCharValue}
+                    onWrite={(uuid, encoded, previous) => writeCharValue(serviceUuid, uuid, encoded, previous)}
                 />
             );
         }
@@ -197,7 +210,7 @@ export default function DeviceStateScreen() {
                     charInfo={charInfo}
                     pendingValue={pendingValues[charUuid] ?? ''}
                     onChangeText={(uuid, text) => setPendingValues(prev => ({ ...prev, [uuid]: text }))}
-                    onWrite={writeCharValue}
+                    onWrite={(uuid, encoded, previous) => writeCharValue(serviceUuid, uuid, encoded, previous)}
                 />
             );
         }
@@ -208,7 +221,7 @@ export default function DeviceStateScreen() {
                     charInfo={charInfo}
                     pendingValue={pendingValues[charUuid] ?? ''}
                     onChangeText={(uuid, text) => setPendingValues(prev => ({ ...prev, [uuid]: text }))}
-                    onWrite={writeCharValue}
+                    onWrite={(uuid, encoded, previous) => writeCharValue(serviceUuid, uuid, encoded, previous)}
                 />
             );
         }
@@ -221,104 +234,19 @@ export default function DeviceStateScreen() {
         return null;
     }
 
-    return (
-        <SafeAreaView style={styles.container}>
-            <KeyboardAvoidingView
-                style={styles.container}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                keyboardVerticalOffset={50}>
-                <ThemedText>
-                    {selectedDevice == null ? "NOT CONNECTED" : selectedDevice.name}
-                </ThemedText>
+    function labelColorFor(charUuid: string): string | Animated.AnimatedInterpolation<string | number> {
+        const status = writeStatus[charUuid];
+        const fadeValue = fadeAnims.current[charUuid];
+        const statusColor = status === 'success' ? c.success
+            : status === 'notification' ? c.info
+            : c.danger;
+        return status && fadeValue
+            ? fadeValue.interpolate({
+                inputRange: [0, 1],
+                outputRange: [c.textPrimary, statusColor],
+            })
+            : c.textPrimary;
+    }
 
-                <View style={styles.separator} />
-
-                <ScrollView contentContainerStyle={styles.scrollContent}>
-                    {
-                        (selectedDevice?.services ?? [])
-                            .filter(service => service.uuid !== UUID_GENERIC_ATTRIBUTE_SERVICE && service.uuid !== UUID_GENERIC_ACCESS_SERVICE)
-                            .map((service, index, visibleServices) => {
-                            return (
-                                <View key={service.uuid + `- service - details - ` + String(index)}>
-                                    <ThemedText
-                                        key={service.uuid + `- ` + String(index)}>
-                                        {selectedDevice?.serviceDisplayNames?.[service.uuid] ?? getServiceName(service.uuid)}
-                                    </ThemedText>
-
-                                    {Object.entries(selectedDevice?.characteristicsByService[service.uuid] ?? {}).map(([charUuid, charInfo], charIndex) => {
-                                        // Already surfaced as the service header above; this UUID is shared
-                                        // across every animation service, so skip the generic row for it.
-                                        if (charUuid === UUID_ANIMATION_NAME_CHARACTERISTIC) return null;
-
-                                        const isMcuMgrCharacteristic = service.uuid === SMP_SERVICE_UUID && charUuid === SMP_CHARACTERISTIC_UUID;
-
-                                        // Get animated color for this characteristic
-                                        const status = writeStatus[charUuid];
-                                        const fadeValue = fadeAnims.current[charUuid];
-
-                                        // Interpolate color based on status and fade value
-                                        const statusColor = status === 'success' ? '#00ff00'
-                                            : status === 'notification' ? '#4499ff'
-                                            : '#ff0000';
-                                        const textColor = status && fadeValue
-                                            ? fadeValue.interpolate({
-                                                inputRange: [0, 1],
-                                                outputRange: ['#ffffff', statusColor]
-                                            })
-                                            : '#ffffff';
-
-                                        return (
-                                            <View
-                                                key={`${service.uuid} -char - ${charIndex} `}
-                                                style={styles.characteristicRow}>
-                                                <Animated.Text style={[styles.characteristicLabel, { color: textColor }]}>
-                                                    {charInfo.name ?? getCharacteristicName(charUuid)}
-                                                </Animated.Text>
-                                                {isMcuMgrCharacteristic && (
-                                                    <Link href="/firmware-update-modal" asChild>
-                                                        <Button title="Update" onPress={() => { }} />
-                                                    </Link>
-                                                )}
-                                                {renderCharacteristicInput(charUuid, charInfo)}
-                                            </View>
-                                        );
-                                    })}
-
-                                    {index < visibleServices.length - 1 && (
-                                        <View style={styles.separator} />
-                                    )}
-                                </View>
-                            )
-                        })
-                    }
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </SafeAreaView>
-    );
+    return { renderCharacteristicInput, labelColorFor };
 }
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        overflow: 'hidden',
-    },
-    separator: {
-        height: 1,
-        backgroundColor: '#ccc',
-        marginVertical: 16,
-    },
-    scrollContent: {
-        paddingBottom: 0,
-    },
-    characteristicRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginLeft: 16,
-        marginVertical: 4,
-    },
-    characteristicLabel: {
-        fontSize: 12,
-        flexShrink: 1,
-        marginRight: 8,
-    },
-});
