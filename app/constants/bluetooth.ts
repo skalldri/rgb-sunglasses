@@ -28,6 +28,22 @@ export const UUID_ANIMATION_NAME_CHARACTERISTIC = "12345678-1234-5678-aaaa-56789
 // writeServiceCharacteristic/getServiceCharacteristicInfo context helpers.
 export const UUID_IS_ACTIVE_CHARACTERISTIC = "12345678-1234-5678-bbbb-56789abd0000";
 
+// Fixed characteristic UUID, identical across every BtGattServer-assembled service (when
+// CONFIG_APP_BT_METADATA_CHARACTERISTIC is enabled - see fw/Kconfig), exposing every sibling
+// characteristic's CUD name + CPF format in one packed blob, read in a single ATT round-trip
+// instead of two descriptor reads per characteristic (issue #41 follow-up). Must match
+// kMetadataCharacteristicUuid in fw/src/bluetooth/bt_service_cpp.h. Services that don't expose
+// this characteristic (e.g. the third-party McuMgr service, or rgb_sunglasses_dk builds with the
+// Kconfig disabled) fall back to the per-descriptor read path - see parseMetadataBlob() in
+// services/ble-value-codec.ts and the discovery loop in hooks/use-ble-connection.ts.
+export const UUID_METADATA_CHARACTERISTIC = "12345678-1234-5678-cccc-56789abd0000";
+
+// Wire-format version for the bulk metadata blob (see parseMetadataBlob()). Must match
+// kMetadataBlobVersion in fw/src/bluetooth/bt_service_cpp.h. Bump together if the byte layout
+// ever changes; a mismatch is detected and triggers the per-descriptor fallback rather than
+// misparsing the blob.
+export const METADATA_BLOB_VERSION = 1;
+
 // Base GATT/GAP services every BLE peripheral exposes. Not useful to display in the device
 // state UI, so device-state.tsx filters services with these UUIDs out of the render loop.
 export const UUID_GENERIC_ATTRIBUTE_SERVICE = "00001801-0000-1000-8000-00805f9b34fb";

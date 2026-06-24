@@ -52,6 +52,30 @@ constexpr bt_uuid_128 kAnimationNameCharacteristicUuid =
 constexpr bt_uuid_128 kIsActiveCharacteristicUuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0xbbbb, 0x56789abd0000));
 
+/**
+ * @brief Fixed UUID for the auto-synthesized "bulk metadata" characteristic that
+ * @ref BtGattServer appends to every service it assembles (issue #41 follow-up).
+ * Group 0xcccc is chosen to never collide with kAnimationNameCharacteristicUuid's 0xaaaa,
+ * kIsActiveCharacteristicUuid's 0xbbbb, or any anim_id<<8 used by BT_ANIMATION_SERVICE_UUID
+ * (anim_id only ranges 0-11 today). Reused identically across every service, same rationale
+ * as kAnimationNameCharacteristicUuid.
+ *
+ * The app reads this once per service to learn every sibling characteristic's CUD name +
+ * CPF format in a single ATT round-trip, instead of two descriptor reads per characteristic.
+ * See MetadataBlobBuilder below for the wire format and BtGattServer for how this gets
+ * appended to the attribute table.
+ */
+constexpr bt_uuid_128 kMetadataCharacteristicUuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0xcccc, 0x56789abd0000));
+
+/**
+ * @brief Wire-format version for the bulk metadata blob (see MetadataBlobBuilder). Bump this
+ * if the byte layout ever changes, so an app build that doesn't understand a newer version can
+ * detect the mismatch and fall back to per-descriptor reads instead of misparsing the blob.
+ * Must match METADATA_BLOB_VERSION in app/constants/bluetooth.ts.
+ */
+constexpr uint8_t kMetadataBlobVersion = 1;
+
 // Helper to check if all tuple elements are bt_gatt_attr
 template <typename Tuple, size_t... Is>
 constexpr bool allAttrsAreGattAttr(std::index_sequence<Is...>) {
@@ -84,6 +108,100 @@ concept BtGattAutoUuidAssignable =
     requires(T &t, const bt_uuid_128 &serviceUuid, uint16_t characteristicId) {
         t.assignAutoUuid(serviceUuid, characteristicId);
     };
+
+/**
+ * @brief Detects whether a provider TYPE (not instance) exposes static compile-time
+ * CUD/CPF metadata accessors. Satisfied by every concrete characteristic built on
+ * @ref BtGattCharacteristicCommon (via its getDescription()/getCpf() static methods,
+ * inherited transparently through ordinary derived-class lookup - no instance or
+ * virtual dispatch needed). Deliberately NOT satisfied by @ref BtGattPrimaryService,
+ * which is exactly the property @ref MetadataBlobBuilder uses to skip it automatically
+ * when building a service's bulk metadata blob.
+ */
+template <typename P>
+concept BtGattMetadataBearingProvider = requires {
+    { P::getDescription() } -> std::convertible_to<const char *>;
+    { P::getCpf() } -> std::convertible_to<bt_gatt_cpf>;
+};
+
+/**
+ * @brief Compile-time fold that packs every metadata-bearing provider's CUD name + CPF
+ * format into a single byte blob, in @p Ps declaration order (issue #41 follow-up).
+ *
+ * Wire format (excluding the 2-byte [version][entry_count] header written by the
+ * caller, see BtGattServer::kMetadataBlob below):
+ *   per entry: [cpf_format: 1 byte][name_len: 1 byte][name_bytes: name_len bytes, no NUL]
+ *
+ * Operates purely on types (Ps...), not instances - getDescription()/getCpf() are
+ * static, so this needs no provider objects to exist yet. Non-metadata-bearing
+ * providers (the primary service) are skipped automatically via `if constexpr`.
+ *
+ * IMPORTANT ordering assumption: entries are written in Ps... (i.e. BtGattServer's
+ * Providers... pack) order, which becomes GATT attribute/handle order. The app's
+ * positional zip (use-ble-connection.ts) assumes characteristicsForService() returns
+ * characteristics in that same handle order - true by the ATT spec's "Read By Type"
+ * ascending-handle-order guarantee for characteristic discovery, not just a platform
+ * convention. See the matching comment in use-ble-connection.ts for the full reasoning
+ * and the one unverified (library, not protocol) link in this chain.
+ */
+template <typename... Ps>
+struct MetadataBlobBuilder;
+
+template <>
+struct MetadataBlobBuilder<> {
+    static constexpr size_t size() { return 0; }
+    static constexpr size_t count() { return 0; }
+    static constexpr void write(uint8_t *, size_t &) {}
+};
+
+template <typename P, typename... Rest>
+struct MetadataBlobBuilder<P, Rest...> {
+    static constexpr size_t size() {
+        if constexpr (BtGattMetadataBearingProvider<P>) {
+            static_assert(
+                strlen(P::getDescription()) <= 255,
+                "CUD description too long for 1-byte length-prefixed metadata blob entry");
+            return 2 + strlen(P::getDescription()) +
+                   MetadataBlobBuilder<Rest...>::size();
+        } else {
+            return MetadataBlobBuilder<Rest...>::size();
+        }
+    }
+
+    static constexpr size_t count() {
+        return (BtGattMetadataBearingProvider<P> ? 1 : 0) + MetadataBlobBuilder<Rest...>::count();
+    }
+
+    static constexpr void write(uint8_t *buf, size_t &pos) {
+        if constexpr (BtGattMetadataBearingProvider<P>) {
+            const char *desc = P::getDescription();
+            size_t len = strlen(desc);
+            buf[pos++] = static_cast<uint8_t>(P::getCpf().format);
+            buf[pos++] = static_cast<uint8_t>(len);
+            for (size_t i = 0; i < len; i++) {
+                buf[pos++] = static_cast<uint8_t>(desc[i]);
+            }
+        }
+        MetadataBlobBuilder<Rest...>::write(buf, pos);
+    }
+};
+
+/**
+ * @brief Builds the full [version][entry_count][entries...] blob for @p Providers... at
+ * compile time. See MetadataBlobBuilder above for the entry format and ordering rationale.
+ */
+template <typename... Providers>
+constexpr auto buildMetadataBlob() {
+    static_assert(MetadataBlobBuilder<Providers...>::count() <= 255,
+                  "Too many metadata-bearing characteristics for a 1-byte entry_count");
+    constexpr size_t kBlobSize = 2 + MetadataBlobBuilder<Providers...>::size();
+    std::array<uint8_t, kBlobSize> blob{};
+    blob[0] = kMetadataBlobVersion;
+    blob[1] = static_cast<uint8_t>(MetadataBlobBuilder<Providers...>::count());
+    size_t pos = 2;
+    MetadataBlobBuilder<Providers...>::write(blob.data(), pos);
+    return blob;
+}
 
 /**
  * @brief Detects whether a characteristic type exposes an `onWrite` hook.
@@ -169,9 +287,23 @@ class BtGattServer {
     static constexpr size_t kServiceUuidProviderCount =
         (0 + ... + static_cast<size_t>(BtGattServiceUuidProvider<Providers>));
 
-    // Deduce total count from all providers' tuples
-    static constexpr size_t kTotalAttrCount =
+    // Deduce attribute count contributed by the providers passed in by the caller.
+    static constexpr size_t kProviderAttrCount =
         (std::tuple_size_v<decltype(std::declval<Providers>().getAttrsTuple())> + ...);
+
+    // +2 for the bulk metadata characteristic BtGattServer synthesizes and appends below
+    // (issue #41 follow-up) - one characteristic-declaration attr + one value attr, same
+    // shape as any other read-only characteristic, but built from the OTHER providers'
+    // own compile-time metadata rather than being listed by the caller. See
+    // getMetadataAttrsTuple()/kMetadataBlob below and MetadataBlobBuilder above.
+    //
+    // Gated by CONFIG_APP_BT_METADATA_CHARACTERISTIC (default y): the blob duplicates
+    // every characteristic's CUD description string as packed binary data, which doesn't
+    // fit in rgb_sunglasses_dk's internal-flash image slot (confirmed: imgtool "Image
+    // size ... exceeds requested size" with this enabled on that board) - see its board
+    // .conf. DK is legacy and doesn't get new features per fw/CLAUDE.md.
+    static constexpr size_t kTotalAttrCount =
+        kProviderAttrCount + (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC) ? 2 : 0);
 
     BtGattServer(Providers &...providers) {
         static_assert(kServiceUuidProviderCount > 0,
@@ -201,8 +333,20 @@ class BtGattServer {
 
         (assignAutoUuids(providers), ...);
 
-        attrs_ = tupleToArray(concatenateAttrTuples(providers...),
-                              std::make_index_sequence<kTotalAttrCount>{});
+        // Metadata attrs are appended AFTER all provider attrs, so they never shift the
+        // handles of any characteristic declared earlier in this same service. Gated by
+        // CONFIG_APP_BT_METADATA_CHARACTERISTIC - see kTotalAttrCount's comment above for
+        // why. When disabled, getMetadataAttrsTuple()/kMetadataBlob are never referenced
+        // and so are never instantiated (class template members are only instantiated
+        // when used), costing zero flash on boards where this is off.
+        if constexpr (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC)) {
+            attrs_ = tupleToArray(
+                std::tuple_cat(concatenateAttrTuples(providers...), getMetadataAttrsTuple()),
+                std::make_index_sequence<kTotalAttrCount>{});
+        } else {
+            attrs_ = tupleToArray(concatenateAttrTuples(providers...),
+                                  std::make_index_sequence<kTotalAttrCount>{});
+        }
 
         // Bind providers that inherit from BtGattAttrProviderBase
         bindProviders(attrs_.data(), std::index_sequence_for<Providers...>{}, providers...);
@@ -214,6 +358,46 @@ class BtGattServer {
     static constexpr size_t size() { return kTotalAttrCount; }
 
    private:
+    static constexpr bt_uuid_16 kGattChrcUuid = BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
+
+    // Compile-time blob packing every OTHER provider's CUD name + CPF format, in
+    // Providers... declaration order (= GATT handle order - see MetadataBlobBuilder's
+    // doc comment for the full ATT ordering-guarantee rationale and its one unverified
+    // link). Skips the primary-service provider automatically (it isn't
+    // BtGattMetadataBearingProvider). Not auto-UUID-assigned - this characteristic uses
+    // the fixed, shared kMetadataCharacteristicUuid instead, same pattern as
+    // kAnimationNameCharacteristicUuid.
+    static constexpr auto kMetadataBlob = buildMetadataBlob<Providers...>();
+
+    static constexpr bt_gatt_chrc kMetadataChrc =
+        BT_GATT_CHRC_INIT(&kMetadataCharacteristicUuid.uuid, 0U, BT_GATT_CHRC_READ);
+
+    static ssize_t readMetadata(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+                                uint16_t len, uint16_t offset) {
+        return bt_gatt_attr_read(conn, attr, buf, len, offset, kMetadataBlob.data(),
+                                 kMetadataBlob.size());
+    }
+
+    static constexpr auto getMetadataAttrsTuple() {
+        return std::make_tuple(
+            bt_gatt_attr{
+                .uuid = &kGattChrcUuid.uuid,
+                .read = bt_gatt_attr_read_chrc,
+                .write = NULL,
+                .user_data = const_cast<void *>(static_cast<const void *>(&kMetadataChrc)),
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            },
+            bt_gatt_attr{
+                .uuid = &kMetadataCharacteristicUuid.uuid,
+                .read = readMetadata,
+                .write = NULL,
+                .user_data = nullptr,
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ_ENCRYPT,
+            });
+    }
+
     std::array<bt_gatt_attr, kTotalAttrCount> attrs_{};
 };
 
@@ -376,6 +560,22 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
         BtGattCpfTraits<T>::kSupported,
         "Unsupported type for BtGattCharacteristic CPF deduction. "
         "Add a BtGattCpfTraits<T> specialization with a static constexpr bt_gatt_cpf kValue.");
+
+    /**
+     * @brief Exposes this characteristic's compile-time CUD description string without
+     * needing an instance. Used by MetadataBlobBuilder (issue #41 follow-up) to build a
+     * per-service bulk metadata blob purely from provider TYPES. Every concrete
+     * characteristic type (BtGattCharacteristic, BtGattAutoCharacteristicExt-derived CRTP
+     * subclasses, BtGattPersistentCharacteristic, etc.) inherits this transparently via
+     * ordinary derived-class static-member lookup.
+     */
+    static constexpr const char *getDescription() { return Description.value; }
+
+    /**
+     * @brief Exposes this characteristic's compile-time CPF format byte - the same value
+     * written into the standard 0x2904 CPF descriptor below. See getDescription() above.
+     */
+    static constexpr bt_gatt_cpf getCpf() { return BtGattCpfTraits<T>::kValue; }
 
     constexpr auto getAttrsTuple() {
         auto baseAttrs = std::make_tuple(

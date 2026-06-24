@@ -98,6 +98,21 @@ config APP_PERSIST_WORKQ_STACK_SIZE
 	  persistent config values (see src/settings/). This option controls the
 	  stack size of that workqueue's thread.
 
+config APP_BT_METADATA_CHARACTERISTIC
+	bool "Append a bulk CUD/CPF metadata characteristic to every BtGattServer service"
+	default y
+	help
+	  Adds one extra read-only characteristic per GATT service (see
+	  BtGattServer in src/bluetooth/bt_service_cpp.h) that returns every
+	  sibling characteristic's CUD name + CPF format in a single packed
+	  blob, so the companion app can read it in one ATT round-trip instead
+	  of two descriptor reads per characteristic during discovery (issue
+	  #41 follow-up). Costs real flash: the blob duplicates every
+	  characteristic's CUD description string as packed binary data.
+	  Disabled on rgb_sunglasses_dk (see its board .conf): that board's
+	  internal-flash image slot has no spare room for this, and per
+	  fw/CLAUDE.md it's legacy / doesn't get new features.
+
 config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	int "Debounce interval (ms) before persisting a changed config value"
 	default 1000
