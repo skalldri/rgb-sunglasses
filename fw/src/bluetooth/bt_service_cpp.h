@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstring>
 #include <tuple>
 #include <type_traits>

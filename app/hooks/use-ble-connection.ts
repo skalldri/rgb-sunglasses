@@ -88,7 +88,14 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 const serviceCharsList = await Promise.all(
                     services.map(service => deviceConnection.characteristicsForService(service.uuid))
                 );
-                const totalCharacteristics = serviceCharsList.reduce((sum, chars) => sum + chars.length, 0);
+                // Excludes the bulk metadata characteristic (issue #41 follow-up) from the count:
+                // it's never individually processed in the loop below (see displayChars), so
+                // including it here would make `total` permanently 1 higher than `current` can
+                // ever reach for any service that has one.
+                const totalCharacteristics = serviceCharsList.reduce(
+                    (sum, chars) => sum + chars.filter(c => c.uuid !== UUID_METADATA_CHARACTERISTIC).length,
+                    0
+                );
                 let processedCharacteristics = 0;
                 setDiscoveryProgress({ current: 0, total: totalCharacteristics });
 
