@@ -18,6 +18,7 @@ const MAPPING = {
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
+  'chevron.left': 'chevron-left',
   'chevron.down': 'keyboard-arrow-down',
   'dot.radiowaves.left.and.right': 'bluetooth-searching',
   'slider.horizontal.3': 'tune',

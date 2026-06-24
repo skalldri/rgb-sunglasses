@@ -19,6 +19,15 @@ export const KnownServiceIds: { [key: string]: string } = {
 // fw/src/bluetooth/bt_service_cpp.h.
 export const UUID_ANIMATION_NAME_CHARACTERISTIC = "12345678-1234-5678-aaaa-56789abd0000";
 
+// Fixed characteristic UUID, identical across every animation service, exposing that
+// animation's boolean "is active" state. Must match kIsActiveCharacteristicUuid in
+// fw/src/bluetooth/bt_service_cpp.h. Like UUID_ANIMATION_NAME_CHARACTERISTIC, this UUID is
+// intentionally reused across every animation service, so it must never go into the flat
+// characteristics/serviceCharacteristics maps (keyed by bare UUID, which would collide) — only
+// into characteristicsByService, and written/read via the service-aware
+// writeServiceCharacteristic/getServiceCharacteristicInfo context helpers.
+export const UUID_IS_ACTIVE_CHARACTERISTIC = "12345678-1234-5678-bbbb-56789abd0000";
+
 // Base GATT/GAP services every BLE peripheral exposes. Not useful to display in the device
 // state UI, so device-state.tsx filters services with these UUIDs out of the render loop.
 export const UUID_GENERIC_ATTRIBUTE_SERVICE = "00001801-0000-1000-8000-00805f9b34fb";

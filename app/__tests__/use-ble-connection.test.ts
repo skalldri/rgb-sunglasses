@@ -7,6 +7,7 @@ import {
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
+    UUID_IS_ACTIVE_CHARACTERISTIC,
 } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import * as BleHook from '@/hooks/ble-manager';
@@ -26,6 +27,7 @@ function makeMockBluetooth() {
         selectedDevice: null as any,
         setSelectedDevice: jest.fn(),
         updateCharValue: jest.fn(),
+        updateServiceCharacteristicValue: jest.fn(),
         setDiscoveryProgress: jest.fn(),
         monitorSubscriptions: { current: [] as any[] },
         disconnectSubscription: { current: null as any },
@@ -249,6 +251,28 @@ describe('useBleConnection', () => {
             expect(ctx.updateCharValue).toHaveBeenCalledWith('char-dropdown', btoa('Option A\nOption B'));
         });
         expect(ctx.updateCharValue).not.toHaveBeenCalledWith('char-dropdown', btoa('Option A'));
+    });
+
+    it('excludes UUID_IS_ACTIVE_CHARACTERISTIC from the flat map and routes its notifications through updateServiceCharacteristicValue', async () => {
+        const isActiveChar = makeCharacteristic(UUID_IS_ACTIVE_CHARACTERISTIC, { notifiable: true, readValue: btoa('\x00') });
+        const service = makeService('svc-1', [isActiveChar]);
+        const deviceConn = makeDeviceConnection([service]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        const payload = ctx.setSelectedDevice.mock.calls[0][0];
+        expect(payload.characteristics[UUID_IS_ACTIVE_CHARACTERISTIC]).toBeUndefined();
+        expect(payload.serviceCharacteristics['svc-1']).toEqual([]);
+        expect(payload.characteristicsByService['svc-1'][UUID_IS_ACTIVE_CHARACTERISTIC]).toBeDefined();
+
+        const monitorCallback = isActiveChar.monitor.mock.calls[0][0];
+        act(() => { monitorCallback(null, { value: btoa('\x01') }); });
+
+        expect(ctx.updateServiceCharacteristicValue).toHaveBeenCalledWith('svc-1', UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x01'));
+        expect(ctx.updateCharValue).not.toHaveBeenCalledWith(UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x01'));
     });
 
     it('connect() registers a disconnect listener', async () => {

@@ -7,6 +7,7 @@ import {
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
+    UUID_IS_ACTIVE_CHARACTERISTIC,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { bleManager } from "@/hooks/ble-manager";
@@ -22,8 +23,10 @@ interface UseBleConnectionResult {
 }
 
 export function useBleConnection(macAddress: string, deviceName: string): UseBleConnectionResult {
-    const { selectedDevice, setSelectedDevice, updateCharValue, monitorSubscriptions, disconnectSubscription, setDiscoveryProgress } =
-        useBluetooth();
+    const {
+        selectedDevice, setSelectedDevice, updateCharValue, updateServiceCharacteristicValue,
+        monitorSubscriptions, disconnectSubscription, setDiscoveryProgress,
+    } = useBluetooth();
 
     const [isConnecting, setIsConnecting] = useState(false);
 
@@ -164,6 +167,13 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                     console.log(`Could not decode animation name for service ${service.uuid}:`, error);
                                 }
                             }
+                        } else if (characteristic.uuid === UUID_IS_ACTIVE_CHARACTERISTIC) {
+                            // Also reused identically across every animation service (see
+                            // constants/bluetooth.ts) - same collision risk as Animation Name, so it's
+                            // excluded from the flat maps too. Unlike Animation Name it stays
+                            // read/write/notifiable per-service, addressed via
+                            // characteristicsByService[serviceUuid][charUuid] and the service-aware
+                            // getServiceCharacteristicInfo/writeServiceCharacteristic context helpers.
                         } else {
                             characteristics[characteristic.uuid] = charInfo;
                             charUuids.push(characteristic.uuid);
@@ -237,6 +247,12 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                             if (read.value) updateCharValue(charUuid, read.value);
                                         })
                                         .catch(err => console.log(`Failed to re-read ${charName} after notification:`, err));
+                                } else if (charUuid === UUID_IS_ACTIVE_CHARACTERISTIC) {
+                                    // Reused identically across every animation service, so it's
+                                    // excluded from the flat characteristics map (see the
+                                    // discovery loop above) - update it via the service-aware
+                                    // path, keyed by this specific service, instead.
+                                    updateServiceCharacteristicValue(serviceUuid, charUuid, characteristic.value);
                                 } else {
                                     updateCharValue(charUuid, characteristic.value);
                                 }
