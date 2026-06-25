@@ -261,9 +261,41 @@ describe('McuMgrClient protocol behavior', () => {
       {},
       1000
     );
+    // sendRequest() queues onto requestChain (see mcumgr.ts), so the actual SMP exchange (and
+    // its responseResolver/responseRejecter setup) starts one microtask later than the call
+    // above - flush that before destroying, or destroy() would find nothing pending yet.
+    await Promise.resolve();
     client.destroy();
 
     await expect(requestPromise).rejects.toThrow('Client destroyed');
+  });
+
+  it('rejects fast with "Client destroyed" when destroy() runs before the queued request starts', async () => {
+    jest.useFakeTimers();
+
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.characteristic = {
+      writeWithoutResponse: jest.fn(async () => undefined),
+    };
+
+    const requestPromise = internal.sendRequest(
+      SmpOp.READ_REQUEST,
+      SmpGroup.IMAGE,
+      ImageCmd.STATE,
+      {},
+      1000
+    );
+    // Unlike the test above, destroy() here runs in the SAME tick as sendRequest() - i.e.
+    // before the queued microtask has run doSendRequest() at all, so responseRejecter is
+    // still null and destroy()'s "reject any pending responses" step has nothing to do. This
+    // is exactly the gap the isDestroyed checks in sendRequest()/doSendRequest() close - without
+    // them this request would instead write to a torn-down characteristic and only fail after
+    // the full 1000ms timeout.
+    client.destroy();
+
+    await expect(requestPromise).rejects.toThrow('Client destroyed');
+    expect(internal.characteristic.writeWithoutResponse).not.toHaveBeenCalled();
   });
 });
 
@@ -643,6 +675,9 @@ describe('McuMgrClient initialize behavior', () => {
       1000
     );
     const assertion = expect(requestPromise).rejects.toEqual({ message: 'SMP failed' });
+    // See the comment in the "cleans up pending responses when destroyed" test above - the
+    // responseRejecter isn't set until requestChain's queued microtask runs.
+    await Promise.resolve();
     monitorCallback?.({ message: 'SMP failed' }, null);
     await assertion;
   });

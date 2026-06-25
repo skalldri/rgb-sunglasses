@@ -303,6 +303,17 @@ export class McuMgrClient {
     private responseRejecter: ((error: Error) => void) | null = null;
     private monitorSubscription: any = null;
     private isDestroyed: boolean = false;
+    // Serializes every SMP exchange. The device (and this class) can only track one
+    // in-flight request at a time - responseResolver/responseRejecter are single slots,
+    // not a queue keyed by sequence number. Two overlapping sendRequest() calls (e.g. the
+    // firmware-update modal's "Refresh" button firing getImageState()+getSlotInfo() without
+    // awaiting either) would otherwise have the second call's resolver silently clobber the
+    // first's, so the first request's response either gets misrouted to the wrong promise or
+    // never arrives at all - it just sits until its own 5s timeout fires
+    // ("SMP request timeout after Xms"). Chaining every call onto this promise (regardless of
+    // whether the previous one resolved or rejected) guarantees only one exchange is ever in
+    // flight, so callers can call sendRequest()-based methods without manually sequencing them.
+    private requestChain: Promise<unknown> = Promise.resolve();
 
     constructor(device: Device) {
         this.device = device;
@@ -442,15 +453,52 @@ export class McuMgrClient {
     }
 
     /**
-     * Send an SMP request and wait for response
+     * Send an SMP request and wait for response.
+     *
+     * Queues onto requestChain so overlapping calls (from any caller) are serialized into
+     * one-at-a-time SMP exchanges - see the requestChain field comment for why this is required.
      */
-    private async sendRequest(
+    private sendRequest(
         op: SmpOp,
         group: SmpGroup,
         command: number,
         payload: any,
         timeout: number = 5000
     ): Promise<any> {
+        // Fail fast for the common case (already destroyed when called). The doSendRequest
+        // check below covers the case where destroy() runs *after* this call but before our
+        // turn in requestChain comes up - see that check's comment.
+        if (this.isDestroyed) {
+            return Promise.reject(new Error('Client destroyed'));
+        }
+
+        const run = () => this.doSendRequest(op, group, command, payload, timeout);
+        const result = this.requestChain.then(run, run);
+        // Swallow rejections here so one failed request doesn't poison the chain for whatever
+        // is queued after it - `result` (returned below) still carries the real outcome to the
+        // original caller.
+        this.requestChain = result.catch(() => undefined);
+        return result;
+    }
+
+    private async doSendRequest(
+        op: SmpOp,
+        group: SmpGroup,
+        command: number,
+        payload: any,
+        timeout: number = 5000
+    ): Promise<any> {
+        // requestChain defers this call by at least one microtask past sendRequest() (see its
+        // comment), so destroy() can run in that gap. When it does, responseRejecter hasn't
+        // been installed yet (we haven't reached the `new Promise` below), so destroy()'s
+        // "reject any pending responses" step has nothing to reject - without this check we'd
+        // instead write to a torn-down characteristic and sit out the full timeout, since
+        // destroy() already removed the monitor subscription that would have delivered a
+        // response. Fail fast with the same error destroy() would have rejected with.
+        if (this.isDestroyed) {
+            throw new Error('Client destroyed');
+        }
+
         if (!this.characteristic) {
             throw new Error('Client not initialized');
         }
@@ -747,6 +795,24 @@ export class McuMgrClient {
             buf_size: response.buf_size || 0,
             buf_count: response.buf_count || 0,
         };
+    }
+
+    /**
+     * Get OS/Application info from the device.
+     * @param format - Format string controlling what info to return. Use "i" for board name.
+     * @returns The output string from the device (e.g. "rgb_sunglasses_proto0_nrf5340_cpuapp")
+     */
+    async getOsInfo(format: string = 'i'): Promise<string> {
+        const response = await this.sendRequest(
+            SmpOp.READ_REQUEST,
+            SmpGroup.OS,
+            OsCmd.INFO,
+            { format }
+        );
+
+        throwOnSmpError(response, 'OS info error');
+
+        return response.output ?? '';
     }
 
     // ========================================================================
