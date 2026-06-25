@@ -269,6 +269,34 @@ describe('McuMgrClient protocol behavior', () => {
 
     await expect(requestPromise).rejects.toThrow('Client destroyed');
   });
+
+  it('rejects fast with "Client destroyed" when destroy() runs before the queued request starts', async () => {
+    jest.useFakeTimers();
+
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.characteristic = {
+      writeWithoutResponse: jest.fn(async () => undefined),
+    };
+
+    const requestPromise = internal.sendRequest(
+      SmpOp.READ_REQUEST,
+      SmpGroup.IMAGE,
+      ImageCmd.STATE,
+      {},
+      1000
+    );
+    // Unlike the test above, destroy() here runs in the SAME tick as sendRequest() - i.e.
+    // before the queued microtask has run doSendRequest() at all, so responseRejecter is
+    // still null and destroy()'s "reject any pending responses" step has nothing to do. This
+    // is exactly the gap the isDestroyed checks in sendRequest()/doSendRequest() close - without
+    // them this request would instead write to a torn-down characteristic and only fail after
+    // the full 1000ms timeout.
+    client.destroy();
+
+    await expect(requestPromise).rejects.toThrow('Client destroyed');
+    expect(internal.characteristic.writeWithoutResponse).not.toHaveBeenCalled();
+  });
 });
 
 describe('McuMgrClient upload behavior', () => {

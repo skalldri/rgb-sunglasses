@@ -149,6 +149,25 @@ export default function FirmwareUpdateModal() {
         }
     }, [initError]);
 
+    // Reset board-detection/update-check state when the client disconnects (e.g. the device
+    // reboots to apply an update via "Reset Device"). Without this, a stale "Update Available"
+    // card (with now-inaccurate Current/Latest versions) can keep showing - harmless since the
+    // Download button is already disabled while !client, but confusing - until the user backs
+    // out of this screen and reopens it, which is the only thing that currently remounts this
+    // component and re-derives this state from scratch. Resetting here means a fresh
+    // board-detection + GitHub check (not a stale local recomputation) runs as soon as the
+    // device reconnects, without requiring that manual round-trip.
+    useEffect(() => {
+        if (client) return;
+
+        setBoardRevision(null);
+        setBoardDetectionError('');
+        setUpdateCheckState('idle');
+        setLatestAsset(null);
+        setLatestVersion('');
+        setUpdateCheckError('');
+    }, [client]);
+
     // Check GitHub for the latest release once board revision is known
     useEffect(() => {
         if (!boardRevision || updateCheckState !== 'idle') return;

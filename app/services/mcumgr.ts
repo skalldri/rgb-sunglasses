@@ -465,6 +465,13 @@ export class McuMgrClient {
         payload: any,
         timeout: number = 5000
     ): Promise<any> {
+        // Fail fast for the common case (already destroyed when called). The doSendRequest
+        // check below covers the case where destroy() runs *after* this call but before our
+        // turn in requestChain comes up - see that check's comment.
+        if (this.isDestroyed) {
+            return Promise.reject(new Error('Client destroyed'));
+        }
+
         const run = () => this.doSendRequest(op, group, command, payload, timeout);
         const result = this.requestChain.then(run, run);
         // Swallow rejections here so one failed request doesn't poison the chain for whatever
@@ -481,6 +488,17 @@ export class McuMgrClient {
         payload: any,
         timeout: number = 5000
     ): Promise<any> {
+        // requestChain defers this call by at least one microtask past sendRequest() (see its
+        // comment), so destroy() can run in that gap. When it does, responseRejecter hasn't
+        // been installed yet (we haven't reached the `new Promise` below), so destroy()'s
+        // "reject any pending responses" step has nothing to reject - without this check we'd
+        // instead write to a torn-down characteristic and sit out the full timeout, since
+        // destroy() already removed the monitor subscription that would have delivered a
+        // response. Fail fast with the same error destroy() would have rejected with.
+        if (this.isDestroyed) {
+            throw new Error('Client destroyed');
+        }
+
         if (!this.characteristic) {
             throw new Error('Client not initialized');
         }

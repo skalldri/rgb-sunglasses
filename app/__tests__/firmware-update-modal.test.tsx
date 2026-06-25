@@ -381,6 +381,34 @@ describe('FirmwareUpdateModal', () => {
       const { findByText } = render(<FirmwareUpdateModal />);
       expect(await findByText('Update check failed: Network error')).toBeTruthy();
     });
+
+    it('clears the stale "Update Available" card once the device disconnects (e.g. reboot to apply an update)', async () => {
+      // Simulates onDeviceDisconnected's setSelectedDevice(null) (use-ble-connection.ts) firing
+      // mid-screen, e.g. after "Reset Device" reboots the board to apply an update. Without
+      // resetting updateCheckState/boardRevision on client loss, this card would otherwise keep
+      // showing a now-inaccurate version comparison until the user manually leaves and re-opens
+      // this screen.
+      let selectedDevice: any = defaultSelectedDevice;
+      jest.spyOn(BluetoothContext, 'useBluetooth').mockImplementation(
+        () => ({ selectedDevice, setSelectedDevice: jest.fn() } as any)
+      );
+      mockClientMethods({
+        getImageState: async () => ({
+          images: [{ image: 0, slot: 0, version: '1.0.0', active: true, confirmed: true }],
+        }),
+      });
+      mockGitHub();
+
+      const { findByText, queryByText, rerender } = render(<FirmwareUpdateModal />);
+      expect(await findByText('Update Available')).toBeTruthy();
+
+      selectedDevice = null;
+      rerender(<FirmwareUpdateModal />);
+
+      await waitFor(() => {
+        expect(queryByText('Update Available')).toBeNull();
+      });
+    });
   });
 
   it('runs reset, erase, and mark-for-test actions', async () => {
