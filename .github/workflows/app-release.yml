@@ -105,8 +105,31 @@ jobs:
           mv android/app/build/outputs/apk/release/app-release.apk \
              android/app/build/outputs/apk/release/rgb-sunglasses-${{ steps.version.outputs.version }}.apk
 
+      - name: Generate APK download QR code
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qrencode
+          sudo rm -rf /var/lib/apt/lists/*
+          # The asset isn't uploaded yet, but a release asset's download URL is
+          # deterministic from the repo + tag + filename, so we can encode it now.
+          APK_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ steps.version.outputs.version }}.apk"
+          qrencode -s 8 -m 2 \
+            -o android/app/build/outputs/apk/release/rgb-sunglasses-${{ steps.version.outputs.version }}-qr.png \
+            "$APK_URL"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app/android/app/build/outputs/apk/release/rgb-sunglasses-*.apk
+          files: |
+            app/android/app/build/outputs/apk/release/rgb-sunglasses-*.apk
+            app/android/app/build/outputs/apk/release/rgb-sunglasses-*-qr.png
           generate_release_notes: true
+          append_body: true
+          body: |
+            ## 📱 Install on Android
+
+            Scan to download the APK:
+
+            ![Download QR code](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ steps.version.outputs.version }}-qr.png)
+
+            [Direct download: rgb-sunglasses-${{ steps.version.outputs.version }}.apk](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ steps.version.outputs.version }}.apk)
