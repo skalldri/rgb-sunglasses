@@ -110,7 +110,9 @@ export async function downloadApk(
 /**
  * Launch the Android package installer for a downloaded APK. The system shows
  * its own confirmation dialog (and, on first use, prompts the user to grant
- * "install unknown apps" to this app). No-op on non-Android platforms.
+ * "install unknown apps" to this app). Throws on non-Android platforms — APK
+ * self-install isn't possible on iOS, so callers gate on Platform.OS (the modal
+ * shows "View Release" instead).
  *
  * A `file://` URI can't be handed to another app on Android 7+, so we convert
  * to a `content://` URI via expo-file-system's bundled FileProvider and grant
