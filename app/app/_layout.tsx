@@ -51,6 +51,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="color-picker-modal" options={{ presentation: 'modal', title: 'Color Picker' }} />
           <Stack.Screen name="firmware-update-modal" options={{ presentation: 'modal', title: 'Firmware Update' }} />
+          <Stack.Screen name="app-update-modal" options={{ presentation: 'modal', title: 'App Update' }} />
         </Stack>
         <StatusBar style="auto" />
       </ThemeProvider>

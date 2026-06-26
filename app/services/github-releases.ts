@@ -16,6 +16,11 @@ export interface GitHubRelease {
     name: string;
     published_at: string;
     assets: GitHubAsset[];
+    // Markdown release notes, shown in the update modal.
+    body?: string;
+    // Browser-facing release page; used to deep-link users to the release (e.g. iOS,
+    // which can't self-install an APK).
+    html_url?: string;
     // Present on the list endpoint (/releases); absent/undefined is treated as "not a draft".
     draft?: boolean;
     prerelease?: boolean;
@@ -31,6 +36,9 @@ export interface GitHubRelease {
  * release workflows under `.github/workflows/`.
  */
 export const FIRMWARE_TAG_PREFIX = 'fw-v';
+
+/** Tag prefix identifying companion-app releases (`app-v*`). */
+export const APP_TAG_PREFIX = 'app-v';
 
 // Page size for the releases list, and a hard cap on pages so a misbehaving API
 // (or an unexpectedly huge history) can't spin unbounded requests against the
@@ -72,19 +80,24 @@ export async function fetchReleases(owner: string, repo: string): Promise<GitHub
 }
 
 /**
- * Fetch the latest *firmware* release.
+ * Fetch the latest published release whose tag carries the given prefix, picking
+ * the highest version.
  *
  * We can't use GitHub's `/releases/latest` here: it returns the single newest
- * release of any kind, which in this monorepo can be an `app-v*` release that
- * carries no firmware `.zip` asset (this caused "No firmware asset found for
- * board: <rev>"). Instead, list all releases, keep only published firmware ones
- * (`fw-v*`), and pick the highest version.
+ * release of any kind, which in this monorepo can be a release of the *other*
+ * component (caused "No firmware asset found for board: <rev>" when an `app-v*`
+ * release shipped). Instead, list all releases, keep only published ones with
+ * the wanted prefix, and pick the highest version.
  */
-export async function fetchLatestFirmwareRelease(owner: string, repo: string): Promise<GitHubRelease> {
+async function fetchLatestReleaseForPrefix(
+    owner: string,
+    repo: string,
+    prefix: string
+): Promise<GitHubRelease | null> {
     const releases = await fetchReleases(owner, repo);
-    const firmwareReleases = releases.filter(
+    const matching = releases.filter(
         r =>
-            r.tag_name.startsWith(FIRMWARE_TAG_PREFIX) &&
+            r.tag_name.startsWith(prefix) &&
             !r.draft &&
             !r.prerelease &&
             // Skip tags whose version we can't parse — otherwise compareVersions()
@@ -93,17 +106,31 @@ export async function fetchLatestFirmwareRelease(owner: string, repo: string): P
             isParseableVersionTag(r.tag_name)
     );
 
-    if (firmwareReleases.length === 0) {
-        throw new Error('No firmware release found');
+    if (matching.length === 0) {
+        return null;
     }
 
     // GitHub returns releases by creation order, which isn't guaranteed to track
     // semver — sort explicitly so e.g. a fw-v1.0.10 patch beats fw-v1.0.9.
-    firmwareReleases.sort((a, b) =>
+    matching.sort((a, b) =>
         compareVersions(parseVersionFromTag(b.tag_name), parseVersionFromTag(a.tag_name))
     );
 
-    return firmwareReleases[0];
+    return matching[0];
+}
+
+/** Fetch the latest published *firmware* (`fw-v*`) release. */
+export async function fetchLatestFirmwareRelease(owner: string, repo: string): Promise<GitHubRelease> {
+    const release = await fetchLatestReleaseForPrefix(owner, repo, FIRMWARE_TAG_PREFIX);
+    if (!release) {
+        throw new Error('No firmware release found');
+    }
+    return release;
+}
+
+/** Fetch the latest published companion-app (`app-v*`) release, or null if none exist. */
+export async function fetchLatestAppRelease(owner: string, repo: string): Promise<GitHubRelease | null> {
+    return fetchLatestReleaseForPrefix(owner, repo, APP_TAG_PREFIX);
 }
 
 // ============================================================================
@@ -144,6 +171,11 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 {
         if (pa > pb) return 1;
     }
     return 0;
+}
+
+/** Find the first .apk asset in a release (the companion-app build). */
+export function findApkAsset(assets: GitHubAsset[]): GitHubAsset | null {
+    return assets.find(a => a.name.toLowerCase().endsWith('.apk')) ?? null;
 }
 
 /** Find the first .zip asset whose name contains the boardRevision string. */

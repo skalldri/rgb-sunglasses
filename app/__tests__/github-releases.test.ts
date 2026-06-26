@@ -1,7 +1,9 @@
 import {
   compareVersions,
   extractBoardRevision,
+  fetchLatestAppRelease,
   fetchLatestFirmwareRelease,
+  findApkAsset,
   findAssetForBoard,
   GitHubAsset,
   GitHubRelease,
@@ -128,6 +130,58 @@ describe('fetchLatestFirmwareRelease', () => {
     await expect(fetchLatestFirmwareRelease('skalldri', 'rgb-sunglasses')).rejects.toThrow(
       'No firmware release found'
     );
+  });
+});
+
+describe('fetchLatestAppRelease', () => {
+  it('ignores fw-v releases and returns the app one', async () => {
+    mockFetchReleases([
+      release('fw-v2.0.0', ['dfu_application_proto0.zip']),
+      release('app-v1.2.0', ['rgb-sunglasses-1.2.0.apk', 'rgb-sunglasses-1.2.0-qr.png']),
+    ]);
+
+    const result = await fetchLatestAppRelease('skalldri', 'rgb-sunglasses');
+    expect(result?.tag_name).toBe('app-v1.2.0');
+    expect(findApkAsset(result!.assets)?.name).toBe('rgb-sunglasses-1.2.0.apk');
+  });
+
+  it('picks the highest app version regardless of list order', async () => {
+    mockFetchReleases([
+      release('app-v1.0.9', ['rgb-sunglasses-1.0.9.apk']),
+      release('app-v1.0.10', ['rgb-sunglasses-1.0.10.apk']),
+      release('fw-v3.0.0', ['dfu_application_proto0.zip']),
+    ]);
+
+    const result = await fetchLatestAppRelease('skalldri', 'rgb-sunglasses');
+    expect(result?.tag_name).toBe('app-v1.0.10');
+  });
+
+  it('skips draft and prerelease app releases', async () => {
+    mockFetchReleases([
+      release('app-v2.0.0', ['rgb-sunglasses-2.0.0.apk'], { draft: true }),
+      release('app-v1.5.0', ['rgb-sunglasses-1.5.0.apk'], { prerelease: true }),
+      release('app-v1.0.0', ['rgb-sunglasses-1.0.0.apk']),
+    ]);
+
+    const result = await fetchLatestAppRelease('skalldri', 'rgb-sunglasses');
+    expect(result?.tag_name).toBe('app-v1.0.0');
+  });
+
+  it('returns null when there are no app releases', async () => {
+    mockFetchReleases([release('fw-v1.0.0', ['dfu_application_proto0.zip'])]);
+    expect(await fetchLatestAppRelease('skalldri', 'rgb-sunglasses')).toBeNull();
+  });
+});
+
+describe('findApkAsset', () => {
+  it('finds the .apk asset and ignores the QR png', () => {
+    const assets = release('app-v1.0.0', ['rgb-sunglasses-1.0.0-qr.png', 'rgb-sunglasses-1.0.0.apk']).assets;
+    expect(findApkAsset(assets)?.name).toBe('rgb-sunglasses-1.0.0.apk');
+  });
+
+  it('returns null when no apk is present', () => {
+    const assets = release('app-v1.0.0', ['rgb-sunglasses-1.0.0-qr.png']).assets;
+    expect(findApkAsset(assets)).toBeNull();
   });
 });
 

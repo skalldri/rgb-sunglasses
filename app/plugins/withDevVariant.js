@@ -2,6 +2,8 @@ const { withAppBuildGradle, withAndroidManifest, withDangerousMod } = require('@
 const fs = require('fs');
 const path = require('path');
 
+// Side-by-side install with the release APK: inject `applicationIdSuffix ".dev"`
+// into the debug buildType so the dev app gets its own package id.
 function withDebugAppIdSuffix(config) {
   return withAppBuildGradle(config, (cfg) => {
     const contents = cfg.modResults.contents;

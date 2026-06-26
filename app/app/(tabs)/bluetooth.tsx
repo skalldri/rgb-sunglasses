@@ -1,5 +1,6 @@
 import BluetoothDeviceListItem from "@/components/bluetooth-device-list-item";
 import { ThemedText } from "@/components/themed-text";
+import { AppButton } from "@/components/ui/app-button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Hero } from "@/components/ui/hero";
@@ -9,9 +10,11 @@ import { useCallback, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { useBluetooth } from "@/context/bluetooth-context";
+import { useAppUpdateCheck } from "@/hooks/use-app-update-check";
 import { bleManager, requestPermissions } from "@/hooks/ble-manager";
 import { useThemeColors } from "@/hooks/use-theme-color";
-import { useFocusEffect } from "expo-router";
+import { getCurrentAppVersion } from "@/services/app-update";
+import { Link, useFocusEffect } from "expo-router";
 import { LogLevel } from "react-native-ble-plx";
 
 // Set log level once at module load
@@ -27,6 +30,7 @@ export default function BluetoothScreen() {
     const { isScanning, setIsScanning } = useBluetooth();
     const [devices, setDevices] = useState<BleDevice[]>([]);
     const c = useThemeColors();
+    const { info: appUpdate } = useAppUpdateCheck();
 
     /**
      *
@@ -111,6 +115,16 @@ export default function BluetoothScreen() {
         <Screen scroll>
             <Hero title="RGB Sunglasses" subtitle="Connect over Bluetooth" emoji="🕶️" />
 
+            {appUpdate && (
+                <Link href="/app-update-modal" asChild>
+                    <AppButton
+                        variant="primary"
+                        title={`App update available: v${appUpdate.version} — tap to install`}
+                        style={styles.updateBanner}
+                    />
+                </Link>
+            )}
+
             <View style={styles.statusRow}>
                 <ThemedText type="overline">Nearby devices</ThemedText>
                 {isScanning && <ActivityIndicator size="small" color={c.primary} />}
@@ -138,6 +152,14 @@ export default function BluetoothScreen() {
                     ))}
                 </View>
             )}
+
+            <Link href="/app-update-modal" asChild>
+                <AppButton
+                    variant="ghost"
+                    title={`App v${getCurrentAppVersion()} • Check for updates`}
+                    style={styles.versionRow}
+                />
+            </Link>
         </Screen>
     );
 }
@@ -150,5 +172,11 @@ const styles = StyleSheet.create({
     },
     list: {
         gap: Spacing.md,
+    },
+    updateBanner: {
+        marginBottom: Spacing.md,
+    },
+    versionRow: {
+        marginTop: Spacing.xl,
     },
 });

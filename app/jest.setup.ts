@@ -50,6 +50,15 @@ jest.mock('expo-file-system/legacy', () => ({
   createDownloadResumable: jest.fn(() => ({
     downloadAsync: jest.fn(async () => ({ uri: 'file:///cache/firmware-update.zip', status: 200 })),
   })),
+  getContentUriAsync: jest.fn(async (uri: string) => `content://mock/${uri}`),
+}));
+
+jest.mock('expo-intent-launcher', () => ({
+  startActivityAsync: jest.fn(async () => ({ resultCode: -1 })),
+}));
+
+jest.mock('expo-web-browser', () => ({
+  openBrowserAsync: jest.fn(async () => ({ type: 'opened' })),
 }));
 
 jest.mock('react-native-ble-plx', () => {
