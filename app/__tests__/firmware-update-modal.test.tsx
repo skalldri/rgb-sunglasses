@@ -12,8 +12,8 @@ import { File } from 'expo-file-system/next';
 
 const mockRelease: GitHubReleases.GitHubRelease = {
   id: 1,
-  tag_name: 'v2.0.0',
-  name: 'Release 2.0.0',
+  tag_name: 'fw-v2.0.0',
+  name: 'Firmware v2.0.0',
   published_at: '2026-01-01T00:00:00Z',
   assets: [
     {
@@ -105,10 +105,10 @@ function mockClientMethods(overrides?: Partial<Record<keyof MockClientSpies, any
   };
 }
 
-function mockGitHub(overrides?: { fetchLatestRelease?: any }) {
+function mockGitHub(overrides?: { fetchLatestFirmwareRelease?: any }) {
   jest
-    .spyOn(GitHubReleases, 'fetchLatestRelease')
-    .mockImplementation(overrides?.fetchLatestRelease ?? (async () => mockRelease));
+    .spyOn(GitHubReleases, 'fetchLatestFirmwareRelease')
+    .mockImplementation(overrides?.fetchLatestFirmwareRelease ?? (async () => mockRelease));
 }
 
 describe('FirmwareUpdateModal', () => {
@@ -291,7 +291,7 @@ describe('FirmwareUpdateModal', () => {
       mockClientMethods();
       // Hold the GitHub call so we can observe the intermediate state
       jest
-        .spyOn(GitHubReleases, 'fetchLatestRelease')
+        .spyOn(GitHubReleases, 'fetchLatestFirmwareRelease')
         .mockImplementation(() => new Promise(() => {})); // never resolves
 
       const { findByText } = render(<FirmwareUpdateModal />);
@@ -375,7 +375,7 @@ describe('FirmwareUpdateModal', () => {
       mockBluetooth(defaultSelectedDevice);
       mockClientMethods();
       mockGitHub({
-        fetchLatestRelease: async () => { throw new Error('Network error'); },
+        fetchLatestFirmwareRelease: async () => { throw new Error('Network error'); },
       });
 
       const { findByText } = render(<FirmwareUpdateModal />);
