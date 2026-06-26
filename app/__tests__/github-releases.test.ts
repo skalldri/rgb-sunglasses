@@ -27,13 +27,31 @@ function release(tag: string, assetNames: string[], extra: Partial<GitHubRelease
   };
 }
 
+const originalFetch = global.fetch;
+
+afterEach(() => {
+  global.fetch = originalFetch;
+  jest.restoreAllMocks();
+});
+
 function mockFetchReleases(releases: GitHubRelease[]) {
-  global.fetch = jest.fn(async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    json: async () => releases,
-  })) as unknown as typeof fetch;
+  // Single page: any short page (< 100) ends pagination after one request.
+  mockFetchPages([releases]);
+}
+
+/** Mock the releases list endpoint to return successive pages, then empty. */
+function mockFetchPages(pages: GitHubRelease[][]) {
+  let call = 0;
+  global.fetch = jest.fn(async () => {
+    const body = pages[call] ?? [];
+    call++;
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => body,
+    };
+  }) as unknown as typeof fetch;
 }
 
 describe('parseVersionFromTag', () => {
@@ -70,6 +88,28 @@ describe('fetchLatestFirmwareRelease', () => {
 
     const result = await fetchLatestFirmwareRelease('skalldri', 'rgb-sunglasses');
     expect(result.tag_name).toBe('fw-v1.0.10');
+  });
+
+  it('pages past the first 100 results to find a later firmware release', async () => {
+    // A full first page of app releases pushes the firmware release onto page 2;
+    // /releases/latest-style single-page fetching would miss it entirely.
+    const page1 = Array.from({ length: 100 }, (_, i) => release(`app-v0.0.${i}`, ['app.apk']));
+    const page2 = [release('fw-v1.0.0', ['dfu_application_proto0.zip'])];
+    mockFetchPages([page1, page2]);
+
+    const result = await fetchLatestFirmwareRelease('skalldri', 'rgb-sunglasses');
+    expect(result.tag_name).toBe('fw-v1.0.0');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores firmware tags whose version is unparseable', async () => {
+    mockFetchReleases([
+      release('fw-vnightly', ['dfu_application_proto0.zip']),
+      release('fw-v1.0.0', ['dfu_application_proto0.zip']),
+    ]);
+
+    const result = await fetchLatestFirmwareRelease('skalldri', 'rgb-sunglasses');
+    expect(result.tag_name).toBe('fw-v1.0.0');
   });
 
   it('skips draft and prerelease firmware releases', async () => {
