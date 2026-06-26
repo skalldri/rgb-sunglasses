@@ -29,13 +29,20 @@ release, unless the user already said so in their request.
 
 For each component being released:
 
-- Find the latest existing tag:
-  - Firmware: `git tag --list 'fw-v*' | sort -V | tail -1`
-  - App: `git tag --list 'app-v*' | sort -V | tail -1`
-  - If none exists, the first release is `1.0.0`.
-- Gather the commits since that tag that touch the component's directory:
-  - Firmware: `git log <lastTag>..HEAD --oneline -- fw/`
-  - App: `git log <lastTag>..HEAD --oneline -- app/`
+- Find the latest existing tag (use git's own semver sort — `--sort=-version:refname`
+  — rather than piping through `sort -V`, which isn't available everywhere):
+  - Firmware: `git tag --list 'fw-v*' --sort=-version:refname | head -1`
+  - App: `git tag --list 'app-v*' --sort=-version:refname | head -1`
+- Gather the commits that touch the component's directory:
+  - **If a prior tag exists** — only the commits since it:
+    - Firmware: `git log <lastTag>..HEAD --oneline -- fw/`
+    - App: `git log <lastTag>..HEAD --oneline -- app/`
+  - **If no prior tag exists** (first release for that component) — the next version
+    is `1.0.0`, and the changelog covers the full history of that directory (drop the
+    `<lastTag>..` range so the command is still runnable):
+    - Firmware: `git log --oneline -- fw/`
+    - App: `git log --oneline -- app/`
+    You can still confirm major/minor/patch below, but `1.0.0` is the expected answer.
 - **Suggest** a bump using semver intent inferred from those commits:
   - **major** — breaking/incompatible changes (BLE GATT layout changes that break
     older app↔firmware pairings, removed characteristics, protocol/wire-format

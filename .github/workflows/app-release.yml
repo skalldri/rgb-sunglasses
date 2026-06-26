@@ -107,7 +107,9 @@ jobs:
 
       - name: Generate APK download QR code
         run: |
-          sudo apt-get update && sudo apt-get install -y qrencode
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qrencode
+          sudo rm -rf /var/lib/apt/lists/*
           # The asset isn't uploaded yet, but a release asset's download URL is
           # deterministic from the repo + tag + filename, so we can encode it now.
           APK_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ steps.version.outputs.version }}.apk"
