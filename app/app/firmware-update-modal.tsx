@@ -18,7 +18,7 @@ import {
 import {
     compareVersions,
     extractBoardRevision,
-    fetchLatestRelease,
+    fetchLatestFirmwareRelease,
     findAssetForBoard,
     GitHubAsset,
     parseVersionFromTag,
@@ -175,7 +175,7 @@ export default function FirmwareUpdateModal() {
         async function checkForUpdates() {
             setUpdateCheckState('checking');
             try {
-                const release = await fetchLatestRelease('skalldri', 'rgb-sunglasses');
+                const release = await fetchLatestFirmwareRelease('skalldri', 'rgb-sunglasses');
                 const asset = findAssetForBoard(release.assets, boardRevision!);
                 if (!asset) {
                     throw new Error(`No firmware asset found for board: ${boardRevision}`);

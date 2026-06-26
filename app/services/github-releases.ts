@@ -16,14 +16,25 @@ export interface GitHubRelease {
     name: string;
     published_at: string;
     assets: GitHubAsset[];
+    // Present on the list endpoint (/releases); absent/undefined is treated as "not a draft".
+    draft?: boolean;
+    prerelease?: boolean;
 }
 
 // ============================================================================
 // API
 // ============================================================================
 
-export async function fetchLatestRelease(owner: string, repo: string): Promise<GitHubRelease> {
-    const url = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
+/**
+ * Tag prefix identifying firmware releases. This is a monorepo that publishes
+ * both firmware (`fw-v*`) and companion-app (`app-v*`) releases — see the two
+ * release workflows under `.github/workflows/`.
+ */
+export const FIRMWARE_TAG_PREFIX = 'fw-v';
+
+/** Fetch the repo's releases, newest first (includes drafts/prereleases). */
+export async function fetchReleases(owner: string, repo: string): Promise<GitHubRelease[]> {
+    const url = `https://api.github.com/repos/${owner}/${repo}/releases?per_page=100`;
     const response = await fetch(url, {
         headers: {
             Accept: 'application/vnd.github+json',
@@ -35,16 +46,49 @@ export async function fetchLatestRelease(owner: string, repo: string): Promise<G
         throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
     }
 
-    return response.json() as Promise<GitHubRelease>;
+    return response.json() as Promise<GitHubRelease[]>;
+}
+
+/**
+ * Fetch the latest *firmware* release.
+ *
+ * We can't use GitHub's `/releases/latest` here: it returns the single newest
+ * release of any kind, which in this monorepo can be an `app-v*` release that
+ * carries no firmware `.zip` asset (this caused "No firmware asset found for
+ * board: <rev>"). Instead, list all releases, keep only published firmware ones
+ * (`fw-v*`), and pick the highest version.
+ */
+export async function fetchLatestFirmwareRelease(owner: string, repo: string): Promise<GitHubRelease> {
+    const releases = await fetchReleases(owner, repo);
+    const firmwareReleases = releases.filter(
+        r => r.tag_name.startsWith(FIRMWARE_TAG_PREFIX) && !r.draft && !r.prerelease
+    );
+
+    if (firmwareReleases.length === 0) {
+        throw new Error('No firmware release found');
+    }
+
+    // GitHub returns releases by creation order, which isn't guaranteed to track
+    // semver — sort explicitly so e.g. a fw-v1.0.10 patch beats fw-v1.0.9.
+    firmwareReleases.sort((a, b) =>
+        compareVersions(parseVersionFromTag(b.tag_name), parseVersionFromTag(a.tag_name))
+    );
+
+    return firmwareReleases[0];
 }
 
 // ============================================================================
 // Utilities
 // ============================================================================
 
-/** Strip leading "v" from a GitHub tag. "v1.2.3" → "1.2.3" */
+/**
+ * Extract the semantic version from a GitHub tag, ignoring any release-channel
+ * prefix. Handles this repo's "fw-v"/"app-v" prefixes as well as a bare "v":
+ * "fw-v1.2.3" → "1.2.3", "v1.2.3" → "1.2.3", "1.2.3" → "1.2.3".
+ */
 export function parseVersionFromTag(tag: string): string {
-    return tag.startsWith('v') ? tag.slice(1) : tag;
+    const match = tag.match(/(\d+\.\d+\.\d+(?:\+[0-9A-Za-z.-]+)?)/);
+    return match ? match[1] : tag;
 }
 
 /**
