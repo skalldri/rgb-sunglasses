@@ -33,8 +33,8 @@ When installing any new CLI tool or dependency, **always add it to the devcontai
 
 ## Session startup
 
-At the start of every new conversation, run `/check-hardware` before doing anything else.
-Report the results to the user as a brief summary table, then continue with whatever they asked for.
+At the start of every new conversation, run `/check-hardware` and `/check-software` before doing anything else.
+Report both results to the user as a brief summary table. If `/check-software` reports any tool as NOT AUTHENTICATED or NOT READY, call it out explicitly — don't wait until it blocks a later step (e.g. `gh` auth blocks PR creation).
 
 Before working on any subsystem, **read its CLAUDE.md first** — those files are the project's persistent memory and contain critical workflow rules (correct commands, known pitfalls, launch procedures) that are not derivable from the code alone. Skipping them leads to doing the wrong thing (e.g. launching the Android app incorrectly). Specifically:
 
