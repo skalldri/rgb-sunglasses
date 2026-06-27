@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(npm test:*)",
-      "WebSearch"
+      "WebSearch",
+      "mcp__serial__serial_flush",
+      "mcp__execbro__clear_logs"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "execbro",
+    "serial"
+  ]
 }

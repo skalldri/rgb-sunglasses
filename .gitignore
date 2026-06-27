@@ -18,3 +18,6 @@ __pycache__/
 .claude/settings.local.json
 
 .serial_mcp/traces/
+
+# ADB auto-reconnect cache (per-machine, not for version control)
+.adb_device

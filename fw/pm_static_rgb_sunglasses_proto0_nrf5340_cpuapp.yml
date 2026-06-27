@@ -7,8 +7,15 @@
 # External flash: MX25R6435F 8 MB (0x800000)
 #   mcuboot_secondary   0x000000  944 KB (0xEC000)  — must match mcuboot_primary
 #   mcuboot_secondary_1 0x0EC000  256 KB (0x40000)  — net core OTA staging
-#   settings_storage    0x12C000    8 KB (0x02000)  — NVS persistent settings
-#   fat_storage         0x12E000    4 MB (0x400000)  — FAT filesystem / USB Mass Storage
+#   settings_storage    0x12C000   32 KB (0x08000)  — NVS persistent settings. Zephyr's default
+#                                                      CONFIG_SETTINGS_NVS_SECTOR_COUNT=8 expects
+#                                                      8 × 4 KB = 32 KB; this partition matches that.
+#   fat_storage         0x134000  ~4 MB (0x3FA000)  — FAT filesystem / USB Mass Storage
+#                                                      NOTE: start address shifted +24 KB vs original
+#                                                      layout (settings_storage has grown over time).
+#                                                      Existing FAT data is invalidated on any settings
+#                                                      partition resize — reformat with mkfs.vfat and
+#                                                      re-copy GLIM files to /NAND:.
 #   external_flash      0x52E000 ~2.82 MB (0x2D2000) — remaining raw flash
 #
 # CONFIG_BOOT_MAX_IMG_SECTORS=256 is set in the mcuboot board conf to handle
@@ -68,13 +75,13 @@ mcuboot_secondary_1:
 
 settings_storage:
   address: 0x12c000
-  size: 0x2000
+  size: 0x8000
   device: MX25R64
   region: external_flash
 
 fat_storage:
-  address: 0x12e000
-  size: 0x400000        # 4 MB — FAT filesystem (USB Mass Storage)
+  address: 0x134000
+  size: 0x3fa000        # ~4 MB — FAT filesystem (USB Mass Storage; start shifted +24 KB, see header)
   device: MX25R64
   region: external_flash
   # affiliation: disk registers this partition with the flash disk driver (PM path).
