@@ -104,7 +104,8 @@ echo ""
 # the device to TCP mode on 5555, every subsequent reconnect just does
 # `adb connect <saved-ip>:5555` — no user interaction, no port hunting.
 # Cache file stores just the device IP (not the port, which rotates).
-ADB_CACHE_FILE="/workspaces/rgb-sunglasses/.adb_device"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ADB_CACHE_FILE="$REPO_ROOT/.adb_device"
 ADB_STABLE_PORT=5555
 
 _adb_serial() {
@@ -149,9 +150,14 @@ if [ -n "$SERIAL" ]; then
         SERIAL=$(_adb_serial)
     fi
 
-    # Save the IP for future reconnects.
-    echo "$DEVICE_IP" > "$ADB_CACHE_FILE" 2>/dev/null || true
-    echo "Android (ADB): CONNECTED — $SERIAL"
+    if [ -n "$SERIAL" ]; then
+        # Save the IP for future reconnects.
+        echo "$DEVICE_IP" > "$ADB_CACHE_FILE" 2>/dev/null || true
+        echo "Android (ADB): CONNECTED — $SERIAL"
+    else
+        echo "Android (ADB): WARN — found device but failed to pin to port $ADB_STABLE_PORT"
+        echo "  Try reconnecting manually: adb connect ${DEVICE_IP}:${ADB_STABLE_PORT}"
+    fi
 else
     echo "Android (ADB): NOT CONNECTED"
     if [ -f "$ADB_CACHE_FILE" ]; then

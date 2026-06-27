@@ -11,11 +11,11 @@
 #                                                      CONFIG_SETTINGS_NVS_SECTOR_COUNT=8 expects
 #                                                      8 × 4 KB = 32 KB; this partition matches that.
 #   fat_storage         0x134000  ~4 MB (0x3FA000)  — FAT filesystem / USB Mass Storage
-#                                                      NOTE: start address shifted +24 KB vs original
-#                                                      layout (settings_storage has grown over time).
-#                                                      Existing FAT data is invalidated on any settings
-#                                                      partition resize — reformat with mkfs.vfat and
-#                                                      re-copy GLIM files to /NAND:.
+#                                                      Start has shifted over time as settings_storage
+#                                                      grew: originally 0x12E000, then 0x130000 (8→16KB
+#                                                      NVS expansion), now 0x134000 (16→32KB). Existing
+#                                                      FAT data is invalidated on any resize — reformat
+#                                                      with mkfs.vfat and re-copy GLIM files to /NAND:.
 #   external_flash      0x52E000 ~2.82 MB (0x2D2000) — remaining raw flash
 #
 # CONFIG_BOOT_MAX_IMG_SECTORS=256 is set in the mcuboot board conf to handle
