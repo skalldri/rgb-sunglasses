@@ -99,79 +99,46 @@ fi
 echo ""
 
 # ── Android (ADB) ──────────────────────────────────────────────────────────
-# Strategy: use `adb tcpip 5555` to pin a stable port on first connect.
-# The random TLS-wireless-debugging port is only needed once; after we switch
-# the device to TCP mode on 5555, every subsequent reconnect just does
-# `adb connect <saved-ip>:5555` — no user interaction, no port hunting.
-# Cache file stores just the device IP (not the port, which rotates).
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-ADB_CACHE_FILE="$REPO_ROOT/.adb_device"
+# The phone stays on port 5555 permanently (set once via `adb tcpip 5555`).
+# If it's seen on a different port (e.g. after a fresh wireless-debug pairing),
+# switch it to 5555 immediately so all future sessions connect the same way.
 ADB_STABLE_PORT=5555
 
 _adb_serial() {
-    # Returns the first connected device serial (ip:port), or empty.
     adb devices 2>/dev/null | tail -n +2 | grep -v '^[[:space:]]*$' | grep 'device$' | awk '{print $1}' | head -n 1
 }
 
 _device_ip() {
-    # Extracts the IP from an adb serial like "192.168.1.34:39327" → "192.168.1.34"
     echo "$1" | cut -d: -f1
 }
 
-_pin_stable_port() {
-    # Switches device to TCP mode on the stable port and reconnects there.
-    local serial="$1"
-    local ip
-    ip=$(_device_ip "$serial")
-    adb -s "$serial" tcpip "$ADB_STABLE_PORT" >/dev/null 2>&1 || return 1
-    sleep 1
-    adb connect "${ip}:${ADB_STABLE_PORT}" >/dev/null 2>&1 || true
-}
-
 SERIAL=$(_adb_serial)
-
-# Not connected — try the saved IP on the stable port.
-if [ -z "$SERIAL" ] && [ -f "$ADB_CACHE_FILE" ]; then
-    SAVED_IP=$(tr -d '[:space:]' < "$ADB_CACHE_FILE")
-    if [ -n "$SAVED_IP" ]; then
-        adb connect "${SAVED_IP}:${ADB_STABLE_PORT}" >/dev/null 2>&1 || true
-        sleep 0.5
-        SERIAL=$(_adb_serial)
-    fi
-fi
 
 if [ -n "$SERIAL" ]; then
     DEVICE_IP=$(_device_ip "$SERIAL")
     DEVICE_PORT=$(echo "$SERIAL" | cut -d: -f2)
 
-    # If we're on a random TLS port, switch to the stable port now.
+    # Not on the stable port — switch it now (one-time per pairing session).
     if [ "$DEVICE_PORT" != "$ADB_STABLE_PORT" ]; then
-        _pin_stable_port "$SERIAL" || true
+        adb -s "$SERIAL" tcpip "$ADB_STABLE_PORT" >/dev/null 2>&1 || true
+        sleep 1
+        adb connect "${DEVICE_IP}:${ADB_STABLE_PORT}" >/dev/null 2>&1 || true
         SERIAL=$(_adb_serial)
     fi
 
     if [ -n "$SERIAL" ]; then
-        # Save the IP for future reconnects.
-        echo "$DEVICE_IP" > "$ADB_CACHE_FILE" 2>/dev/null || true
         echo "Android (ADB): CONNECTED — $SERIAL"
     else
-        echo "Android (ADB): WARN — found device but failed to pin to port $ADB_STABLE_PORT"
-        echo "  Try reconnecting manually: adb connect ${DEVICE_IP}:${ADB_STABLE_PORT}"
+        echo "Android (ADB): WARN — found device but failed to switch to port $ADB_STABLE_PORT"
+        echo "  Try manually: adb connect ${DEVICE_IP}:${ADB_STABLE_PORT}"
     fi
 else
     echo "Android (ADB): NOT CONNECTED"
-    if [ -f "$ADB_CACHE_FILE" ]; then
-        SAVED_IP=$(tr -d '[:space:]' < "$ADB_CACHE_FILE")
-        echo "  (Could not reach $SAVED_IP:$ADB_STABLE_PORT — phone may need wireless debugging re-enabled)"
-        echo "  Once wireless debugging is on, run:  adb connect $SAVED_IP:<port shown on phone>"
-        echo "  check-hardware will then pin port $ADB_STABLE_PORT automatically."
-    else
-        echo "  To connect wirelessly (no QR code — mDNS fails in-container):"
-        echo "    1. Phone: Developer Options → Wireless debugging → Pair with pairing code"
-        echo "    2. adb pair <IP:pairing-port>    (enter the 6-digit code)"
-        echo "    3. adb connect <IP:debug-port>   (main port shown on Wireless debugging screen)"
-        echo "  check-hardware will then pin port $ADB_STABLE_PORT for all future reconnects."
-    fi
+    echo "  To connect wirelessly (no QR code — mDNS fails in-container):"
+    echo "    1. Phone: Developer Options → Wireless debugging → Pair with pairing code"
+    echo "    2. adb pair <IP:pairing-port>    (enter the 6-digit code)"
+    echo "    3. adb connect <IP:debug-port>   (main port shown on Wireless debugging screen)"
+    echo "  check-hardware will then switch the device to port $ADB_STABLE_PORT automatically."
 fi
 
 echo ""
