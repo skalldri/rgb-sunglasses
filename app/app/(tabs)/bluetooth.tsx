@@ -13,7 +13,7 @@ import { useBluetooth } from "@/context/bluetooth-context";
 import { useAppUpdateCheck } from "@/hooks/use-app-update-check";
 import { bleManager, requestPermissions } from "@/hooks/ble-manager";
 import { useThemeColors } from "@/hooks/use-theme-color";
-import { getCurrentAppVersion } from "@/services/app-update";
+import { APP_SELF_UPDATE_SUPPORTED, getCurrentAppVersion } from "@/services/app-update";
 import { Link, useFocusEffect } from "expo-router";
 import { LogLevel } from "react-native-ble-plx";
 
@@ -45,52 +45,68 @@ export default function BluetoothScreen() {
         setIsScanning(true);
         setDevices([]);
 
-        const permissionsGranted = await requestPermissions();
-        if (!permissionsGranted) {
-            console.log('Bluetooth permissions denied');
-            setIsScanning(false);
-            return;
-        }
-
-        await bleManager.startDeviceScan(null, null, (error, device) => {
-            if (error) {
-                console.log(error);
+        try {
+            const permissionsGranted = await requestPermissions();
+            if (!permissionsGranted) {
+                console.log('Bluetooth permissions denied');
+                setIsScanning(false);
+                return;
             }
 
-            if (device) {
-                if (device.localName?.includes("RGB Sunglasses")) {
-                    console.log(`Found device: ${device.name ?? 'Unnamed'} (${device.id})`);
+            // startDeviceScan returns void (not a Promise) and delivers per-scan
+            // errors to the callback below — not to the surrounding try/catch.
+            bleManager.startDeviceScan(null, null, (error, device) => {
+                if (error) {
+                    console.log(error);
+                }
+
+                if (device) {
+                    if (device.localName?.includes("RGB Sunglasses")) {
+                        console.log(`Found device: ${device.name ?? 'Unnamed'} (${device.id})`);
+
+                        setDevices((prevDevices) => {
+
+                            if (!isDuplicateDevice(prevDevices, device.id)) {
+                                return [...prevDevices, { name: device.localName ?? 'Unnamed', mac: device.id }];
+                            }
+
+                            return prevDevices;
+                        });
+                    }
+                }
+            });
+
+            // Check if any devices are already paired with the OS with the "Core Config Service" UUID
+            const connectedDevices = await bleManager.connectedDevices(["12345678-1234-5678-0001-56789abc0000"]);
+
+            for (const device of connectedDevices) {
+                console.log(`Already connected to device: ${device.name ?? 'Unnamed'} (${device.id})`);
+
+                if (device.localName?.includes("RGB Sunglasses") || device.name?.includes("RGB Sunglasses")) {
+                    console.log(`Already connected to device: is an RGB Sunglasses!`);
 
                     setDevices((prevDevices) => {
 
                         if (!isDuplicateDevice(prevDevices, device.id)) {
-                            return [...prevDevices, { name: device.localName ?? 'Unnamed', mac: device.id }];
+                            return [...prevDevices, { name: device.localName ?? device.name ?? 'Unnamed', mac: device.id }];
                         }
 
                         return prevDevices;
                     });
                 }
             }
-        });
-
-        // Check if any devices are already paired with the OS with the "Core Config Service" UUID
-        const connectedDevices = await bleManager.connectedDevices(["12345678-1234-5678-0001-56789abc0000"]);
-
-        for (const device of connectedDevices) {
-            console.log(`Already connected to device: ${device.name ?? 'Unnamed'} (${device.id})`);
-
-            if (device.localName?.includes("RGB Sunglasses") || device.name?.includes("RGB Sunglasses")) {
-                console.log(`Already connected to device: is an RGB Sunglasses!`);
-
-                setDevices((prevDevices) => {
-
-                    if (!isDuplicateDevice(prevDevices, device.id)) {
-                        return [...prevDevices, { name: device.localName ?? device.name ?? 'Unnamed', mac: device.id }];
-                    }
-
-                    return prevDevices;
-                });
-            }
+        } catch (error) {
+            // Bluetooth may be unavailable: powered off, or — notably on iOS — the
+            // Simulator, which has no BLE radio and rejects scan/query calls. Log it
+            // and drop out of the scanning state instead of leaving an uncaught
+            // promise rejection (which surfaces as a red LogBox in dev builds).
+            // If startDeviceScan already succeeded before a later call (e.g.
+            // connectedDevices) threw, stop it so we don't leave a scan running
+            // while the UI shows scanning as stopped. stopDeviceScan is a safe no-op
+            // if no scan is active.
+            console.log('Bluetooth scan failed:', error);
+            bleManager.stopDeviceScan();
+            setIsScanning(false);
         }
     }
 
@@ -115,7 +131,7 @@ export default function BluetoothScreen() {
         <Screen scroll>
             <Hero title="RGB Sunglasses" subtitle="Connect over Bluetooth" emoji="🕶️" />
 
-            {appUpdate && (
+            {APP_SELF_UPDATE_SUPPORTED && appUpdate && (
                 <Link href="/app-update-modal" asChild>
                     <AppButton
                         variant="primary"
@@ -153,13 +169,21 @@ export default function BluetoothScreen() {
                 </View>
             )}
 
-            <Link href="/app-update-modal" asChild>
-                <AppButton
-                    variant="ghost"
-                    title={`App v${getCurrentAppVersion()} • Check for updates`}
-                    style={styles.versionRow}
-                />
-            </Link>
+            {APP_SELF_UPDATE_SUPPORTED ? (
+                <Link href="/app-update-modal" asChild>
+                    <AppButton
+                        variant="ghost"
+                        title={`App v${getCurrentAppVersion()} • Check for updates`}
+                        style={styles.versionRow}
+                    />
+                </Link>
+            ) : (
+                // iOS: in-app updates come from the App Store, so just show the
+                // version (no link to the update modal).
+                <ThemedText type="caption" style={[styles.versionRow, styles.versionLabel]}>
+                    {`App v${getCurrentAppVersion()}`}
+                </ThemedText>
+            )}
         </Screen>
     );
 }
@@ -178,5 +202,8 @@ const styles = StyleSheet.create({
     },
     versionRow: {
         marginTop: Spacing.xl,
+    },
+    versionLabel: {
+        textAlign: 'center',
     },
 });

@@ -1,0 +1,101 @@
+name: App iOS CI
+
+# iOS builds need macOS + Xcode, so they run on a self-hosted Apple Silicon
+# runner (Mac Mini M1) — see app/README.md "iOS (macOS)" for registration.
+#
+# SECURITY — why this is a separate workflow with no `pull_request` trigger:
+# a self-hosted runner executes job code on our own hardware, and this repo is
+# public. If the iOS build ran on `pull_request`, anyone could fork the repo,
+# edit their copy of the workflow to remove any guard, and have their code run
+# on the Mac (the fork's workflow file is what runs for a fork PR). To make that
+# impossible by construction, this workflow triggers ONLY on `push` and manual
+# `workflow_dispatch` — both require write access to this repo, and both always
+# use THIS repo's trusted copy of the workflow. Forks can do neither, so fork
+# code can never reach the runner regardless of what they put in their files.
+#
+# PR validation (test + Android build, on GitHub-hosted ubuntu runners that are
+# ephemeral and sandboxed) still runs for every pull request via app-ci.yml.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-ios-ci.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  build-ios:
+    name: Build iOS (simulator, unsigned)
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Gate the build on the test suite (app-ci.yml only runs tests on PRs and
+      # pushes to main, so run them here too for branch pushes / manual runs).
+      - name: Run tests
+        run: npm test -- --ci
+
+      # Regenerates ios/ from app.json + config plugins and runs `pod install`.
+      - name: Generate iOS native project
+        run: npx expo prebuild --platform ios --clean
+
+      # The scheme/workspace names derive from the Expo project name
+      # ("RGB Sunglasses" -> "RGBSunglasses"). CODE_SIGNING_ALLOWED=NO keeps the
+      # simulator build unsigned, so it needs no Apple account or signing secrets.
+      - name: Build for iOS Simulator (unsigned)
+        run: |
+          xcodebuild \
+            -workspace ios/RGBSunglasses.xcworkspace \
+            -scheme RGBSunglasses \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ios/build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # Smoke test: boot a simulator, install the built .app, launch it, and
+      # confirm the process is still alive a few seconds later (catches launch
+      # crashes that a pure compile would miss). The simulator has no Bluetooth
+      # radio, so this verifies build + launch only, not live BLE.
+      - name: Smoke test in simulator (boot, install, launch)
+        run: |
+          set -euo pipefail
+          BUNDLE_ID=com.autom8ed.rgbsunglassesapp
+          APP_PATH=ios/build/Build/Products/Debug-iphonesimulator/RGBSunglasses.app
+          DEVICE_ID=$(xcrun simctl list devices available | grep -E "iPhone" | grep -oE "[0-9A-Fa-f-]{36}" | head -1)
+          if [ -z "$DEVICE_ID" ]; then
+            echo "::error::No iOS Simulator device available on the runner — install an iOS runtime in Xcode (Settings -> Components) or via 'xcodebuild -downloadPlatform iOS'."
+            exit 1
+          fi
+          echo "Using simulator: $DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl install "$DEVICE_ID" "$APP_PATH"
+          xcrun simctl launch "$DEVICE_ID" "$BUNDLE_ID"
+          sleep 5
+          xcrun simctl spawn "$DEVICE_ID" launchctl list | grep "$BUNDLE_ID" \
+            || { echo "::error::App is not running 5s after launch"; exit 1; }
+          xcrun simctl io "$DEVICE_ID" screenshot ios-smoke.png || true
+          xcrun simctl shutdown "$DEVICE_ID" || true
+
+      - name: Upload iOS simulator build
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb-sunglasses-ios-sim-${{ github.sha }}
+          path: |
+            app/ios/build/Build/Products/Debug-iphonesimulator/RGBSunglasses.app
+            app/ios-smoke.png
+          retention-days: 7

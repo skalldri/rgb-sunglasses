@@ -20,6 +20,17 @@ const REPO_NAME = 'rgb-sunglasses';
 // Cached APK download target. Kept in the cache dir so the OS can reclaim it.
 const APK_FILENAME = 'app-update.apk';
 
+/**
+ * Whether the in-app self-update flow (download a release artifact from GitHub
+ * and install it) is available on this platform.
+ *
+ * Only Android can side-load an APK from a GitHub release. iOS apps can only be
+ * updated through the App Store / TestFlight, so the feature is disabled on iOS
+ * entirely — no launch-time check, banner, or update modal. Callers gate every
+ * entry point on this flag.
+ */
+export const APP_SELF_UPDATE_SUPPORTED = Platform.OS === 'android';
+
 export interface AppUpdateInfo {
     /** Version of the available release, e.g. "1.2.3". */
     version: string;

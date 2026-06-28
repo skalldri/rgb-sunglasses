@@ -25,7 +25,13 @@ container.
   (Node, JDK 17, Android SDK/NDK). Connect a physical Android phone via wireless
   ADB (phone and container on the same network) and run the Expo dev-client — see
   [`app/README.md`](app/README.md#developing-in-the-devcontainer-android).
-  iOS native builds require macOS/Xcode and are not supported in the container.
+- **App (iOS):** iOS native builds require macOS/Xcode and so are built on a Mac
+  (e.g. a Mac Mini M1) rather than in the container. Run the self-setup script
+  [`app/scripts/macos-setup.sh`](app/scripts/macos-setup.sh) once, then
+  `npm run ios` — see [`app/README.md`](app/README.md#ios-macos). iOS is also
+  built in CI on a self-hosted macOS runner — triggered on push and manual
+  `workflow_dispatch`, never on pull requests (see
+  `.github/workflows/app-ios-ci.yml`).
 - **USB device (serial + mass storage):** the board's CDC-ACM serial ports and
   mass-storage volume are forwarded into the container from Windows via `usbipd`.
   This is automatic after a one-time `usbipd bind` — see

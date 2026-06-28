@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { AppUpdateInfo, checkForAppUpdate } from '@/services/app-update';
+import { APP_SELF_UPDATE_SUPPORTED, AppUpdateInfo, checkForAppUpdate } from '@/services/app-update';
 
 // Run the update check at most once per app launch. GitHub's anonymous REST API
 // is rate-limited to 60 req/hr per IP, so we cache the result process-wide and
@@ -10,6 +10,14 @@ let cached: AppUpdateInfo | null | undefined;
 let inFlight: Promise<AppUpdateInfo | null> | null = null;
 
 function getCheck(): Promise<AppUpdateInfo | null> {
+    // iOS can't self-install a GitHub release — skip the check entirely (no
+    // network call, so no banner and no anonymous rate-limit usage). Cache the
+    // null result so later mounts don't restart in a "loading" state or re-enter
+    // this no-op, preserving the once-per-launch contract.
+    if (!APP_SELF_UPDATE_SUPPORTED) {
+        cached = null;
+        return Promise.resolve(null);
+    }
     if (cached !== undefined) return Promise.resolve(cached);
     if (!inFlight) {
         inFlight = checkForAppUpdate()
