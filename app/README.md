@@ -96,15 +96,15 @@ No USB passthrough or usbipd required. Two sub-approaches depending on Android v
 
 **Android 11+ — no USB needed at all:**
 
-1. On the phone: *Settings > Developer Options > Wireless Debugging* — toggle it on.
-2. Tap *Pair device with pairing code*; note the **IP address**, **pair port**, and **pairing
+1. On the phone: _Settings > Developer Options > Wireless Debugging_ — toggle it on.
+2. Tap _Pair device with pairing code_; note the **IP address**, **pair port**, and **pairing
    code** shown on screen.
 3. Inside the container, pair once:
    ```bash
    adb pair <phone-ip>:<pair-port>
    # enter the 6-digit pairing code when prompted
    ```
-4. Back on the phone, the *Wireless Debugging* screen shows a separate **IP address & Port** for
+4. Back on the phone, the _Wireless Debugging_ screen shows a separate **IP address & Port** for
    the debug connection (different from the pair port). Use that port to connect:
    ```bash
    app/scripts/adb-connect.sh <phone-ip> <debug-port>
@@ -114,7 +114,7 @@ No USB passthrough or usbipd required. Two sub-approaches depending on Android v
 
 1. Connect the phone via USB to the host machine with USB debugging enabled.
 2. On the host (not inside the container): `adb tcpip 5555`
-3. Unplug USB. Find the phone IP under *Settings > About phone > Status > IP address*.
+3. Unplug USB. Find the phone IP under _Settings > About phone > Status > IP address_.
 4. Inside the container:
    ```bash
    app/scripts/adb-connect.sh <phone-ip>
@@ -124,9 +124,7 @@ No USB passthrough or usbipd required. Two sub-approaches depending on Android v
 
 ```bash
 cd app
-npx expo run:android      # first run, or after native/plugin/permission changes
-# subsequent JS-only sessions:
-npx expo start --dev-client
+npx expo run:android --device <device name> --app-id com.autom8ed.rgbsunglassesapp.dev      # first run, or after native/plugin/permission changes
 ```
 
 Editing `.ts`/`.tsx` triggers fast refresh on the phone over the adb tunnel.
@@ -144,7 +142,7 @@ usbipd list                          # find the phone's BUSID
 usbipd bind   --busid <BUSID>        # one-time per device
 ```
 
-**Each session, on Windows** (attach *before* opening or rebuilding the container):
+**Each session, on Windows** (attach _before_ opening or rebuilding the container):
 
 ```powershell
 usbipd attach --wsl --busid <BUSID>
@@ -156,8 +154,7 @@ usbipd attach --wsl --busid <BUSID>
 app/scripts/adb-connect.sh
 
 cd app
-npx expo run:android
-# or: npx expo start --dev-client
+npx expo run:android --device <device name> --app-id com.autom8ed.rgbsunglassesapp.dev
 ```
 
 ## Key Files

@@ -99,18 +99,46 @@ fi
 echo ""
 
 # ── Android (ADB) ──────────────────────────────────────────────────────────
-ADB_LINES=$(adb devices 2>/dev/null | tail -n +2 | grep -v '^[[:space:]]*$' || true)
-CONNECTED=$(echo "$ADB_LINES" | grep 'device$' | awk '{print $1}' | tr '\n' ' ' | sed 's/ $//')
+# The phone stays on port 5555 permanently (set once via `adb tcpip 5555`).
+# If it's seen on a different port (e.g. after a fresh wireless-debug pairing),
+# switch it to 5555 immediately so all future sessions connect the same way.
+ADB_STABLE_PORT=5555
 
-if [ -n "$CONNECTED" ]; then
-    echo "Android (ADB): CONNECTED — $CONNECTED"
+_adb_serial() {
+    adb devices 2>/dev/null | tail -n +2 | grep -v '^[[:space:]]*$' | grep 'device$' | awk '{print $1}' | head -n 1
+}
+
+_device_ip() {
+    echo "$1" | cut -d: -f1
+}
+
+SERIAL=$(_adb_serial)
+
+if [ -n "$SERIAL" ]; then
+    DEVICE_IP=$(_device_ip "$SERIAL")
+    DEVICE_PORT=$(echo "$SERIAL" | cut -d: -f2)
+
+    # Not on the stable port — switch it now (one-time per pairing session).
+    if [ "$DEVICE_PORT" != "$ADB_STABLE_PORT" ]; then
+        adb -s "$SERIAL" tcpip "$ADB_STABLE_PORT" >/dev/null 2>&1 || true
+        sleep 1
+        adb connect "${DEVICE_IP}:${ADB_STABLE_PORT}" >/dev/null 2>&1 || true
+        SERIAL=$(_adb_serial)
+    fi
+
+    if [ -n "$SERIAL" ]; then
+        echo "Android (ADB): CONNECTED — $SERIAL"
+    else
+        echo "Android (ADB): WARN — found device but failed to switch to port $ADB_STABLE_PORT"
+        echo "  Try manually: adb connect ${DEVICE_IP}:${ADB_STABLE_PORT}"
+    fi
 else
     echo "Android (ADB): NOT CONNECTED"
     echo "  To connect wirelessly (no QR code — mDNS fails in-container):"
     echo "    1. Phone: Developer Options → Wireless debugging → Pair with pairing code"
     echo "    2. adb pair <IP:pairing-port>    (enter the 6-digit code)"
     echo "    3. adb connect <IP:debug-port>   (main port shown on Wireless debugging screen)"
-    echo "    4. adb devices                   (confirm)"
+    echo "  check-hardware will then switch the device to port $ADB_STABLE_PORT automatically."
 fi
 
 echo ""
