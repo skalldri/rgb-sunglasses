@@ -6,13 +6,17 @@
 // firmware adds/renames an animation, exactly like this map silently did for Bad Apple/Nyan Cat
 // before that fix landed.
 export const KnownServiceIds: { [key: string]: string } = {
-    "12345678-1234-5678-0001-56789abc0000": "Core Config Service",
-    "12345678-1234-5678-0002-56789abc0000": "Audio Analysis Config Service",
+    "12345678-1234-5678-0001-56789abc0000": "Core Config",
+    "12345678-1234-5678-0002-56789abc0000": "Audio Analysis Config",
+    "12345678-1234-5678-0003-56789abc0000": "Bootloader Info",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
     "00001800-0000-1000-8000-00805f9b34fb": "Generic Access Service",
 };
+
+// Well-known non-animation service UUIDs that receive special treatment in device-state/index.tsx.
+export const UUID_MCUBOOT_INFO_SERVICE = "12345678-1234-5678-0003-56789abc0000";
 
 // Fixed characteristic UUID, identical across every animation service, exposing that
 // animation's human-readable name. Must match kAnimationNameCharacteristicUuid in

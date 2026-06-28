@@ -7,11 +7,12 @@ import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { Section } from "@/components/ui/section";
-import { getServiceName, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC } from "@/constants/bluetooth";
+import { getServiceName, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { SMP_SERVICE_UUID } from "@/services/mcumgr";
+import { decodeUtf8FromBase64 } from "@/services/ble-value-codec";
 import { Link } from "expo-router";
 import React, { ReactNode } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
@@ -55,8 +56,13 @@ export default function DeviceStateMenuScreen() {
         service => service.uuid !== SMP_SERVICE_UUID && selectedDevice?.serviceDisplayNames?.[service.uuid] != null
     );
     const settingsServices = visibleServices.filter(
-        service => service.uuid !== SMP_SERVICE_UUID && selectedDevice?.serviceDisplayNames?.[service.uuid] == null
+        service =>
+            service.uuid !== SMP_SERVICE_UUID &&
+            service.uuid !== UUID_MCUBOOT_INFO_SERVICE &&
+            selectedDevice?.serviceDisplayNames?.[service.uuid] == null
     );
+    // Read-only device info characteristics displayed inline (no navigation required).
+    const mcubootInfoChars = selectedDevice?.characteristicsByService?.[UUID_MCUBOOT_INFO_SERVICE];
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>
@@ -130,6 +136,26 @@ export default function DeviceStateMenuScreen() {
                             </Section>
                         </Card>
                     )}
+
+                    {mcubootInfoChars && (
+                        <Card style={styles.card}>
+                            <Section title="Device Info">
+                                {Object.values(mcubootInfoChars)
+                                    .filter(charInfo => charInfo.name != null)
+                                    .map((charInfo, index) => (
+                                        <React.Fragment key={index}>
+                                            {index > 0 && <Divider />}
+                                            <View style={styles.infoRow}>
+                                                <ThemedText style={styles.infoLabel}>{charInfo.name}</ThemedText>
+                                                <ThemedText style={styles.infoValue}>
+                                                    {charInfo.value ? decodeUtf8FromBase64(charInfo.value) : "—"}
+                                                </ThemedText>
+                                            </View>
+                                        </React.Fragment>
+                                    ))}
+                            </Section>
+                        </Card>
+                    )}
                 </ScrollView>
             )}
         </SafeAreaView>
@@ -174,5 +200,18 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: Spacing.sm,
+    },
+    infoRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: Spacing.sm,
+    },
+    infoLabel: {
+        fontSize: 16,
+    },
+    infoValue: {
+        fontSize: 16,
+        opacity: 0.5,
     },
 });
