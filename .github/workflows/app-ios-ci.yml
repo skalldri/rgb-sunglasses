@@ -77,6 +77,10 @@ jobs:
           BUNDLE_ID=com.autom8ed.rgbsunglassesapp
           APP_PATH=ios/build/Build/Products/Debug-iphonesimulator/RGBSunglasses.app
           DEVICE_ID=$(xcrun simctl list devices available | grep -E "iPhone" | grep -oE "[0-9A-Fa-f-]{36}" | head -1)
+          if [ -z "$DEVICE_ID" ]; then
+            echo "::error::No iOS Simulator device available on the runner — install an iOS runtime in Xcode (Settings -> Components) or via 'xcodebuild -downloadPlatform iOS'."
+            exit 1
+          fi
           echo "Using simulator: $DEVICE_ID"
           xcrun simctl boot "$DEVICE_ID" || true
           xcrun simctl install "$DEVICE_ID" "$APP_PATH"

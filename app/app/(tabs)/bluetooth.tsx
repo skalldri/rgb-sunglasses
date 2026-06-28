@@ -53,7 +53,9 @@ export default function BluetoothScreen() {
                 return;
             }
 
-            await bleManager.startDeviceScan(null, null, (error, device) => {
+            // startDeviceScan returns void (not a Promise) and delivers per-scan
+            // errors to the callback below — not to the surrounding try/catch.
+            bleManager.startDeviceScan(null, null, (error, device) => {
                 if (error) {
                     console.log(error);
                 }
@@ -98,7 +100,12 @@ export default function BluetoothScreen() {
             // Simulator, which has no BLE radio and rejects scan/query calls. Log it
             // and drop out of the scanning state instead of leaving an uncaught
             // promise rejection (which surfaces as a red LogBox in dev builds).
+            // If startDeviceScan already succeeded before a later call (e.g.
+            // connectedDevices) threw, stop it so we don't leave a scan running
+            // while the UI shows scanning as stopped. stopDeviceScan is a safe no-op
+            // if no scan is active.
             console.log('Bluetooth scan failed:', error);
+            bleManager.stopDeviceScan();
             setIsScanning(false);
         }
     }

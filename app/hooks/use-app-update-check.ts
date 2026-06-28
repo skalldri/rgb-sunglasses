@@ -11,8 +11,13 @@ let inFlight: Promise<AppUpdateInfo | null> | null = null;
 
 function getCheck(): Promise<AppUpdateInfo | null> {
     // iOS can't self-install a GitHub release — skip the check entirely (no
-    // network call, so no banner and no anonymous rate-limit usage).
-    if (!APP_SELF_UPDATE_SUPPORTED) return Promise.resolve(null);
+    // network call, so no banner and no anonymous rate-limit usage). Cache the
+    // null result so later mounts don't restart in a "loading" state or re-enter
+    // this no-op, preserving the once-per-launch contract.
+    if (!APP_SELF_UPDATE_SUPPORTED) {
+        cached = null;
+        return Promise.resolve(null);
+    }
     if (cached !== undefined) return Promise.resolve(cached);
     if (!inFlight) {
         inFlight = checkForAppUpdate()

@@ -88,8 +88,13 @@ finds nothing. Simulator verification covers build + UI + navigation only; any l
 (scan/connect/control/firmware-update) needs a **physical iPhone**. The Android-only BLE tuning
 calls (`requestConnectionPriority`, `refreshGatt`, `requestMTU`) are already no-ops/try-caught on
 iOS, and `requestPermissions()` returns `true` on iOS (BLE permission strings come from the
-`react-native-ble-plx` Expo plugin config in `app.json`, which also sets `UIBackgroundModes`). The
-APK self-update path is gated to Android and falls back to opening the browser on iOS.
+`react-native-ble-plx` Expo plugin config in `app.json`, which also sets `UIBackgroundModes`).
+
+The in-app self-update flow is **disabled on iOS entirely** (it side-loads an APK, which only Android
+can do). The `APP_SELF_UPDATE_SUPPORTED` flag in `services/app-update.ts` (`Platform.OS === 'android'`)
+gates every entry point: no launch-time check or "update available" banner, the footer shows a plain
+version label instead of a "Check for updates" link, and the update modal renders a "not available"
+message if reached via deep link. On iOS the app is updated through the App Store / TestFlight.
 
 There is currently **no iOS dev-variant** (the Android `.dev` side-by-side install from
 `plugins/withDevVariant.js` is Android-only); the iOS dev build uses the production bundle id.
