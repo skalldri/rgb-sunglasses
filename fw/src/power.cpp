@@ -114,6 +114,11 @@ static void charger_status_thread_func(void *, void *, void *) {
         return;
     }
 
+    /* Enable the ADC so VBAT readings are available, and override the NTC
+     * thermal check (no thermistor fitted on proto0). */
+    bq25792_adc_enable(bq, true);
+    bq25792_temp_override(bq, true);
+
     while (true) {
         uint8_t chg_stat = 0;
         if (bq25792_get_charge_status(bq, &chg_stat) == 0) {
@@ -138,9 +143,30 @@ static void charger_status_thread_func(void *, void *, void *) {
                 case Bq25792ChargeStatus::ChargeTerminationDone:
                     indication = StatusIndication::Solid;
                     break;
-                default: /* NotCharging, Reserved */
-                    indication = StatusIndication::Off;
+                default: { /* NotCharging, Reserved — running on battery */
+                    /* 2S LiPo: cutoff 7000 mV (0%), full 8400 mV (100%).
+                     * Thresholds: >=7700 mV = >=50% green, >=7350 mV = >=25% orange,
+                     * >=7000 mV = >=0% red, <7000 mV = no battery (blink red). */
+                    int32_t vbat_mv = 0;
+                    if (bq25792_get_vbat_mv(bq, &vbat_mv) == 0) {
+                        if (vbat_mv < 7000) {
+                            indication = StatusIndication::Blinking;
+                            color      = StatusColor::Red;
+                        } else if (vbat_mv >= 7700) {
+                            indication = StatusIndication::Solid;
+                            color      = StatusColor::Green;
+                        } else if (vbat_mv >= 7350) {
+                            indication = StatusIndication::Solid;
+                            color      = StatusColor::Orange;
+                        } else {
+                            indication = StatusIndication::Solid;
+                            color      = StatusColor::Red;
+                        }
+                    } else {
+                        indication = StatusIndication::Off;
+                    }
                     break;
+                }
             }
 
             status_led_set(0, indication, color);

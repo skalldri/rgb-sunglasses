@@ -59,6 +59,17 @@ int bq25792_register_irq_callback(const struct device *dev, bq25792_irq_callback
  */
 int bq25792_get_charge_status(const struct device* dev, uint8_t* chg_stat);
 
+/**
+ * @brief Read the battery voltage from the VBAT_ADC register.
+ *
+ * ADC must be enabled first via bq25792_adc_enable().
+ *
+ * @param dev     BQ25792 device pointer.
+ * @param vbat_mv Output: battery voltage in millivolts.
+ * @return 0 on success, negative errno on failure.
+ */
+int bq25792_get_vbat_mv(const struct device* dev, int32_t* vbat_mv);
+
 #ifdef __cplusplus
 };
 #endif

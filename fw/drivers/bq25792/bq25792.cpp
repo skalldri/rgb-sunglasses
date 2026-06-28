@@ -157,6 +157,17 @@ int bq25792_get_charge_status(const struct device* dev, uint8_t* chg_stat) {
     return 0;
 }
 
+int bq25792_get_vbat_mv(const struct device* dev, int32_t* vbat_mv) {
+    if (!dev || !vbat_mv) {
+        return -EINVAL;
+    }
+    const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
+    BQ25792_VBAT_ADC reg(cfg);
+    uint32_t raw = reg.get<BQ25792_VBAT_ADC_VBAT_ADC>(0, true /* read from hw */);
+    *vbat_mv = (int32_t)BQ25792_ADC_VOLTAGE_UnitConversion::conversion(raw);
+    return 0;
+}
+
 int bq25792_set_charge_enable(const struct device* dev, bool enabled) {
     const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
     BQ25792_CHARGER_CONTROL_0 chargerControl0(cfg);
