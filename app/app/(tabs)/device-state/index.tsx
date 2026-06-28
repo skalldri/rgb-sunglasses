@@ -87,14 +87,6 @@ export default function DeviceStateMenuScreen() {
                 />
             ) : (
                 <ScrollView contentContainerStyle={styles.scrollContent}>
-                    {firmwareService && (
-                        <Card style={styles.card}>
-                            <Section title="Firmware">
-                                <MenuRow label="Firmware Update" href="/firmware-update-modal" />
-                            </Section>
-                        </Card>
-                    )}
-
                     {animationServices.length > 0 && (
                         <Card style={styles.card}>
                             <Section title="Animations">
@@ -117,6 +109,14 @@ export default function DeviceStateMenuScreen() {
                                         </React.Fragment>
                                     );
                                 })}
+                            </Section>
+                        </Card>
+                    )}
+
+                    {firmwareService && (
+                        <Card style={styles.card}>
+                            <Section title="Firmware">
+                                <MenuRow label="Firmware Update" href="/firmware-update-modal" />
                             </Section>
                         </Card>
                     )}
