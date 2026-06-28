@@ -34,6 +34,10 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
     const size_t width = renderer.displayWidth();
     const size_t height = renderer.displayHeight();
 
+    __ASSERT(width <= kMatrixMaxCols && height <= kMatrixMaxRows,
+             "Display (%zu x %zu) exceeds MatrixCodeAnimation buffer (%zu x %zu)",
+             width, height, kMatrixMaxCols, kMatrixMaxRows);
+
     // Decay all pixel brightnesses
     const uint32_t decay = (timeSinceLastTickMs * 255) / fadeTimeMs;
     for (size_t x = 0; x < width; x++) {

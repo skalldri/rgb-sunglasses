@@ -10,19 +10,19 @@ constexpr bt_uuid_128 kMatrixCodeConfigServiceUuid =
 BtGattPrimaryService<kMatrixCodeConfigServiceUuid> matrixCodePrimaryService;
 
 // ms per row step — lower = faster falling drops
-BtGattPersistentCharacteristic<"matrix/drop_speed_ms", "Drop Speed Ms", false, uint32_t, 80>
+BtGattPersistentCharacteristic<"matrix_code/drop_speed_ms", "Drop Speed Ms", false, uint32_t, 80>
     matrixCodeDropSpeedMs;
 
 // ms for a pixel to fully fade from full brightness to dark
-BtGattPersistentCharacteristic<"matrix/fade_time_ms", "Fade Time Ms", false, uint32_t, 600>
+BtGattPersistentCharacteristic<"matrix_code/fade_time_ms", "Fade Time Ms", false, uint32_t, 600>
     matrixCodeFadeTimeMs;
 
-// 0–100: probability per tick that an idle column spawns a new drop
-BtGattPersistentCharacteristic<"matrix/density", "Density", false, uint32_t, 40>
+// 0–100: % chance per second that an idle column spawns a new drop (tick-rate-independent)
+BtGattPersistentCharacteristic<"matrix_code/density", "Density", false, uint32_t, 40>
     matrixCodeDensity;
 
 // Drop colour; default is classic phosphor green (#00FF41)
-BtGattPersistentCharacteristic<"matrix/color", "Color", false, BtGattColor,
+BtGattPersistentCharacteristic<"matrix_code/color", "Color", false, BtGattColor,
                                BtGattColor{0x0000FF41}>
     matrixCodeColor;
 
