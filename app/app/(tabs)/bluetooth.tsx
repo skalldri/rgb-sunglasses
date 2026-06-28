@@ -13,7 +13,7 @@ import { useBluetooth } from "@/context/bluetooth-context";
 import { useAppUpdateCheck } from "@/hooks/use-app-update-check";
 import { bleManager, requestPermissions } from "@/hooks/ble-manager";
 import { useThemeColors } from "@/hooks/use-theme-color";
-import { getCurrentAppVersion } from "@/services/app-update";
+import { APP_SELF_UPDATE_SUPPORTED, getCurrentAppVersion } from "@/services/app-update";
 import { Link, useFocusEffect } from "expo-router";
 import { LogLevel } from "react-native-ble-plx";
 
@@ -124,7 +124,7 @@ export default function BluetoothScreen() {
         <Screen scroll>
             <Hero title="RGB Sunglasses" subtitle="Connect over Bluetooth" emoji="🕶️" />
 
-            {appUpdate && (
+            {APP_SELF_UPDATE_SUPPORTED && appUpdate && (
                 <Link href="/app-update-modal" asChild>
                     <AppButton
                         variant="primary"
@@ -162,13 +162,21 @@ export default function BluetoothScreen() {
                 </View>
             )}
 
-            <Link href="/app-update-modal" asChild>
-                <AppButton
-                    variant="ghost"
-                    title={`App v${getCurrentAppVersion()} • Check for updates`}
-                    style={styles.versionRow}
-                />
-            </Link>
+            {APP_SELF_UPDATE_SUPPORTED ? (
+                <Link href="/app-update-modal" asChild>
+                    <AppButton
+                        variant="ghost"
+                        title={`App v${getCurrentAppVersion()} • Check for updates`}
+                        style={styles.versionRow}
+                    />
+                </Link>
+            ) : (
+                // iOS: in-app updates come from the App Store, so just show the
+                // version (no link to the update modal).
+                <ThemedText type="caption" style={[styles.versionRow, styles.versionLabel]}>
+                    {`App v${getCurrentAppVersion()}`}
+                </ThemedText>
+            )}
         </Screen>
     );
 }
@@ -187,5 +195,8 @@ const styles = StyleSheet.create({
     },
     versionRow: {
         marginTop: Spacing.xl,
+    },
+    versionLabel: {
+        textAlign: 'center',
     },
 });

@@ -1,7 +1,6 @@
 import { Link } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, ScrollView, StyleSheet, View } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
+import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -11,6 +10,7 @@ import { ProgressBar } from '@/components/ui/progress-bar';
 import { Spacing } from '@/constants/theme';
 import { useThemeColors } from '@/hooks/use-theme-color';
 import {
+    APP_SELF_UPDATE_SUPPORTED,
     AppUpdateInfo,
     checkForAppUpdate,
     downloadApk,
@@ -23,7 +23,6 @@ type CheckState = 'checking' | 'upToDate' | 'updateAvailable' | 'error';
 export default function AppUpdateModal() {
     const c = useThemeColors();
     const currentVersion = getCurrentAppVersion();
-    const isAndroid = Platform.OS === 'android';
 
     const [checkState, setCheckState] = useState<CheckState>('checking');
     const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
@@ -35,6 +34,9 @@ export default function AppUpdateModal() {
     const [isInstalling, setIsInstalling] = useState(false);
 
     const runCheck = useCallback(async () => {
+        // The feature is Android-only; on iOS the modal renders a "not available"
+        // message instead (see the early return below), so skip the network call.
+        if (!APP_SELF_UPDATE_SUPPORTED) return;
         setCheckState('checking');
         setError('');
         setApkUri(null);
@@ -84,12 +86,6 @@ export default function AppUpdateModal() {
             setError(`Install failed: ${e?.message ?? 'Unknown error'}`);
         } finally {
             setIsInstalling(false);
-        }
-    }
-
-    async function handleViewRelease() {
-        if (updateInfo?.htmlUrl) {
-            await WebBrowser.openBrowserAsync(updateInfo.htmlUrl);
         }
     }
 
@@ -144,44 +140,51 @@ export default function AppUpdateModal() {
                     </View>
                 )}
 
-                {isAndroid ? (
-                    <View style={styles.buttonRow}>
-                        {apkUri ? (
-                            <AppButton
-                                title={isInstalling ? 'Opening installer...' : 'Install'}
-                                variant="primary"
-                                style={styles.rowButton}
-                                onPress={handleInstall}
-                                disabled={isInstalling}
-                            />
-                        ) : (
-                            <AppButton
-                                title={isDownloading ? `Downloading (${downloadProgress}%)...` : 'Download'}
-                                variant="primary"
-                                style={styles.rowButton}
-                                onPress={handleDownload}
-                                disabled={isDownloading || !updateInfo.apkAsset}
-                            />
-                        )}
-                    </View>
-                ) : (
-                    <View style={styles.buttonRow}>
+                <View style={styles.buttonRow}>
+                    {apkUri ? (
                         <AppButton
-                            title="View Release"
+                            title={isInstalling ? 'Opening installer...' : 'Install'}
                             variant="primary"
                             style={styles.rowButton}
-                            onPress={handleViewRelease}
-                            disabled={!updateInfo.htmlUrl}
+                            onPress={handleInstall}
+                            disabled={isInstalling}
                         />
-                    </View>
-                )}
+                    ) : (
+                        <AppButton
+                            title={isDownloading ? `Downloading (${downloadProgress}%)...` : 'Download'}
+                            variant="primary"
+                            style={styles.rowButton}
+                            onPress={handleDownload}
+                            disabled={isDownloading || !updateInfo.apkAsset}
+                        />
+                    )}
+                </View>
 
-                {isAndroid && !updateInfo.apkAsset && (
+                {!updateInfo.apkAsset && (
                     <ThemedText type="caption" style={{ color: c.danger }}>
                         This release has no APK asset to install.
                     </ThemedText>
                 )}
             </Card>
+        );
+    }
+
+    // Defense-in-depth: the UI entry points to this modal are hidden on iOS, but
+    // the route still exists and could be reached via a deep link. iOS can't
+    // self-install a GitHub release, so show a clear message instead.
+    if (!APP_SELF_UPDATE_SUPPORTED) {
+        return (
+            <ThemedView style={styles.container}>
+                <Card style={styles.card}>
+                    <ThemedText>
+                        In-app updates aren&apos;t available on this platform. Install the latest
+                        version of RGB Sunglasses from the App Store.
+                    </ThemedText>
+                </Card>
+                <Link href="../" style={styles.link}>
+                    <ThemedText type="link">Done</ThemedText>
+                </Link>
+            </ThemedView>
         );
     }
 
