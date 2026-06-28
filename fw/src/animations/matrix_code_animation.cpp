@@ -62,8 +62,9 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
                 }
             }
         } else {
-            // Randomly spawn a new drop based on density
-            if (density > 0 && (sys_rand32_get() % 100) < density) {
+            // density (0-100) = % chance per second; scale to per-tick probability so
+            // the effective spawn rate is tick-rate-independent.
+            if (density > 0 && (sys_rand32_get() % 100000) < (density * timeSinceLastTickMs)) {
                 columns_[x].active = true;
                 columns_[x].headY = 0;
                 columns_[x].dropTimerMs = dropSpeedMs;
