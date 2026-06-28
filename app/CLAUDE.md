@@ -124,6 +124,10 @@ Connect to any BLE device with custom services to test UI rendering logic. The a
 
 ## Autonomous Agent Notes (Claude / MCP)
 
+### App-Update Modal Auto-Opens After Force-Stop + Relaunch
+
+After `adb shell am force-stop` + relaunch, the in-app self-update check runs on mount and can immediately push the **App Update** modal (`app-update-modal`) on top of the bluetooth tab if a newer release is found on GitHub. This leaves the navigation stack as `__root > (tabs) > app-update-modal > (tabs) > bluetooth`, which blocks tapping anything underneath. Dismiss it with `adb shell input keyevent KEYCODE_BACK` before trying to interact with the Bluetooth or Controls screens. The BLE connection (if triggered before the modal appeared) is still live — the button will show "Disconnect" once the modal is cleared.
+
 ### BLE Pairing — Ask the User
 
 First-time pairing requires accepting Android system prompts that are too timing-sensitive for autonomous handling:
@@ -188,13 +192,41 @@ Device density is 360 dpi → pixel ratio = 360/160 = **2.25**.
 
 **Practical rule**: get coordinates from the screenshot for `tap()`. Convert to dp for `inspect_at_point()`. Don't mix them up.
 
-### execbro tap coordinates on the OnePlus 9 Pro (LE2125) — read positions from the rendered image, ignore the pressable list
+### execbro tapping on the OnePlus 9 Pro (LE2125) — use `strategy="accessibility"` first
 
-On this device the `android_screenshot` raw frame is 1080×2412 and is delivered downscaled to 896×2000 (~0.829×). Two gotchas burned several taps in one session:
+**The most reliable approach on this device is `tap(text="...", strategy="accessibility")`.** It fires directly via the Android accessibility tree without any coordinate conversion ambiguity, and it worked in every verified session. Try this first for any button/link with a visible label.
 
-- The **pressables list** that `android_screenshot` prints (e.g. `<AppButton/> "Connect" frame:(714,709 ...)`) reports coordinates that are _inflated_ relative to the delivered image (values exceed the 2000px delivered height) — passing them to `tap(x,y)` lands high/short and misses.
-- `tap(..., native=true)` does **not** bypass the scaling here — it still multiplies the input by ~1.206, so native taps with raw coords overshoot off-screen.
-- What actually works: **visually read the target's position from the delivered screenshot image and pass those pixel coords to `tap(x, y)` (no `native`)**. The tool multiplies by ~1.206 to hit the real raw pixel, and the crosshair lands at roughly the input coordinate in the displayed image. Fiber/`component=`/`text=` taps also misfired (same conversion bug), so coordinate taps read from the image are the reliable path. If a tap shows `meaningful:false`/no change, nudge using the image, don't trust the pressable-list numbers.
+Two things that do **not** work reliably:
+
+- The **pressables list** that `android_screenshot` prints (e.g. `<AppButton/> "Connect" frame:(714,709 ...)`) reports coordinates that are _inflated_ relative to the delivered image — passing them to `tap(x,y)` lands high/short and misses.
+- `tap(..., native=true)` and coordinate taps from the screenshot image also misfired repeatedly across multiple sessions. The crosshair appears where the tap landed but the resulting position in the delivered image is inconsistent.
+
+**When `strategy="accessibility"` can't distinguish between two elements with the same label** (e.g. a "Connect" `AppButton` and a "Connect" `BottomTabItem` both matching), use `execute_in_app` to walk the fiber tree and fire `onPress` directly:
+
+```javascript
+// Find the first AppButton whose title matches, fire its onPress
+(function() {
+  var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  var roots = hook.getFiberRoots(1);
+  var root = null;
+  roots.forEach(function(r) { if (!root) root = r; });
+  var q = [root.current];
+  while (q.length) {
+    var f = q.shift();
+    if (!f) continue;
+    var n = f.type && (f.type.displayName || f.type.name || '');
+    if (n === 'AppButton') {
+      var p = f.memoizedProps || {};
+      if (p.title === 'Connect' && p.onPress) { p.onPress(); return 'fired'; }
+    }
+    if (f.child) q.push(f.child);
+    if (f.sibling) q.push(f.sibling);
+  }
+  return 'not found';
+})()
+```
+
+Note: `BaseExpoRouterLink` children are not a bare string in the fiber props — `tap(text=..., strategy="accessibility")` handles those correctly without needing fiber tree surgery.
 
 ### Toggling Switch (Boolean) Characteristics
 
