@@ -4,6 +4,9 @@
 #include <animations/null_animation.h>
 #include <bluetooth/bt_state_observer.h>
 #include <configuration_provider.h>
+#if defined(CONFIG_STATUS_LED)
+#include <status_led/status_led.h>
+#endif
 #include <core_config.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
@@ -38,16 +41,32 @@ static ConfigurationProvider &getPatternConfig() {
 class PatternControllerBtObserver : public BtStateObserver {
    public:
     void onAdvertisingStarted() override {
+#if !defined(CONFIG_STATUS_LED)
         pattern_controller_request_indicator(Indicator::BtAdvertising);
+#else
+        status_led_set(1, StatusIndication::Breathing, StatusColor::Blue);
+#endif
     }
     void onConnectingStarted() override {
+#if !defined(CONFIG_STATUS_LED)
         pattern_controller_request_indicator(Indicator::BtConnecting);
+#else
+        status_led_set(1, StatusIndication::Blinking, StatusColor::Blue);
+#endif
     }
-    void onConnected() override { pattern_controller_reset_indicator(); }
+    void onConnected() override {
+        pattern_controller_reset_indicator();
+#if defined(CONFIG_STATUS_LED)
+        status_led_set(1, StatusIndication::Solid, StatusColor::Blue);
+#endif
+    }
     void onPairingCodeRequired(unsigned int pairingCode) override {
         BtPairingAnimation::getInstance()->init();
         BtPairingAnimation::getInstance()->setPairingCode(pairingCode);
         pattern_controller_request_indicator(Indicator::BtPairing);
+#if defined(CONFIG_STATUS_LED)
+        status_led_set(1, StatusIndication::Blinking, StatusColor::Blue);
+#endif
     }
 };
 
