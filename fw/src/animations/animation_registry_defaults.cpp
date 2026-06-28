@@ -21,6 +21,10 @@
 #include <animations/glim_player_animation.h>
 #endif
 
+#if defined(CONFIG_ANIMATION_MATRIX_CODE)
+#include <animations/matrix_code_animation.h>
+#endif
+
 namespace {
 class RegistryActiveStateObserver : public AnimationActiveStateObserver {
    public:
@@ -69,6 +73,10 @@ using FftBarsAnimationIsActive = AnimationIsActiveBinding<Animation::FftBars>;
 using GlimPlayerAnimationIsActive = AnimationIsActiveBinding<Animation::GlimPlayer>;
 #endif
 
+#if defined(CONFIG_ANIMATION_MATRIX_CODE)
+using MatrixCodeAnimationIsActive = AnimationIsActiveBinding<Animation::MatrixCode>;
+#endif
+
 BaseAnimation *null_animation_factory() {
     return NullAnimation::getInstance();
 }
@@ -112,6 +120,12 @@ BaseAnimation *glim_player_animation_factory() {
     return GlimPlayerAnimation::getInstance();
 }
 #endif
+
+#if defined(CONFIG_ANIMATION_MATRIX_CODE)
+BaseAnimation *matrix_code_animation_factory() {
+    return MatrixCodeAnimation::getInstance();
+}
+#endif
 }  // namespace
 
 int animation_registry_register_defaults() {
@@ -134,6 +148,9 @@ int animation_registry_register_defaults() {
 #endif
 #if defined(CONFIG_ANIMATION_GLIM_PLAYER)
     AnimationIsActiveBinding<Animation::GlimPlayer>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_MATRIX_CODE)
+    AnimationIsActiveBinding<Animation::MatrixCode>::registerActivator(&sActivator);
 #endif
 
     animation_registry_reset();
@@ -247,6 +264,21 @@ int animation_registry_register_defaults() {
 
     glim_player_animation_bind_default_button_dependencies();
     glim_player_animation_bind_default_bt_dependencies();
+#endif
+
+#if defined(CONFIG_ANIMATION_MATRIX_CODE)
+    ret = animation_registry_register(Animation::MatrixCode, matrix_code_animation_factory);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::MatrixCode,
+                                                MatrixCodeAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    matrix_code_animation_bind_default_dependencies();
 #endif
 
     return 0;

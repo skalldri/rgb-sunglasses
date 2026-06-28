@@ -53,6 +53,7 @@ target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG app PRIVATE src/animations/zigzag_a
 target_sources_ifdef(CONFIG_ANIMATION_BEAT    app PRIVATE src/animations/beat_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/animations/fft_bars_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_GLIM_PLAYER app PRIVATE src/animations/glim_player_animation.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_MATRIX_CODE app PRIVATE src/animations/matrix_code_animation.cpp)
 
 if(CONFIG_ANIMATION_BEAT OR CONFIG_ANIMATION_FFT_BARS)
   target_sources(app PRIVATE src/sound/animation_adapters/audio_animations_sound.cpp)
@@ -66,6 +67,7 @@ target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG  app PRIVATE src/bluetooth/animatio
 target_sources_ifdef(CONFIG_ANIMATION_BEAT    app PRIVATE src/bluetooth/animation_adapters/beat_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/bluetooth/animation_adapters/fft_bars_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_GLIM_PLAYER app PRIVATE src/bluetooth/animation_adapters/glim_player_animation_bt.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_MATRIX_CODE app PRIVATE src/bluetooth/animation_adapters/matrix_code_animation_bt.cpp)
 
 target_sources_ifdef(CONFIG_STATUS_LED app PRIVATE src/status_led/status_led.cpp)
 
