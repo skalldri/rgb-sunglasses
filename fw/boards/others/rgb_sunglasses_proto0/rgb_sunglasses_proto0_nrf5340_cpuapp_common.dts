@@ -427,5 +427,34 @@ zephyr_udc0: &usbd {
 	};
 };
 
+/* Retained memory for MCUboot blinfo shared data.
+ * 256 bytes at the top of sram0_ns (0x2006ff00–0x20070000), excluded from BSS zeroing.
+ * MCUboot writes its version here at boot; the app reads it via blinfo_lookup(). */
+/ {
+	sram_mcuboot_blinfo: sram@2006ff00 {
+		compatible = "zephyr,memory-region", "mmio-sram";
+		reg = <0x2006ff00 0x100>;
+		zephyr,memory-region = "McubootRetainedMem";
+		status = "okay";
+
+		retainedmem {
+			compatible = "zephyr,retained-ram";
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			boot_info0: boot_info@0 {
+				compatible = "zephyr,retention";
+				status = "okay";
+				reg = <0x0 0x100>;
+			};
+		};
+	};
+
+	chosen {
+		zephyr,bootloader-info = &boot_info0;
+	};
+};
+
 /* Include partition configuration file */
 #include "rgb_sunglasses_proto0_nrf5340_cpuapp_partition_conf.dts"

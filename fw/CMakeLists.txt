@@ -72,6 +72,7 @@ target_sources_ifdef(CONFIG_ANIMATION_MATRIX_CODE app PRIVATE src/bluetooth/anim
 target_sources_ifdef(CONFIG_STATUS_LED app PRIVATE src/status_led/status_led.cpp)
 
 target_sources_ifdef(CONFIG_NETCORE_VERSION_IPC app PRIVATE src/netcore_version.c)
+target_sources_ifdef(CONFIG_RETENTION_BOOTLOADER_INFO app PRIVATE src/mcuboot_info.cpp)
 
 target_include_directories(
   app 
