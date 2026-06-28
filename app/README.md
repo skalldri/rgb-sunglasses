@@ -199,6 +199,21 @@ Apple currently supports.
 macOS (Apple Silicon) runner, mirroring the Android debug build. No Apple Developer account or
 signing credentials are required for the simulator build.
 
+The `build-ios` job targets `runs-on: [self-hosted, macOS, ARM64]`, so it stays queued until a
+matching runner is registered. Register the Mac (one-time) from GitHub → repo **Settings → Actions
+→ Runners → New self-hosted runner** (macOS / ARM64), which gives you a registration token, then on
+the Mac:
+
+```bash
+mkdir -p ~/actions-runner && cd ~/actions-runner
+# download the macOS-arm64 runner package shown on that settings page, then:
+./config.sh --url https://github.com/skalldri/rgb-sunglasses --token <REGISTRATION_TOKEN>
+./run.sh                 # or: ./svc.sh install && ./svc.sh start   (run as a background service)
+```
+
+The default labels (`self-hosted`, `macOS`, `ARM64`) are what the job matches; no extra labels are
+needed. The runner must have Xcode + CocoaPods (the `macos-setup.sh` prerequisites) installed.
+
 ## Key Files
 
 - `app/(tabs)/bluetooth.tsx`: scanning and device list
