@@ -29,7 +29,8 @@ container.
   (e.g. a Mac Mini M1) rather than in the container. Run the self-setup script
   [`app/scripts/macos-setup.sh`](app/scripts/macos-setup.sh) once, then
   `npm run ios` — see [`app/README.md`](app/README.md#ios-macos). iOS is also
-  built in CI on a self-hosted macOS runner (see `.github/workflows/app-ci.yml`).
+  built in CI on a self-hosted macOS runner, triggered on push only (see
+  `.github/workflows/app-ios-ci.yml`).
 - **USB device (serial + mass storage):** the board's CDC-ACM serial ports and
   mass-storage volume are forwarded into the container from Windows via `usbipd`.
   This is automatic after a one-time `usbipd bind` — see
