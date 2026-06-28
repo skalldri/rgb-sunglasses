@@ -6,6 +6,7 @@ import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
 import { useThemeColors } from '@/hooks/use-theme-color';
 import { encodeColorToBase64 } from '@/services/ble-value-codec';
+import { LinearGradient } from 'expo-linear-gradient';
 import Slider from '@react-native-community/slider';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
@@ -148,13 +149,15 @@ export default function ColorPickerModal() {
                         {Array.from({ length: 360 }, (_, i) => {
                             const [r, g, b] = hsvToRgb(i, 1, 1);
                             return (
-                                <View
+                                <LinearGradient
                                     key={i}
+                                    colors={[`rgb(${r},${g},${b})`, 'rgb(255,255,255)']}
+                                    start={{ x: 0.5, y: 0 }}
+                                    end={{ x: 0.5, y: 1 }}
                                     style={{
                                         position: 'absolute',
                                         width: 2,
                                         height: WHEEL_RADIUS,
-                                        backgroundColor: `rgb(${r},${g},${b})`,
                                         left: WHEEL_RADIUS - 1,
                                         top: 0,
                                         transformOrigin: `1px ${WHEEL_RADIUS}px`,
@@ -163,8 +166,6 @@ export default function ColorPickerModal() {
                                 />
                             );
                         })}
-                        {/* White center overlay for saturation gradient effect */}
-                        <View style={styles.wheelCenterGradient} />
                     </View>
 
                     {/* Thumb indicator */}
@@ -229,15 +230,6 @@ const styles = StyleSheet.create({
         height: WHEEL_SIZE,
         borderRadius: WHEEL_RADIUS,
         overflow: 'hidden',
-    },
-    wheelCenterGradient: {
-        position: 'absolute',
-        width: WHEEL_SIZE * 0.7,
-        height: WHEEL_SIZE * 0.7,
-        borderRadius: WHEEL_SIZE * 0.35,
-        left: WHEEL_SIZE * 0.15,
-        top: WHEEL_SIZE * 0.15,
-        backgroundColor: 'rgba(255,255,255,0.3)',
     },
     wheelThumb: {
         position: 'absolute',
