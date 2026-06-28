@@ -42,9 +42,9 @@ static int mcuboot_info_init(void) {
     mcubootVersionCharacteristic = s;
     return 0;
 }
-/* blinfo_init runs at APPLICATION, CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY (default 87).
+/* blinfo_init runs at APPLICATION, CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY.
  * Run one step later so blinfo has already parsed the retained-mem TLV area. */
-SYS_INIT(mcuboot_info_init, APPLICATION, 88);
+SYS_INIT(mcuboot_info_init, APPLICATION, CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY + 1);
 
 static int cmd_mcuboot_version(const struct shell *sh, size_t argc, char **argv) {
     char buf[32];

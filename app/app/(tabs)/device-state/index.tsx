@@ -140,19 +140,27 @@ export default function DeviceStateMenuScreen() {
                     {mcubootInfoChars && (
                         <Card style={styles.card}>
                             <Section title="Device Info">
-                                {Object.values(mcubootInfoChars)
-                                    .filter(charInfo => charInfo.name != null)
-                                    .map((charInfo, index) => (
-                                        <React.Fragment key={index}>
-                                            {index > 0 && <Divider />}
-                                            <View style={styles.infoRow}>
-                                                <ThemedText style={styles.infoLabel}>{charInfo.name}</ThemedText>
-                                                <ThemedText style={styles.infoValue}>
-                                                    {charInfo.value ? decodeUtf8FromBase64(charInfo.value) : "—"}
-                                                </ThemedText>
-                                            </View>
-                                        </React.Fragment>
-                                    ))}
+                                {Object.entries(mcubootInfoChars)
+                                    .filter(([, charInfo]) => charInfo.name != null)
+                                    .map(([charUuid, charInfo], index) => {
+                                        let displayValue = "—";
+                                        if (charInfo.value) {
+                                            try {
+                                                displayValue = decodeUtf8FromBase64(charInfo.value).replace(/\0/g, '');
+                                            } catch {
+                                                displayValue = "—";
+                                            }
+                                        }
+                                        return (
+                                            <React.Fragment key={charUuid}>
+                                                {index > 0 && <Divider />}
+                                                <View style={styles.infoRow}>
+                                                    <ThemedText style={styles.infoLabel}>{charInfo.name}</ThemedText>
+                                                    <ThemedText style={styles.infoValue}>{displayValue}</ThemedText>
+                                                </View>
+                                            </React.Fragment>
+                                        );
+                                    })}
                             </Section>
                         </Card>
                     )}
