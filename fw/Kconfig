@@ -76,6 +76,13 @@ config ANIMATION_GLIM_PLAYER
 	  generate .glim files. If no files are found, scrolls "NO FILE" as a
 	  rainbow-colored error message.
 
+config ANIMATION_MATRIX_CODE
+	bool "Enable Matrix Code animation"
+	default y
+	help
+	  Green waterfall dot animation inspired by The Matrix. Tunable drop
+	  speed, fade time, column density, and color (default: phosphor green).
+
 config APP_PERSIST_BT_CONFIG
 	bool "Persist BT-settable configuration via the Settings subsystem"
 	default y
