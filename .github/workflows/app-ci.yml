@@ -90,3 +90,72 @@ jobs:
           name: rgb-sunglasses-debug-${{ github.sha }}
           path: app/android/app/build/outputs/apk/debug/*.apk
           retention-days: 7
+
+  # iOS builds require macOS/Xcode and so cannot run on the ubuntu runners used
+  # above. This job runs on a self-hosted Apple Silicon (Mac Mini M1) runner —
+  # see app/README.md "iOS (macOS)" for runner registration. Like build-android,
+  # it builds an UNSIGNED debug binary (for the iOS Simulator), so it needs no
+  # Apple Developer account, certificates, or signing secrets. The simulator has
+  # no Bluetooth radio, so this verifies build + launch only, not live BLE.
+  build-ios:
+    name: Build iOS (simulator, unsigned)
+    needs: test
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Regenerates ios/ from app.json + config plugins and runs `pod install`.
+      - name: Generate iOS native project
+        run: npx expo prebuild --platform ios --clean
+
+      # The scheme/workspace names derive from the Expo project name
+      # ("RGB Sunglasses" -> "RGBSunglasses"). CODE_SIGNING_ALLOWED=NO keeps the
+      # simulator build unsigned, mirroring the Android debug build.
+      - name: Build for iOS Simulator (unsigned)
+        run: |
+          xcodebuild \
+            -workspace ios/RGBSunglasses.xcworkspace \
+            -scheme RGBSunglasses \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ios/build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # Smoke test: boot a simulator, install the built .app, launch it, and
+      # confirm the process is still alive a few seconds later (catches launch
+      # crashes that a pure compile would miss).
+      - name: Smoke test in simulator (boot, install, launch)
+        run: |
+          set -euo pipefail
+          BUNDLE_ID=com.autom8ed.rgbsunglassesapp
+          APP_PATH=ios/build/Build/Products/Debug-iphonesimulator/RGBSunglasses.app
+          DEVICE_ID=$(xcrun simctl list devices available | grep -E "iPhone" | grep -oE "[0-9A-Fa-f-]{36}" | head -1)
+          echo "Using simulator: $DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl install "$DEVICE_ID" "$APP_PATH"
+          xcrun simctl launch "$DEVICE_ID" "$BUNDLE_ID"
+          sleep 5
+          xcrun simctl spawn "$DEVICE_ID" launchctl list | grep "$BUNDLE_ID" \
+            || { echo "::error::App is not running 5s after launch"; exit 1; }
+          xcrun simctl io "$DEVICE_ID" screenshot ios-smoke.png || true
+          xcrun simctl shutdown "$DEVICE_ID" || true
+
+      - name: Upload iOS simulator build
+        uses: actions/upload-artifact@v4
+        with:
+          name: rgb-sunglasses-ios-sim-${{ github.sha }}
+          path: |
+            app/ios/build/Build/Products/Debug-iphonesimulator/RGBSunglasses.app
+            app/ios-smoke.png
+          retention-days: 7

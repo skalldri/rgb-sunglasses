@@ -45,52 +45,61 @@ export default function BluetoothScreen() {
         setIsScanning(true);
         setDevices([]);
 
-        const permissionsGranted = await requestPermissions();
-        if (!permissionsGranted) {
-            console.log('Bluetooth permissions denied');
-            setIsScanning(false);
-            return;
-        }
-
-        await bleManager.startDeviceScan(null, null, (error, device) => {
-            if (error) {
-                console.log(error);
+        try {
+            const permissionsGranted = await requestPermissions();
+            if (!permissionsGranted) {
+                console.log('Bluetooth permissions denied');
+                setIsScanning(false);
+                return;
             }
 
-            if (device) {
-                if (device.localName?.includes("RGB Sunglasses")) {
-                    console.log(`Found device: ${device.name ?? 'Unnamed'} (${device.id})`);
+            await bleManager.startDeviceScan(null, null, (error, device) => {
+                if (error) {
+                    console.log(error);
+                }
+
+                if (device) {
+                    if (device.localName?.includes("RGB Sunglasses")) {
+                        console.log(`Found device: ${device.name ?? 'Unnamed'} (${device.id})`);
+
+                        setDevices((prevDevices) => {
+
+                            if (!isDuplicateDevice(prevDevices, device.id)) {
+                                return [...prevDevices, { name: device.localName ?? 'Unnamed', mac: device.id }];
+                            }
+
+                            return prevDevices;
+                        });
+                    }
+                }
+            });
+
+            // Check if any devices are already paired with the OS with the "Core Config Service" UUID
+            const connectedDevices = await bleManager.connectedDevices(["12345678-1234-5678-0001-56789abc0000"]);
+
+            for (const device of connectedDevices) {
+                console.log(`Already connected to device: ${device.name ?? 'Unnamed'} (${device.id})`);
+
+                if (device.localName?.includes("RGB Sunglasses") || device.name?.includes("RGB Sunglasses")) {
+                    console.log(`Already connected to device: is an RGB Sunglasses!`);
 
                     setDevices((prevDevices) => {
 
                         if (!isDuplicateDevice(prevDevices, device.id)) {
-                            return [...prevDevices, { name: device.localName ?? 'Unnamed', mac: device.id }];
+                            return [...prevDevices, { name: device.localName ?? device.name ?? 'Unnamed', mac: device.id }];
                         }
 
                         return prevDevices;
                     });
                 }
             }
-        });
-
-        // Check if any devices are already paired with the OS with the "Core Config Service" UUID
-        const connectedDevices = await bleManager.connectedDevices(["12345678-1234-5678-0001-56789abc0000"]);
-
-        for (const device of connectedDevices) {
-            console.log(`Already connected to device: ${device.name ?? 'Unnamed'} (${device.id})`);
-
-            if (device.localName?.includes("RGB Sunglasses") || device.name?.includes("RGB Sunglasses")) {
-                console.log(`Already connected to device: is an RGB Sunglasses!`);
-
-                setDevices((prevDevices) => {
-
-                    if (!isDuplicateDevice(prevDevices, device.id)) {
-                        return [...prevDevices, { name: device.localName ?? device.name ?? 'Unnamed', mac: device.id }];
-                    }
-
-                    return prevDevices;
-                });
-            }
+        } catch (error) {
+            // Bluetooth may be unavailable: powered off, or — notably on iOS — the
+            // Simulator, which has no BLE radio and rejects scan/query calls. Log it
+            // and drop out of the scanning state instead of leaving an uncaught
+            // promise rejection (which surfaces as a red LogBox in dev builds).
+            console.log('Bluetooth scan failed:', error);
+            setIsScanning(false);
         }
     }
 
