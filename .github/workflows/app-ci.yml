@@ -97,9 +97,24 @@ jobs:
   # it builds an UNSIGNED debug binary (for the iOS Simulator), so it needs no
   # Apple Developer account, certificates, or signing secrets. The simulator has
   # no Bluetooth radio, so this verifies build + launch only, not live BLE.
+  #
+  # SECURITY: this is the only self-hosted job, so it is the only one that runs
+  # untrusted contributor code on our own hardware. This repo is public, so the
+  # `if` below restricts when it runs (the hosted Linux jobs above stay open and
+  # still give every PR test + Android coverage):
+  #   - push events (post-merge code on our branches) always run.
+  #   - pull_request events run ONLY when the PR head is a branch in THIS repo
+  #     (never a fork) AND the author is in the approved-actor allowlist.
+  # The allowlist is the repo variable IOS_CI_ALLOWED_ACTORS (a JSON array of
+  # logins, editable under Settings -> Secrets and variables -> Actions ->
+  # Variables — no workflow edit needed); it falls back to ["skalldri"] if unset.
   build-ios:
     name: Build iOS (simulator, unsigned)
     needs: test
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON(vars.IOS_CI_ALLOWED_ACTORS || '["skalldri"]'), github.actor))
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v4

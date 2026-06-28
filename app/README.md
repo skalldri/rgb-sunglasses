@@ -214,6 +214,27 @@ mkdir -p ~/actions-runner && cd ~/actions-runner
 The default labels (`self-hosted`, `macOS`, `ARM64`) are what the job matches; no extra labels are
 needed. The runner must have Xcode + CocoaPods (the `macos-setup.sh` prerequisites) installed.
 
+#### Self-hosted runner security
+
+This repo is **public**, and a self-hosted runner executes job code on our own hardware — so an
+unrestricted `pull_request` trigger would let anyone run arbitrary code on the Mac by opening a PR.
+Two layers guard against this (the hosted Linux jobs — `test`, `build-android` — are unaffected and
+still run for every PR, since GitHub-hosted runners are ephemeral and sandboxed):
+
+1. **Job-level `if` gate** on `build-ios` (in `app-ci.yml`): it runs only on `push` events
+   (post-merge code on our own branches) or on pull requests whose head branch is in **this** repo
+   (never a fork) **and** whose author is in an approved-actor allowlist. The allowlist is the repo
+   variable **`IOS_CI_ALLOWED_ACTORS`** — a JSON array of GitHub logins, e.g. `["skalldri"]` —
+   editable under **Settings → Secrets and variables → Actions → Variables** with no workflow edit
+   (it falls back to `["skalldri"]` if unset). Add/remove approved accounts there.
+2. **Fork-PR approval policy** (repo setting, defense-in-depth): set to *require approval for all
+   external contributors*, so any outside contributor's workflow run must be approved by a
+   maintainer before it starts. Change it under **Settings → Actions → General → Fork pull request
+   workflows from outside collaborators**.
+
+For stronger isolation, prefer an **ephemeral** runner (register with `./config.sh --ephemeral` so
+it de-registers after one job) and never store secrets or long-lived credentials on the runner host.
+
 ## Key Files
 
 - `app/(tabs)/bluetooth.tsx`: scanning and device list
