@@ -57,7 +57,8 @@
 };
 
 &sram0_ns {
-	reg = <0x20040000 0x30000>;
+	/* Top 256 bytes (0x2006ff00–0x20070000) reserved for MCUboot blinfo retained mem */
+	reg = <0x20040000 0x2FF00>;
 };
 
 /* Include shared RAM configuration file */
