@@ -44,8 +44,9 @@ static int mcuboot_info_init(void) {
 }
 /* blinfo_init runs at APPLICATION, CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY.
  * Run one step later so blinfo has already parsed the retained-mem TLV area. */
-#define MCUBOOT_INFO_INIT_PRIORITY (CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY + 1)
-SYS_INIT(mcuboot_info_init, APPLICATION, MCUBOOT_INFO_INIT_PRIORITY);
+SYS_INIT(mcuboot_info_init, APPLICATION, CONFIG_MCUBOOT_INFO_INIT_PRIORITY);
+static_assert(CONFIG_MCUBOOT_INFO_INIT_PRIORITY > CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY,
+              "MCUboot info service init priority must be higher than blinfo init priority");
 
 static int cmd_mcuboot_version(const struct shell* sh, size_t argc, char** argv) {
     char buf[32];

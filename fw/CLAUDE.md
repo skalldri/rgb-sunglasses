@@ -3,19 +3,24 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Agent behavior
+
 - Always use built-in LLM tools to edit files
 - Whenever I say "Remember that" or some similar equivalent, update this file with the information.
 
 ## Hardware Revisions
+
 - The "rgb_sunglasses_dk" board is legacy. We need to retain build support for it, but no new features are added to this board.
 - The "rgb_sunglasses_proto0" board is the latest hardware revision. Always enable new features on the proto0 hardware revision by default. When I ask you to add a new feature, ensure it's enabled on the Proto0 hardware KConfig
 
 ## Project vs SDK
+
 - Files under the `fw` directory are ours to modify as we please.
 - Files under the `~/ncs` directory are NOT modifyable. They are part of the SDK and can NEVER BE TOUCHED.
 
 ## Project applications
+
 The firwmare is composed for 4 applications:
+
 - MCUBoot: the appcore's bootloader
 - rgb-sunglasses: the appcore main application
 - b0n: the netcore bootloader
@@ -54,11 +59,13 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 ### Subsystems and their roles
 
 **LED rendering pipeline**
+
 - `src/led_controller.cpp` — manages dual-bank WS2812 LED strip hardware and a double-framebuffer. Callers claim a buffer via `claimBufferForRender`, write pixels via `set_pixel_in_framebuffer`, then release it.
 - `src/pattern_controller.cpp` — sits above the LED controller. Owns the active animation slot and an optional `Indicator` overlay (BT advertising/connecting/pairing). Callers request an indicator with `pattern_controller_request_indicator` or switch animations with `pattern_controller_change_to_animation`.
 - `src/led_config.h` — compile-time constants for the frame LED geometry (40×12 logical display over two banks, serpentine wiring) and the devkit LED geometry (8×2). All rendering code receives a `const LedConfig*` so the same logic runs on both targets.
 
 **Animation system**
+
 - `src/animations/animation_base.h` — pure abstract `BaseAnimation` with `init()`, `tick()`, and `setActive()`.
 - `src/animations/animation.h` — `BaseAnimationTemplate<T, A>` CRTP base that adds a Meyer's singleton (`getInstance()`) and wires `setActive()` to the registry.
 - `src/animations/animation_types.h` — `Animation` enum (ZigZag, Text, Rainbow, BtAdvertising, etc.).
@@ -67,13 +74,14 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 - Each animation (`zigzag`, `rainbow`, `text`, `my_eyes`) has a dependency struct holding `const` references to `AnimationUint32ParameterSource` (or similar abstract interfaces). The animation's `tick()` reads parameters only through these interfaces, keeping animation logic BT-free.
 
 **Bluetooth / GATT layer**
+
 - `src/bluetooth.cpp` — BT thread + state machine (IDLE → ADVERTISING → CONNECTING → CONNECTED). Uses `K_MSGQ` to decouple connection callbacks from state transitions. Requires `BT_SECURITY_L4` before transitioning to CONNECTED.
   - **Requests a fast connection interval once security completes (issue #41)**: right before transitioning CONNECTING → CONNECTED, calls `bt_conn_le_param_update(ctx->conn, &fast_conn_param)` with `fast_conn_param = BT_LE_CONN_PARAM_INIT(6, 12, 0, 400)` (~7.5-15ms interval). Without this, the connection runs at whatever the central defaults to (Zephyr's own unrequested default is `BT_GAP_INIT_CONN_INT_MIN/MAX`, 30-50ms), and the app's discovery walk does ~170+ sequential GATT reads — one full connection interval each, since Android only allows one outstanding GATT op per connection. This is a belt-and-suspenders complement to the app's own `requestConnectionPriority(ConnectionPriority.High)` call in `use-ble-connection.ts` (see `app/CLAUDE.md`) — either side's request should produce the same effect; having both means it still works if one side's request doesn't take for some reason. A non-zero return from `bt_conn_le_param_update()` is logged but non-fatal.
-  - **`bt_conn_info` shell command and `le_param_updated` connection callback (issue #41 follow-up)**: added to verify, rather than assume, what connection interval is actually in effect — `bt_conn_le_param_update()` only sends a *request*; it doesn't tell you what the central actually granted. `le_param_updated(conn, interval, latency, timeout)` (registered in `conn_callbacks`, a `BT_CONN_CB_DEFINE`) logs the real negotiated parameters every time they change, with a timestamp, so you can see exactly when/whether a fast-interval request converged relative to other events. `bt_conn_info` (a standalone `SHELL_CMD_REGISTER`, no subcommands) prints the *current* parameters of `s_active_conn` (a diagnostic-only tracked pointer, ref-counted via the existing `connected()`/`disconnected()` callbacks) on demand — useful for polling mid-connection from a second shell session while the app is mid-discovery. Confirmed finding from using these: the interval briefly converges to 7.5ms right after `CONNECTED`, has a ~400ms excursion to 45ms about 2s in (during the app's `connectToDevice()`/GATT-cache-refresh phase, before the per-characteristic read loop starts), then settles at **15ms** (the slow end of our requested 7.5-15ms range) for the rest of the connection — not the 7.5ms fast end originally assumed. This is very likely Android's own `CONNECTION_PRIORITY_HIGH` policy floor (~11.25-15ms is its documented range), which as GAP central it has final say over regardless of what `fast_conn_param` proposes — there's no public Android API tier faster than "high priority" to request instead.
+  - **`bt_conn_info` shell command and `le_param_updated` connection callback (issue #41 follow-up)**: added to verify, rather than assume, what connection interval is actually in effect — `bt_conn_le_param_update()` only sends a _request_; it doesn't tell you what the central actually granted. `le_param_updated(conn, interval, latency, timeout)` (registered in `conn_callbacks`, a `BT_CONN_CB_DEFINE`) logs the real negotiated parameters every time they change, with a timestamp, so you can see exactly when/whether a fast-interval request converged relative to other events. `bt_conn_info` (a standalone `SHELL_CMD_REGISTER`, no subcommands) prints the _current_ parameters of `s_active_conn` (a diagnostic-only tracked pointer, ref-counted via the existing `connected()`/`disconnected()` callbacks) on demand — useful for polling mid-connection from a second shell session while the app is mid-discovery. Confirmed finding from using these: the interval briefly converges to 7.5ms right after `CONNECTED`, has a ~400ms excursion to 45ms about 2s in (during the app's `connectToDevice()`/GATT-cache-refresh phase, before the per-characteristic read loop starts), then settles at **15ms** (the slow end of our requested 7.5-15ms range) for the rest of the connection — not the 7.5ms fast end originally assumed. This is very likely Android's own `CONNECTION_PRIORITY_HIGH` policy floor (~11.25-15ms is its documented range), which as GAP central it has final say over regardless of what `fast_conn_param` proposes — there's no public Android API tier faster than "high priority" to request instead.
 - `src/bluetooth/bt_service_cpp.h` — C++23 compile-time GATT server assembler. `BtGattServer<Providers...>` collects `BtGattAttributeProvider` objects, assigns auto UUIDs in provider-declaration order, and flattens them to a `bt_gatt_attr[]` backed by a `std::array`. Use `BT_GATT_SERVER_REGISTER(name, server)` to register with Zephyr.
   - **Bulk metadata characteristic, gated by `CONFIG_APP_BT_METADATA_CHARACTERISTIC` (issue #41 follow-up)**: `BtGattServer` automatically synthesizes and appends one extra read-only characteristic per service (fixed shared UUID `kMetadataCharacteristicUuid`, same pattern as `kAnimationNameCharacteristicUuid`) whose value is a compile-time-constant packed blob containing every sibling characteristic's CUD name + CPF format — `[version][entry_count]` then `[cpf_format][name_len][name_bytes]` per entry, in `Providers...` declaration order. This lets the app read one characteristic per service instead of two descriptor reads (CUD + CPF) per characteristic, cutting ATT op count roughly in half for discovery. **No per-service `.cpp` file needs to change** — the blob is derived automatically from the same `Providers...` pack each service already passes into `BtGattServer(...)`, via `getDescription()`/`getCpf()` static accessors added to `BtGattCharacteristicCommon` and the `BtGattMetadataBearingProvider` concept + `MetadataBlobBuilder<Ps...>` fold (both just above `BtGattServer` in this file), which skip the primary-service provider automatically since it doesn't expose those statics. Hardware-verified: discovery across all 9 services dropped from ~13-30s to ~6s with zero fallback/mismatch warnings.
     - **Disabled on `rgb_sunglasses_dk`** (`CONFIG_APP_BT_METADATA_CHARACTERISTIC=n` in its board `.conf`): the blob duplicates every characteristic's CUD description string as packed binary data, which pushed that board's image past its internal-flash slot size (confirmed: imgtool `Image size ... exceeds requested size` with this enabled) — same flash-budget reasoning as `CONFIG_APP_PERSIST_BT_CONFIG` below. When disabled, `getMetadataAttrsTuple()`/`kMetadataBlob` are never referenced and so are never instantiated (class template members are only instantiated when used) — zero flash cost on that board.
-    - **Ordering assumption**: the app's positional zip (`use-ble-connection.ts`) assumes `characteristicsForService()` returns characteristics in the same order as this blob, i.e. firmware GATT declaration order. This holds because ATT "Read By Type" (used internally by characteristic discovery) is spec-required to return attributes in ascending handle order, and handles are assigned in exactly `Providers...`'s declaration order — not a platform convention that could silently change. Verified (this session) that react-native-ble-plx's Android module (`BleModule.java:511-517` → `Service.java:51-53`) passes Android's native `BluetoothGattService.getCharacteristics()` result straight through with no client-side re-sort. A same-count *reordering* would not be caught by the blob's `entry_count` check — only a count mismatch is detected — this residual risk is accepted rather than paying for a fully self-describing (per-entry UUID-tagged) wire format.
+    - **Ordering assumption**: the app's positional zip (`use-ble-connection.ts`) assumes `characteristicsForService()` returns characteristics in the same order as this blob, i.e. firmware GATT declaration order. This holds because ATT "Read By Type" (used internally by characteristic discovery) is spec-required to return attributes in ascending handle order, and handles are assigned in exactly `Providers...`'s declaration order — not a platform convention that could silently change. Verified (this session) that react-native-ble-plx's Android module (`BleModule.java:511-517` → `Service.java:51-53`) passes Android's native `BluetoothGattService.getCharacteristics()` result straight through with no client-side re-sort. A same-count _reordering_ would not be caught by the blob's `entry_count` check — only a count mismatch is detected — this residual risk is accepted rather than paying for a fully self-describing (per-entry UUID-tagged) wire format.
   - Characteristic aliases: `BtGattReadWriteCharacteristic`, `BtGattReadNotifyCharacteristic`, `BtGattAutoReadWriteCharacteristic`, etc.
   - Write hooks: if a characteristic class defines `onWrite(const T&)`, it is called automatically after each successful remote write.
   - `src/bluetooth/persistent_characteristic.h` — `BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>`: a `BtGattAutoCharacteristicExt` subclass (same shape as `IsActiveCharacteristic` below) that backs a plain POD/`BtGattColor`/`BtGattString<N>` characteristic with Zephyr's settings subsystem, so its value survives a power cycle. `Key` is an explicit string literal (e.g. `"core/brightness"`) — never derive it from declaration order, since `BtGattServer`'s auto-UUID assignment is positional but settings keys must stay stable across reorderings. See "Settings-backed config persistence" below for the full mechanism. `BtGattDropdownList<N>` characteristics (glim selection/loop mode) don't fit this generic mixin and persist by hand instead — see `glim_player_animation_bt.cpp`.
@@ -83,6 +91,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 - `src/animations/animation_is_active_characteristic.h` — `IsActiveCharacteristic<A>`: a `BtGattAutoCharacteristicExt` subclass that hooks `onWrite` to `AnimationIsActiveBinding<A>::onRemoteActiveChange`.
 
 **DI interfaces (added in `animation-refactor-part2`)**
+
 - `src/bluetooth/bt_state_observer.h` — `BtStateObserver`: pure abstract observer; `bluetooth.cpp` calls through this instead of including `pattern_controller.h` / `bt_animations.h`. Register with `bluetooth_register_state_observer()`.
 - `src/configuration_provider.h` — `ConfigurationProvider`: abstract interface over `CoreConfig` singleton (getBrightnessFactor, getDisplayRateMs, getRenderRateMs). `CoreConfig` inherits from it. Injected into `led_controller` and `pattern_controller` via setter functions; lazy fallback to `CoreConfig::getInstance()` if not set.
 - `src/button_event_listener.h` + `src/buttons.h` — `ButtonEventListener`: `onButtonPressed(size_t buttonId)`. Dispatch is ISR-safe: GPIO interrupt → `K_MSGQ_DEFINE` → `k_work` → listener on work-queue thread. Register with `buttons_register_listener()`. Button IDs 0–3 = sw0–sw3; ID 4 = wake button.
@@ -97,6 +106,7 @@ The goal is to remove all BT headers from `src/animations/*_animation.cpp`. Each
 The refactor is in progress. When editing animation code, check whether the animation has already been split (adapter file exists under `src/bluetooth/animation_adapters/`) or still holds BT code in its `.cpp`.
 
 After the refactor, verify the separation with:
+
 ```bash
 grep -rE 'bluetooth|BT_GATT|BtGatt' src/animations/
 # Expect zero matches outside bt_animations.{h,cpp}
@@ -123,11 +133,13 @@ Every BT-settable config value (core config, animation parameters/strings/colors
 ### Kconfig and optional features
 
 Animations are conditionally compiled via:
+
 ```
 CONFIG_ANIMATION_MY_EYES=y
 CONFIG_ANIMATION_RAINBOW=y
 CONFIG_ANIMATION_ZIGZAG=y
 ```
+
 Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_SIZE_OPTIMIZATIONS=y`).
 
 **Don't reuse a Kconfig symbol from one subsystem to configure unrelated code in another, even if the value/semantics happen to line up.** E.g. a BT-free module's debounce/delay tunable should get its own `CONFIG_APP_*` symbol, not borrow `CONFIG_BT_SETTINGS_DELAYED_STORE_MS` just because the timing happens to match — that creates a hidden cross-subsystem dependency and works against this project's general push to decouple BT from non-BT code (see the animation/BT decoupling refactor above).
@@ -136,9 +148,27 @@ Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.
 
 `SYS_INIT(fn, APPLICATION, N)` runs before `K_THREAD_DEFINE` threads are scheduled. Lower N runs first. When an observer or listener must be registered before a thread can fire its first event, use `SYS_INIT(APPLICATION, 0)`. Both `bluetooth_init` and `button_init` run at priority 1, so registering observers at priority 0 guarantees the observer is in place before either subsystem starts.
 
+It's very important that SYS_INIT() priority levels must ALWAYS be a plain pre-processor directive that derives to a single number. SYS_INIT() priority levels CANNOT be expressions that require evaluation, they MUST be a plain number or a single pre-processor directive that is replaced directly with a number.
+
+For example, this is illegal:
+
+```
+SYS_INIT(mcuboot_info_init, APPLICATION, CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY + 1);
+```
+
+This is also illegal:
+
+```
+#define MCUBOOT_INFO_INIT_PRIORITY (CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY + 1)
+SYS_INIT(mcuboot_info_init, APPLICATION, MCUBOOT_INFO_INIT_PRIORITY);
+```
+
+To enforce init ordering, use a plain KConfig value and then add `static_assert()`s as needed to guarantee ordering.
+
 ### Test structure
 
 Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suite has its own `CMakeLists.txt`, `prj.conf`, and `testcase.yaml`:
+
 - `tests/animations/animation_registry/` — unit tests for the registry itself.
 - `tests/animations/*_animation_di/` — dependency-injection tests for each animation, compiling the pure animation `.cpp` without BT. These currently require `CONFIG_BT=y` in their `prj.conf` only because animation `.cpp` files still include BT headers; removing BT from the animations is the goal of the active refactor.
 - `tests/bt_state_observer/` — interface contract tests for `BtStateObserver` (does not link `bluetooth.cpp`).
@@ -156,6 +186,7 @@ Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suit
 Prefer changes under `/workspaces/rgb-sunglasses/fw` (app code). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
 
 ### Zephyr RTOS
+
 This project uses the Zephyr RTOS.
 
 Read the documentation directly from /root/ncs/v3.1.1/zephyr/doc
@@ -168,10 +199,10 @@ Run `/check-hardware` at the start of any session to discover what's available. 
 
 The dev board exposes two USB-CDC-ACM ports:
 
-| Port | Role | Baud |
-|------|------|------|
+| Port           | Role                                        | Baud   |
+| -------------- | ------------------------------------------- | ------ |
 | `/dev/ttyACM0` | Zephyr interactive shell (`uart:~$` prompt) | 115200 |
-| `/dev/ttyACM1` | MCUmgr UART transport (firmware updates) | 115200 |
+| `/dev/ttyACM1` | MCUmgr UART transport (firmware updates)    | 115200 |
 
 A SEGGER J-Link (VID:PID `1366:0101`) may also be connected for advanced operations (reflashing MCUboot, GDB debugging). `/check-hardware` probes it and prints status, VTref, and serial number. See [Flashing via J-Link](#flashing-via-j-link-fast-path) below for the fast flash path.
 
@@ -190,6 +221,7 @@ Note: `JLinkExe -CommandFile` only opens the USB connection lazily, on the first
 **Wait for boot before sending commands.** Boot log output interleaves with shell echoed input and causes `command not found` errors. Wait until `uart:~$` appears before issuing any shell commands.
 
 **Sending newlines correctly.** `serial_write` with `data: "\r\n"` sends the four literal characters `\`, `r`, `\`, `n` — not a CR+LF. Always use one of these instead:
+
 ```jsonc
 // Option 1 — append_newline flag (preferred)
 { "data": "kernel version", "append_newline": true }
@@ -219,7 +251,7 @@ is set and will visually hide it. `rgb_sunglasses.set_animation` already does
 this automatically (calls `clear_indicator` before `anim set` and verifies via
 `anim get`) — don't bypass it by calling the shell directly.
 
-**Zephyr shell prompt redraw quirk:** the shell redraws `uart:~$` after *every*
+**Zephyr shell prompt redraw quirk:** the shell redraws `uart:~$` after _every_
 async log line (BT notifications, GLIM decoder logs, etc.), not just after a
 command finishes. A naive `read_until("uart:~$ ")` can match a stale redraw left
 over from a previous command's delayed logging, before the current command's
@@ -268,6 +300,7 @@ interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts 
 `fw/tools/convert_bad_apple.py`, `generate_nyan_cat_glim.py`).
 
 **Finding and mounting it from the devcontainer:**
+
 ```bash
 # It enumerates as a SCSI disk alongside the container's own disks — identify it
 # by the SCSI string, not a fixed /dev/sdX (the letter shifts based on what else
@@ -324,10 +357,10 @@ mcumgr $CONN reset            # soft-reset the device
 
 The board exposes two images via MCUmgr (confirmed from `image list`):
 
-| image | Slot | Core |
-|-------|------|------|
-| 0 | 0 | App core (rgb-sunglasses) |
-| 1 | 0 | Net core (ipc_radio) |
+| image | Slot | Core                      |
+| ----- | ---- | ------------------------- |
+| 0     | 0    | App core (rgb-sunglasses) |
+| 1     | 0    | Net core (ipc_radio)      |
 
 Both currently report `version: 0.0.0` — the build version string is not yet wired up.
 
@@ -370,6 +403,7 @@ mcumgr $CONN stat read flash_sim_stats
 The `zephyr,cdc-acm-uart` driver's `poll_out` silently **drops bytes** when the TX ring buffer is full and `hw-flow-control` is NOT set. With the default 1024-byte FIFO a multi-frame `taskstat` response (~1850 wire bytes) overflows mid-stream and the client times out.
 
 Fix applied in `rgb_sunglasses_proto0_nrf5340_cpuapp_common.dts`:
+
 ```dts
 cdc_acm_uart1: cdc_acm_uart1 {
     compatible = "zephyr,cdc-acm-uart";
@@ -385,6 +419,7 @@ cdc_acm_uart1: cdc_acm_uart1 {
 After a firmware reset, the board re-enumerates as a new USB device. The Linux kernel assigns the next available ACM minor numbers — if the previous ttyACM0 node wasn't cleaned up, the new device gets ttyACM1/ttyACM2 instead. Additionally, WSL2's udev sometimes fails to create /dev nodes for new ACM interfaces even though they appear in sysfs.
 
 **If mcumgr times out after a reset:**
+
 ```bash
 # Check sysfs for all registered ACM devices
 ls /sys/class/tty/ttyACM*
@@ -406,7 +441,7 @@ done
 
 The mcumgr port is whichever responds to `echo`. Update `CONN` accordingly.
 
-**This also breaks already-open `mcp__serial__*` connections, not just mcumgr.** After flashing via J-Link (`jlink-flash.sh` resets the board) or any other board reset, an existing `mcp__serial__*` connection_id to the Zephyr shell goes stale: the first write after the reset fails with an I/O error (`[Errno 5] Input/output error`), and `serial_open` on the *same path* then fails with `[Errno 6] No such device or address` because the board re-enumerated under a new ttyACM minor number (the old path's underlying device is just gone). Fix: `serial_close` the stale connection_id, re-run `/check-hardware` (or the `ls`/`mknod` loop above) to find the shell's *new* port, then `serial_open` on that new path. Don't retry the old connection_id or the old path — it will keep failing.
+**This also breaks already-open `mcp__serial__*` connections, not just mcumgr.** After flashing via J-Link (`jlink-flash.sh` resets the board) or any other board reset, an existing `mcp__serial__*` connection_id to the Zephyr shell goes stale: the first write after the reset fails with an I/O error (`[Errno 5] Input/output error`), and `serial_open` on the _same path_ then fails with `[Errno 6] No such device or address` because the board re-enumerated under a new ttyACM minor number (the old path's underlying device is just gone). Fix: `serial_close` the stale connection_id, re-run `/check-hardware` (or the `ls`/`mknod` loop above) to find the shell's _new_ port, then `serial_open` on that new path. Don't retry the old connection_id or the old path — it will keep failing.
 
 ## Build Failures
 
@@ -421,6 +456,7 @@ fw/sysbuild/<image-name>/prj.conf                          # per-image Kconfig f
 fw/sysbuild/<image-name>/boards/<board>.conf                # per-image, per-board Kconfig fragment
 fw/sysbuild/<image-name>/boards/<board>.overlay              # per-image, per-board devicetree overlay
 ```
+
 e.g. `fw/sysbuild/mcuboot/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.overlay` only applies to the MCUboot image. These are auto-discovered by Zephyr's CMake — no wiring needed beyond creating the file in the right place.
 
 **`add_overlay_dts(${DEFAULT_IMAGE}, ...)` in `fw/conf/<board>/sysbuild.cmake` targets the main "fw" app image, not MCUboot.** `${DEFAULT_IMAGE}` is sysbuild's default/main image, which is `fw` in this project. Don't reach for this mechanism when you actually want to target MCUboot, b0n, or ipc_radio — use the per-image `sysbuild/<image-name>/` directory above instead.

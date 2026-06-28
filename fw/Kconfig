@@ -173,4 +173,11 @@ source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
 
 endif # NETCORE_VERSION_IPC
 
+config MCUBOOT_INFO_INIT_PRIORITY
+	int "MCUboot info service init priority"
+	default 88
+	help
+	  The init priority of the MCUboot info service. Lower numbers are
+	  initialized first. The default is 88, which is one-higher than CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY.
+
 rsource "drivers/Kconfig"
