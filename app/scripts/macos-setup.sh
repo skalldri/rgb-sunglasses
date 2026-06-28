@@ -71,6 +71,8 @@ if command -v pod >/dev/null 2>&1; then
 else
     brew_ensure cocoapods pod
 fi
+# gh: GitHub CLI, used for opening PRs and other repo automation.
+brew_ensure gh gh
 # applesimutils: optional, lets Expo pick simulators by name. Non-fatal.
 if ! command -v applesimutils >/dev/null 2>&1; then
     info "Installing applesimutils (optional) via Homebrew..."
@@ -100,3 +102,8 @@ echo "  npm run ios            # build + launch on the iOS Simulator"
 echo
 echo "Note: BLE requires a physical iPhone — the iOS Simulator has no Bluetooth"
 echo "radio, so device scanning will find nothing there."
+echo
+if command -v gh >/dev/null 2>&1 && ! gh auth status >/dev/null 2>&1; then
+    echo "Tip: authenticate the GitHub CLI to open PRs / manage releases:"
+    echo "  gh auth login"
+fi
