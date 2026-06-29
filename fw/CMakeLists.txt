@@ -84,4 +84,10 @@ target_include_directories(
 # Needs to be accessible to drivers so that the TPS25750 can access the patch file
 zephyr_include_directories(misc)
 
+# nRF5340 Anomaly 211: device misses USB RESUME when host restarts SOF packets
+# without a formal K-state RESUME signal, causing Windows to escalate to a USB
+# Reset. The workaround (polling-based SOF detection during suspend) is already
+# implemented in udc_nrf.c but disabled by default behind an #ifndef guard.
+zephyr_compile_definitions(NRF_USBD_COMMON_USE_WORKAROUND_FOR_ANOMALY_211=1)
+
 # NORDIC SDK APP END

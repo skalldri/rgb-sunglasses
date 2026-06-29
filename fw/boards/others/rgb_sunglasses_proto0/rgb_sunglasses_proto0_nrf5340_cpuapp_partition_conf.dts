@@ -21,9 +21,9 @@
   * the beginning of the Non-Secure image (not its size).
   */
 
- &slot0_partition {
+/*&slot0_partition {
 	 reg = <0x00030000 0x60000>;
-};
+};*/
 
 /*
 &slot0_ns_partition {
@@ -31,9 +31,9 @@
 };
  */
 
-&slot1_partition {
+/*&slot1_partition {
 	reg = <0x00090000 0x60000>;
-};
+};*/
 
 /*
 &slot1_ns_partition {

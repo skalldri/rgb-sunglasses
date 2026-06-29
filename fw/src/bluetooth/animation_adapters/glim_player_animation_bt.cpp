@@ -127,6 +127,10 @@ size_t findGlimIndexByName(const char *name) {
 
 BtGattPrimaryService<kGlimPlayerConfigServiceUuid> glimPlayerPrimaryService;
 
+// Keys defined here (before the characteristic classes) so onWrite() can mark them dirty.
+static constexpr const char *kGlimSelectionKey = "glim_player/selected_name";
+static constexpr const char *kGlimLoopModeKey = "glim_player/loop_mode";
+
 class GlimSelectionCharacteristic
     : public BtGattAutoCharacteristicExt<GlimSelectionCharacteristic, "Glim Selection", true, false,
                                          BtGattDropdownList<kGlimSelectionMaxLen>,
@@ -148,6 +152,7 @@ class GlimSelectionCharacteristic
         sSelectedIndex = index;
         this->operator=(buildGlimSelectionValue(index));
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_mark_dirty(kGlimSelectionKey);
             persistent_value_store::request_save();
         }
     }
@@ -175,6 +180,7 @@ class GlimLoopModeCharacteristic
         }
         this->operator=(buildLoopModeValue(mode));
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_mark_dirty(kGlimLoopModeKey);
             persistent_value_store::request_save();
         }
     }
@@ -182,9 +188,6 @@ class GlimLoopModeCharacteristic
 GlimLoopModeCharacteristic glimLoopMode;
 
 namespace {
-
-constexpr const char *kGlimSelectionKey = "glim_player/selected_name";
-constexpr const char *kGlimLoopModeKey = "glim_player/loop_mode";
 
 // glim_registry hasn't scanned /NAND:/glim yet when settings_load() runs (that happens in
 // bluetooth_init, before pattern_controller_thread_func's glim_registry::init() call - see
@@ -275,6 +278,7 @@ class ConcreteGlimSelectionSource : public GlimSelectionSource {
         GlimSelectionCharacteristic::sSelectedIndex = index;
         glimSelection = buildGlimSelectionValue(index);
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_mark_dirty(kGlimSelectionKey);
             persistent_value_store::request_save();
         }
     }
@@ -411,6 +415,7 @@ static int cmd_glim_set_loop_mode(const struct shell *shell, size_t argc, char *
 
     glimLoopMode = buildLoopModeValue(mode);
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        persistent_value_registry_mark_dirty(kGlimLoopModeKey);
         persistent_value_store::request_save();
     }
     return 0;

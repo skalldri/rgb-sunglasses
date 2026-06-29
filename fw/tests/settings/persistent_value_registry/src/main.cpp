@@ -94,14 +94,38 @@ ZTEST(persistent_value_registry_tests, test_register_rejects_null_arguments) {
     zassert_equal(ret, -EINVAL, "Expected -EINVAL for null save, got %d", ret);
 }
 
-ZTEST(persistent_value_registry_tests, test_save_all_calls_every_entry) {
+ZTEST(persistent_value_registry_tests, test_save_all_calls_every_dirty_entry) {
     reset_test_state();
     persistent_value_registry_register("foo/bar", nullptr, record_load, record_save);
     persistent_value_registry_register("foo/baz", nullptr, record_load, record_save);
 
+    persistent_value_registry_mark_dirty("foo/bar");
+    persistent_value_registry_mark_dirty("foo/baz");
     persistent_value_registry_save_all();
 
-    zassert_equal(sSaveCallCount, 2, "Expected save to be called once per entry");
+    zassert_equal(sSaveCallCount, 2, "Expected save to be called once per dirty entry");
+}
+
+ZTEST(persistent_value_registry_tests, test_save_all_skips_non_dirty_entries) {
+    reset_test_state();
+    persistent_value_registry_register("foo/bar", nullptr, record_load, record_save);
+    persistent_value_registry_register("foo/baz", nullptr, record_load, record_save);
+
+    persistent_value_registry_mark_dirty("foo/bar");
+    persistent_value_registry_save_all();
+
+    zassert_equal(sSaveCallCount, 1, "Expected only the dirty entry to be saved, not the clean one");
+}
+
+ZTEST(persistent_value_registry_tests, test_save_all_clears_dirty_flag) {
+    reset_test_state();
+    persistent_value_registry_register("foo/bar", nullptr, record_load, record_save);
+
+    persistent_value_registry_mark_dirty("foo/bar");
+    persistent_value_registry_save_all();
+    persistent_value_registry_save_all();  // second call — flag should be clear, no re-save
+
+    zassert_equal(sSaveCallCount, 1, "Expected second save_all() to skip already-saved entry");
 }
 
 ZTEST(persistent_value_registry_tests, test_reset_clears_entries) {

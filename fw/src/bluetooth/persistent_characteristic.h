@@ -47,7 +47,16 @@ class BtGattPersistentCharacteristic
     // bypasses onWrite entirely - see BtGattWriteHook in bt_service_cpp.h).
     void onWrite(const T &) {
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_mark_dirty(Key.value);
             persistent_value_store::request_save();
+        }
+    }
+
+    // Marks this characteristic dirty for the next batch save. Call before request_save()
+    // when the value changes via a non-BLE path (e.g. a shell setter using operator=).
+    void mark_dirty() {
+        if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_mark_dirty(Key.value);
         }
     }
 

@@ -193,7 +193,8 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     if (sAnimationWasLoaded && getAnimation(sLoadedAnimation)) {
         startupAnimation = sLoadedAnimation;
     }
-    pattern_controller_change_to_animation(startupAnimation);
+    // Restore without scheduling a save — this is a read-back, not a user-initiated change.
+    pattern_controller_change_to_animation(startupAnimation, false);
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -270,7 +271,7 @@ Animation pattern_controller_get_current_animation(void) {
     return currentAnimation;
 }
 
-int pattern_controller_change_to_animation(Animation animation) {
+int pattern_controller_change_to_animation(Animation animation, bool persist) {
     // Try to get the next animation
     BaseAnimation *next = getAnimation(animation);
 
@@ -290,7 +291,8 @@ int pattern_controller_change_to_animation(Animation animation) {
 
     currentAnimation = animation;
 
-    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+    if (persist && IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        persistent_value_registry_mark_dirty(kLastActiveAnimationKey);
         persistent_value_store::request_save();
     }
 
