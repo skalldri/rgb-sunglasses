@@ -114,7 +114,17 @@ static void charger_status_thread_func(void *, void *, void *) {
         return;
     }
 
+    /* Enable the ADC so VBAT readings are available, and override the NTC
+     * thermal check (no thermistor fitted on proto0). */
+    bq25792_adc_enable(bq, true);
+    bq25792_temp_override(bq, true);
+
     while (true) {
+        /* Read VBAT first — the charger may report TrickleCharge even with no
+         * battery present, so we must gate on voltage before trusting CHG_STAT. */
+        int32_t vbat_mv = 0;
+        bool vbat_ok    = (bq25792_get_vbat_mv(bq, &vbat_mv) == 0);
+
         uint8_t chg_stat = 0;
         if (bq25792_get_charge_status(bq, &chg_stat) == 0) {
 #if defined(CONFIG_STATUS_LED)
@@ -122,25 +132,50 @@ static void charger_status_thread_func(void *, void *, void *) {
             StatusColor            color  = StatusColor::Green;
             Bq25792ChargeStatus    status = static_cast<Bq25792ChargeStatus>(chg_stat);
 
-            switch (status) {
-                case Bq25792ChargeStatus::TrickleCharge:
-                    [[fallthrough]];
-                case Bq25792ChargeStatus::PreCharge:
-                    indication = StatusIndication::Breathing;
-                    break;
-                case Bq25792ChargeStatus::FastChargeCC:
-                    [[fallthrough]];
-                case Bq25792ChargeStatus::TaperChargeCV:
-                    indication = StatusIndication::FastBreathing;
-                    break;
-                case Bq25792ChargeStatus::TopOffTimerActive:
-                    [[fallthrough]];
-                case Bq25792ChargeStatus::ChargeTerminationDone:
-                    indication = StatusIndication::Solid;
-                    break;
-                default: /* NotCharging, Reserved */
-                    indication = StatusIndication::Off;
-                    break;
+            /* Dead/absent battery — override everything else with blinking red.
+             * 6000 mV threshold: a healthy 2S pack reads >7V at rest; values
+             * below 6V indicate a dead or disconnected pack. */
+            if (vbat_ok && vbat_mv < 6000) {
+                indication = StatusIndication::Blinking;
+                color      = StatusColor::Red;
+            } else {
+                switch (status) {
+                    case Bq25792ChargeStatus::TrickleCharge:
+                        [[fallthrough]];
+                    case Bq25792ChargeStatus::PreCharge:
+                        indication = StatusIndication::Breathing;
+                        break;
+                    case Bq25792ChargeStatus::FastChargeCC:
+                        [[fallthrough]];
+                    case Bq25792ChargeStatus::TaperChargeCV:
+                        indication = StatusIndication::FastBreathing;
+                        break;
+                    case Bq25792ChargeStatus::TopOffTimerActive:
+                        [[fallthrough]];
+                    case Bq25792ChargeStatus::ChargeTerminationDone:
+                        indication = StatusIndication::Solid;
+                        break;
+                    default: { /* NotCharging, Reserved — running on battery */
+                        /* 2S LiPo: cutoff 7000 mV (0%), full 8400 mV (100%).
+                         * Thresholds: >=7700 mV = >=50% green, >=7350 mV = >=25% orange,
+                         * >=7000 mV = >=0% red. */
+                        if (vbat_ok) {
+                            if (vbat_mv >= 7700) {
+                                indication = StatusIndication::Solid;
+                                color      = StatusColor::Green;
+                            } else if (vbat_mv >= 7350) {
+                                indication = StatusIndication::Solid;
+                                color      = StatusColor::Orange;
+                            } else {
+                                indication = StatusIndication::Solid;
+                                color      = StatusColor::Red;
+                            }
+                        } else {
+                            indication = StatusIndication::Off;
+                        }
+                        break;
+                    }
+                }
             }
 
             status_led_set(0, indication, color);
