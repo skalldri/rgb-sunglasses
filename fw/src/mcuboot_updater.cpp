@@ -229,25 +229,38 @@ static void commit_work_handler(struct k_work *work)
 
     for (uint32_t p = 1; p < kTotalPages; p++) {
         off_t internal_off = (off_t)(p * kPageSize);
-        off_t file_off     = (off_t)(kHdrSize + p * kPageSize);
+        uint32_t page_off  = p * kPageSize; /* byte offset into payload */
 
-        int rc = fs_seek(&s_staging_file, file_off, FS_SEEK_SET);
-        if (rc) {
-            LOG_ERR("Seek failed for page %u: %d", p, rc);
-            close_staging_file(false);
-            set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
-            return;
+        if (page_off >= s_payload_size) {
+            /* Page is entirely beyond the binary — write 0xFF (erased state). */
+            memset(page_buf, 0xFF, kPageSize);
+        } else {
+            off_t file_off = (off_t)(kHdrSize + page_off);
+            uint32_t avail = MIN(kPageSize, s_payload_size - page_off);
+
+            int read_rc = fs_seek(&s_staging_file, file_off, FS_SEEK_SET);
+            if (read_rc) {
+                LOG_ERR("Seek failed for page %u: %d", p, read_rc);
+                close_staging_file(false);
+                set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
+                return;
+            }
+
+            read_rc = fs_read(&s_staging_file, page_buf, avail);
+            if (read_rc != (int)avail) {
+                LOG_ERR("Read failed for page %u: got %d of %u", p, read_rc, avail);
+                close_staging_file(false);
+                set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
+                return;
+            }
+
+            /* Pad any partial page tail with 0xFF to fill the full page. */
+            if (avail < kPageSize) {
+                memset(page_buf + avail, 0xFF, kPageSize - avail);
+            }
         }
 
-        rc = fs_read(&s_staging_file, page_buf, kPageSize);
-        if (rc != (int)kPageSize) {
-            LOG_ERR("Read failed for page %u: got %d", p, rc);
-            close_staging_file(false);
-            set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
-            return;
-        }
-
-        rc = flash_area_erase(s_mcuboot_fa, internal_off, kPageSize);
+        int rc = flash_area_erase(s_mcuboot_fa, internal_off, kPageSize);
         if (rc) {
             LOG_ERR("Internal flash erase failed at page %u: %d", p, rc);
             close_staging_file(false);
@@ -273,23 +286,30 @@ static void commit_work_handler(struct k_work *work)
     /* Page 0 — point of no return. Power loss here requires J-Link recovery. */
     LOG_INF("Writing page 0 (reset vector) — point of no return");
 
-    int rc = fs_seek(&s_staging_file, (off_t)kHdrSize, FS_SEEK_SET);
-    if (rc) {
-        LOG_ERR("Seek failed for page 0: %d", rc);
-        close_staging_file(false);
-        set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
-        return;
+    {
+        uint32_t avail = MIN(kPageSize, s_payload_size);
+        int read_rc = fs_seek(&s_staging_file, (off_t)kHdrSize, FS_SEEK_SET);
+        if (read_rc) {
+            LOG_ERR("Seek failed for page 0: %d", read_rc);
+            close_staging_file(false);
+            set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
+            return;
+        }
+
+        read_rc = fs_read(&s_staging_file, page_buf, avail);
+        if (read_rc != (int)avail) {
+            LOG_ERR("Read failed for page 0: got %d of %u", read_rc, avail);
+            close_staging_file(false);
+            set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
+            return;
+        }
+
+        if (avail < kPageSize) {
+            memset(page_buf + avail, 0xFF, kPageSize - avail);
+        }
     }
 
-    rc = fs_read(&s_staging_file, page_buf, kPageSize);
-    if (rc != (int)kPageSize) {
-        LOG_ERR("Read failed for page 0: got %d", rc);
-        close_staging_file(false);
-        set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
-        return;
-    }
-
-    rc = flash_area_erase(s_mcuboot_fa, 0, kPageSize);
+    int rc = flash_area_erase(s_mcuboot_fa, 0, kPageSize);
     if (rc) {
         LOG_ERR("Internal flash erase failed for page 0: %d", rc);
         close_staging_file(false);
@@ -563,10 +583,164 @@ static int cmd_mcuboot_update_request_reboot(const struct shell *sh, size_t argc
     return 0;
 }
 
+/* Independently verify /NAND:/mcuboot.bin: print header fields and compute CRC32
+ * without touching the state machine. Safe to run at any time. Use this to confirm
+ * a file copied via USB is intact before running sideload. */
+static int cmd_mcuboot_update_verify(const struct shell *sh, size_t argc, char **argv)
+{
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    int rc = fs_open(&f, MCUBOOT_STAGING_PATH, FS_O_READ);
+    if (rc) {
+        shell_error(sh, "Cannot open %s: %d", MCUBOOT_STAGING_PATH, rc);
+        return rc;
+    }
+
+    struct McubootPkgHeader hdr = {};
+    rc = fs_read(&f, &hdr, sizeof(hdr));
+    if (rc != (int)sizeof(hdr)) {
+        shell_error(sh, "Header read failed: %d", rc);
+        fs_close(&f);
+        return -EIO;
+    }
+
+    shell_print(sh, "Path:    %s", MCUBOOT_STAGING_PATH);
+    shell_print(sh, "Magic:   0x%08X (%s)", hdr.magic,
+                hdr.magic == kPkgMagic ? "OK" : "BAD");
+    shell_print(sh, "Version: %u.%u.%u",
+                hdr.version_major, hdr.version_minor, hdr.version_revision);
+    shell_print(sh, "Payload: %u bytes", hdr.payload_size);
+    shell_print(sh, "CRC32:   0x%08X (from header)", hdr.crc32);
+
+    if (hdr.magic != kPkgMagic) {
+        shell_error(sh, "Bad magic — not a valid mcuboot package");
+        fs_close(&f);
+        return -EINVAL;
+    }
+
+    /* Stream the payload through CRC32 in kPageSize chunks */
+    static uint8_t verify_buf[kPageSize];
+    uint32_t running   = 0;
+    uint32_t remaining = hdr.payload_size;
+
+    while (remaining > 0) {
+        uint32_t chunk = MIN(remaining, sizeof(verify_buf));
+        rc = fs_read(&f, verify_buf, chunk);
+        if (rc != (int)chunk) {
+            shell_error(sh, "Read error at remaining=%u: got %d", remaining, rc);
+            fs_close(&f);
+            return -EIO;
+        }
+        running = crc32_ieee_update(running, verify_buf, chunk);
+        remaining -= chunk;
+    }
+
+    fs_close(&f);
+
+    shell_print(sh, "CRC32:   0x%08X (computed)", running);
+    if (running == hdr.crc32) {
+        shell_print(sh, "Result:  PASS — file is intact");
+        return 0;
+    } else {
+        shell_error(sh, "Result:  FAIL — CRC mismatch (expected 0x%08X, got 0x%08X)",
+                    hdr.crc32, running);
+        return -EBADMSG;
+    }
+}
+
+/* Open an already-sideloaded /NAND:/mcuboot.bin without truncating it, set up
+ * the state machine as if all chunks have been received, and trigger validation.
+ * Designed for USB-sideloaded binaries (copy mcuboot.bin to the NAND disk, then
+ * run this command instead of the full BLE upload sequence). */
+static int cmd_mcuboot_update_sideload(const struct shell *sh, size_t argc, char **argv)
+{
+    /* Auto-unlock if the state machine is still in its default LOCKED state */
+    if (s_status.state == MCUBOOT_UPDATER_LOCKED) {
+        int rc = mcuboot_updater_unlock();
+        if (rc) {
+            shell_error(sh, "Failed to unlock updater: %d", rc);
+            return rc;
+        }
+    }
+
+    if (s_status.state != MCUBOOT_UPDATER_IDLE) {
+        shell_error(sh, "Must be in IDLE state to sideload (current state: %d)", s_status.state);
+        return -EBUSY;
+    }
+
+    /* Open the existing file — no truncation, just read access */
+    fs_file_t_init(&s_staging_file);
+    int rc = fs_open(&s_staging_file, MCUBOOT_STAGING_PATH, FS_O_RDWR);
+    if (rc) {
+        shell_error(sh, "Failed to open %s: %d  (copy mcuboot.bin to NAND drive first)",
+                    MCUBOOT_STAGING_PATH, rc);
+        return rc;
+    }
+
+    /* Read header to learn payload size and verify the file is a valid package */
+    struct McubootPkgHeader hdr = {};
+    rc = fs_read(&s_staging_file, &hdr, sizeof(hdr));
+    if (rc != (int)sizeof(hdr)) {
+        fs_close(&s_staging_file);
+        shell_error(sh, "Header read failed: %d", rc);
+        return -EIO;
+    }
+
+    if (hdr.magic != kPkgMagic) {
+        fs_close(&s_staging_file);
+        shell_error(sh, "Bad magic: 0x%08x — not a valid mcuboot package (expected 0x%08x)",
+                    hdr.magic, kPkgMagic);
+        return -EINVAL;
+    }
+
+    if (hdr.payload_size == 0 || hdr.payload_size > PM_MCUBOOT_SIZE) {
+        fs_close(&s_staging_file);
+        shell_error(sh, "Implausible payload_size: %u (MCUboot partition is %u bytes)",
+                    hdr.payload_size, PM_MCUBOOT_SIZE);
+        return -EINVAL;
+    }
+
+    /* Commit the file handle and fake a completed receive so validate() accepts us */
+    s_staging_file_open = true;
+    k_mutex_lock(&s_mutex, K_FOREVER);
+    s_payload_size     = hdr.payload_size;
+    s_write_offset     = kHdrSize + hdr.payload_size; /* all data already present */
+    s_status.state     = MCUBOOT_UPDATER_RECEIVING;
+    s_status.progress  = 100;
+    s_status.error     = MCUBOOT_UPDATER_ERR_NONE;
+    k_mutex_unlock(&s_mutex);
+
+    shell_print(sh, "Found package: v%u.%u.%u  payload=%u bytes — starting validation...",
+                hdr.version_major, hdr.version_minor, hdr.version_revision, hdr.payload_size);
+
+    /* mcuboot_updater_validate() now sees RECEIVING + complete write_offset */
+    rc = mcuboot_updater_validate();
+    if (rc) {
+        shell_error(sh, "validate() rejected: %d", rc);
+        close_staging_file(true);
+        return rc;
+    }
+    return 0;
+}
+
+static int cmd_mcuboot_update_commit(const struct shell *sh, size_t argc, char **argv)
+{
+    int rc = mcuboot_updater_commit();
+    if (rc) {
+        shell_error(sh, "commit() rejected (must be VALIDATED first): %d", rc);
+        return rc;
+    }
+    shell_print(sh, "Flashing MCUboot — device will reboot automatically when done");
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(mcuboot_update_cmds,
-    SHELL_CMD(status,          NULL, "Print updater state",                  cmd_mcuboot_update_status),
-    SHELL_CMD(abort,           NULL, "Abort and lock",                       cmd_mcuboot_update_abort),
-    SHELL_CMD(request_reboot,  NULL, "Set UPDATER_REQ boot mode and reboot", cmd_mcuboot_update_request_reboot),
+    SHELL_CMD(status,          NULL, "Print updater state",                              cmd_mcuboot_update_status),
+    SHELL_CMD(abort,           NULL, "Abort and lock",                                   cmd_mcuboot_update_abort),
+    SHELL_CMD(request_reboot,  NULL, "Set UPDATER_REQ boot mode and reboot",             cmd_mcuboot_update_request_reboot),
+    SHELL_CMD(verify,          NULL, "Check /NAND:/mcuboot.bin header and CRC (no state change)", cmd_mcuboot_update_verify),
+    SHELL_CMD(sideload,        NULL, "Open existing /NAND:/mcuboot.bin and validate it", cmd_mcuboot_update_sideload),
+    SHELL_CMD(commit,          NULL, "Flash validated package and reboot (irreversible)", cmd_mcuboot_update_commit),
     SHELL_SUBCMD_SET_END
 );
 SHELL_CMD_REGISTER(mcuboot_update, &mcuboot_update_cmds,

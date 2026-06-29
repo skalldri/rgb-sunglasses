@@ -46,7 +46,7 @@ void GlimPlayerAnimation::openCurrentFile(size_t index) {
     if (!glim_registry::full_path(index, path, sizeof(path))) {
         LOG_ERR("No GLIM file at registry index %zu", index);
         decoder_.close();
-        openIndex_ = kInvalidIndex;
+        openIndex_ = index;  // suppress retry until selection changes
         inErrorState_ = true;
         return;
     }
@@ -54,7 +54,7 @@ void GlimPlayerAnimation::openCurrentFile(size_t index) {
     int rc = decoder_.open(path);
     if (rc < 0) {
         LOG_ERR("Failed to open %s: %d", path, rc);
-        openIndex_ = kInvalidIndex;
+        openIndex_ = index;  // suppress retry until selection changes
         inErrorState_ = true;
         return;
     }
