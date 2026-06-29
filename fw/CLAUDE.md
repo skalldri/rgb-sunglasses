@@ -276,8 +276,16 @@ geometry/frame-count/pixel-format (mono `Raw` or `Rgb24`) from each file's own h
 rather than hardcoding anything, so trying new footage is just a matter of dropping a
 new `.glim` file into `/NAND:/glim/` and resetting — no firmware rebuild needed; see
 `tools/convert_video_to_glim.py` / `tools/convert_bad_apple.py` / `tools/convert_gif_to_glim.py`
-to generate one. The original Nyan Cat asset is preserved at the git-tracked
-`fw/nyan_cat.glim` — copy it into `/NAND:/glim/` (then reset) to make it selectable again.
+to generate one.
+
+**Setting up GLIM files on a new board:** All GLIM assets are generated using in-repo Python scripts — nothing is checked in as a binary. Generate them before provisioning:
+
+```bash
+python3 fw/tools/generate_nyan_cat_glim.py --output fw/nyan_cat.glim
+python3 fw/tools/convert_bad_apple.py --output fw/bad_apple.glim   # downloads from YouTube, ~1 min
+```
+
+Then copy both into `/NAND:/glim/` on the board and reset. If the NAND disk on a new board is unformatted (FAT read errors in dmesg), it needs `mkfs.vfat -F 12 -s 8 -S 4096 /dev/sdX` before mounting — ask the user to run this as it is destructive.
 
 ### Useful shell commands
 

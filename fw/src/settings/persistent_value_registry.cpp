@@ -19,6 +19,7 @@ struct PersistentValueRegistryEntry {
     void *target;
     PersistentValueLoadFn load;
     PersistentValueSaveFn save;
+    bool dirty;
 };
 
 constexpr size_t kMaxRegistryEntries = 96;
@@ -59,6 +60,7 @@ int persistent_value_registry_register(const char *key, void *target, Persistent
         .target = target,
         .load = load,
         .save = save,
+        .dirty = false,
     };
     sRegistryCount++;
     return 0;
@@ -89,8 +91,19 @@ int persistent_value_registry_dispatch_load(const char *name, size_t len, settin
     return -ENOENT;
 }
 
+void persistent_value_registry_mark_dirty(const char *key) {
+    ssize_t i = findRegistryIndex(key);
+    if (i >= 0) {
+        sRegistry[i].dirty = true;
+    }
+}
+
 void persistent_value_registry_save_all() {
     for (size_t i = 0; i < sRegistryCount; i++) {
+        if (!sRegistry[i].dirty) {
+            continue;
+        }
+        sRegistry[i].dirty = false;
         sRegistry[i].save(sRegistry[i].target);
     }
 }
@@ -113,6 +126,8 @@ int persistent_value_registry_register(const char *, void *, PersistentValueLoad
 int persistent_value_registry_dispatch_load(const char *, size_t, settings_read_cb, void *) {
     return -ENOENT;
 }
+
+void persistent_value_registry_mark_dirty(const char *) {}
 
 void persistent_value_registry_save_all() {}
 

@@ -21,6 +21,12 @@
 		nordic,802154-spinel-ipc = &ipc0;
 		zephyr,ieee802154 = &ieee802154;
 		nordic,pm-ext-flash = &mx25r64;
+		/* Do NOT add zephyr,settings-partition here. NCS replaces flash_map_default.c with
+		 * flash_map_partition_manager.c (PM IDs, not DTS IDs). flash_map_pm.h redefines
+		 * FIXED_PARTITION_ID(storage_partition) → PM_SETTINGS_STORAGE_ID = 9, so
+		 * settings_nvs.c's fallback path already routes to the correct external flash region
+		 * at 0x12c000. Adding zephyr,settings-partition would switch to DT_FIXED_PARTITION_ID
+		 * which collides with PM IDs and opens the wrong partition. */
 	};
 
 	/*leds {
@@ -343,11 +349,39 @@ led_strip_spi_1: &spi4 {
 			#address-cells = <1>;
 			#size-cells = <1>;
 
-			/* 4 MB FAT partition — matches PM fat_storage region (0x12E000, 0x400000).
+			/* slot1_partition is teh  */
+			slot1_partition: partition@0 {
+				label = "image-1";
+				reg = <0x000000 0xEC000>;
+			};
+
+			/* slot2_partition is the net core's primary partition
+			 * for image 2. It is defined in the net_core_sim_flash.overlay
+			 * file, which is included in the net core build. It doesn't actually
+			 * exist in flash that is accessible to the app core. Instead, we
+			 * have a "virtual flash" driver that pretents to be flash, allowing
+			 * the mcumgr code on the app core to "read" the net core's TLVs
+			 */
+
+			slot3_partition: partition@ec000 {
+				label = "image-3";
+				reg = <0xEC000 0x40000>;
+			};
+
+			/* 32 KB NVS settings partition — matches PM settings_storage region (0x12c000, 0x8000).
+			 * Pointed to by zephyr,settings-partition in chosen so that settings_nvs.c
+			 * opens this partition (ID 9 on MX25R64) instead of falling back to the
+			 * internal flash storage_partition at 0xfa000 (ID 6, inside the app image). */
+			settings_storage_partition: partition@12c000 {
+				label = "settings-storage";
+				reg = <0x12c000 0x8000>;
+			};
+
+			/* 4 MB FAT partition — matches PM fat_storage region (0x134000, 0x3fa000).
 			 * Referenced by the msc_disk0 flash-disk node above. */
-			fat_partition: partition@12e000 {
+			fat_partition: partition@134000 {
 				label = "fat-disk";
-				reg = <0x12e000 0x400000>;
+				reg = <0x134000 0x3fa000>;
 			};
 		};
 	};
@@ -363,11 +397,14 @@ led_strip_spi_1: &spi4 {
 
 		boot_partition: partition@0 {
 			label = "mcuboot";
-			reg = <0x00000000 0x00030000>;
+			reg = <0x00000000 0x00014200>;
 		};
-		slot0_partition: partition@30000 {
+		/* These don't match what's in partition manager. Remove them for clarity */
+		slot0_partition: partition@14200 {
 			label = "image-0";
+			reg = <0x00014200 0x000EC000>;
 		};
+		/*
 		slot1_partition: partition@90000 {
 			label = "image-1";
 		};
@@ -378,7 +415,7 @@ led_strip_spi_1: &spi4 {
 		storage_partition: partition@fa000 {
 			label = "storage";
 			reg = <0x000fa000 0x00006000>;
-		};
+		};*/
 	};
 };
 

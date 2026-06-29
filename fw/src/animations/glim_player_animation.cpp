@@ -100,9 +100,10 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
         return;
     }
 
+    size_t count = glim_registry::count();
+
     if (buttonSource_) {
         buttonSource_->update();
-        size_t count = glim_registry::count();
         if (count > 0) {
             if (buttonSource_->wasPressed(kNextButtonId)) {
                 size_t next = (deps_->selectionSource.currentIndex() + 1) % count;
@@ -112,6 +113,12 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
                 deps_->selectionSource.setSelection(prev);
             }
         }
+    }
+
+    if (count == 0) {
+        inErrorState_ = true;
+        renderError(renderer, timeSinceLastTickMs);
+        return;
     }
 
     // Pick up any selection change, whether from the button press above or a BLE write.

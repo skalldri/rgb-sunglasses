@@ -43,7 +43,17 @@ int persistent_value_registry_register(const char *key, void *target, Persistent
 int persistent_value_registry_dispatch_load(const char *name, size_t len, settings_read_cb read_cb,
                                              void *cb_arg);
 
-/** @brief Calls every registered entry's save callback. */
+/**
+ * @brief Marks a registered entry as dirty so the next save_all() flushes it.
+ *
+ * Call this before request_save() when a value changes via a non-BLE path (e.g. a shell
+ * setter) or from a custom onWrite() that bypasses BtGattPersistentCharacteristic. Does
+ * nothing (and does not log) if the key is not found - safe to call speculatively.
+ */
+void persistent_value_registry_mark_dirty(const char *key);
+
+/** @brief Calls the save callback for every entry that has been marked dirty, then clears
+ *  the dirty flag. Entries that have not been marked dirty are skipped entirely. */
 void persistent_value_registry_save_all();
 
 /** @brief Test hook: clears the registry. */

@@ -91,9 +91,10 @@ float AudioConfig::getTargetLow() {
 void AudioConfig::setTargetLow(float value) {
     audioAgcTargetLow = std::clamp(value, 0.001f, 0.1f);
     // operator= does not invoke onWrite/persistence (see persistent_characteristic.h) -
-    // this is a non-BT-write mutation path (shell), so it must request the save itself,
-    // mirroring ConcreteGlimSelectionSource::setSelection() in glim_player_animation_bt.cpp.
+    // this is a non-BT-write mutation path (shell), so it must mark dirty and request the
+    // save itself, mirroring ConcreteGlimSelectionSource::setSelection().
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioAgcTargetLow.mark_dirty();
         persistent_value_store::request_save();
     }
 }
@@ -110,6 +111,7 @@ float AudioConfig::getTargetHigh() {
 void AudioConfig::setTargetHigh(float value) {
     audioAgcTargetHigh = std::clamp(value, 0.001f, 0.2f);
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioAgcTargetHigh.mark_dirty();
         persistent_value_store::request_save();
     }
 }
@@ -126,6 +128,7 @@ uint32_t AudioConfig::getRateLimitFrames() {
 void AudioConfig::setRateLimitFrames(uint32_t value) {
     audioAgcRateLimitFrames = std::clamp<uint32_t>(value, 1, 100);
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioAgcRateLimitFrames.mark_dirty();
         persistent_value_store::request_save();
     }
 }
