@@ -64,6 +64,7 @@ ZTEST(persistent_value_store_tests, test_save_and_reload_round_trip) {
     FakeUint32Entry before{"test/round_trip", 1234};
     persistent_value_registry_register(before.key, &before, uint32_load, uint32_save);
 
+    persistent_value_registry_mark_dirty(before.key);
     persistent_value_store::request_save();
     k_sleep(K_MSEC(CONFIG_APP_SETTINGS_SAVE_DEBOUNCE_MS + 50));
 
@@ -87,10 +88,13 @@ ZTEST(persistent_value_store_tests, test_rapid_requests_coalesce_into_one_save) 
     persistent_value_registry_register(entry.key, &entry, uint32_load, uint32_save);
 
     entry.value = 1;
+    persistent_value_registry_mark_dirty(entry.key);
     persistent_value_store::request_save();
     entry.value = 2;
+    persistent_value_registry_mark_dirty(entry.key);
     persistent_value_store::request_save();
     entry.value = 3;
+    persistent_value_registry_mark_dirty(entry.key);
     persistent_value_store::request_save();
 
     k_sleep(K_MSEC(CONFIG_APP_SETTINGS_SAVE_DEBOUNCE_MS + 50));
@@ -106,6 +110,7 @@ ZTEST(persistent_value_store_tests, test_string_value_round_trip) {
     FakeStringEntry before{"test/string_round_trip", "hello"};
     persistent_value_registry_register(before.key, &before, string_load, string_save);
 
+    persistent_value_registry_mark_dirty(before.key);
     persistent_value_store::request_save();
     k_sleep(K_MSEC(CONFIG_APP_SETTINGS_SAVE_DEBOUNCE_MS + 50));
 
