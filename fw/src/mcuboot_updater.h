@@ -52,10 +52,16 @@ enum McubootUpdaterError {
     MCUBOOT_UPDATER_ERR_STAGING_READ      = 11,
 };
 
+/* Boot-mode values written to the gpregret2 retention register.
+ * Must match the #defines in fw/mcuboot_hooks/fprotect_hook.c. */
+#define MCUBOOT_UPDATER_BOOT_MODE_REQ    0xB1U  /* app → MCUboot: skip fprotect next boot */
+#define MCUBOOT_UPDATER_BOOT_MODE_ACTIVE 0xB2U  /* MCUboot → app: flash region is unlocked */
+
 struct McubootUpdaterStatus {
     enum McubootUpdaterState state;
-    uint8_t progress;  /* 0-100 */
+    uint8_t progress;        /* 0-100 */
     enum McubootUpdaterError error;
+    uint8_t flash_unlocked;  /* 1 if MCUboot skipped fprotect this boot, 0 otherwise */
 };
 
 typedef void (*mcuboot_updater_status_cb_t)(struct McubootUpdaterStatus status);
@@ -92,6 +98,15 @@ void mcuboot_updater_abort(void);
 
 /** Read the current status (safe to call from any thread). */
 struct McubootUpdaterStatus mcuboot_updater_get_status(void);
+
+/**
+ * Request an updater-mode reboot.
+ * Sets the gpregret2 boot-mode to MCUBOOT_UPDATER_BOOT_MODE_REQ then triggers
+ * a warm reboot after 200 ms (allowing the BLE ATT response to be sent first).
+ * After the reboot, MCUboot's fprotect_hook skips flash protection and sets
+ * BOOT_MODE_UPDATER_ACTIVE so the app can confirm the region is writable.
+ */
+int mcuboot_updater_request_updater_reboot(void);
 
 #ifdef __cplusplus
 }

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/retention/bootmode.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/crc.h>
@@ -41,9 +42,10 @@ static_assert(PM_MCUBOOT_SIZE % kPageSize == 0, "MCUboot size must be page-align
  * Module state
  * ============================================================================ */
 static struct McubootUpdaterStatus s_status = {
-    .state    = MCUBOOT_UPDATER_LOCKED,
-    .progress = 0,
-    .error    = MCUBOOT_UPDATER_ERR_NONE,
+    .state          = MCUBOOT_UPDATER_LOCKED,
+    .progress       = 0,
+    .error          = MCUBOOT_UPDATER_ERR_NONE,
+    .flash_unlocked = 0,
 };
 static mcuboot_updater_status_cb_t s_cb  = NULL;
 static uint32_t s_payload_size           = 0;
@@ -59,10 +61,11 @@ static const struct flash_area *s_staging_fa  = NULL;
  * Worker thread
  * ============================================================================ */
 K_THREAD_STACK_DEFINE(s_updater_stack, CONFIG_APP_MCUBOOT_UPDATER_STACK_SIZE);
-static struct k_work_q s_updater_wq;
-static struct k_work   s_erase_work;
-static struct k_work   s_validate_work;
-static struct k_work   s_commit_work;
+static struct k_work_q      s_updater_wq;
+static struct k_work        s_erase_work;
+static struct k_work        s_validate_work;
+static struct k_work        s_commit_work;
+static struct k_work_delayable s_reboot_work;
 
 static void fire_callback(void)
 {
@@ -83,6 +86,13 @@ static void set_error(enum McubootUpdaterError err)
 /* ============================================================================
  * Async work handlers
  * ============================================================================ */
+static void reboot_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    LOG_INF("Rebooting into updater mode now...");
+    sys_reboot(SYS_REBOOT_WARM);
+}
+
 static void erase_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
@@ -265,6 +275,14 @@ void mcuboot_updater_init(mcuboot_updater_status_cb_t cb)
         LOG_ERR("Failed to open mcuboot_staging flash area: %d", rc);
     }
 
+    /* Check whether MCUboot's fprotect_hook skipped protection this boot.
+     * BOOT_MODE_UPDATER_ACTIVE (0xB2) is written by the hook when it grants
+     * an updater-mode boot.  We deliberately do NOT clear it here — the hook
+     * needs to see 0xB2 (not 0xB1) on the post-commit reboot so it knows to
+     * apply fprotect again and restore normal protection. */
+    int bm = bootmode_check(MCUBOOT_UPDATER_BOOT_MODE_ACTIVE);
+    s_status.flash_unlocked = (bm == 1) ? 1U : 0U;
+
     k_work_queue_init(&s_updater_wq);
     k_work_queue_start(&s_updater_wq, s_updater_stack,
                        K_THREAD_STACK_SIZEOF(s_updater_stack),
@@ -272,8 +290,10 @@ void mcuboot_updater_init(mcuboot_updater_status_cb_t cb)
     k_work_init(&s_erase_work,    erase_work_handler);
     k_work_init(&s_validate_work, validate_work_handler);
     k_work_init(&s_commit_work,   commit_work_handler);
+    k_work_init_delayable(&s_reboot_work, reboot_work_handler);
 
-    LOG_INF("MCUboot updater initialized (state: LOCKED)");
+    LOG_INF("MCUboot updater initialized (state: LOCKED, flash_unlocked=%d)",
+            s_status.flash_unlocked);
 }
 
 int mcuboot_updater_unlock(void)
@@ -455,6 +475,20 @@ struct McubootUpdaterStatus mcuboot_updater_get_status(void)
     return st;
 }
 
+int mcuboot_updater_request_updater_reboot(void)
+{
+    int rc = bootmode_set(MCUBOOT_UPDATER_BOOT_MODE_REQ);
+    if (rc) {
+        LOG_ERR("Failed to set updater boot mode: %d", rc);
+        return rc;
+    }
+    LOG_INF("Updater reboot requested; rebooting in 200 ms");
+    /* Delay gives the BLE ATT response time to be transmitted before the
+     * radio disappears with the reboot. */
+    k_work_schedule_for_queue(&s_updater_wq, &s_reboot_work, K_MSEC(200));
+    return 0;
+}
+
 /* ============================================================================
  * Shell commands (for development / testing)
  * ============================================================================ */
@@ -467,7 +501,8 @@ static int cmd_mcuboot_update_status(const struct shell *sh, size_t argc, char *
     };
     const char *state_str = (st.state < ARRAY_SIZE(state_names))
                             ? state_names[st.state] : "UNKNOWN";
-    shell_print(sh, "state=%s progress=%u error=%d", state_str, st.progress, st.error);
+    shell_print(sh, "state=%s progress=%u error=%d flash_unlocked=%u",
+                state_str, st.progress, st.error, st.flash_unlocked);
     return 0;
 }
 

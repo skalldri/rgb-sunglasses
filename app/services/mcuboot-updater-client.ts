@@ -16,7 +16,11 @@
  *     Raw binary package chunks, ≤244 bytes each
  *
  *   Status characteristic (read + notify):
- *     3 bytes: [state:u8, progress:u8, error:u8]
+ *     4 bytes: [state:u8, progress:u8, error:u8, flash_unlocked:u8]
+ *
+ *   0x06 — RequestUpdaterReboot: sets boot-mode=0xB1, device reboots in ~200 ms.
+ *     After reboot, MCUboot's fprotect_hook skips flash protection and sets
+ *     boot-mode=0xB2; the app reads flash_unlocked=1 to confirm.
  */
 
 import { Characteristic, Device, Subscription } from 'react-native-ble-plx';
@@ -45,8 +49,9 @@ export enum McubootUpdaterState {
 
 export interface McubootUpdaterStatus {
     state: McubootUpdaterState;
-    progress: number;  // 0-100
+    progress: number;       // 0-100
     errorCode: number;
+    flashUnlocked: boolean; // true if MCUboot skipped fprotect this boot (BOOT_MODE_UPDATER_ACTIVE was set)
 }
 
 export interface McubootPackageInfo {
@@ -70,11 +75,12 @@ export const MCUBOOT_PKG_HEADER_SIZE = 16;
 export const MCUBOOT_CHUNK_SIZE = 244;
 
 // Control command bytes (must match mcuboot_updater_service.cpp)
-const CMD_UNLOCK   = 0x05;
-const CMD_BEGIN    = 0x01;
-const CMD_VALIDATE = 0x02;
-const CMD_COMMIT   = 0x03;
-const CMD_ABORT    = 0x04;
+const CMD_UNLOCK                 = 0x05;
+const CMD_BEGIN                  = 0x01;
+const CMD_VALIDATE               = 0x02;
+const CMD_COMMIT                 = 0x03;
+const CMD_ABORT                  = 0x04;
+const CMD_REQUEST_UPDATER_REBOOT = 0x06;
 
 // ============================================================================
 // Package parsing
@@ -204,9 +210,10 @@ export class McubootUpdaterClient {
             if (bytes.length < 3) return;
 
             const status: McubootUpdaterStatus = {
-                state:     bytes[0] as McubootUpdaterState,
-                progress:  bytes[1],
-                errorCode: bytes[2],
+                state:         bytes[0] as McubootUpdaterState,
+                progress:      bytes[1],
+                errorCode:     bytes[2],
+                flashUnlocked: bytes.length >= 4 ? bytes[3] !== 0 : false,
             };
 
             this.statusHandler?.(status);
@@ -298,6 +305,18 @@ export class McubootUpdaterClient {
     /** Abort and return the updater to LOCKED state. */
     async abort(): Promise<void> {
         await this.writeControl(new Uint8Array([CMD_ABORT]));
+    }
+
+    /**
+     * Set boot-mode to UPDATER_REQ and reboot.
+     * The device will reboot in ~200 ms after the ATT write response is sent.
+     * After reboot, MCUboot's fprotect_hook skips flash protection and sets
+     * boot-mode=UPDATER_ACTIVE, which the app reads back as flashUnlocked=true.
+     * The BLE connection will drop when the device reboots — do NOT await a
+     * state change; the caller should handle the disconnect event instead.
+     */
+    async requestUpdaterReboot(): Promise<void> {
+        await this.writeControl(new Uint8Array([CMD_REQUEST_UPDATER_REBOOT]));
     }
 
     /** Unsubscribe from status notifications. Call on component unmount. */

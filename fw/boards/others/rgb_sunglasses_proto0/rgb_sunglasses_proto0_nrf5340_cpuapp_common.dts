@@ -484,5 +484,24 @@ zephyr_udc0: &usbd {
 	};
 };
 
+/* gpregret2 — one-byte retention register used as the BLE bootloader-updater
+ * boot-mode flag.  The hook in fw/mcuboot_hooks/fprotect_hook.c writes
+ * BOOT_MODE_UPDATER_ACTIVE (0xB2) here when it skips fprotect; the app
+ * reads it back via bootmode_check() to confirm the region is writable.
+ * gpregret1 is deliberately left free for generic NCS serial-recovery use. */
+&gpregret2 {
+	boot_mode_updater: boot_mode@0 {
+		compatible = "zephyr,retention";
+		status = "okay";
+		reg = <0x0 0x1>;
+	};
+};
+
+/ {
+	chosen {
+		zephyr,boot-mode = &boot_mode_updater;
+	};
+};
+
 /* Include partition configuration file */
 #include "rgb_sunglasses_proto0_nrf5340_cpuapp_partition_conf.dts"

@@ -82,6 +82,8 @@ export default function FirmwareUpdateModal() {
     const [blStatus, setBlStatus] = useState<McubootUpdaterState>(McubootUpdaterState.LOCKED);
     const [blProgress, setBlProgress] = useState(0);
     const [blError, setBlError] = useState<string>('');
+    const [blFlashUnlocked, setBlFlashUnlocked] = useState(false);
+    const [blRebooting, setBlRebooting] = useState(false);
 
     // Update context with client for cleanup on disconnect
     useEffect(() => {
@@ -103,6 +105,8 @@ export default function FirmwareUpdateModal() {
             setBlProgress(0);
             setBlError('');
             setBlPackage(null);
+            setBlFlashUnlocked(false);
+            setBlRebooting(false);
             return;
         }
 
@@ -113,6 +117,7 @@ export default function FirmwareUpdateModal() {
             updater.onStatusChanged(s => {
                 setBlStatus(s.state);
                 setBlProgress(s.progress);
+                setBlFlashUnlocked(s.flashUnlocked);
                 if (s.state === McubootUpdaterState.ERROR) {
                     setBlError(`Updater error (code ${s.errorCode})`);
                 }
@@ -366,6 +371,19 @@ export default function FirmwareUpdateModal() {
         } finally {
             setIsDownloading(false);
             setDownloadProgress(0);
+        }
+    }
+
+    async function handlePrepareDevice() {
+        const updater = blUpdaterRef.current;
+        if (!updater) return;
+
+        setBlError('');
+        try {
+            await updater.requestUpdaterReboot();
+            setBlRebooting(true);
+        } catch (e: any) {
+            setBlError(`Failed to prepare device: ${e.message}`);
         }
     }
 
@@ -760,7 +778,28 @@ export default function FirmwareUpdateModal() {
                     </ThemedText>
                 )}
 
-                {!isActive && !isDone && blPackage && (
+                {blRebooting && (
+                    <ThemedText type="caption" style={[styles.status, { color: c.warning }]}>
+                        Device is rebooting — please reconnect after ~15 seconds
+                    </ThemedText>
+                )}
+
+                {!blFlashUnlocked && !blRebooting && !isActive && !isDone && (
+                    <Card style={styles.cardSpacing}>
+                        <ThemedText type="caption" style={{ textAlign: 'center' }}>
+                            Flash is protected. Tap "Prepare Device" to reboot into updater mode (unlocks flash).
+                        </ThemedText>
+                        <AppButton
+                            title="Prepare Device"
+                            variant="secondary"
+                            style={{ marginTop: 8 }}
+                            onPress={handlePrepareDevice}
+                            disabled={!updater}
+                        />
+                    </Card>
+                )}
+
+                {blFlashUnlocked && !isActive && !isDone && blPackage && (
                     <Card style={styles.cardSpacing}>
                         <ThemedText style={styles.slotTitle}>
                             Package loaded
@@ -777,15 +816,21 @@ export default function FirmwareUpdateModal() {
                     </Card>
                 )}
 
+                {!isActive && !isDone && blFlashUnlocked && !blPackage && (
+                    <ThemedText type="caption" style={[styles.status, { color: c.success }]}>
+                        Flash is unlocked — select a package to flash
+                    </ThemedText>
+                )}
+
                 <View style={styles.buttonRow}>
                     <AppButton
                         title="Select .bin Package"
                         variant="secondary"
                         style={styles.rowButton}
                         onPress={handleSelectBootloaderPackage}
-                        disabled={isActive || !updater}
+                        disabled={isActive || !updater || !blFlashUnlocked}
                     />
-                    {blPackage && (
+                    {blPackage && blFlashUnlocked && (
                         <AppButton
                             title="Flash Bootloader"
                             variant="danger"

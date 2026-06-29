@@ -21,7 +21,7 @@ LOG_MODULE_REGISTER(mcuboot_updater_svc, LOG_LEVEL_INF);
 static const struct bt_uuid_128 kServiceUuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 4, 0x56789abc0000));
 
-/* Status (R+Notify): 3 bytes {state:u8, progress:u8, error:u8} */
+/* Status (R+Notify): 4 bytes {state:u8, progress:u8, error:u8, flash_unlocked:u8} */
 static const struct bt_uuid_128 kStatusUuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 4, 0x56789abc0001));
 
@@ -40,12 +40,14 @@ static const struct bt_uuid_128 kControlUuid = BT_UUID_INIT_128(
  *   0x03                — Commit (irreversible — flashes and reboots)
  *   0x04                — Abort (returns to LOCKED)
  *   0x05                — Unlock (LOCKED → IDLE)
+ *   0x06                — RequestUpdaterReboot: sets boot-mode=0xB1, reboots in 200 ms
  */
-static constexpr uint8_t kCmdBegin    = 0x01;
-static constexpr uint8_t kCmdValidate = 0x02;
-static constexpr uint8_t kCmdCommit   = 0x03;
-static constexpr uint8_t kCmdAbort    = 0x04;
-static constexpr uint8_t kCmdUnlock   = 0x05;
+static constexpr uint8_t kCmdBegin                = 0x01;
+static constexpr uint8_t kCmdValidate             = 0x02;
+static constexpr uint8_t kCmdCommit               = 0x03;
+static constexpr uint8_t kCmdAbort                = 0x04;
+static constexpr uint8_t kCmdUnlock               = 0x05;
+static constexpr uint8_t kCmdRequestUpdaterReboot = 0x06;
 
 /* ============================================================================
  * Attribute callbacks
@@ -54,10 +56,11 @@ static ssize_t status_read_cb(struct bt_conn *conn, const struct bt_gatt_attr *a
                                void *buf, uint16_t len, uint16_t offset)
 {
     struct McubootUpdaterStatus st = mcuboot_updater_get_status();
-    uint8_t packed[3] = {
+    uint8_t packed[4] = {
         (uint8_t)st.state,
         st.progress,
         (uint8_t)st.error,
+        st.flash_unlocked,
     };
     return bt_gatt_attr_read(conn, attr, buf, len, offset, packed, sizeof(packed));
 }
@@ -138,6 +141,10 @@ static ssize_t control_write_cb(struct bt_conn *conn, const struct bt_gatt_attr 
         rc = 0;
         break;
 
+    case kCmdRequestUpdaterReboot:
+        rc = mcuboot_updater_request_updater_reboot();
+        break;
+
     default:
         return BT_GATT_ERR(BT_ATT_ERR_NOT_SUPPORTED);
     }
@@ -186,10 +193,11 @@ BT_GATT_SERVICE_DEFINE(mcuboot_updater_svc,
  * ============================================================================ */
 static void status_notification_callback(struct McubootUpdaterStatus status)
 {
-    uint8_t packed[3] = {
+    uint8_t packed[4] = {
         (uint8_t)status.state,
         status.progress,
         (uint8_t)status.error,
+        status.flash_unlocked,
     };
     /* attrs[2] is the Status characteristic value — see index map above */
     int rc = bt_gatt_notify(NULL, &mcuboot_updater_svc.attrs[2], packed, sizeof(packed));
