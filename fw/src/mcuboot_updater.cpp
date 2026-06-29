@@ -513,9 +513,21 @@ static int cmd_mcuboot_update_abort(const struct shell *sh, size_t argc, char **
     return 0;
 }
 
+static int cmd_mcuboot_update_request_reboot(const struct shell *sh, size_t argc, char **argv)
+{
+    int rc = mcuboot_updater_request_updater_reboot();
+    if (rc) {
+        shell_error(sh, "Failed to request updater reboot: %d", rc);
+        return rc;
+    }
+    shell_print(sh, "Updater reboot requested — device will reboot in ~200 ms");
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(mcuboot_update_cmds,
-    SHELL_CMD(status, NULL, "Print updater state", cmd_mcuboot_update_status),
-    SHELL_CMD(abort,  NULL, "Abort and lock",      cmd_mcuboot_update_abort),
+    SHELL_CMD(status,          NULL, "Print updater state",                  cmd_mcuboot_update_status),
+    SHELL_CMD(abort,           NULL, "Abort and lock",                       cmd_mcuboot_update_abort),
+    SHELL_CMD(request_reboot,  NULL, "Set UPDATER_REQ boot mode and reboot", cmd_mcuboot_update_request_reboot),
     SHELL_SUBCMD_SET_END
 );
 SHELL_CMD_REGISTER(mcuboot_update, &mcuboot_update_cmds,
