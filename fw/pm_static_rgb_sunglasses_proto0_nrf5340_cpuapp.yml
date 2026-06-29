@@ -16,6 +16,7 @@
 #                                                      NVS expansion), now 0x134000 (16→32KB). Existing
 #                                                      FAT data is invalidated on any resize — reformat
 #                                                      with mkfs.vfat and re-copy GLIM files to /NAND:.
+#                                                      mcuboot.bin staging lives here too (see mcuboot_updater.cpp).
 #   external_flash      0x52E000 ~2.82 MB (0x2D2000) — remaining raw flash
 #
 # CONFIG_BOOT_MAX_IMG_SECTORS=256 is set in the mcuboot board conf to handle
@@ -92,15 +93,9 @@ fat_storage:
     disk_cache_size: 4096
     disk_sector_size: 4096
 
-mcuboot_staging:
-  address: 0x52e000
-  size: 0x18000         # 96 KB — staging area for BLE bootloader update binary
-  device: MX25R64       # comfortably covers the current ~67 KB MCUboot binary
-  region: external_flash
-
 external_flash:
-  address: 0x546000
-  size: 0x2ba000        # ~2.73 MB — remaining raw flash (was 0x2d2000 at 0x52e000)
+  address: 0x52e000
+  size: 0x2d2000        # ~2.82 MB — remaining raw flash
   device: MX25R64
   region: external_flash
 

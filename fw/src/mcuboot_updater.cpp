@@ -2,6 +2,7 @@
 
 #include <pm_config.h>
 #include <string.h>
+#include <zephyr/fs/fs.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/retention/bootmode.h>
@@ -27,6 +28,11 @@ static constexpr uint32_t kHdrSize    = 16U;
 static constexpr uint32_t kPageSize   = 4096U;
 static constexpr uint32_t kTotalPages = PM_MCUBOOT_SIZE / kPageSize;
 
+/* Staging file on the FAT filesystem (/NAND: over USB Mass Storage).
+ * The BLE upload path writes here directly. Users can also sideload a
+ * package by copying it to the USB drive as mcuboot.bin. */
+#define MCUBOOT_STAGING_PATH "/NAND:/mcuboot.bin"
+
 struct __attribute__((packed)) McubootPkgHeader {
     uint32_t magic;
     uint8_t  version_major;
@@ -49,13 +55,14 @@ static struct McubootUpdaterStatus s_status = {
 };
 static mcuboot_updater_status_cb_t s_cb  = NULL;
 static uint32_t s_payload_size           = 0;
-static uint32_t s_write_offset           = 0; /* bytes written to staging so far */
+static uint32_t s_write_offset           = 0; /* bytes written to staging file so far */
 static uint8_t  s_prev_progress          = 0;
 
 static K_MUTEX_DEFINE(s_mutex);
 
-static const struct flash_area *s_mcuboot_fa  = NULL;
-static const struct flash_area *s_staging_fa  = NULL;
+static const struct flash_area *s_mcuboot_fa  = NULL; /* internal MCUboot flash region */
+static struct fs_file_t s_staging_file;               /* FAT staging file handle */
+static bool s_staging_file_open = false;
 
 /* ============================================================================
  * Worker thread
@@ -83,6 +90,18 @@ static void set_error(enum McubootUpdaterError err)
     fire_callback();
 }
 
+/* Close the staging file and optionally delete it from the FAT filesystem. */
+static void close_staging_file(bool delete_file)
+{
+    if (s_staging_file_open) {
+        fs_close(&s_staging_file);
+        s_staging_file_open = false;
+    }
+    if (delete_file) {
+        fs_unlink(MCUBOOT_STAGING_PATH);
+    }
+}
+
 /* ============================================================================
  * Async work handlers
  * ============================================================================ */
@@ -97,13 +116,17 @@ static void erase_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
 
-    LOG_INF("Erasing staging partition (%u bytes)...", PM_MCUBOOT_STAGING_SIZE);
-    int rc = flash_area_erase(s_staging_fa, 0, PM_MCUBOOT_STAGING_SIZE);
+    /* "Erase" for FAT staging: open the file with truncation. Nearly instantaneous
+     * compared to erasing a flash partition — the ERASING state is very brief. */
+    fs_file_t_init(&s_staging_file);
+    int rc = fs_open(&s_staging_file, MCUBOOT_STAGING_PATH,
+                     FS_O_CREATE | FS_O_RDWR | FS_O_TRUNC);
     if (rc) {
-        LOG_ERR("Staging erase failed: %d", rc);
+        LOG_ERR("Failed to open staging file %s: %d", MCUBOOT_STAGING_PATH, rc);
         set_error(MCUBOOT_UPDATER_ERR_STAGING_ERASE);
         return;
     }
+    s_staging_file_open = true;
 
     k_mutex_lock(&s_mutex, K_FOREVER);
     s_status.state    = MCUBOOT_UPDATER_RECEIVING;
@@ -112,7 +135,7 @@ static void erase_work_handler(struct k_work *work)
     s_prev_progress   = 0;
     k_mutex_unlock(&s_mutex);
 
-    LOG_INF("Staging partition erased, ready to receive %u bytes", s_payload_size);
+    LOG_INF("Staging file opened, ready to receive %u bytes", s_payload_size);
     fire_callback();
 }
 
@@ -120,48 +143,59 @@ static void validate_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
 
-    /* Read and validate the package header from staging flash */
-    struct McubootPkgHeader hdr = {};
-    int rc = flash_area_read(s_staging_fa, 0, &hdr, sizeof(hdr));
+    int rc = fs_seek(&s_staging_file, 0, FS_SEEK_SET);
     if (rc) {
+        LOG_ERR("Failed to seek staging file: %d", rc);
+        close_staging_file(true);
+        set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
+        return;
+    }
+
+    struct McubootPkgHeader hdr = {};
+    rc = fs_read(&s_staging_file, &hdr, sizeof(hdr));
+    if (rc != (int)sizeof(hdr)) {
         LOG_ERR("Failed to read staging header: %d", rc);
+        close_staging_file(true);
         set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
         return;
     }
 
     if (hdr.magic != kPkgMagic) {
         LOG_ERR("Bad magic: 0x%08x (expected 0x%08x)", hdr.magic, kPkgMagic);
+        close_staging_file(true);
         set_error(MCUBOOT_UPDATER_ERR_INVALID_MAGIC);
         return;
     }
 
     if (hdr.payload_size != s_payload_size) {
         LOG_ERR("Header payload_size %u != expected %u", hdr.payload_size, s_payload_size);
+        close_staging_file(true);
         set_error(MCUBOOT_UPDATER_ERR_INVALID_SIZE);
         return;
     }
 
-    /* Incrementally compute CRC32 over the payload in 4 KB chunks */
+    /* Incrementally compute CRC32 over the payload — file is already positioned
+     * after the header from the read above. */
     static uint8_t crc_buf[kPageSize];
-    uint32_t running = 0;
+    uint32_t running   = 0;
     uint32_t remaining = hdr.payload_size;
-    off_t off = kHdrSize;
 
     while (remaining > 0) {
         uint32_t chunk = MIN(remaining, sizeof(crc_buf));
-        rc = flash_area_read(s_staging_fa, off, crc_buf, chunk);
-        if (rc) {
-            LOG_ERR("CRC read failed at offset %zu: %d", (size_t)off, rc);
+        rc = fs_read(&s_staging_file, crc_buf, chunk);
+        if (rc != (int)chunk) {
+            LOG_ERR("CRC read failed (got %d, expected %u)", rc, chunk);
+            close_staging_file(true);
             set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
             return;
         }
         running = crc32_ieee_update(running, crc_buf, chunk);
-        off       += chunk;
         remaining -= chunk;
     }
 
     if (running != hdr.crc32) {
         LOG_ERR("CRC32 mismatch: computed=0x%08x, header=0x%08x", running, hdr.crc32);
+        close_staging_file(true);
         set_error(MCUBOOT_UPDATER_ERR_CRC_MISMATCH);
         return;
     }
@@ -170,6 +204,7 @@ static void validate_work_handler(struct k_work *work)
             hdr.version_major, hdr.version_minor, hdr.version_revision,
             hdr.payload_size, hdr.crc32);
 
+    /* Leave file open — commit_work_handler will seek and read from it. */
     k_mutex_lock(&s_mutex, K_FOREVER);
     s_status.state    = MCUBOOT_UPDATER_VALIDATED;
     s_status.progress = 100;
@@ -194,11 +229,20 @@ static void commit_work_handler(struct k_work *work)
 
     for (uint32_t p = 1; p < kTotalPages; p++) {
         off_t internal_off = (off_t)(p * kPageSize);
-        off_t staging_off  = (off_t)(kHdrSize + p * kPageSize);
+        off_t file_off     = (off_t)(kHdrSize + p * kPageSize);
 
-        int rc = flash_area_read(s_staging_fa, staging_off, page_buf, kPageSize);
+        int rc = fs_seek(&s_staging_file, file_off, FS_SEEK_SET);
         if (rc) {
-            LOG_ERR("Staging read failed at page %u: %d", p, rc);
+            LOG_ERR("Seek failed for page %u: %d", p, rc);
+            close_staging_file(false);
+            set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
+            return;
+        }
+
+        rc = fs_read(&s_staging_file, page_buf, kPageSize);
+        if (rc != (int)kPageSize) {
+            LOG_ERR("Read failed for page %u: got %d", p, rc);
+            close_staging_file(false);
             set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
             return;
         }
@@ -206,6 +250,7 @@ static void commit_work_handler(struct k_work *work)
         rc = flash_area_erase(s_mcuboot_fa, internal_off, kPageSize);
         if (rc) {
             LOG_ERR("Internal flash erase failed at page %u: %d", p, rc);
+            close_staging_file(false);
             set_error(MCUBOOT_UPDATER_ERR_INTERNAL_ERASE);
             return;
         }
@@ -213,6 +258,7 @@ static void commit_work_handler(struct k_work *work)
         rc = flash_area_write(s_mcuboot_fa, internal_off, page_buf, kPageSize);
         if (rc) {
             LOG_ERR("Internal flash write failed at page %u: %d", p, rc);
+            close_staging_file(false);
             set_error(MCUBOOT_UPDATER_ERR_INTERNAL_WRITE);
             return;
         }
@@ -226,9 +272,19 @@ static void commit_work_handler(struct k_work *work)
 
     /* Page 0 — point of no return. Power loss here requires J-Link recovery. */
     LOG_INF("Writing page 0 (reset vector) — point of no return");
-    int rc = flash_area_read(s_staging_fa, (off_t)kHdrSize, page_buf, kPageSize);
+
+    int rc = fs_seek(&s_staging_file, (off_t)kHdrSize, FS_SEEK_SET);
     if (rc) {
-        LOG_ERR("Staging read failed for page 0: %d", rc);
+        LOG_ERR("Seek failed for page 0: %d", rc);
+        close_staging_file(false);
+        set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
+        return;
+    }
+
+    rc = fs_read(&s_staging_file, page_buf, kPageSize);
+    if (rc != (int)kPageSize) {
+        LOG_ERR("Read failed for page 0: got %d", rc);
+        close_staging_file(false);
         set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
         return;
     }
@@ -236,6 +292,7 @@ static void commit_work_handler(struct k_work *work)
     rc = flash_area_erase(s_mcuboot_fa, 0, kPageSize);
     if (rc) {
         LOG_ERR("Internal flash erase failed for page 0: %d", rc);
+        close_staging_file(false);
         set_error(MCUBOOT_UPDATER_ERR_INTERNAL_ERASE);
         return;
     }
@@ -243,9 +300,13 @@ static void commit_work_handler(struct k_work *work)
     rc = flash_area_write(s_mcuboot_fa, 0, page_buf, kPageSize);
     if (rc) {
         LOG_ERR("Internal flash write failed for page 0: %d", rc);
+        close_staging_file(false);
         set_error(MCUBOOT_UPDATER_ERR_INTERNAL_WRITE);
         return;
     }
+
+    /* File has been fully consumed — delete it to free FAT space. */
+    close_staging_file(true);
 
     k_mutex_lock(&s_mutex, K_FOREVER);
     s_status.state    = MCUBOOT_UPDATER_DONE;
@@ -270,10 +331,7 @@ void mcuboot_updater_init(mcuboot_updater_status_cb_t cb)
         LOG_ERR("Failed to open mcuboot flash area: %d", rc);
     }
 
-    rc = flash_area_open(FIXED_PARTITION_ID(mcuboot_staging), &s_staging_fa);
-    if (rc) {
-        LOG_ERR("Failed to open mcuboot_staging flash area: %d", rc);
-    }
+    fs_file_t_init(&s_staging_file);
 
     /* Check whether MCUboot's fprotect_hook skipped protection this boot.
      * BOOT_MODE_UPDATER_ACTIVE (0xB2) is written by the hook when it grants
@@ -292,8 +350,8 @@ void mcuboot_updater_init(mcuboot_updater_status_cb_t cb)
     k_work_init(&s_commit_work,   commit_work_handler);
     k_work_init_delayable(&s_reboot_work, reboot_work_handler);
 
-    LOG_INF("MCUboot updater initialized (state: LOCKED, flash_unlocked=%d)",
-            s_status.flash_unlocked);
+    LOG_INF("MCUboot updater initialized (state: LOCKED, flash_unlocked=%d, staging: %s)",
+            s_status.flash_unlocked, MCUBOOT_STAGING_PATH);
 }
 
 int mcuboot_updater_unlock(void)
@@ -322,17 +380,10 @@ int mcuboot_updater_begin(uint32_t payload_size)
         return -EBUSY;
     }
 
-    if (payload_size > (PM_MCUBOOT_STAGING_SIZE - kHdrSize)) {
-        k_mutex_unlock(&s_mutex);
-        LOG_ERR("payload_size %u exceeds staging capacity %u", payload_size,
-                PM_MCUBOOT_STAGING_SIZE - kHdrSize);
-        return -EINVAL;
-    }
-
     if (payload_size > PM_MCUBOOT_SIZE) {
         k_mutex_unlock(&s_mutex);
-        LOG_ERR("payload_size %u exceeds MCUboot partition size %u", payload_size,
-                PM_MCUBOOT_SIZE);
+        LOG_ERR("payload_size %u exceeds MCUboot partition size %u",
+                payload_size, PM_MCUBOOT_SIZE);
         return -EINVAL;
     }
 
@@ -342,7 +393,7 @@ int mcuboot_updater_begin(uint32_t payload_size)
     s_status.error    = MCUBOOT_UPDATER_ERR_NONE;
     k_mutex_unlock(&s_mutex);
 
-    LOG_INF("Beginning upload of %u bytes, erasing staging partition...", payload_size);
+    LOG_INF("Beginning upload of %u bytes, opening staging file...", payload_size);
     fire_callback();
     k_work_submit_to_queue(&s_updater_wq, &s_erase_work);
     return 0;
@@ -364,32 +415,18 @@ int mcuboot_updater_write_chunk(const uint8_t *data, uint16_t len)
         return -EOVERFLOW;
     }
 
-    /*
-     * Pad final chunk to 4-byte boundary for QSPI write alignment.
-     * The CRC check uses header.payload_size bytes, not the padded amount,
-     * so 0xFF padding bytes at the end are harmless.
-     */
-    uint16_t padded_len = len;
-    static uint8_t pad_buf[244 + 3]; /* max chunk + up to 3 pad bytes */
-    if (len % 4 != 0) {
-        memcpy(pad_buf, data, len);
-        while (padded_len % 4 != 0) {
-            pad_buf[padded_len++] = 0xFF;
-        }
-        data = pad_buf;
-    }
-
-    int rc = flash_area_write(s_staging_fa, (off_t)s_write_offset, data, padded_len);
-    if (rc) {
+    /* FAT writes need no alignment padding (unlike raw QSPI NOR). */
+    int rc = fs_write(&s_staging_file, data, len);
+    if (rc < 0 || (uint16_t)rc != len) {
         s_status.state = MCUBOOT_UPDATER_ERROR;
         s_status.error = MCUBOOT_UPDATER_ERR_STAGING_WRITE;
         k_mutex_unlock(&s_mutex);
         LOG_ERR("Staging write failed at offset %u: %d", s_write_offset, rc);
         fire_callback();
-        return rc;
+        return (rc < 0) ? rc : -EIO;
     }
 
-    s_write_offset += len; /* advance by unpadded length */
+    s_write_offset += len;
 
     uint32_t total = kHdrSize + s_payload_size;
     uint8_t  prog  = (uint8_t)((s_write_offset * 100U) / total);
@@ -455,6 +492,8 @@ int mcuboot_updater_commit(void)
 
 void mcuboot_updater_abort(void)
 {
+    close_staging_file(true);
+
     k_mutex_lock(&s_mutex, K_FOREVER);
     s_status.state    = MCUBOOT_UPDATER_LOCKED;
     s_status.progress = 0;

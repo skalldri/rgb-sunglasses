@@ -72,7 +72,7 @@ void mcuboot_updater_init(mcuboot_updater_status_cb_t cb);
 /** Unlock the state machine (LOCKED → IDLE). */
 int mcuboot_updater_unlock(void);
 
-/** Begin an upload: validates size and queues an async erase of the staging partition. */
+/** Begin an upload: validates size and queues an async open of the FAT staging file. */
 int mcuboot_updater_begin(uint32_t payload_size);
 
 /**
