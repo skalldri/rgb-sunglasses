@@ -132,10 +132,10 @@ static void charger_status_thread_func(void *, void *, void *) {
             StatusColor            color  = StatusColor::Green;
             Bq25792ChargeStatus    status = static_cast<Bq25792ChargeStatus>(chg_stat);
 
-            /* No battery connected — override everything else with blinking red.
-             * 3000 mV threshold: a genuinely exhausted 2S pack still reads >7V;
-             * values this low mean the battery is absent or disconnected. */
-            if (vbat_ok && vbat_mv < 3000) {
+            /* Dead/absent battery — override everything else with blinking red.
+             * 6000 mV threshold: a healthy 2S pack reads >7V at rest; values
+             * below 6V indicate a dead or disconnected pack. */
+            if (vbat_ok && vbat_mv < 6000) {
                 indication = StatusIndication::Blinking;
                 color      = StatusColor::Red;
             } else {
