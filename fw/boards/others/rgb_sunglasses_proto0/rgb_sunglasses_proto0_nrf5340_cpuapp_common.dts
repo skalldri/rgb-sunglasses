@@ -349,7 +349,8 @@ led_strip_spi_1: &spi4 {
 			#address-cells = <1>;
 			#size-cells = <1>;
 
-			/* slot1_partition is teh  */
+			/* App core secondary (upgrade) slot — used by MCUboot for DFU staging.
+			 * Matches PM slot1_partition at 0x0, size 0xEC000. */
 			slot1_partition: partition@0 {
 				label = "image-1";
 				reg = <0x000000 0xEC000>;
@@ -359,7 +360,7 @@ led_strip_spi_1: &spi4 {
 			 * for image 2. It is defined in the net_core_sim_flash.overlay
 			 * file, which is included in the net core build. It doesn't actually
 			 * exist in flash that is accessible to the app core. Instead, we
-			 * have a "virtual flash" driver that pretents to be flash, allowing
+			 * have a "virtual flash" driver that pretends to be flash, allowing
 			 * the mcumgr code on the app core to "read" the net core's TLVs
 			 */
 
@@ -368,14 +369,12 @@ led_strip_spi_1: &spi4 {
 				reg = <0xEC000 0x40000>;
 			};
 
-			/* 32 KB NVS settings partition — matches PM settings_storage region (0x12c000, 0x8000).
-			 * Pointed to by zephyr,settings-partition in chosen so that settings_nvs.c
-			 * opens this partition (ID 9 on MX25R64) instead of falling back to the
-			 * internal flash storage_partition at 0xfa000 (ID 6, inside the app image). */
-			settings_storage_partition: partition@12c000 {
-				label = "settings-storage";
-				reg = <0x12c000 0x8000>;
-			};
+			/* NVS settings at 0x12c000 (PM settings_storage, 32 KB) are NOT mapped here.
+			 * NCS replaces Zephyr's flash_map_default.c with flash_map_partition_manager.c,
+			 * so FIXED_PARTITION_ID(storage_partition) already resolves to PM_SETTINGS_STORAGE_ID=9
+			 * (the correct external-flash region). Adding a DTS node and pointing
+			 * zephyr,settings-partition at it would switch settings_nvs.c to DT_FIXED_PARTITION_ID,
+			 * which uses sequential DTS slot numbers that collide with PM IDs. */
 
 			/* 4 MB FAT partition — matches PM fat_storage region (0x134000, 0x3fa000).
 			 * Referenced by the msc_disk0 flash-disk node above. */
@@ -399,23 +398,15 @@ led_strip_spi_1: &spi4 {
 			label = "mcuboot";
 			reg = <0x00000000 0x00014200>;
 		};
-		/* These don't match what's in partition manager. Remove them for clarity */
+		/* The app core's primary slot (image-0) is at 0x14200, size 0xEC000.
+		 * This is the region that the app core boots from.
+		 * It resides in the NRF5340's internal flash, and is used by MCUboot to
+		 * store the main application image.
+		 */
 		slot0_partition: partition@14200 {
 			label = "image-0";
 			reg = <0x00014200 0x000EC000>;
 		};
-		/*
-		slot1_partition: partition@90000 {
-			label = "image-1";
-		};
-		scratch_partition: partition@f0000 {
-			label = "image-scratch";
-			reg = <0x000f0000 0xa000>;
-		};
-		storage_partition: partition@fa000 {
-			label = "storage";
-			reg = <0x000fa000 0x00006000>;
-		};*/
 	};
 };
 

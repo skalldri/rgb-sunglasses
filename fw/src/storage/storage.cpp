@@ -30,8 +30,6 @@ static int mount_fat(void) {
         LOG_INF("FAT mounted at %s", fat_mnt.mnt_point);
     }
     return rc;
-
-    return 0;
 }
 
 SYS_INIT(mount_fat, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
@@ -57,7 +55,10 @@ static int cmd_storage_reformat(const struct shell *sh, size_t argc, char **argv
     rc = fs_mkfs(FS_FATFS, (uintptr_t)kFatDiskId, NULL, 0);
     if (rc < 0) {
         shell_error(sh, "Format failed: %d", rc);
-        fs_mount(&fat_mnt);
+        int remount_rc = fs_mount(&fat_mnt);
+        if (remount_rc < 0) {
+            shell_error(sh, "Remount after failed format also failed: %d", remount_rc);
+        }
         return rc;
     }
 
