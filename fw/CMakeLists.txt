@@ -73,6 +73,10 @@ target_sources_ifdef(CONFIG_STATUS_LED app PRIVATE src/status_led/status_led.cpp
 
 target_sources_ifdef(CONFIG_NETCORE_VERSION_IPC app PRIVATE src/netcore_version.c)
 target_sources_ifdef(CONFIG_APP_MCUBOOT_INFO_SERVICE app PRIVATE src/mcuboot_info.cpp)
+target_sources_ifdef(CONFIG_APP_MCUBOOT_UPDATER app PRIVATE
+    src/mcuboot_updater.cpp
+    src/bluetooth/mcuboot_updater_service.cpp
+)
 
 target_include_directories(
   app 

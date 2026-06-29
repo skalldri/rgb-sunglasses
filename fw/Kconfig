@@ -134,6 +134,33 @@ config APP_MCUBOOT_INFO_SERVICE
 	  and doesn't get new features per fw/CLAUDE.md, and its internal-flash
 	  image slot has no spare room for the blinfo stack.
 
+config APP_MCUBOOT_UPDATER
+	bool "BLE MCUboot bootloader updater (proto0 escape hatch)"
+	default y if BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP
+	default n
+	depends on FLASH && FLASH_MAP && APP_MCUBOOT_INFO_SERVICE
+	help
+	  Custom BLE-based mechanism to update the MCUboot bootloader in-field.
+	  Receives the packaged binary over BLE, stores it in the external QSPI
+	  staging partition, validates the CRC32, then page-by-page rewrites
+	  internal flash 0x0-0x14000. Requires CONFIG_FPROTECT=n in the MCUboot
+	  sysbuild conf so the SPU does not lock that region before jumping to the
+	  app. Proto0 only — not offered on rgb_sunglasses_dk.
+
+config APP_MCUBOOT_UPDATER_STACK_SIZE
+	int "MCUboot updater worker thread stack size"
+	default 4096
+	depends on APP_MCUBOOT_UPDATER
+
+config APP_MCUBOOT_UPDATER_INIT_PRIORITY
+	int "MCUboot updater SYS_INIT priority"
+	default 90
+	depends on APP_MCUBOOT_UPDATER
+	help
+	  APPLICATION-phase init priority for the MCUboot updater. Must run
+	  after the flash subsystem (pre-APPLICATION). The default of 90 leaves
+	  room above CONFIG_MCUBOOT_INFO_INIT_PRIORITY (88).
+
 config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	int "Debounce interval (ms) before persisting a changed config value"
 	default 1000

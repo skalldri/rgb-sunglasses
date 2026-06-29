@@ -92,9 +92,15 @@ fat_storage:
     disk_cache_size: 4096
     disk_sector_size: 4096
 
-external_flash:
+mcuboot_staging:
   address: 0x52e000
-  size: 0x2d2000        # ~2.82 MB — remaining raw flash
+  size: 0x18000         # 96 KB — staging area for BLE bootloader update binary
+  device: MX25R64       # comfortably covers the current ~67 KB MCUboot binary
+  region: external_flash
+
+external_flash:
+  address: 0x546000
+  size: 0x2ba000        # ~2.73 MB — remaining raw flash (was 0x2d2000 at 0x52e000)
   device: MX25R64
   region: external_flash
 
