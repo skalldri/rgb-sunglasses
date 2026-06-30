@@ -1,28 +1,35 @@
+#include "imu.h"
+
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-
-#include "imu.h"
 
 LOG_MODULE_REGISTER(imu);
 
 K_MSGQ_DEFINE(imu_result_q, sizeof(struct imu_analysis_result), 4, 4);
 K_SEM_DEFINE(imu_drdy_sem, 0, 1);
 
-static const struct device *s_imu_dev;
+static const struct device* s_imu_dev;
 static uint32_t s_seq;
 
-static void drdy_handler(const struct device *dev, const struct sensor_trigger *trig) {
+static void drdy_handler(const struct device* dev, const struct sensor_trigger* trig) {
     ARG_UNUSED(dev);
     ARG_UNUSED(trig);
     k_sem_give(&imu_drdy_sem);
 }
 
-static void imu_thread_func(void *a, void *b, void *c) {
+static void imu_thread_func(void* a, void* b, void* c) {
     ARG_UNUSED(a);
     ARG_UNUSED(b);
     ARG_UNUSED(c);
+
+    struct sensor_value odr;
+    odr.val1 = 25;
+
+    // Start the accel and gyro at 25Hz
+    sensor_attr_set(s_imu_dev, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr);
+    sensor_attr_set(s_imu_dev, SENSOR_CHAN_GYRO_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr);
 
     while (true) {
         /* Block until the BMI270 data-ready interrupt fires. */
@@ -57,10 +64,10 @@ static void imu_thread_func(void *a, void *b, void *c) {
             .accel_x = sensor_value_to_float(&accel[0]),
             .accel_y = sensor_value_to_float(&accel[1]),
             .accel_z = sensor_value_to_float(&accel[2]),
-            .gyro_x  = sensor_value_to_float(&gyro[0]),
-            .gyro_y  = sensor_value_to_float(&gyro[1]),
-            .gyro_z  = sensor_value_to_float(&gyro[2]),
-            .seq     = s_seq++,
+            .gyro_x = sensor_value_to_float(&gyro[0]),
+            .gyro_y = sensor_value_to_float(&gyro[1]),
+            .gyro_z = sensor_value_to_float(&gyro[2]),
+            .seq = s_seq++,
         };
 
         /* Discard old frames if the queue is full — keep only the freshest. */
