@@ -1,4 +1,5 @@
 ---
+name: build-proto0
 description: Incrementally build the proto0 (rgb_sunglasses_proto0) firmware — the primary day-to-day build target
 allowed-tools: Bash, Read
 ---

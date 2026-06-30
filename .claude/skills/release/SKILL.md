@@ -1,4 +1,5 @@
 ---
+name: release
 description: Cut a versioned release of the firmware, the companion app, or both — bump version, tag, push, and attach curated release notes
 allowed-tools: Bash(git:*), Bash(gh:*), Read, Write, AskUserQuestion
 ---

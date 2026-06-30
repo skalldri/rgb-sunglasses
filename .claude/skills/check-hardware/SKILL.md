@@ -1,4 +1,5 @@
 ---
+name: check-hardware
 description: Check which development hardware is available (dev board, J-Link, Android device)
 allowed-tools: Bash(.devcontainer/scripts/check-hardware.sh)
 ---
