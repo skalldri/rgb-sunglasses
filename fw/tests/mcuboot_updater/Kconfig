@@ -1,0 +1,9 @@
+source "Kconfig.zephyr"
+
+config APP_MCUBOOT_UPDATER_STACK_SIZE
+	int "MCUboot updater worker thread stack size"
+	default 4096
+	help
+	  Stack size for the mcuboot updater work-queue thread.
+	  Mirrors the symbol in fw/Kconfig — this test compiles mcuboot_updater.cpp
+	  directly outside the main application's Kconfig tree.

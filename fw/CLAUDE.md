@@ -26,14 +26,33 @@ The firwmare is composed for 4 applications:
 - b0n: the netcore bootloader
 - ipc_radio: the netcore's main application
 
-## Build and Test Commands
+## Build directories — never mix boards in the same dir
+
+| Board | Build dir | When to use |
+|---|---|---|
+| `rgb_sunglasses_proto0` | `fw/build` | Day-to-day development (incremental) |
+| `rgb_sunglasses_dk` | `fw/build-dk` | Pre-PR validation only |
+
+Switching boards inside the same build dir forces a full pristine rebuild (minutes of wasted time). Always use the correct dir for each board.
+
+Use the project skills — `/build-proto0`, `/build-dk`, `/test-fw` — instead of raw `west build` commands. Use `/submit-pr` instead of manually pushing and creating PRs; it enforces both-board builds and coverage gates.
+
+**Before any `git push` or PR creation**, you must:
+1. Run `/build-proto0` — proto0 must compile clean
+2. Run `/build-dk` — DK must compile clean (no flash overflow)
+3. Run `/test-fw` — all tests must pass, patch coverage ≥ 50%
+
+## Build and Test Commands (raw — prefer the skills above)
 
 ```bash
 # First time build (pristine, setup build system, very slow! Only run if build folder is empty / nonexistent)
 west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
 
-# Full incremental build (preferred)
-west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw
+# Full incremental build of proto0 (preferred for daily dev)
+west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+
+# DK build (pre-PR validation)
+west build --build-dir /workspaces/rgb-sunglasses/fw/build-dk /workspaces/rgb-sunglasses/fw --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
 
 # Run all tests on native simulator
 twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim
@@ -296,7 +315,23 @@ bt connect              # (if shell BT commands are enabled)
 bt_conn_info             # print the *actual* current LE connection interval/latency/timeout
                          # (see bluetooth.cpp's le_param_updated callback for the issue #41
                          # connection-interval investigation this was added for)
+mcuboot_version         # read MCUboot version from retention registers (major.minor.rev+tweak)
+mcuboot_update verify   # read /NAND:/mcuboot.bin, print GRMB header fields, compute and compare CRC
+mcuboot_update sideload # open /NAND:/mcuboot.bin and validate it (no BLE upload needed)
+mcuboot_update commit   # flash validated package to internal MCUboot region and reboot
+mcuboot_update request_reboot  # set gpregret2=BOOT_MODE_REQ and reboot (MCUboot skips fprotect)
+fatfs reformat          # nuke and recreate the NAND FAT filesystem (all files erased)
 ```
+
+**`storage` is a reserved macro in NCS** — `nrf/include/flash_map_pm.h` defines `#define storage settings_storage` (conditionally). The `UTIL_CAT` macro used inside `SHELL_CMD_REGISTER` double-expands its arguments, so `SHELL_CMD_REGISTER(storage, ...)` silently registers a command named `settings_storage` instead of `storage`. Use `fatfs` (or any other token not in `flash_map_pm.h`) for shell commands related to the FAT disk.
+
+**MCUboot VERSION incremental build** — editing `fw/sysbuild/mcuboot/VERSION` alone does NOT trigger ninja to recompile. Force a rebuild of the version-stamped objects by deleting `fw/build/mcuboot/CMakeCache.txt` (forces cmake reconfigure) and then touching `fw/build/mcuboot/zephyr/include/generated/zephyr/app_version_override.h` (forces recompile of `boot_record.c.obj` and `banner.c.obj`).
+
+**Serial connection pool limit** — the MCP serial server defaults to 10 concurrent connections. After several J-Link flashes + reboots, ttyACM ports accumulate and connections are never GC'd. When you hit the limit, close all stale connections explicitly before opening the new port.
+
+**ttyACM port numbers shift after every reboot or J-Link flash** — the device re-enumerates and Linux assigns the next available minor numbers. After each reset: loop over `/sys/class/tty/ttyACM*`, create any missing `/dev/ttyACMN` nodes with `mknod`, then probe each new port with Ctrl+C to find the shell (look for `uart:~$`). Verify a stale node is actually current by comparing `cat /sys/class/tty/ttyACMN/dev` (major:minor) against `ls -la /dev/ttyACMN`.
+
+**TPS25750 log fires at ~10 ms after boot** — the USB PD controller always logs `tps25750: MODE is not PTCH (got APP) Cannot download patch!` around 10 ms uptime. If the first shell command sent after boot is read with `read_until("uart:~$")`, this log fires first, matches the redraw prompt, and swallows the command's actual output. Fix: flush the RX buffer and resend the command; the second call completes cleanly.
 
 ## USB Flash Disk (`/NAND:` — GLIM/animation assets)
 
@@ -331,6 +366,10 @@ or a physical reset — the firmware's own FAT mount has to be re-established be
 `bad_apple`/`nyan_cat` (or anything else that opens `/NAND:`) can see newly-copied
 files. Wait ~15s for `ttyACM*` to re-enumerate, then re-run `/check-hardware` before
 issuing more serial commands.
+
+**FAT concurrent access causes read corruption.** The firmware mounts the FAT volume at boot and caches cluster allocations. If you write a file over USB while the firmware still has the volume mounted, the firmware's in-memory FAT doesn't know about the new cluster chain — subsequent reads return stale data (wrong CRC, wrong file content). Always write via USB → sync → umount → **reboot the device** before reading the file from firmware. A warm reboot (`kernel reboot warm`) is sufficient; no J-Link needed. This also applies to `mcuboot.bin` staging.
+
+**Reformatting the NAND filesystem from the shell**: use `fatfs reformat` (requires the firmware to be built with `CONFIG_FILE_SYSTEM_MKFS=y`, which is already on for proto0). This is the correct fix for FAT corruption. After the reformat you must reboot the board and re-copy any files you need.
 
 ## Flashing via J-Link (fast path)
 

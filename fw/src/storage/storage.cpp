@@ -76,6 +76,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_storage,
     SHELL_CMD(reformat, NULL, "Reformat the NAND FAT filesystem (DESTRUCTIVE — erases all files)",
               cmd_storage_reformat),
     SHELL_SUBCMD_SET_END);
-SHELL_CMD_REGISTER(storage, &sub_storage, "Storage subsystem commands", NULL);
+/* "storage" is a reserved macro in nrf/include/flash_map_pm.h — use "fatfs" instead. */
+SHELL_CMD_REGISTER(fatfs, &sub_storage, "FAT filesystem management", NULL);
 
 #endif /* CONFIG_SHELL && CONFIG_FILE_SYSTEM_MKFS */

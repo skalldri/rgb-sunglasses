@@ -16,6 +16,7 @@
 #                                                      NVS expansion), now 0x134000 (16→32KB). Existing
 #                                                      FAT data is invalidated on any resize — reformat
 #                                                      with mkfs.vfat and re-copy GLIM files to /NAND:.
+#                                                      mcuboot.bin staging lives here too (see mcuboot_updater.cpp).
 #   external_flash      0x52E000 ~2.82 MB (0x2D2000) — remaining raw flash
 #
 # CONFIG_BOOT_MAX_IMG_SECTORS=256 is set in the mcuboot board conf to handle

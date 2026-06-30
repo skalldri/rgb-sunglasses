@@ -23,13 +23,20 @@ import {
     GitHubAsset,
     parseVersionFromTag,
 } from '@/services/github-releases';
+import {
+    McubootUpdaterClient,
+    McubootPackageInfo,
+    McubootUpdaterState,
+    MCUBOOT_CHUNK_SIZE,
+    parseMcubootPackage,
+} from '@/services/mcuboot-updater-client';
 import { formatBytes, formatHash, ImageSlot, SlotInfoResponse } from '@/services/mcumgr';
 import * as DocumentPicker from 'expo-document-picker';
 import * as LegacyFS from 'expo-file-system/legacy';
 import { File } from 'expo-file-system/next';
 import { Link } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from 'react-native';
 
 // ============================================================================
 // Component
@@ -69,6 +76,15 @@ export default function FirmwareUpdateModal() {
     const [isDownloading, setIsDownloading] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState<number>(0);
 
+    // Bootloader update
+    const blUpdaterRef = useRef<McubootUpdaterClient | null>(null);
+    const [blPackage, setBlPackage] = useState<McubootPackageInfo | null>(null);
+    const [blStatus, setBlStatus] = useState<McubootUpdaterState>(McubootUpdaterState.LOCKED);
+    const [blProgress, setBlProgress] = useState(0);
+    const [blError, setBlError] = useState<string>('');
+    const [blFlashUnlocked, setBlFlashUnlocked] = useState(false);
+    const [blRebooting, setBlRebooting] = useState(false);
+
     // Update context with client for cleanup on disconnect
     useEffect(() => {
         if (client && selectedDevice) {
@@ -78,6 +94,47 @@ export default function FirmwareUpdateModal() {
             });
         }
     }, [client, selectedDevice?.mac]); // Only update when client or device MAC changes
+
+    // Initialize (and tear down) the MCUboot updater BLE client alongside the MCUmgr client.
+    useEffect(() => {
+        const device = selectedDevice?.device ?? null;
+        if (!device) {
+            blUpdaterRef.current?.destroy();
+            blUpdaterRef.current = null;
+            setBlStatus(McubootUpdaterState.LOCKED);
+            setBlProgress(0);
+            setBlError('');
+            setBlPackage(null);
+            setBlFlashUnlocked(false);
+            setBlRebooting(false);
+            return;
+        }
+
+        const updater = new McubootUpdaterClient();
+        blUpdaterRef.current = updater;
+
+        updater.initialize(device).then(() => {
+            updater.onStatusChanged(s => {
+                setBlStatus(s.state);
+                setBlProgress(s.progress);
+                setBlFlashUnlocked(s.flashUnlocked);
+                // Any status notification means the device is alive — clear rebooting state.
+                setBlRebooting(false);
+                if (s.state === McubootUpdaterState.ERROR) {
+                    setBlError(`Updater error (code ${s.errorCode})`);
+                }
+            });
+        }).catch(err => {
+            // Service not present on this board variant — not an error worth surfacing prominently.
+            // Clear the ref so the bootloader section stays hidden for unsupported devices.
+            console.log('MCUboot updater service unavailable:', err?.message ?? err);
+            blUpdaterRef.current = null;
+        });
+
+        return () => {
+            updater.destroy();
+        };
+    }, [selectedDevice?.device]);
 
     const refreshImageState = useCallback(async () => {
         if (!client) return;
@@ -321,6 +378,126 @@ export default function FirmwareUpdateModal() {
         }
     }
 
+    async function handlePrepareDevice() {
+        const updater = blUpdaterRef.current;
+        if (!updater) return;
+
+        setBlError('');
+        try {
+            await updater.requestUpdaterReboot();
+            setBlRebooting(true);
+        } catch (e: any) {
+            setBlError(`Failed to prepare device: ${e.message}`);
+            setBlRebooting(false);
+        }
+    }
+
+    async function handleSelectBootloaderPackage() {
+        try {
+            setBlError('');
+            const result = await DocumentPicker.getDocumentAsync({
+                copyToCacheDirectory: true,
+            });
+            if (result.canceled || !result.assets?.[0]) return;
+
+            const file = result.assets[0];
+            const fileRef = new File(file.uri);
+            const base64Data = await fileRef.base64();
+
+            // Decode base64 → Uint8Array
+            const binary = atob(base64Data);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+            const pkg = parseMcubootPackage(bytes);
+            setBlPackage(pkg);
+        } catch (e: any) {
+            setBlError(`Failed to load package: ${e.message}`);
+        }
+    }
+
+    async function handleStartBootloaderUpdate() {
+        const updater = blUpdaterRef.current;
+        if (!updater || !blPackage) return;
+
+        // First confirmation: general risk warning
+        const confirmed1 = await new Promise<boolean>(resolve => {
+            Alert.alert(
+                'Update MCUboot Bootloader?',
+                'This will replace the MCUboot bootloader. Power loss during flashing may ' +
+                'require J-Link recovery. Only proceed if you understand the risk.',
+                [
+                    { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                    { text: 'Continue', onPress: () => resolve(true) },
+                ]
+            );
+        });
+        if (!confirmed1) return;
+
+        setBlError('');
+
+        try {
+            // Unlock the updater (LOCKED → IDLE)
+            await updater.unlock();
+
+            // Begin upload — this erases the staging partition (~2-3 s)
+            await updater.beginUpload(blPackage.payload.length);
+
+            // Stream the full package (header + payload) in chunks.
+            // The header is the first 16 bytes already embedded in blPackage.payload's
+            // parent array — rebuild the full package bytes here.
+            const header = new Uint8Array(16);
+            const hdrView = new DataView(header.buffer);
+            hdrView.setUint32(0, 0x424D5247, true);          // magic
+            header[4] = blPackage.major;
+            header[5] = blPackage.minor;
+            hdrView.setUint16(6, blPackage.revision, true);
+            hdrView.setUint32(8, blPackage.payloadSize, true);
+            hdrView.setUint32(12, blPackage.crc32, true);
+
+            const fullPackage = new Uint8Array(16 + blPackage.payload.length);
+            fullPackage.set(header, 0);
+            fullPackage.set(blPackage.payload, 16);
+
+            for (let offset = 0; offset < fullPackage.length; offset += MCUBOOT_CHUNK_SIZE) {
+                const chunk = fullPackage.slice(offset, offset + MCUBOOT_CHUNK_SIZE);
+                await updater.sendChunk(chunk);
+                // Progress 0-80% maps to transfer phase
+                setBlProgress(Math.round((offset / fullPackage.length) * 80));
+            }
+
+            // Validate — firmware computes CRC32 over the staged data
+            await updater.validate();
+            setBlProgress(90);
+
+            // Second confirmation: final irreversible step
+            const confirmed2 = await new Promise<boolean>(resolve => {
+                Alert.alert(
+                    'Flash Bootloader Now?',
+                    `Validation passed (v${blPackage.major}.${blPackage.minor}.${blPackage.revision}, ` +
+                    `${blPackage.payloadSize} bytes). Tap "Flash" to write and reboot. ` +
+                    'The device will be unreachable for ~15 seconds.',
+                    [
+                        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                        { text: 'Flash', style: 'destructive', onPress: () => resolve(true) },
+                    ]
+                );
+            });
+
+            if (!confirmed2) {
+                await updater.abort();
+                return;
+            }
+
+            // Commit — flashes internal flash and reboots (BLE link will drop)
+            await updater.commit();
+            setBlProgress(100);
+            setBlPackage(null);
+        } catch (e: any) {
+            setBlError(e.message ?? 'Bootloader update failed');
+        }
+    }
+
     function handleCancelPackage() {
         setFirmwarePackage(null);
         setStatus('');
@@ -555,6 +732,123 @@ export default function FirmwareUpdateModal() {
         );
     }
 
+    function renderBootloaderSection() {
+        const updater = blUpdaterRef.current;
+        const isActive = blStatus === McubootUpdaterState.ERASING   ||
+                         blStatus === McubootUpdaterState.RECEIVING  ||
+                         blStatus === McubootUpdaterState.VALIDATING ||
+                         blStatus === McubootUpdaterState.FLASHING;
+        const isDone   = blStatus === McubootUpdaterState.DONE;
+
+        const stateLabel: Record<McubootUpdaterState, string> = {
+            [McubootUpdaterState.LOCKED]:     'Locked',
+            [McubootUpdaterState.IDLE]:       'Ready',
+            [McubootUpdaterState.ERASING]:    'Erasing staging area…',
+            [McubootUpdaterState.RECEIVING]:  'Receiving binary…',
+            [McubootUpdaterState.VALIDATING]: 'Validating CRC32…',
+            [McubootUpdaterState.VALIDATED]:  'Validated',
+            [McubootUpdaterState.FLASHING]:   'Flashing internal flash…',
+            [McubootUpdaterState.DONE]:       'Done — device rebooting',
+            [McubootUpdaterState.ERROR]:      'Error',
+        };
+
+        return (
+            <>
+                <ThemedText type="overline" style={styles.sectionTitle}>
+                    Bootloader Update (Advanced)
+                </ThemedText>
+
+                <Card style={[styles.updateCard, { borderColor: c.warning, borderWidth: 1 }]}>
+                    <ThemedText type="caption" style={{ color: c.warning, textAlign: 'center' }}>
+                        ⚠ Power loss during flashing can require J-Link recovery
+                    </ThemedText>
+                </Card>
+
+                {blError ? (
+                    <ThemedText style={[styles.error, { color: c.danger }]}>{blError}</ThemedText>
+                ) : null}
+
+                {(isActive || isDone) && (
+                    <View style={styles.progressWrap}>
+                        <ThemedText type="caption" style={styles.status}>
+                            {stateLabel[blStatus]}
+                        </ThemedText>
+                        <ProgressBar progress={blProgress / 100} label={`${blProgress}%`} height={12} />
+                    </View>
+                )}
+
+                {isDone && (
+                    <ThemedText type="caption" style={[styles.status, { color: c.success }]}>
+                        Bootloader updated. Reconnect after ~15 seconds.
+                    </ThemedText>
+                )}
+
+                {blRebooting && (
+                    <ThemedText type="caption" style={[styles.status, { color: c.warning }]}>
+                        Device is rebooting — please reconnect after ~15 seconds
+                    </ThemedText>
+                )}
+
+                {!blFlashUnlocked && !blRebooting && !isActive && !isDone && (
+                    <Card style={styles.cardSpacing}>
+                        <ThemedText type="caption" style={{ textAlign: 'center' }}>
+                            Flash is protected. Tap "Prepare Device" to reboot into updater mode (unlocks flash).
+                        </ThemedText>
+                        <AppButton
+                            title="Prepare Device"
+                            variant="secondary"
+                            style={{ marginTop: 8 }}
+                            onPress={handlePrepareDevice}
+                            disabled={!updater}
+                        />
+                    </Card>
+                )}
+
+                {blFlashUnlocked && !isActive && !isDone && blPackage && (
+                    <Card style={styles.cardSpacing}>
+                        <ThemedText style={styles.slotTitle}>
+                            Package loaded
+                        </ThemedText>
+                        <ThemedText type="caption">
+                            Version: {blPackage.major}.{blPackage.minor}.{blPackage.revision}
+                        </ThemedText>
+                        <ThemedText type="caption">
+                            Size: {formatBytes(blPackage.payloadSize)}
+                        </ThemedText>
+                        <ThemedText type="caption">
+                            CRC32: 0x{blPackage.crc32.toString(16).padStart(8, '0')}
+                        </ThemedText>
+                    </Card>
+                )}
+
+                {!isActive && !isDone && blFlashUnlocked && !blPackage && (
+                    <ThemedText type="caption" style={[styles.status, { color: c.success }]}>
+                        Flash is unlocked — select a package to flash
+                    </ThemedText>
+                )}
+
+                <View style={styles.buttonRow}>
+                    <AppButton
+                        title="Select .bin Package"
+                        variant="secondary"
+                        style={styles.rowButton}
+                        onPress={handleSelectBootloaderPackage}
+                        disabled={isActive || !updater || !blFlashUnlocked}
+                    />
+                    {blPackage && blFlashUnlocked && (
+                        <AppButton
+                            title="Flash Bootloader"
+                            variant="danger"
+                            style={styles.rowButton}
+                            onPress={handleStartBootloaderUpdate}
+                            disabled={isActive || !updater}
+                        />
+                    )}
+                </View>
+            </>
+        );
+    }
+
     if (isInitializing) {
         return (
             <ThemedView style={styles.container}>
@@ -672,6 +966,8 @@ export default function FirmwareUpdateModal() {
                                 disabled={isUploading || !client}
                             />
                         </View>
+
+                        {blUpdaterRef.current && renderBootloaderSection()}
                     </>
                 )}
             </ScrollView>
