@@ -323,6 +323,13 @@ int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t 
 #define MATRIX_CODE_SHELL_SUBCMD
 #endif
 
+#if defined(CONFIG_ANIMATION_TILT)
+#define TILT_SHELL_SUBCMD \
+    , (tilt, 12, "Tilt animation (hue-shifted rainbow driven by accelerometer)")
+#else
+#define TILT_SHELL_SUBCMD
+#endif
+
 #if defined(CONFIG_SHELL)
 
 static int cmd_anim_set(const struct shell *shell, size_t argc, char **argv, void *data) {
@@ -386,6 +393,11 @@ static int cmd_anim_get(const struct shell *shell, size_t argc, char **argv) {
             name = "matrix_code";
             break;
 #endif
+#if defined(CONFIG_ANIMATION_TILT)
+        case Animation::Tilt:
+            name = "tilt";
+            break;
+#endif
         default:
             name = "unknown";
             break;
@@ -401,7 +413,8 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_anim_set, cmd_anim_set, (none, 0, "No animation
                              (beat, 8, "Beat animation (per-band flash on beat detection)"),
                              (fft_bars, 9, "FFT Bars animation (live frequency bar graph)")
                                  GLIM_PLAYER_SHELL_SUBCMD
-                                 MATRIX_CODE_SHELL_SUBCMD);
+                                 MATRIX_CODE_SHELL_SUBCMD
+                                 TILT_SHELL_SUBCMD);
 
 static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argc);
