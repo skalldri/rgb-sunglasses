@@ -14,4 +14,5 @@ enum class Animation {
     FftBars = 9,
     GlimPlayer = 10,
     MatrixCode = 11,
+    Tilt = 12,
 };

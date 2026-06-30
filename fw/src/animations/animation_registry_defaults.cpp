@@ -25,6 +25,10 @@
 #include <animations/matrix_code_animation.h>
 #endif
 
+#if defined(CONFIG_ANIMATION_TILT)
+#include <animations/tilt_animation.h>
+#endif
+
 namespace {
 class RegistryActiveStateObserver : public AnimationActiveStateObserver {
    public:
@@ -77,6 +81,10 @@ using GlimPlayerAnimationIsActive = AnimationIsActiveBinding<Animation::GlimPlay
 using MatrixCodeAnimationIsActive = AnimationIsActiveBinding<Animation::MatrixCode>;
 #endif
 
+#if defined(CONFIG_ANIMATION_TILT)
+using TiltAnimationIsActive = AnimationIsActiveBinding<Animation::Tilt>;
+#endif
+
 BaseAnimation *null_animation_factory() {
     return NullAnimation::getInstance();
 }
@@ -126,6 +134,12 @@ BaseAnimation *matrix_code_animation_factory() {
     return MatrixCodeAnimation::getInstance();
 }
 #endif
+
+#if defined(CONFIG_ANIMATION_TILT)
+BaseAnimation *tilt_animation_factory() {
+    return TiltAnimation::getInstance();
+}
+#endif
 }  // namespace
 
 int animation_registry_register_defaults() {
@@ -151,6 +165,9 @@ int animation_registry_register_defaults() {
 #endif
 #if defined(CONFIG_ANIMATION_MATRIX_CODE)
     AnimationIsActiveBinding<Animation::MatrixCode>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_TILT)
+    AnimationIsActiveBinding<Animation::Tilt>::registerActivator(&sActivator);
 #endif
 
     animation_registry_reset();
@@ -279,6 +296,22 @@ int animation_registry_register_defaults() {
     }
 
     matrix_code_animation_bind_default_dependencies();
+#endif
+
+#if defined(CONFIG_ANIMATION_TILT)
+    ret = animation_registry_register(Animation::Tilt, tilt_animation_factory);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::Tilt,
+                                                TiltAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    tilt_animation_bind_default_imu_dependencies();
+    tilt_animation_bind_default_bt_dependencies();
 #endif
 
     return 0;

@@ -83,6 +83,36 @@ config ANIMATION_MATRIX_CODE
 	  Green waterfall dot animation inspired by The Matrix. Tunable drop
 	  speed, fade time, column density, and color (default: phosphor green).
 
+config IMU
+	bool "Enable IMU subsystem (BMI270 accel/gyro pipeline)"
+	depends on BMI270
+	help
+	  Enables a dedicated thread that reads accel+gyro frames from the BMI270
+	  via the data-ready interrupt, then publishes them to a K_MSGQ so
+	  animations can consume the data without knowing about the driver.
+	  Proto0 only — the DK has no BMI270.
+
+config IMU_THREAD_PRIORITY
+	int "IMU thread priority"
+	default 7
+	depends on IMU
+	help
+	  Preemptive Zephyr priority for the IMU reader thread. Lower numbers run
+	  first. Must be positive (preemptive) so the animation tick thread
+	  (priority 6) can preempt it.
+
+config IMU_THREAD_STACK_SIZE
+	int "IMU thread stack size (bytes)"
+	default 1024
+	depends on IMU
+
+config ANIMATION_TILT
+	bool "Enable Tilt animation"
+	depends on IMU
+	help
+	  Maps lateral accelerometer tilt (accel_x) to a hue-shifted rainbow
+	  across the full display. Demonstrates the IMU animation pipeline.
+
 config APP_PERSIST_BT_CONFIG
 	bool "Persist BT-settable configuration via the Settings subsystem"
 	default y
