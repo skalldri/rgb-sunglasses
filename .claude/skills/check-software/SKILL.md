@@ -1,4 +1,5 @@
 ---
+name: check-software
 description: Check software authentication and tooling readiness (gh, etc.)
 allowed-tools: Bash(.devcontainer/scripts/check-software.sh)
 ---

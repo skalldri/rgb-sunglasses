@@ -1,4 +1,5 @@
 ---
+name: test-fw
 description: Run the firmware Twister test suite on native_sim and collect lcov code coverage
 allowed-tools: Bash, Read
 ---

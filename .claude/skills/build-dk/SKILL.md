@@ -1,4 +1,5 @@
 ---
+name: build-dk
 description: Build the DK (rgb_sunglasses_dk) firmware — kept in a separate build dir to avoid costly board-switch rebuilds
 allowed-tools: Bash, Read
 ---

@@ -1,4 +1,5 @@
 ---
+name: submit-pr
 description: Pre-PR validation gate for firmware — builds both boards, runs tests, checks patch coverage ≥ 50%, then creates the GitHub PR
 allowed-tools: Bash, Read, AskUserQuestion
 ---
