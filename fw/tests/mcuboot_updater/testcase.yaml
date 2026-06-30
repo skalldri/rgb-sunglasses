@@ -1,0 +1,8 @@
+tests:
+  mcuboot_updater.state_machine:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: mcuboot updater
+    filter: dt_label_with_parent_compat_enabled("mcuboot", "fixed-partitions")

@@ -1,0 +1,12 @@
+/*
+ * Add a settings_storage partition in native_sim's unused flash space (above
+ * the OS partitions that end at 0x100000) so that FIXED_PARTITION_ID(settings_storage)
+ * resolves the same way it does on hardware (via pm_static YAML).
+ */
+&flash0 {
+	partitions {
+		settings_storage: partition@100000 {
+			reg = <0x100000 0x8000>;
+		};
+	};
+};

@@ -601,3 +601,43 @@ ZTEST(glim_player_animation_di_io, test_setactive_false_closes_decoder) {
     zassert_false(anim->decoder_.isOpen(), "Decoder must be closed after setActive(false)");
     zassert_false(anim->inErrorState_, "inErrorState_ must be clear after setActive(false)");
 }
+
+/* A file with garbage content (wrong GLIM magic) causes decoder_.open() to fail.
+ * The fix: openCurrentFile() must set openIndex_ = index (not kInvalidIndex) on
+ * failure, so the animation does not retry on every tick until the selection changes. */
+ZTEST(glim_player_animation_di_io, test_corrupt_file_sets_openindex_to_suppress_retry) {
+    reset_nand();
+
+    // Write a file whose content is all-zeros — wrong GLIM magic, decoder.open() rejects it.
+    char path[64];
+    snprintf(path, sizeof(path), "%s/corrupt.glim", glim_registry::kDirectory);
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC),
+               "setup: create corrupt.glim");
+    uint8_t zeros[32] = {};
+    fs_write(&f, zeros, sizeof(zeros));
+    fs_close(&f);
+
+    glim_registry::init();
+    size_t idx = indexOfName("corrupt.glim");
+    zassert_not_equal(idx, SIZE_MAX, "corrupt.glim must be in registry");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    anim->tick(renderer, 10);
+
+    zassert_true(anim->inErrorState_, "Corrupt file must enter error state");
+    // Key assertion: openIndex_ must equal the *requested* index (not kInvalidIndex).
+    // If it were kInvalidIndex, every tick would call openCurrentFile() again (spam fix).
+    zassert_equal(anim->openIndex_, idx,
+                  "openIndex_ must match the requested index to suppress per-frame retries");
+
+    anim->setActive(false);
+}

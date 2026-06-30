@@ -1,0 +1,8 @@
+tests:
+  storage.appcfg_erase:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: storage settings
+    filter: dt_label_with_parent_compat_enabled("settings_storage", "fixed-partitions")

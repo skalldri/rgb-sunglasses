@@ -1,0 +1,23 @@
+/*
+ * FAT ramdisk for /NAND:/mcuboot.bin staging path, and a 'mcuboot' flash
+ * partition so that FIXED_PARTITION_ID(mcuboot) resolves via DT on native_sim
+ * (USE_PARTITION_MANAGER=0). Both are placed above the standard native_sim
+ * partitions which end at 0x100000.
+ */
+/ {
+	nand_ramdisk: ramdisk0 {
+		compatible = "zephyr,ram-disk";
+		disk-name = "NAND";
+		sector-size = <512>;
+		sector-count = <512>;   /* 256 KB — enough for test packages */
+	};
+};
+
+&flash0 {
+	partitions {
+		/* 80 KB at 0x110000 — matches PM_MCUBOOT_SIZE in include/pm_config.h */
+		mcuboot: partition@110000 {
+			reg = <0x110000 0x14000>;
+		};
+	};
+};
