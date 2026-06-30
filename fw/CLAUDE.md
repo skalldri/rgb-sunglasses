@@ -26,14 +26,33 @@ The firwmare is composed for 4 applications:
 - b0n: the netcore bootloader
 - ipc_radio: the netcore's main application
 
-## Build and Test Commands
+## Build directories — never mix boards in the same dir
+
+| Board | Build dir | When to use |
+|---|---|---|
+| `rgb_sunglasses_proto0` | `fw/build` | Day-to-day development (incremental) |
+| `rgb_sunglasses_dk` | `fw/build-dk` | Pre-PR validation only |
+
+Switching boards inside the same build dir forces a full pristine rebuild (minutes of wasted time). Always use the correct dir for each board.
+
+Use the project skills — `/build-proto0`, `/build-dk`, `/test-fw` — instead of raw `west build` commands. Use `/submit-pr` instead of manually pushing and creating PRs; it enforces both-board builds and coverage gates.
+
+**Before any `git push` or PR creation**, you must:
+1. Run `/build-proto0` — proto0 must compile clean
+2. Run `/build-dk` — DK must compile clean (no flash overflow)
+3. Run `/test-fw` — all tests must pass, patch coverage ≥ 50%
+
+## Build and Test Commands (raw — prefer the skills above)
 
 ```bash
 # First time build (pristine, setup build system, very slow! Only run if build folder is empty / nonexistent)
 west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
 
-# Full incremental build (preferred)
-west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw
+# Full incremental build of proto0 (preferred for daily dev)
+west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+
+# DK build (pre-PR validation)
+west build --build-dir /workspaces/rgb-sunglasses/fw/build-dk /workspaces/rgb-sunglasses/fw --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
 
 # Run all tests on native simulator
 twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim
