@@ -52,4 +52,4 @@ Before working on any subsystem, **read its CLAUDE.md first** — those files ar
 | `fw/`               | Zephyr RTOS firmware (nRF5340). See `fw/CLAUDE.md` for build/test commands.              |
 | `app/`              | React Native companion app (Expo). See `app/CLAUDE.md` for architecture and agent notes. |
 | `.devcontainer/`    | Devcontainer definition and setup scripts.                                               |
-| `.claude/commands/` | Project slash commands (skills).                                                         |
+| `claude/skills/`    | Project skills (slash commands).                                                         |

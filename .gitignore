@@ -4,6 +4,8 @@
 
 # build
 build*/
+!.claude/skills/build*/
+!.claude/skills/build*/**
 
 # Test output
 twister-out*/
