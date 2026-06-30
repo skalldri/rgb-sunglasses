@@ -90,13 +90,14 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="Package a raw MCUboot zephyr.bin with a 16-byte validation header."
     )
-    ap.add_argument("--input",    required=True,  help="Path to mcuboot/zephyr/zephyr.bin")
-    ap.add_argument("--output",   required=True,  help="Output .bin path")
-    ap.add_argument("--major",    required=True,  type=int, help="Version major")
-    ap.add_argument("--minor",    required=True,  type=int, help="Version minor")
-    ap.add_argument("--revision", required=True,  type=int, help="Version revision/patch")
+    ap.add_argument("--input",    required=True,  help="Path to input .bin")
+    ap.add_argument("--output",   required=False, help="Output .bin path (create mode only)")
+    ap.add_argument("--major",    required=False, type=int, help="Version major (create mode only)")
+    ap.add_argument("--minor",    required=False, type=int, help="Version minor (create mode only)")
+    ap.add_argument("--revision", required=False, type=int, help="Version revision/patch (create mode only)")
     ap.add_argument("--verify",   action="store_true",
-                    help="Verify an existing package instead of creating one")
+                    help="Verify an existing package instead of creating one "
+                         "(only --input is required in this mode)")
     args = ap.parse_args()
 
     if args.verify:
@@ -107,6 +108,11 @@ def main() -> None:
         print(f"  Payload size: {info['payload_size']} bytes")
         print(f"  CRC32:        0x{info['crc32']:08X}")
         return
+
+    missing = [f"--{f}" for f in ("output", "major", "minor", "revision")
+               if getattr(args, f) is None]
+    if missing:
+        ap.error(f"create mode requires: {', '.join(missing)}")
 
     payload = Path(args.input).read_bytes()
     header  = pack_header(args.major, args.minor, args.revision, payload)

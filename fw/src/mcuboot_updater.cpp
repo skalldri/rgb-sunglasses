@@ -83,11 +83,18 @@ static void fire_callback(void)
 
 static void set_error(enum McubootUpdaterError err)
 {
+    bool changed = false;
     k_mutex_lock(&s_mutex, K_FOREVER);
-    s_status.state = MCUBOOT_UPDATER_ERROR;
-    s_status.error = err;
+    /* Don't overwrite LOCKED — a concurrent abort() already cleaned up. */
+    if (s_status.state != MCUBOOT_UPDATER_LOCKED) {
+        s_status.state = MCUBOOT_UPDATER_ERROR;
+        s_status.error = err;
+        changed = true;
+    }
     k_mutex_unlock(&s_mutex);
-    fire_callback();
+    if (changed) {
+        fire_callback();
+    }
 }
 
 /* Close the staging file and optionally delete it from the FAT filesystem. */
@@ -116,6 +123,14 @@ static void erase_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
 
+    /* Bail out if abort() ran before we could start. */
+    k_mutex_lock(&s_mutex, K_FOREVER);
+    if (s_status.state != MCUBOOT_UPDATER_ERASING) {
+        k_mutex_unlock(&s_mutex);
+        return;
+    }
+    k_mutex_unlock(&s_mutex);
+
     /* "Erase" for FAT staging: open the file with truncation. Nearly instantaneous
      * compared to erasing a flash partition — the ERASING state is very brief. */
     fs_file_t_init(&s_staging_file);
@@ -129,6 +144,12 @@ static void erase_work_handler(struct k_work *work)
     s_staging_file_open = true;
 
     k_mutex_lock(&s_mutex, K_FOREVER);
+    if (s_status.state != MCUBOOT_UPDATER_ERASING) {
+        /* abort() ran while we were opening the file — close and discard. */
+        k_mutex_unlock(&s_mutex);
+        close_staging_file(true);
+        return;
+    }
     s_status.state    = MCUBOOT_UPDATER_RECEIVING;
     s_status.progress = 0;
     s_write_offset    = 0;
@@ -142,6 +163,14 @@ static void erase_work_handler(struct k_work *work)
 static void validate_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
+
+    /* Bail out if abort() ran before we could start. */
+    k_mutex_lock(&s_mutex, K_FOREVER);
+    if (s_status.state != MCUBOOT_UPDATER_VALIDATING) {
+        k_mutex_unlock(&s_mutex);
+        return;
+    }
+    k_mutex_unlock(&s_mutex);
 
     int rc = fs_seek(&s_staging_file, 0, FS_SEEK_SET);
     if (rc) {
@@ -215,6 +244,14 @@ static void validate_work_handler(struct k_work *work)
 static void commit_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
+
+    /* Bail out if abort() ran before we could start. */
+    k_mutex_lock(&s_mutex, K_FOREVER);
+    if (s_status.state != MCUBOOT_UPDATER_FLASHING) {
+        k_mutex_unlock(&s_mutex);
+        return;
+    }
+    k_mutex_unlock(&s_mutex);
 
     /*
      * Write pages in reverse order: pages 1..N-1 first, then page 0 last.
@@ -335,7 +372,11 @@ static void commit_work_handler(struct k_work *work)
     fire_callback();
 
     LOG_INF("MCUboot flashed successfully. Rebooting in 500 ms...");
-    k_msleep(500); /* Give the BLE stack time to transmit the DONE notification */
+#if defined(CONFIG_BT)
+    /* Give the BLE stack time to transmit the DONE notification before the
+     * radio disappears.  Skip in test builds — no BLE stack present. */
+    k_msleep(500);
+#endif
     sys_reboot(SYS_REBOOT_WARM);
 }
 
@@ -428,6 +469,12 @@ int mcuboot_updater_write_chunk(const uint8_t *data, uint16_t len)
 
     k_mutex_lock(&s_mutex, K_FOREVER);
 
+    /* Re-check state under the lock to close the TOCTOU window with abort(). */
+    if (s_status.state != MCUBOOT_UPDATER_RECEIVING) {
+        k_mutex_unlock(&s_mutex);
+        return -EBUSY;
+    }
+
     if (s_write_offset + len > kHdrSize + s_payload_size) {
         k_mutex_unlock(&s_mutex);
         LOG_ERR("Chunk overflow: write_offset=%u + len=%u > hdr+payload=%u",
@@ -512,6 +559,14 @@ int mcuboot_updater_commit(void)
 
 void mcuboot_updater_abort(void)
 {
+    /* Cancel any pending (not yet running) work items.  If a handler is
+     * already running, the state guards inside each handler will detect the
+     * LOCKED state set below and bail out without corrupting shared state. */
+    k_work_cancel(&s_erase_work);
+    k_work_cancel(&s_validate_work);
+    k_work_cancel(&s_commit_work);
+    k_work_cancel_delayable(&s_reboot_work);
+
     close_staging_file(true);
 
     k_mutex_lock(&s_mutex, K_FOREVER);

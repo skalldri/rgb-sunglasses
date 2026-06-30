@@ -336,3 +336,84 @@ ZTEST(mcuboot_updater_flow, test_abort_from_receiving_deletes_staging_file) {
         fs_close(&f);
     }
 }
+
+ZTEST(mcuboot_updater_flow, test_header_payload_size_mismatch_reaches_error_invalid_size) {
+    /* begin() expects 512 bytes, but the package header claims 1024. */
+    static uint8_t payload[512];
+    memset(payload, 0xAA, sizeof(payload));
+
+    MockPkgHeader hdr = {
+        .magic        = kPkgMagic,
+        .payload_size = 1024,                               /* Mismatch with begin(512) */
+        .crc32        = crc32_ieee(payload, sizeof(payload)),
+    };
+
+    mcuboot_updater_unlock();
+    zassert_ok(mcuboot_updater_begin(sizeof(payload)));
+    k_sleep(K_MSEC(500));
+
+    write_chunks(&hdr, payload, sizeof(payload));
+    zassert_ok(mcuboot_updater_validate());
+    k_sleep(K_MSEC(500));
+
+    struct McubootUpdaterStatus st = mcuboot_updater_get_status();
+    zassert_equal(st.state, MCUBOOT_UPDATER_ERROR);
+    zassert_equal(st.error, MCUBOOT_UPDATER_ERR_INVALID_SIZE,
+                  "Mismatched payload_size in header must set INVALID_SIZE");
+}
+
+ZTEST(mcuboot_updater_flow, test_erase_fails_when_staging_fs_not_mounted) {
+    /* Unmount the FAT volume so the staging file cannot be created.
+     * erase_work_handler must set STAGING_ERASE error. */
+    nand_unmount();
+
+    mcuboot_updater_unlock();
+    zassert_ok(mcuboot_updater_begin(512));
+    k_sleep(K_MSEC(500));
+
+    struct McubootUpdaterStatus st = mcuboot_updater_get_status();
+    zassert_equal(st.state, MCUBOOT_UPDATER_ERROR);
+    zassert_equal(st.error, MCUBOOT_UPDATER_ERR_STAGING_ERASE,
+                  "erase failure must set STAGING_ERASE error");
+
+    nand_mount(); /* Remount so after-each abort() and subsequent tests work cleanly. */
+}
+
+/* Prefixed "z_" to sort last within this suite.
+ *
+ * commit_work_handler calls sys_reboot() after setting DONE.  The stub loops
+ * forever (satisfying __noreturn), which permanently occupies the worker
+ * thread.  Ztest runs tests alphabetically, so keeping this name starting
+ * with "z_" guarantees it runs after all other flow tests. */
+ZTEST(mcuboot_updater_flow, test_z_commit_flashes_to_done_state) {
+    static uint8_t payload[1024];
+    memset(payload, 0xCD, sizeof(payload));
+    uint32_t crc = crc32_ieee(payload, sizeof(payload));
+
+    MockPkgHeader hdr = {
+        .magic = kPkgMagic, .major = 1, .minor = 0, .revision = 0,
+        .payload_size = sizeof(payload), .crc32 = crc,
+    };
+
+    mcuboot_updater_unlock();
+    zassert_ok(mcuboot_updater_begin(sizeof(payload)));
+    k_sleep(K_MSEC(500));
+    zassert_equal(mcuboot_updater_get_status().state, MCUBOOT_UPDATER_RECEIVING);
+
+    write_chunks(&hdr, payload, sizeof(payload));
+    zassert_ok(mcuboot_updater_validate());
+    k_sleep(K_MSEC(500));
+    zassert_equal(mcuboot_updater_get_status().state, MCUBOOT_UPDATER_VALIDATED);
+
+    zassert_ok(mcuboot_updater_commit());
+    /* Wait for the commit handler to flash all 20 pages, set DONE, then call
+     * sys_reboot (which stubs to for(;;)).  The 500 ms reboot-delay inside
+     * commit_work_handler means the handler calls sys_reboot at ~600 ms.
+     * We wait 2 s to be safely past that point. */
+    k_sleep(K_MSEC(2000));
+
+    struct McubootUpdaterStatus st = mcuboot_updater_get_status();
+    zassert_equal(st.state, MCUBOOT_UPDATER_DONE,
+                  "commit() must reach DONE after flashing all pages");
+    zassert_equal(st.progress, 100u);
+}

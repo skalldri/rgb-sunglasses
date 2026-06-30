@@ -118,13 +118,17 @@ export default function FirmwareUpdateModal() {
                 setBlStatus(s.state);
                 setBlProgress(s.progress);
                 setBlFlashUnlocked(s.flashUnlocked);
+                // Any status notification means the device is alive — clear rebooting state.
+                setBlRebooting(false);
                 if (s.state === McubootUpdaterState.ERROR) {
                     setBlError(`Updater error (code ${s.errorCode})`);
                 }
             });
         }).catch(err => {
-            // Service not present on this board variant — not an error worth surfacing prominently
+            // Service not present on this board variant — not an error worth surfacing prominently.
+            // Clear the ref so the bootloader section stays hidden for unsupported devices.
             console.log('MCUboot updater service unavailable:', err?.message ?? err);
+            blUpdaterRef.current = null;
         });
 
         return () => {
@@ -384,6 +388,7 @@ export default function FirmwareUpdateModal() {
             setBlRebooting(true);
         } catch (e: any) {
             setBlError(`Failed to prepare device: ${e.message}`);
+            setBlRebooting(false);
         }
     }
 
