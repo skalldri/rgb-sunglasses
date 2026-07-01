@@ -204,21 +204,32 @@ export class McubootUpdaterClient {
             throw new Error('MCUboot updater service is missing one or more characteristics');
         }
 
+        // Seed the real current state immediately. Without this, the client only learns the
+        // device's state from the next notification, which never fires on a plain reconnect
+        // (nothing changed since boot) — leaving the UI stuck on stale defaults (e.g.
+        // flashUnlocked=false) even when the device is genuinely already unlocked.
+        const initial = await this.statusChar.read();
+        if (initial.value) this.handleStatusValue(initial.value);
+
         this.subscription = this.statusChar.monitor((err, char) => {
             if (err || !char?.value) return;
-            const bytes = base64ToUint8Array(char.value);
-            if (bytes.length < 3) return;
-
-            const status: McubootUpdaterStatus = {
-                state:         bytes[0] as McubootUpdaterState,
-                progress:      bytes[1],
-                errorCode:     bytes[2],
-                flashUnlocked: bytes.length >= 4 ? bytes[3] !== 0 : false,
-            };
-
-            this.statusHandler?.(status);
-            this.dispatchToWaiters(status);
+            this.handleStatusValue(char.value);
         });
+    }
+
+    private handleStatusValue(base64Value: string): void {
+        const bytes = base64ToUint8Array(base64Value);
+        if (bytes.length < 3) return;
+
+        const status: McubootUpdaterStatus = {
+            state:         bytes[0] as McubootUpdaterState,
+            progress:      bytes[1],
+            errorCode:     bytes[2],
+            flashUnlocked: bytes.length >= 4 ? bytes[3] !== 0 : false,
+        };
+
+        this.statusHandler?.(status);
+        this.dispatchToWaiters(status);
     }
 
     /** Register a handler called on every status notification. */
