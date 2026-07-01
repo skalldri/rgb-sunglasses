@@ -3,11 +3,14 @@ import { ThemedView } from '@/components/themed-view';
 import { AppButton } from '@/components/ui/app-button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
+import { Divider } from '@/components/ui/divider';
 import { ProgressBar } from '@/components/ui/progress-bar';
+import { UUID_MCUBOOT_INFO_SERVICE } from '@/constants/bluetooth';
 import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
 import { useThemeColors } from '@/hooks/use-theme-color';
 import { useMcuMgrClient } from '@/hooks/use-mcumgr-client';
+import { decodeUtf8FromBase64 } from '@/services/ble-value-codec';
 import {
     calculateOverallUploadProgress,
     findUploadedImageForIndex,
@@ -19,6 +22,7 @@ import {
     compareVersions,
     extractBoardRevision,
     fetchLatestFirmwareRelease,
+    fetchLatestMcubootRelease,
     findAssetForBoard,
     GitHubAsset,
     parseVersionFromTag,
@@ -35,7 +39,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as LegacyFS from 'expo-file-system/legacy';
 import { File } from 'expo-file-system/next';
 import { Link } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from 'react-native';
 
 // ============================================================================
@@ -46,6 +50,13 @@ function flagTone(flag: string): 'success' | 'info' | 'neutral' {
     if (flag === 'Active' || flag === 'Confirmed' || flag === 'Bootable') return 'success';
     if (flag === 'Pending' || flag === 'Permanent') return 'info';
     return 'neutral';
+}
+
+function base64ToBytes(base64Data: string): Uint8Array {
+    const binary = atob(base64Data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
 }
 
 export default function FirmwareUpdateModal() {
@@ -85,6 +96,34 @@ export default function FirmwareUpdateModal() {
     const [blFlashUnlocked, setBlFlashUnlocked] = useState(false);
     const [blRebooting, setBlRebooting] = useState(false);
 
+    // Bootloader GitHub update check
+    type McubootUpdateCheckState = 'idle' | 'checking' | 'upToDate' | 'updateAvailable' | 'error';
+    const [mcubootUpdateCheckState, setMcubootUpdateCheckState] = useState<McubootUpdateCheckState>('idle');
+    const [mcubootLatestAsset, setMcubootLatestAsset] = useState<GitHubAsset | null>(null);
+    const [mcubootLatestVersion, setMcubootLatestVersion] = useState<string>('');
+    const [mcubootUpdateCheckError, setMcubootUpdateCheckError] = useState<string>('');
+    const [isDownloadingBootloader, setIsDownloadingBootloader] = useState(false);
+    const [bootloaderDownloadProgress, setBootloaderDownloadProgress] = useState<number>(0);
+
+    // Read-only bootloader device info characteristics (e.g. "MCUboot Version"), sourced from the
+    // same BluetoothContext data device-state/index.tsx used to show inline in the Controls tab —
+    // moved here since it's more relevant next to the bootloader update controls (issue #76).
+    const mcubootInfoChars = selectedDevice?.characteristicsByService?.[UUID_MCUBOOT_INFO_SERVICE];
+    const mcubootDeviceInfo = Object.entries(mcubootInfoChars ?? {})
+        .filter(([, charInfo]) => charInfo.name != null)
+        .map(([charUuid, charInfo]) => {
+            let displayValue = '—';
+            if (charInfo.value) {
+                try {
+                    displayValue = decodeUtf8FromBase64(charInfo.value).replace(/\0/g, '');
+                } catch {
+                    displayValue = '—';
+                }
+            }
+            return { charUuid, name: charInfo.name as string, value: displayValue };
+        });
+    const currentMcubootVersion = mcubootDeviceInfo.find(info => info.name === 'MCUboot Version')?.value ?? null;
+
     // Update context with client for cleanup on disconnect
     useEffect(() => {
         if (client && selectedDevice) {
@@ -106,25 +145,31 @@ export default function FirmwareUpdateModal() {
             setBlError('');
             setBlPackage(null);
             setBlFlashUnlocked(false);
-            setBlRebooting(false);
+            // Deliberately NOT resetting blRebooting here: this branch runs on the disconnect
+            // that immediately follows a self-requested reboot (by design, ~200ms after the
+            // write), so clearing it here would hide the "reconnect" message before the user
+            // ever sees it. It's cleared once the device reconnects and reports fresh status.
             return;
         }
 
         const updater = new McubootUpdaterClient();
         blUpdaterRef.current = updater;
 
-        updater.initialize(device).then(() => {
-            updater.onStatusChanged(s => {
-                setBlStatus(s.state);
-                setBlProgress(s.progress);
-                setBlFlashUnlocked(s.flashUnlocked);
-                // Any status notification means the device is alive — clear rebooting state.
-                setBlRebooting(false);
-                if (s.state === McubootUpdaterState.ERROR) {
-                    setBlError(`Updater error (code ${s.errorCode})`);
-                }
-            });
-        }).catch(err => {
+        // Registered before initialize() so the initial status read it performs on connect
+        // (not just the state-change notification stream) reaches this handler instead of
+        // being silently dropped.
+        updater.onStatusChanged(s => {
+            setBlStatus(s.state);
+            setBlProgress(s.progress);
+            setBlFlashUnlocked(s.flashUnlocked);
+            // Any status update means the device is alive — clear rebooting state.
+            setBlRebooting(false);
+            if (s.state === McubootUpdaterState.ERROR) {
+                setBlError(`Updater error (code ${s.errorCode})`);
+            }
+        });
+
+        updater.initialize(device).catch(err => {
             // Service not present on this board variant — not an error worth surfacing prominently.
             // Clear the ref so the bootloader section stays hidden for unsupported devices.
             console.log('MCUboot updater service unavailable:', err?.message ?? err);
@@ -223,6 +268,10 @@ export default function FirmwareUpdateModal() {
         setLatestAsset(null);
         setLatestVersion('');
         setUpdateCheckError('');
+        setMcubootUpdateCheckState('idle');
+        setMcubootLatestAsset(null);
+        setMcubootLatestVersion('');
+        setMcubootUpdateCheckError('');
     }, [client]);
 
     // Check GitHub for the latest release once board revision is known
@@ -254,6 +303,41 @@ export default function FirmwareUpdateModal() {
 
         checkForUpdates();
     }, [boardRevision, imageState]);
+
+    // Check GitHub for the latest standalone MCUboot release. Proto0-only, like the bootloader
+    // updater service itself (fw/Kconfig's APP_MCUBOOT_UPDATER), and only once the device's own
+    // current MCUboot version is known (read from the Device Info characteristics above).
+    useEffect(() => {
+        if (boardRevision !== 'proto0' || !currentMcubootVersion || mcubootUpdateCheckState !== 'idle') return;
+
+        async function checkForMcubootUpdates() {
+            setMcubootUpdateCheckState('checking');
+            try {
+                const release = await fetchLatestMcubootRelease('skalldri', 'rgb-sunglasses');
+                if (!release) {
+                    setMcubootUpdateCheckState('upToDate');
+                    return;
+                }
+
+                const asset = findAssetForBoard(release.assets, boardRevision!, '.bin');
+                if (!asset) {
+                    throw new Error(`No MCUboot asset found for board: ${boardRevision}`);
+                }
+
+                const githubVersion = parseVersionFromTag(release.tag_name);
+                const cmp = compareVersions(currentMcubootVersion!, githubVersion);
+
+                setMcubootLatestAsset(asset);
+                setMcubootLatestVersion(githubVersion);
+                setMcubootUpdateCheckState(cmp < 0 ? 'updateAvailable' : 'upToDate');
+            } catch (e: unknown) {
+                setMcubootUpdateCheckError(e instanceof Error ? e.message : String(e));
+                setMcubootUpdateCheckState('error');
+            }
+        }
+
+        checkForMcubootUpdates();
+    }, [boardRevision, currentMcubootVersion]);
 
     async function handleSelectFirmwarePackage() {
         try {
@@ -404,15 +488,50 @@ export default function FirmwareUpdateModal() {
             const fileRef = new File(file.uri);
             const base64Data = await fileRef.base64();
 
-            // Decode base64 → Uint8Array
-            const binary = atob(base64Data);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-            const pkg = parseMcubootPackage(bytes);
+            const pkg = parseMcubootPackage(base64ToBytes(base64Data));
             setBlPackage(pkg);
         } catch (e: any) {
             setBlError(`Failed to load package: ${e.message}`);
+        }
+    }
+
+    async function handleDownloadBootloaderUpdate() {
+        if (!mcubootLatestAsset) return;
+
+        setIsDownloadingBootloader(true);
+        setBootloaderDownloadProgress(0);
+        setBlError('');
+
+        const destUri = (LegacyFS.cacheDirectory ?? '') + 'mcuboot-update.bin';
+
+        try {
+            const task = LegacyFS.createDownloadResumable(
+                mcubootLatestAsset.browser_download_url,
+                destUri,
+                {},
+                ({ totalBytesWritten, totalBytesExpectedToWrite }: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
+                    if (totalBytesExpectedToWrite > 0) {
+                        setBootloaderDownloadProgress(
+                            Math.round((totalBytesWritten / totalBytesExpectedToWrite) * 100)
+                        );
+                    }
+                }
+            );
+
+            const result = await task.downloadAsync();
+            if (!result) {
+                throw new Error('Download was cancelled');
+            }
+
+            const fileRef = new File(result.uri);
+            const base64Data = await fileRef.base64();
+            const pkg = parseMcubootPackage(base64ToBytes(base64Data));
+            setBlPackage(pkg);
+        } catch (e: any) {
+            setBlError(`Download failed: ${e.message}`);
+        } finally {
+            setIsDownloadingBootloader(false);
+            setBootloaderDownloadProgress(0);
         }
     }
 
@@ -752,11 +871,80 @@ export default function FirmwareUpdateModal() {
             [McubootUpdaterState.ERROR]:      'Error',
         };
 
+        function renderMcubootAutoUpdateSection() {
+            if (isDownloadingBootloader) {
+                return (
+                    <Card style={styles.updateCard}>
+                        <ThemedText type="overline">Downloading Bootloader Update...</ThemedText>
+                        <ProgressBar progress={bootloaderDownloadProgress / 100} label={`${bootloaderDownloadProgress}%`} height={12} />
+                    </Card>
+                );
+            }
+
+            if (mcubootUpdateCheckState === 'checking') {
+                return (
+                    <Card style={styles.updateCard}>
+                        <ActivityIndicator size="small" color={c.primary} />
+                        <ThemedText type="caption" style={styles.status}>Checking for bootloader updates...</ThemedText>
+                    </Card>
+                );
+            }
+
+            if (mcubootUpdateCheckState === 'error') {
+                return (
+                    <Card style={styles.updateCard}>
+                        <ThemedText style={[styles.updateCardError, { color: c.danger }]}>
+                            Bootloader update check failed: {mcubootUpdateCheckError}
+                        </ThemedText>
+                    </Card>
+                );
+            }
+
+            if (mcubootUpdateCheckState === 'updateAvailable' && mcubootLatestAsset) {
+                return (
+                    <Card style={[styles.updateCard, { borderColor: c.success }]}>
+                        <ThemedText type="overline" style={styles.sectionTitle}>
+                            Bootloader Update Available
+                        </ThemedText>
+                        <ThemedText type="caption">Current: v{currentMcubootVersion}</ThemedText>
+                        <ThemedText type="caption">Latest: v{mcubootLatestVersion}</ThemedText>
+                        <View style={styles.buttonRow}>
+                            <AppButton
+                                title="Download Update"
+                                variant="primary"
+                                style={styles.rowButton}
+                                onPress={handleDownloadBootloaderUpdate}
+                                disabled={isActive}
+                            />
+                        </View>
+                    </Card>
+                );
+            }
+
+            return null;
+        }
+
         return (
             <>
                 <ThemedText type="overline" style={styles.sectionTitle}>
                     Bootloader Update (Advanced)
                 </ThemedText>
+
+                {mcubootDeviceInfo.length > 0 && (
+                    <Card style={styles.cardSpacing}>
+                        {mcubootDeviceInfo.map((info, index) => (
+                            <React.Fragment key={info.charUuid}>
+                                {index > 0 && <Divider />}
+                                <View style={styles.infoRow}>
+                                    <ThemedText style={styles.infoLabel}>{info.name}</ThemedText>
+                                    <ThemedText style={styles.infoValue}>{info.value}</ThemedText>
+                                </View>
+                            </React.Fragment>
+                        ))}
+                    </Card>
+                )}
+
+                {renderMcubootAutoUpdateSection()}
 
                 <Card style={[styles.updateCard, { borderColor: c.warning, borderWidth: 1 }]}>
                     <ThemedText type="caption" style={{ color: c.warning, textAlign: 'center' }}>
@@ -967,7 +1155,7 @@ export default function FirmwareUpdateModal() {
                             />
                         </View>
 
-                        {blUpdaterRef.current && renderBootloaderSection()}
+                        {(blUpdaterRef.current || blRebooting) && renderBootloaderSection()}
                     </>
                 )}
             </ScrollView>
@@ -1023,6 +1211,19 @@ const styles = StyleSheet.create({
     },
     noImages: {
         fontStyle: 'italic',
+    },
+    infoRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: Spacing.sm,
+    },
+    infoLabel: {
+        fontSize: 16,
+    },
+    infoValue: {
+        fontSize: 16,
+        opacity: 0.5,
     },
     status: {
         marginTop: Spacing.sm,

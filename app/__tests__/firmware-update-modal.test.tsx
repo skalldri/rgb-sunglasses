@@ -2,9 +2,13 @@ import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import FirmwareUpdateModal from '@/app/firmware-update-modal';
+import { UUID_MCUBOOT_INFO_SERVICE } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
+import { encodeUtf8ToBase64 } from '@/services/ble-value-codec';
 import * as FirmwarePackageService from '@/services/firmware-package';
 import * as GitHubReleases from '@/services/github-releases';
+import { McubootUpdaterClient, McubootUpdaterState, McubootPackageInfo } from '@/services/mcuboot-updater-client';
+import * as McubootUpdaterModule from '@/services/mcuboot-updater-client';
 import * as McuMgrModule from '@/services/mcumgr';
 import * as DocumentPicker from 'expo-document-picker';
 import * as LegacyFS from 'expo-file-system/legacy';
@@ -109,6 +113,84 @@ function mockGitHub(overrides?: { fetchLatestFirmwareRelease?: any }) {
   jest
     .spyOn(GitHubReleases, 'fetchLatestFirmwareRelease')
     .mockImplementation(overrides?.fetchLatestFirmwareRelease ?? (async () => mockRelease));
+}
+
+const mcubootRelease: GitHubReleases.GitHubRelease = {
+  id: 2,
+  tag_name: 'mcuboot-v2.0.0',
+  name: 'MCUboot v2.0.0',
+  published_at: '2026-01-01T00:00:00Z',
+  assets: [
+    {
+      id: 20,
+      name: 'mcuboot-2.0.0-proto0.bin',
+      browser_download_url: 'https://example.com/mcuboot-2.0.0-proto0.bin',
+      size: 4096,
+      content_type: 'application/octet-stream',
+    },
+  ],
+};
+
+/** A selectedDevice with a live "MCUboot Version" characteristic, as populated by BluetoothContext. */
+function deviceWithMcubootVersion(version: string) {
+  const versionCharUuid = '12345678-1234-5678-0003-56789abc0001';
+  return {
+    ...defaultSelectedDevice,
+    characteristicsByService: {
+      [UUID_MCUBOOT_INFO_SERVICE]: {
+        [versionCharUuid]: {
+          characteristic: {},
+          value: encodeUtf8ToBase64(version),
+          name: 'MCUboot Version',
+          cpfFormat: 0x19,
+          isUpdateInProgress: false,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Mocks McubootUpdaterClient at the prototype level (same approach as McuMgrClient above).
+ * By default, initialize() simulates the real client's behaviour post-fix: it delivers an
+ * initial status via whatever handler was registered through onStatusChanged *before*
+ * initialize() was awaited — reproducing the real ordering dependency the issue #76 fix relies on
+ * in firmware-update-modal.tsx (onStatusChanged is now called before initialize(), not after).
+ */
+function mockMcubootUpdater(overrides?: {
+  initialStatus?: { state: McubootUpdaterState; progress: number; errorCode: number; flashUnlocked: boolean };
+  initialize?: any;
+}) {
+  let statusHandler: ((s: any) => void) | null = null;
+  const onStatusChangedSpy = jest
+    .spyOn(McubootUpdaterClient.prototype, 'onStatusChanged')
+    .mockImplementation(function (this: any, handler: any) {
+      statusHandler = handler;
+    });
+  const initialize =
+    overrides?.initialize ??
+    (async () => {
+      statusHandler?.(
+        overrides?.initialStatus ?? {
+          state: McubootUpdaterState.LOCKED,
+          progress: 0,
+          errorCode: 0,
+          flashUnlocked: false,
+        }
+      );
+    });
+  const initializeSpy = jest.spyOn(McubootUpdaterClient.prototype, 'initialize').mockImplementation(initialize);
+  const destroySpy = jest.spyOn(McubootUpdaterClient.prototype, 'destroy').mockImplementation(() => undefined);
+  const requestUpdaterRebootSpy = jest
+    .spyOn(McubootUpdaterClient.prototype, 'requestUpdaterReboot')
+    .mockImplementation(async () => undefined);
+  return {
+    onStatusChangedSpy,
+    initializeSpy,
+    destroySpy,
+    requestUpdaterRebootSpy,
+    emitStatus: (s: any) => statusHandler?.(s),
+  };
 }
 
 describe('FirmwareUpdateModal', () => {
@@ -437,6 +519,150 @@ describe('FirmwareUpdateModal', () => {
     fireEvent.press(await findByText('Erase Slot 1'));
     await waitFor(() => {
       expect(spies.eraseImage).toHaveBeenCalledWith(1);
+    });
+  });
+
+  describe('bootloader section (issue #76)', () => {
+    // Every test in this block connects a proto0 device (mockClientMethods()'s default getOsInfo),
+    // so both auto-update-check effects (firmware and bootloader) fire regardless of what the test
+    // itself cares about. Node's built-in global fetch is real in this test environment, so leaving
+    // either call unmocked triggers a genuine (and here, network-less-sandbox-hanging) HTTP request
+    // that bleeds slow timing into whichever test runs next - always mock both explicitly.
+    function mockNoGithubReleases() {
+      mockGitHub({ fetchLatestFirmwareRelease: async () => { throw new Error('not relevant to this test'); } });
+      jest.spyOn(GitHubReleases, 'fetchLatestMcubootRelease').mockResolvedValue(null);
+    }
+
+    it('shows the current MCUboot Version, moved here from the Controls tab', async () => {
+      mockBluetooth(deviceWithMcubootVersion('1.0.0+0'));
+      mockClientMethods();
+      mockMcubootUpdater();
+      mockNoGithubReleases();
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      expect(await findByText('Bootloader Update (Advanced)')).toBeTruthy();
+      expect(await findByText('MCUboot Version')).toBeTruthy();
+      expect(await findByText('1.0.0+0')).toBeTruthy();
+    });
+
+    it('reflects a device that is already unlocked at connect time (regression: used to require a notification that never came)', async () => {
+      mockBluetooth(deviceWithMcubootVersion('1.0.0+0'));
+      mockClientMethods();
+      mockMcubootUpdater({
+        initialStatus: { state: McubootUpdaterState.LOCKED, progress: 0, errorCode: 0, flashUnlocked: true },
+      });
+      mockNoGithubReleases();
+
+      const { findByText, queryByText } = render(<FirmwareUpdateModal />);
+      expect(await findByText('Flash is unlocked — select a package to flash')).toBeTruthy();
+      expect(queryByText('Prepare Device')).toBeNull();
+    });
+
+    it('keeps the "reconnect" message visible through the disconnect after Prepare Device (bug 3a)', async () => {
+      let selectedDevice: any = defaultSelectedDevice;
+      jest
+        .spyOn(BluetoothContext, 'useBluetooth')
+        .mockImplementation(() => ({ selectedDevice, setSelectedDevice: jest.fn() } as any));
+      mockClientMethods();
+      const { requestUpdaterRebootSpy } = mockMcubootUpdater();
+      mockNoGithubReleases();
+
+      const { findByText, queryByText, rerender } = render(<FirmwareUpdateModal />);
+      fireEvent.press(await findByText('Prepare Device'));
+
+      await waitFor(() => {
+        expect(requestUpdaterRebootSpy).toHaveBeenCalledTimes(1);
+      });
+      expect(await findByText('Device is rebooting — please reconnect after ~15 seconds')).toBeTruthy();
+
+      // Simulate the BLE disconnect that follows the reboot ~200ms later — this used to hide the
+      // whole bootloader section (and the message with it) because blUpdaterRef.current was
+      // nulled and the render gate didn't account for blRebooting.
+      selectedDevice = null;
+      rerender(<FirmwareUpdateModal />);
+
+      expect(queryByText('Device is rebooting — please reconnect after ~15 seconds')).toBeTruthy();
+    });
+
+    describe('GitHub update check', () => {
+      it('shows "Bootloader Update Available" when a newer mcuboot-v release exists', async () => {
+        mockBluetooth(deviceWithMcubootVersion('1.0.0+0'));
+        mockClientMethods();
+        mockMcubootUpdater();
+        mockGitHub({ fetchLatestFirmwareRelease: async () => { throw new Error('not relevant to this test'); } });
+        jest.spyOn(GitHubReleases, 'fetchLatestMcubootRelease').mockResolvedValue(mcubootRelease);
+
+        const { findByText } = render(<FirmwareUpdateModal />);
+        expect(await findByText('Bootloader Update Available')).toBeTruthy();
+        expect(await findByText('Current: v1.0.0+0')).toBeTruthy();
+        expect(await findByText('Latest: v2.0.0')).toBeTruthy();
+      });
+
+      it('shows nothing extra when already up to date', async () => {
+        mockBluetooth(deviceWithMcubootVersion('2.0.0'));
+        mockClientMethods();
+        mockMcubootUpdater();
+        mockGitHub({ fetchLatestFirmwareRelease: async () => { throw new Error('not relevant to this test'); } });
+        jest.spyOn(GitHubReleases, 'fetchLatestMcubootRelease').mockResolvedValue(mcubootRelease);
+
+        const { findByText, queryByText } = render(<FirmwareUpdateModal />);
+        expect(await findByText('Bootloader Update (Advanced)')).toBeTruthy();
+        await waitFor(() => {
+          expect(queryByText('Bootloader Update Available')).toBeNull();
+        });
+      });
+
+      it('does not check GitHub when no MCUboot release has ever been published', async () => {
+        mockBluetooth(deviceWithMcubootVersion('1.0.0+0'));
+        mockClientMethods();
+        mockMcubootUpdater();
+        mockGitHub({ fetchLatestFirmwareRelease: async () => { throw new Error('not relevant to this test'); } });
+        const fetchSpy = jest.spyOn(GitHubReleases, 'fetchLatestMcubootRelease').mockResolvedValue(null);
+
+        const { findByText, queryByText } = render(<FirmwareUpdateModal />);
+        expect(await findByText('Bootloader Update (Advanced)')).toBeTruthy();
+        await waitFor(() => {
+          expect(fetchSpy).toHaveBeenCalledTimes(1);
+        });
+        expect(queryByText('Bootloader Update Available')).toBeNull();
+      });
+
+      it('"Download Update" downloads the .bin asset and loads it as the flash-ready package', async () => {
+        mockBluetooth(deviceWithMcubootVersion('1.0.0+0'));
+        mockClientMethods();
+        mockMcubootUpdater({
+          initialStatus: { state: McubootUpdaterState.LOCKED, progress: 0, errorCode: 0, flashUnlocked: true },
+        });
+        mockGitHub({ fetchLatestFirmwareRelease: async () => { throw new Error('not relevant to this test'); } });
+        jest.spyOn(GitHubReleases, 'fetchLatestMcubootRelease').mockResolvedValue(mcubootRelease);
+
+        (File as unknown as jest.Mock).mockImplementation(() => ({
+          base64: jest.fn(async () => btoa('raw-package-bytes')),
+        }));
+        const downloadedPackage: McubootPackageInfo = {
+          major: 2,
+          minor: 0,
+          revision: 0,
+          payloadSize: 4,
+          crc32: 0,
+          payload: new Uint8Array([1, 2, 3, 4]),
+        };
+        jest.spyOn(McubootUpdaterModule, 'parseMcubootPackage').mockReturnValue(downloadedPackage);
+
+        const { findByText } = render(<FirmwareUpdateModal />);
+        fireEvent.press(await findByText('Download Update'));
+
+        await waitFor(() => {
+          expect(LegacyFS.createDownloadResumable).toHaveBeenCalledWith(
+            'https://example.com/mcuboot-2.0.0-proto0.bin',
+            'file:///cache/mcuboot-update.bin',
+            {},
+            expect.any(Function)
+          );
+        });
+        expect(await findByText('Package loaded')).toBeTruthy();
+        expect(await findByText('Version: 2.0.0')).toBeTruthy();
+      });
     });
   });
 });

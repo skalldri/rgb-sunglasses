@@ -40,6 +40,9 @@ export const FIRMWARE_TAG_PREFIX = 'fw-v';
 /** Tag prefix identifying companion-app releases (`app-v*`). */
 export const APP_TAG_PREFIX = 'app-v';
 
+/** Tag prefix identifying standalone MCUboot bootloader releases (`mcuboot-v*`). */
+export const MCUBOOT_TAG_PREFIX = 'mcuboot-v';
+
 // Page size for the releases list, and a hard cap on pages so a misbehaving API
 // (or an unexpectedly huge history) can't spin unbounded requests against the
 // unauthenticated 60-req/hr rate limit.
@@ -133,6 +136,11 @@ export async function fetchLatestAppRelease(owner: string, repo: string): Promis
     return fetchLatestReleaseForPrefix(owner, repo, APP_TAG_PREFIX);
 }
 
+/** Fetch the latest published MCUboot bootloader (`mcuboot-v*`) release, or null if none exist. */
+export async function fetchLatestMcubootRelease(owner: string, repo: string): Promise<GitHubRelease | null> {
+    return fetchLatestReleaseForPrefix(owner, repo, MCUBOOT_TAG_PREFIX);
+}
+
 // ============================================================================
 // Utilities
 // ============================================================================
@@ -178,10 +186,14 @@ export function findApkAsset(assets: GitHubAsset[]): GitHubAsset | null {
     return assets.find(a => a.name.toLowerCase().endsWith('.apk')) ?? null;
 }
 
-/** Find the first .zip asset whose name contains the boardRevision string. */
-export function findAssetForBoard(assets: GitHubAsset[], boardRevision: string): GitHubAsset | null {
+/** Find the first asset (default: .zip) whose name contains the boardRevision string. */
+export function findAssetForBoard(
+    assets: GitHubAsset[],
+    boardRevision: string,
+    extension: string = '.zip'
+): GitHubAsset | null {
     const lower = boardRevision.toLowerCase();
-    return assets.find(a => a.name.toLowerCase().includes(lower) && a.name.endsWith('.zip')) ?? null;
+    return assets.find(a => a.name.toLowerCase().includes(lower) && a.name.endsWith(extension)) ?? null;
 }
 
 /**

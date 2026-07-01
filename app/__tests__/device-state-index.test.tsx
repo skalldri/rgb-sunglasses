@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import DeviceStateMenuScreen from '@/app/(tabs)/device-state/index';
-import { UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE } from '@/constants/bluetooth';
+import { UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import { encodeBooleanToBase64, encodeUtf8ToBase64 } from '@/services/ble-value-codec';
 import { SMP_SERVICE_UUID } from '@/services/mcumgr';
@@ -118,13 +118,19 @@ describe('DeviceStateMenuScreen', () => {
     expect(getByText('Firmware Update')).toBeTruthy();
   });
 
-  it('renders the Device Info section with MCUboot version characteristic', () => {
+  it('excludes the MCUboot Info and MCUboot Updater services from the Settings section (issue #76)', () => {
+    // The "Device Info"/"MCUboot Version" card and the raw-UUID "MCUboot Updater" detail page
+    // both moved to the Firmware Update modal (issue #76) - this screen should show neither.
     const versionCharUuid = '12345678-1234-5678-0003-56789abc0001';
     const selectedDevice = {
       name: 'RGB Sunglasses',
       mac: 'AA:BB:CC',
       device: {},
-      services: [{ uuid: UUID_MCUBOOT_INFO_SERVICE }],
+      services: [
+        { uuid: UUID_MCUBOOT_INFO_SERVICE },
+        { uuid: UUID_MCUBOOT_UPDATER_SERVICE },
+        { uuid: 'core-config-service' },
+      ],
       characteristicsByService: {
         [UUID_MCUBOOT_INFO_SERVICE]: {
           [versionCharUuid]: {
@@ -135,143 +141,13 @@ describe('DeviceStateMenuScreen', () => {
             isUpdateInProgress: false,
           },
         },
-      },
-      characteristics: {},
-      serviceCharacteristics: { [UUID_MCUBOOT_INFO_SERVICE]: [] },
-      serviceDisplayNames: {},
-    };
-
-    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
-      selectedDevice,
-      writeServiceCharacteristic: jest.fn(async () => true),
-    } as any);
-
-    const { getByText } = render(<DeviceStateMenuScreen />);
-    expect(getByText('Device Info')).toBeTruthy();
-    expect(getByText('MCUboot Version')).toBeTruthy();
-    expect(getByText('1.0.0+0')).toBeTruthy();
-  });
-
-  it('shows — for a Device Info characteristic with no value', () => {
-    const versionCharUuid = '12345678-1234-5678-0003-56789abc0001';
-    const selectedDevice = {
-      name: 'RGB Sunglasses',
-      mac: 'AA:BB:CC',
-      device: {},
-      services: [{ uuid: UUID_MCUBOOT_INFO_SERVICE }],
-      characteristicsByService: {
-        [UUID_MCUBOOT_INFO_SERVICE]: {
-          [versionCharUuid]: {
-            characteristic: {},
-            value: null,
-            name: 'MCUboot Version',
-            cpfFormat: 0x19,
-            isUpdateInProgress: false,
-          },
-        },
-      },
-      characteristics: {},
-      serviceCharacteristics: { [UUID_MCUBOOT_INFO_SERVICE]: [] },
-      serviceDisplayNames: {},
-    };
-
-    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
-      selectedDevice,
-      writeServiceCharacteristic: jest.fn(async () => true),
-    } as any);
-
-    const { getByText } = render(<DeviceStateMenuScreen />);
-    expect(getByText('—')).toBeTruthy();
-  });
-
-  it('shows — for a Device Info characteristic with malformed base64', () => {
-    const versionCharUuid = '12345678-1234-5678-0003-56789abc0001';
-    const selectedDevice = {
-      name: 'RGB Sunglasses',
-      mac: 'AA:BB:CC',
-      device: {},
-      services: [{ uuid: UUID_MCUBOOT_INFO_SERVICE }],
-      characteristicsByService: {
-        [UUID_MCUBOOT_INFO_SERVICE]: {
-          [versionCharUuid]: {
-            characteristic: {},
-            value: '!!!not-valid-base64!!!',
-            name: 'MCUboot Version',
-            cpfFormat: 0x19,
-            isUpdateInProgress: false,
-          },
-        },
-      },
-      characteristics: {},
-      serviceCharacteristics: { [UUID_MCUBOOT_INFO_SERVICE]: [] },
-      serviceDisplayNames: {},
-    };
-
-    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
-      selectedDevice,
-      writeServiceCharacteristic: jest.fn(async () => true),
-    } as any);
-
-    const { getByText } = render(<DeviceStateMenuScreen />);
-    expect(getByText('—')).toBeTruthy();
-  });
-
-  it('strips NUL characters from Device Info characteristic values', () => {
-    const versionCharUuid = '12345678-1234-5678-0003-56789abc0001';
-    // "1.0.0" followed by a NUL byte
-    const valueWithNul = btoa('1.0.0\x00');
-    const selectedDevice = {
-      name: 'RGB Sunglasses',
-      mac: 'AA:BB:CC',
-      device: {},
-      services: [{ uuid: UUID_MCUBOOT_INFO_SERVICE }],
-      characteristicsByService: {
-        [UUID_MCUBOOT_INFO_SERVICE]: {
-          [versionCharUuid]: {
-            characteristic: {},
-            value: valueWithNul,
-            name: 'MCUboot Version',
-            cpfFormat: 0x19,
-            isUpdateInProgress: false,
-          },
-        },
-      },
-      characteristics: {},
-      serviceCharacteristics: { [UUID_MCUBOOT_INFO_SERVICE]: [] },
-      serviceDisplayNames: {},
-    };
-
-    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
-      selectedDevice,
-      writeServiceCharacteristic: jest.fn(async () => true),
-    } as any);
-
-    const { getByText } = render(<DeviceStateMenuScreen />);
-    expect(getByText('1.0.0')).toBeTruthy();
-  });
-
-  it('excludes the MCUboot Info service from the Settings section', () => {
-    const versionCharUuid = '12345678-1234-5678-0003-56789abc0001';
-    const selectedDevice = {
-      name: 'RGB Sunglasses',
-      mac: 'AA:BB:CC',
-      device: {},
-      services: [{ uuid: UUID_MCUBOOT_INFO_SERVICE }, { uuid: 'core-config-service' }],
-      characteristicsByService: {
-        [UUID_MCUBOOT_INFO_SERVICE]: {
-          [versionCharUuid]: {
-            characteristic: {},
-            value: encodeUtf8ToBase64('1.0.0+0'),
-            name: 'MCUboot Version',
-            cpfFormat: 0x19,
-            isUpdateInProgress: false,
-          },
-        },
+        [UUID_MCUBOOT_UPDATER_SERVICE]: {},
         'core-config-service': {},
       },
       characteristics: {},
       serviceCharacteristics: {
         [UUID_MCUBOOT_INFO_SERVICE]: [],
+        [UUID_MCUBOOT_UPDATER_SERVICE]: [],
         'core-config-service': [],
       },
       serviceDisplayNames: {},
@@ -282,11 +158,12 @@ describe('DeviceStateMenuScreen', () => {
       writeServiceCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByText } = render(<DeviceStateMenuScreen />);
-    // Device Info should be its own section, not lumped into Settings
-    expect(getByText('Device Info')).toBeTruthy();
+    const { getByText, queryByText } = render(<DeviceStateMenuScreen />);
+    expect(queryByText('Device Info')).toBeNull();
+    expect(queryByText('MCUboot Version')).toBeNull();
+    expect(queryByText('MCUboot Updater')).toBeNull();
     expect(getByText('Settings')).toBeTruthy();
-    // core-config-service is in Settings (unknown UUID renders as the UUID string itself)
+    // core-config-service is still in Settings (unknown UUID renders as the UUID string itself)
     expect(getByText('core-config-service')).toBeTruthy();
   });
 });
