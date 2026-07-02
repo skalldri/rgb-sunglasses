@@ -101,7 +101,9 @@ K_MSGQ_DEFINE(bt_thread_command_msgq,  /* name */
 
 void bt_thread_func(void *a, void *b, void *c);
 
-K_THREAD_DEFINE(bt_thread, 8096, bt_thread_func, NULL, NULL, NULL, 6, 0, 0);
+// Stack size verified against real connect/disconnect/GATT-write traffic (issue #75):
+// high-water mark stayed at 724 B out of the previous 8096 B budget. 2048 B leaves ~2.8x margin.
+K_THREAD_DEFINE(bt_thread, 2048, bt_thread_func, NULL, NULL, NULL, 6, 0, 0);
 
 // Diagnostic-only (issue #41 investigation): tracks the currently connected peer so the
 // `bt_conn_info` shell command (below) can report live LE connection parameters on demand,

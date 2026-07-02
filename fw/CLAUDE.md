@@ -387,6 +387,18 @@ fw/scripts/jlink-flash.sh -- --skip-rebuild # extra args forwarded to `west flas
 - Typical total time: ~30-45s, plus ~15s for USB re-enumeration afterward. Re-run `/check-hardware` to confirm both ttyACM ports are back before issuing further serial/mcumgr commands.
 - This is the only way to reflash the bootloader (MCUboot/b0n); MCUmgr can only update the application images.
 
+### Recovering a wedged shell UART without reflashing
+
+If the shell UART (ttyACM0, `cdc_acm_uart0`) stops accepting writes (host-side `serial.write` times out) while the other CDC interface (ttyACM1, mcumgr) still works, the shell thread is likely wedged — e.g. a `sensor stream <dev> on ...` left running combines with `hw-flow-control`'s blocking `poll_out` to starve the OUT endpoint. This is a firmware hang, not a USB/WSL2 dropout (confirm via `lsusb | grep 2fe3` — device still enumerates).
+
+Don't reach for a full `jlink-flash.sh` reflash for this — it's slower and reprograms flash unnecessarily. Just reset the target CPU over the J-Link's SWD connection:
+
+```bash
+nrfutil device reset --serial-number <jlink-serial> --reset-kind RESET_PIN
+```
+
+(`<jlink-serial>` is the same S/N `/check-hardware` and `jlink-flash.sh` print, e.g. `50104975`.) This power-cycles/resets the target without touching flash contents. The board re-enumerates over USB afterward the same as after any reset — poll `lsusb`/`/dev/ttyACM*` before issuing further commands.
+
 ## MCUmgr
 
 `mcumgr` is installed in the devcontainer (built from source during image build). The MCUmgr port is always USB interface x.2 — run `/check-hardware` to find the current port (it shifts after resets; see WSL2 note below).
