@@ -180,7 +180,9 @@
 	status = "okay";
 	pinctrl-0 = <&pdm0_default>;
 	pinctrl-names = "default";
-	queue-size = <32>;
+	/* Verified against real beat/fft_bars audio load (issue #75, k_mem_slab_max_used_get()):
+	 * peak in-flight blocks stayed at 3 out of the previous 32+1 budget. 8 leaves ~2.6x margin. */
+	queue-size = <8>;
 	clock-source = "PCLK32M";
 };
 

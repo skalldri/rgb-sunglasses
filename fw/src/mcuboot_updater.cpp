@@ -64,6 +64,13 @@ static const struct flash_area *s_mcuboot_fa  = NULL; /* internal MCUboot flash 
 static struct fs_file_t s_staging_file;               /* FAT staging file handle */
 static bool s_staging_file_open = false;
 
+/* Shared scratch buffer for validate_work_handler and commit_work_handler — both run
+ * serialized on s_updater_wq (see k_work_submit_to_queue calls below), so they can never
+ * be active at the same time. cmd_mcuboot_update_verify's verify_buf is intentionally kept
+ * separate: it runs on the shell thread and is documented as callable without synchronizing
+ * against the update state machine. */
+static uint8_t s_scratch_buf[kPageSize];
+
 /* ============================================================================
  * Worker thread
  * ============================================================================ */
@@ -205,20 +212,19 @@ static void validate_work_handler(struct k_work *work)
 
     /* Incrementally compute CRC32 over the payload — file is already positioned
      * after the header from the read above. */
-    static uint8_t crc_buf[kPageSize];
     uint32_t running   = 0;
     uint32_t remaining = hdr.payload_size;
 
     while (remaining > 0) {
-        uint32_t chunk = MIN(remaining, sizeof(crc_buf));
-        rc = fs_read(&s_staging_file, crc_buf, chunk);
+        uint32_t chunk = MIN(remaining, sizeof(s_scratch_buf));
+        rc = fs_read(&s_staging_file, s_scratch_buf, chunk);
         if (rc != (int)chunk) {
             LOG_ERR("CRC read failed (got %d, expected %u)", rc, chunk);
             close_staging_file(true);
             set_error(MCUBOOT_UPDATER_ERR_STAGING_READ);
             return;
         }
-        running = crc32_ieee_update(running, crc_buf, chunk);
+        running = crc32_ieee_update(running, s_scratch_buf, chunk);
         remaining -= chunk;
     }
 
@@ -260,7 +266,6 @@ static void commit_work_handler(struct k_work *work)
      * the device can be recovered. Only the final ~100 ms (page 0 erase +
      * write) is the unrecoverable window that requires J-Link.
      */
-    static uint8_t page_buf[kPageSize];
 
     LOG_INF("Flashing MCUboot: %u pages (%u bytes)", kTotalPages, PM_MCUBOOT_SIZE);
 
@@ -270,7 +275,7 @@ static void commit_work_handler(struct k_work *work)
 
         if (page_off >= s_payload_size) {
             /* Page is entirely beyond the binary — write 0xFF (erased state). */
-            memset(page_buf, 0xFF, kPageSize);
+            memset(s_scratch_buf, 0xFF, kPageSize);
         } else {
             off_t file_off = (off_t)(kHdrSize + page_off);
             uint32_t avail = MIN(kPageSize, s_payload_size - page_off);
@@ -283,7 +288,7 @@ static void commit_work_handler(struct k_work *work)
                 return;
             }
 
-            read_rc = fs_read(&s_staging_file, page_buf, avail);
+            read_rc = fs_read(&s_staging_file, s_scratch_buf, avail);
             if (read_rc != (int)avail) {
                 LOG_ERR("Read failed for page %u: got %d of %u", p, read_rc, avail);
                 close_staging_file(false);
@@ -293,7 +298,7 @@ static void commit_work_handler(struct k_work *work)
 
             /* Pad any partial page tail with 0xFF to fill the full page. */
             if (avail < kPageSize) {
-                memset(page_buf + avail, 0xFF, kPageSize - avail);
+                memset(s_scratch_buf + avail, 0xFF, kPageSize - avail);
             }
         }
 
@@ -305,7 +310,7 @@ static void commit_work_handler(struct k_work *work)
             return;
         }
 
-        rc = flash_area_write(s_mcuboot_fa, internal_off, page_buf, kPageSize);
+        rc = flash_area_write(s_mcuboot_fa, internal_off, s_scratch_buf, kPageSize);
         if (rc) {
             LOG_ERR("Internal flash write failed at page %u: %d", p, rc);
             close_staging_file(false);
@@ -333,7 +338,7 @@ static void commit_work_handler(struct k_work *work)
             return;
         }
 
-        read_rc = fs_read(&s_staging_file, page_buf, avail);
+        read_rc = fs_read(&s_staging_file, s_scratch_buf, avail);
         if (read_rc != (int)avail) {
             LOG_ERR("Read failed for page 0: got %d of %u", read_rc, avail);
             close_staging_file(false);
@@ -342,7 +347,7 @@ static void commit_work_handler(struct k_work *work)
         }
 
         if (avail < kPageSize) {
-            memset(page_buf + avail, 0xFF, kPageSize - avail);
+            memset(s_scratch_buf + avail, 0xFF, kPageSize - avail);
         }
     }
 
@@ -354,7 +359,7 @@ static void commit_work_handler(struct k_work *work)
         return;
     }
 
-    rc = flash_area_write(s_mcuboot_fa, 0, page_buf, kPageSize);
+    rc = flash_area_write(s_mcuboot_fa, 0, s_scratch_buf, kPageSize);
     if (rc) {
         LOG_ERR("Internal flash write failed for page 0: %d", rc);
         close_staging_file(false);
