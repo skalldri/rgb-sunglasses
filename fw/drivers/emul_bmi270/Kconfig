@@ -1,0 +1,10 @@
+config EMUL_BMI270
+    bool "Emulate a Bosch BMI270 accel/gyro (native_sim tests)"
+    depends on EMUL && BMI270
+    help
+      SPI register-file emulator for the Bosch BMI270 IMU. Satisfies the
+      upstream bmi270 driver's full init handshake (chip id, soft reset,
+      config-file upload, INTERNAL_STATUS poll) and lets tests inject
+      accel/gyro samples via the sensor emulator backend API
+      (emul_sensor_backend_set_channel). Only useful on native_sim; can
+      never be enabled in hardware builds because CONFIG_EMUL is off there.
