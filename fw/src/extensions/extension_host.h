@@ -57,9 +57,15 @@ void setParamValue(size_t slot, size_t index, uint32_t value);
 Animation animationId(size_t slot);
 
 /** (Re)creates the sandbox thread inside `slot`'s domain and runs the
- *  extension's rgbx_init() there. Clears a previous fault. Called by the
- *  proxy on setActive(true). */
+ *  extension's rgbx_init() there. Called by the proxy on setActive(true).
+ *  Returns false — and pushes Is Active = false to the app — if bring-up
+ *  fails or the slot is faulted (a dead extension must be explicitly reset
+ *  via clearFault() before it can run again). */
 bool activate(size_t slot);
+
+/** Clears a slot's fault flag so activate() will accept it again. Deliberate
+ *  developer action (shell `ext select`); BLE activation never auto-clears. */
+void clearFault(size_t slot);
 
 /** Aborts the sandbox thread. Called by the proxy on setActive(false). */
 void deactivate(size_t slot);
@@ -67,8 +73,9 @@ void deactivate(size_t slot);
 /** Runs one sandboxed tick: writes the input snapshot into the extension,
  *  signals the sandbox thread, waits up to CONFIG_APP_EXT_TICK_DEADLINE_MS,
  *  then copies the extension's framebuffer into `renderer`. On deadline
- *  overrun or fault the slot is marked faulted, the thread is aborted, and
- *  false is returned (issue #85 recovery path). */
+ *  overrun or fault the slot is marked faulted, the thread is aborted, the
+ *  animation's Is Active state is un-marked (notifying the app), and false
+ *  is returned (issue #85 recovery path). */
 bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer);
 
 /** Optional IMU snapshot provider for rgbx_inputs (zeros when unset). */

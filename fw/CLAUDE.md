@@ -241,7 +241,8 @@ See `src/imu/imu.cpp`'s `imu_init()` for the working reference implementation of
 - **The `llext-edk` cmake target does not rebuild when headers change** — delete `build/fw/zephyr/llext-edk.tar.xz` first (build.sh does).
 - **Extension init arrays run inside the sandbox** via `llext_bringup()` from the user-mode thread entry (`llext_get_fn_table` is a syscall) — needed for C++ static constructors, though GCC constant-initializes simple instances (vtable pointer via `.rel.data`).
 - The fs loader copies the whole ELF into `llext_heap` (`CONFIG_LLEXT_HEAP_SIZE=64` KB; appcore RAM went 75.5% → ~89%).
-- Debug shell: `ext list` / `ext select <slot>` / `ext param <slot> <idx> [<value>]` / `ext scan`. The plasma demo doubles as the recovery test (Speed `0xDEAD` = MPU fault, `0xF00D` = hang).
+- Debug shell: `ext list` / `ext select <slot>` / `ext param <slot> <idx> [<value>]`. The plasma demo doubles as the recovery test (Speed `0xDEAD` = MPU fault, `0xF00D` = hang).
+- **Fault recovery is deliberate**: a dead sandbox un-marks + notifies the animation's Is Active characteristic (app toggle turns off) and BLE re-activation is rejected; only `ext select <slot>` clears the fault and retries. The host serializes activate/deactivate/tick/param-writes with a mutex — `pattern_controller_change_to_animation()` runs synchronously on the *caller's* thread (BT RX for GATT writes, shell), so nothing here may assume pattern-controller thread context.
 
 ### Scope reminder
 

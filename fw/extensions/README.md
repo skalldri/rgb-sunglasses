@@ -4,8 +4,10 @@ Loadable animation extensions (`.llext` files) run **fully sandboxed**: the
 firmware executes extension code exclusively on a dedicated user-mode thread
 confined to the extension's own MPU memory domain (GitHub issue #85). A buggy
 extension can hang or crash *itself* — the firmware aborts the sandbox on a
-missed tick deadline or MPU fault, keeps running, and the extension can be
-re-activated from the app or shell.
+missed tick deadline or MPU fault, keeps running, un-marks the animation's
+Is Active characteristic (with a notification, so the app disables it), and
+rejects further BLE activation until the fault is deliberately cleared with
+`ext select` on the shell.
 
 Extensions are discovered at boot from `/NAND:/ext/*.llext` and appear as
 **first-class animations**: they get their own BLE GATT service (Animation
@@ -66,11 +68,12 @@ filename; each gets animation id `0x20 + slot`.
 
 ```
 ext list                      # slots, ids, names, [active]/[FAULTED] flags
-ext select <slot>             # activate an extension animation
+ext select <slot>             # activate an extension animation (clears a fault)
 ext param <slot> <idx> [<v>]  # get/set a manifest parameter without BLE
-ext scan                      # re-run discovery (only when nothing loaded)
 ```
 
 `plasma` doubles as the sandbox-recovery test: setting Speed to `0xDEAD`
 makes the next tick MPU-fault; `0xF00D` makes it spin until the deadline.
-Both abort only the sandbox thread; re-activate to recover.
+Both abort only the sandbox thread and push Is Active = false to the app;
+`ext select <slot>` clears the fault and retries (BLE activation of a
+faulted extension is rejected, so recovery is always a deliberate action).

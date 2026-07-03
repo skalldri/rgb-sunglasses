@@ -21,7 +21,9 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/logging/log.h>
 
+#include <array>
 #include <cstring>
+#include <utility>
 
 LOG_MODULE_REGISTER(ext_bt, LOG_LEVEL_INF);
 
@@ -31,8 +33,9 @@ using extension_host::kMaxExtensions;
 
 /* Characteristics per service: Animation Name + Is Active + params. */
 constexpr size_t kMaxChars = 2 + RGBX_MAX_PARAMS;
-/* Attrs per characteristic: declaration + value + CUD + CPF. */
-constexpr size_t kMaxAttrs = 1 /* primary service */ + 4 * kMaxChars;
+/* Attrs per characteristic: declaration + value + CUD + CPF; +1 for the CCC
+ * on Is Active (the only notifying characteristic). */
+constexpr size_t kMaxAttrs = 1 /* primary service */ + 4 * kMaxChars + 1;
 
 constexpr bt_gatt_cpf kCpfUtf8 = {.format = BLE_GATT_CPF_FORMAT_UTF8S};
 constexpr bt_gatt_cpf kCpfBool = {.format = BLE_GATT_CPF_FORMAT_BOOLEAN};
@@ -54,10 +57,24 @@ struct BtSlot {
     bt_gatt_chrc chrcs[kMaxChars] = {};
     ParamCtx paramCtx[RGBX_MAX_PARAMS] = {};
     bt_gatt_attr attrs[kMaxAttrs] = {};
+    bt_gatt_ccc_managed_user_data isActiveCcc = {};
+    const bt_gatt_attr *isActiveValueAttr = nullptr;  // notify target
     bt_gatt_service svc = {};
 };
 
 BtSlot sBtSlots[kMaxExtensions];
+
+/* Notifies the CURRENT Is Active value unconditionally. Used both when the
+ * value changes and to push a rejection back to a client whose optimistic
+ * toggle write didn't take (PR #89 review finding 3) — in that case the
+ * value hasn't changed but the app must still hear "you are off". No
+ * subscribers is fine; bt_gatt_notify's error is ignored. */
+void push_is_active(BtSlot *bs) {
+    if (bs->registered && bs->isActiveValueAttr != nullptr) {
+        (void)bt_gatt_notify(nullptr, bs->isActiveValueAttr, &bs->isActive,
+                             sizeof(bs->isActive));
+    }
+}
 
 /* --- value callbacks ---------------------------------------------------- */
 
@@ -76,17 +93,32 @@ ssize_t read_is_active(struct bt_conn *conn, const struct bt_gatt_attr *attr, vo
 
 /* Same semantics as AnimationIsActiveBinding::onRemoteActiveChange for the
  * built-ins: write true switches to this animation; write false deactivates
- * it (back to None) only if it is the current one. */
+ * it (back to None) only if it is the current one. Unlike built-ins,
+ * activation can FAIL (faulted slot, sandbox bring-up death) — every
+ * rejected/failed true-write pushes Is Active = false back so the app's
+ * optimistic toggle reverts (PR #89 review finding 3). */
 ssize_t write_is_active(struct bt_conn *, const struct bt_gatt_attr *attr, const void *buf,
                         uint16_t len, uint16_t offset, uint8_t) {
     if (offset != 0 || len != 1) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
-    const auto *bs = static_cast<const BtSlot *>(attr->user_data);
+    auto *bs = static_cast<BtSlot *>(attr->user_data);
     const bool active = *static_cast<const uint8_t *>(buf) != 0;
     const Animation id = extension_host::animationId(bs->slot);
     if (active) {
+        if (extension_host::isFaulted(bs->slot)) {
+            /* Dead sandbox: don't switch to an animation that can't run —
+             * only `ext select` (deliberate developer action) resets it. */
+            push_is_active(bs);
+            return len;
+        }
         pattern_controller_change_to_animation(id);
+        if (bs->isActive == 0) {
+            /* The switch happened but the sandbox died in rgbx_init(): the
+             * proxy already recorded inactive; make sure the writer hears it
+             * (the value never changed, so no notify fired). */
+            push_is_active(bs);
+        }
     } else if (pattern_controller_get_current_animation() == id) {
         pattern_controller_change_to_animation(Animation::None);
     }
@@ -165,20 +197,28 @@ size_t append_characteristic(BtSlot *bs, size_t attrIdx, size_t chrcIdx, const b
 
 /* Registry is-active mirror: one setter thunk per slot (the registry takes
  * plain function pointers), keeping the readable is-active value in sync
- * with activation state — the same registry -> characteristic path the
- * built-ins use via IsActiveCharacteristic. */
+ * with activation state and notifying subscribers on change — the same
+ * registry -> characteristic path the built-ins use via
+ * IsActiveCharacteristic. The thunk table is expanded from kMaxExtensions
+ * via index_sequence so a capacity change needs no hand edits here (PR #89
+ * review finding 7). */
 template <size_t N>
 void is_active_setter(bool active) {
-    sBtSlots[N].isActive = active ? 1 : 0;
+    BtSlot *bs = &sBtSlots[N];
+    const uint8_t value = active ? 1 : 0;
+    if (bs->isActive != value) {
+        bs->isActive = value;
+        push_is_active(bs);
+    }
 }
 
-constexpr AnimationIsActiveSetter kIsActiveSetters[kMaxExtensions] = {
-    is_active_setter<0>,
-    is_active_setter<1>,
-    is_active_setter<2>,
-    is_active_setter<3>,
-};
-static_assert(kMaxExtensions == 4, "kIsActiveSetters must list one thunk per extension slot");
+template <size_t... I>
+constexpr std::array<AnimationIsActiveSetter, sizeof...(I)> make_is_active_setters(
+    std::index_sequence<I...>) {
+    return {{is_active_setter<I>...}};
+}
+
+constexpr auto kIsActiveSetters = make_is_active_setters(std::make_index_sequence<kMaxExtensions>{});
 
 }  // namespace
 
@@ -214,10 +254,26 @@ void extension_bt_register(size_t slot) {
                                     /*writable=*/false, read_name, nullptr, bs, "Animation Name",
                                     &kCpfUtf8);
 
-    /* Is Active — fixed UUID, read/write, drives activation. */
+    /* Is Active — fixed UUID, read/write/notify, drives activation. The
+     * notify path lets the firmware push Is Active = false when a sandbox
+     * dies or a write is rejected, so the app disables the toggle (built-ins
+     * notify too, via IsActiveCharacteristic). CCC follows CPF, mirroring
+     * BtGattCharacteristicCommon's attribute order. */
+    const size_t isActiveChrc = chrcIdx;
     attrIdx = append_characteristic(
         bs, attrIdx, chrcIdx++, reinterpret_cast<const bt_uuid *>(&kIsActiveCharacteristicUuid),
         /*writable=*/true, read_is_active, write_is_active, bs, "Is Active", &kCpfBool);
+    bs->chrcs[isActiveChrc].properties |= BT_GATT_CHRC_NOTIFY;
+    bs->isActiveValueAttr = &bs->attrs[attrIdx - 3];  // value attr of the 4 just appended
+    bs->isActiveCcc = BT_GATT_CCC_MANAGED_USER_DATA_INIT(nullptr, nullptr, nullptr);
+    bs->attrs[attrIdx++] = {
+        .uuid = BT_UUID_GATT_CCC,
+        .read = bt_gatt_attr_read_ccc,
+        .write = bt_gatt_attr_write_ccc,
+        .user_data = &bs->isActiveCcc,
+        .handle = 0,
+        .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+    };
 
     /* One characteristic per manifest parameter, auto-UUID'd with the same
      * compose scheme BtGattServer uses (characteristic id in the UUID's low

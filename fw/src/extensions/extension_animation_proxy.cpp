@@ -16,6 +16,9 @@
 #include <extensions/extension_host.h>
 #include <zephyr/logging/log.h>
 
+#include <array>
+#include <utility>
+
 LOG_MODULE_REGISTER(ext_proxy, LOG_LEVEL_INF);
 
 namespace {
@@ -31,14 +34,19 @@ class ExtensionAnimationProxy : public BaseAnimation {
     void init() override {}
 
     void setActive(bool active) override {
+        bool running = active;
         if (active) {
-            (void)extension_host::activate(slot_);
+            running = extension_host::activate(slot_);
         } else {
             extension_host::deactivate(slot_);
         }
-        /* Mirror state to the BLE is-active characteristic, matching what
-         * BaseAnimationTemplate does for built-ins via the registry. */
-        animation_registry_set_is_active(extension_host::animationId(slot_), active);
+        /* Mirror the ACTUAL state — not the requested one — to the BLE
+         * is-active characteristic (PR #89 review finding 3): a failed or
+         * rejected sandbox bring-up must read (and notify) as inactive so
+         * the app disables the animation instead of showing a live toggle
+         * over a black frame. Built-ins mirror the request directly via
+         * BaseAnimationTemplate because they cannot fail to start. */
+        animation_registry_set_is_active(extension_host::animationId(slot_), running);
     }
 
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override {
@@ -63,20 +71,22 @@ class ExtensionAnimationProxy : public BaseAnimation {
 ExtensionAnimationProxy sProxies[extension_host::kMaxExtensions];
 
 /* animation_registry factories are plain function pointers (no context
- * argument), so each slot needs its own thunk. */
+ * argument), so each slot needs its own thunk. The table is expanded from
+ * kMaxExtensions via index_sequence so a capacity change needs no hand
+ * edits here (PR #89 review finding 7). */
 template <size_t N>
 BaseAnimation *proxy_factory() {
     return &sProxies[N];
 }
 
-constexpr AnimationInstanceFactory kFactories[extension_host::kMaxExtensions] = {
-    proxy_factory<0>,
-    proxy_factory<1>,
-    proxy_factory<2>,
-    proxy_factory<3>,
-};
-static_assert(extension_host::kMaxExtensions == 4,
-              "kFactories must list one thunk per extension slot");
+template <size_t... I>
+constexpr std::array<AnimationInstanceFactory, sizeof...(I)> make_factories(
+    std::index_sequence<I...>) {
+    return {{proxy_factory<I>...}};
+}
+
+constexpr auto kFactories =
+    make_factories(std::make_index_sequence<extension_host::kMaxExtensions>{});
 
 }  // namespace
 

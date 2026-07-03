@@ -47,6 +47,7 @@ namespace {
 struct Slot {
     bool loaded = false;
     bool faulted = false;
+    size_t fileIndex = 0;  // extension_registry index this slot was loaded from
     struct llext *ext = nullptr;
     struct k_mem_domain domain;
     char displayName[kMaxNameLen] = {};
@@ -76,6 +77,20 @@ int sActiveSlot = -1;
  * synchronous. */
 K_SEM_DEFINE(sReqSem, 0, 1);
 K_SEM_DEFINE(sDoneSem, 0, 1);
+
+/* Serializes every entry point that touches the singleton sandbox state
+ * (thread object, handshake semaphores, sActiveSlot) or slot param values.
+ * Needed because pattern_controller_change_to_animation() runs the switch
+ * synchronously on the CALLER's thread — activate()/deactivate() arrive on
+ * the BT RX thread (Is Active GATT write) or the shell thread while tick()
+ * runs on the pattern-controller thread (PR #89 review finding 1). k_mutex
+ * is owner-recursive, so nested locking within one entry point is safe. */
+K_MUTEX_DEFINE(sHostLock);
+
+struct HostLockGuard {
+    HostLockGuard() { k_mutex_lock(&sHostLock, K_FOREVER); }
+    ~HostLockGuard() { k_mutex_unlock(&sHostLock); }
+};
 
 AnimationImuSource *sImuSource = nullptr;
 
@@ -115,16 +130,17 @@ void sandbox_stop() {
 
 /* Marks the active slot dead after a deadline overrun / fault and tears the
  * sandbox down so the pattern controller can keep running (issue #85
- * recovery). The slot stays faulted until the animation is re-activated. */
+ * recovery). The slot stays faulted — activate() rejects it — until
+ * clearFault() (shell `ext select`) explicitly resets it. Un-marking
+ * Is Active notifies the app so it disables the dead animation's toggle. */
 void sandbox_fault(Slot &slot, const char *what) {
-    LOG_ERR("extension '%s': %s — aborting sandbox (re-activate to retry)", slot.displayName,
+    LOG_ERR("extension '%s': %s — aborting sandbox (`ext select` to retry)", slot.displayName,
             what);
     slot.faulted = true;
     sandbox_stop();
+    animation_registry_set_is_active(animationId(static_cast<size_t>(&slot - sSlots)), false);
 }
 
-/* Loads registry entry `fileIndex` into slot `slotIndex`. The two diverge as
- * soon as one file fails validation and is skipped. */
 }  // namespace
 }  // namespace extension_host
 
@@ -158,6 +174,34 @@ extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch
 namespace extension_host {
 namespace {
 
+/* Bytes remaining from `ptr` to the end of the extension memory region that
+ * contains it, or 0 if `ptr` lies in none of the extension's four MPU
+ * partition regions (TEXT/DATA/RODATA/BSS — the memory the extension itself
+ * owns and the only memory the kernel may dereference on its behalf). */
+size_t ext_region_remaining(const struct llext *ext, const void *ptr) {
+    const auto addr = reinterpret_cast<uintptr_t>(ptr);
+    for (int r = LLEXT_MEM_TEXT; r < LLEXT_MEM_PARTITIONS; r++) {
+        const auto base = reinterpret_cast<uintptr_t>(ext->mem[r]);
+        if (ext->mem[r] != nullptr && addr >= base && addr - base < ext->mem_size[r]) {
+            return ext->mem_size[r] - (addr - base);
+        }
+    }
+    return 0;
+}
+
+bool in_ext_memory(const struct llext *ext, const void *ptr, size_t len) {
+    return len > 0 && ext_region_remaining(ext, ptr) >= len;
+}
+
+/* NUL-terminated string fully inside extension memory (NUL included)? */
+bool ext_string_ok(const struct llext *ext, const char *str) {
+    const size_t cap = ext_region_remaining(ext, str);
+    return cap > 0 && memchr(str, '\0', cap) != nullptr;
+}
+
+/* Loads registry entry `fileIndex` into slot `slotIndex`. The two diverge as
+ * soon as one file fails validation and is skipped, so the slot records its
+ * file index for diagnostics (`ext list`). */
 bool load_slot(size_t fileIndex, size_t slotIndex) {
     Slot &slot = sSlots[slotIndex];
 
@@ -195,10 +239,19 @@ bool load_slot(size_t fileIndex, size_t slotIndex) {
         return false;
     }
 
-    /* Validate the manifest before trusting any of it. Note the manifest's
-     * embedded pointers (name, params) point into the extension's own
-     * regions; everything is copied out here so nothing kernel-side ever
-     * dereferences extension memory after load. */
+    /* Validate the manifest before trusting any of it. Its embedded pointers
+     * (name, params, each param's name) are untrusted relocated values from
+     * the ELF: a corrupt or hostile file can make them point anywhere, and a
+     * kernel-mode deref of a wild pointer faults a NON-sandbox thread — a
+     * whole-system halt (PR #89 review finding 2). Every pointer is
+     * bounds-checked against the extension's own regions before the copy-out
+     * below, and nothing kernel-side dereferences extension manifest memory
+     * after load. */
+    if (!in_ext_memory(slot.ext, manifest, sizeof(*manifest))) {
+        LOG_ERR("%s: manifest outside extension memory", path);
+        llext_unload(&slot.ext);
+        return false;
+    }
     const LedConfig *cfg = get_current_led_config();
     if (manifest->abi_version != RGBX_ABI_VERSION) {
         LOG_ERR("%s: ABI version %u != %u", path, manifest->abi_version, RGBX_ABI_VERSION);
@@ -212,18 +265,42 @@ bool load_slot(size_t fileIndex, size_t slotIndex) {
         return false;
     }
     if (manifest->param_count > RGBX_MAX_PARAMS ||
-        (manifest->param_count > 0 && manifest->params == nullptr)) {
+        (manifest->param_count > 0 &&
+         !in_ext_memory(slot.ext, manifest->params,
+                        manifest->param_count * sizeof(struct rgbx_param_desc)))) {
         LOG_ERR("%s: bad param table (count %u)", path, manifest->param_count);
         llext_unload(&slot.ext);
         return false;
     }
+    if (manifest->name != nullptr && !ext_string_ok(slot.ext, manifest->name)) {
+        LOG_ERR("%s: manifest name outside extension memory", path);
+        llext_unload(&slot.ext);
+        return false;
+    }
+    /* The exported blocks the host reads/writes every tick must also be
+     * fully inside extension memory — an export whose real object is smaller
+     * than the ABI-required size would otherwise have the kernel touching
+     * memory past it. */
+    if (!in_ext_memory(slot.ext, slot.inputs, sizeof(struct rgbx_inputs)) ||
+        !in_ext_memory(slot.ext, slot.framebuffer,
+                       (size_t)manifest->width * manifest->height * 3)) {
+        LOG_ERR("%s: inputs/framebuffer exports too small or outside extension memory", path);
+        llext_unload(&slot.ext);
+        return false;
+    }
 
+    slot.fileIndex = fileIndex;
     slot.width = manifest->width;
     slot.height = manifest->height;
     strncpy(slot.displayName, manifest->name ? manifest->name : "unnamed", kMaxNameLen - 1);
     slot.nParams = manifest->param_count;
     for (size_t p = 0; p < slot.nParams; p++) {
         const struct rgbx_param_desc &desc = manifest->params[p];
+        if (desc.name != nullptr && !ext_string_ok(slot.ext, desc.name)) {
+            LOG_ERR("%s: param %zu name outside extension memory", path, p);
+            llext_unload(&slot.ext);
+            return false;
+        }
         strncpy(slot.params[p].name, desc.name ? desc.name : "param", kMaxParamNameLen - 1);
         slot.params[p].type = desc.type;
         slot.params[p].defaultValue = desc.default_value;
@@ -308,6 +385,9 @@ void setParamValue(size_t slot, size_t index, uint32_t value) {
     if (slot >= sSlotCount || index >= sSlots[slot].nParams) {
         return;
     }
+    /* Serialized against tick()'s params snapshot so one frame can't observe
+     * a mix of old and new values across params (finding 6). */
+    HostLockGuard lock;
     sSlots[slot].paramValues[index] = value;
 }
 
@@ -323,10 +403,19 @@ bool activate(size_t slot) {
     if (!isLoaded(slot)) {
         return false;
     }
+    HostLockGuard lock;
     Slot &s = sSlots[slot];
 
+    /* A faulted extension stays dead until explicitly reset (clearFault via
+     * shell `ext select`) — BLE re-activation is rejected and the app's
+     * toggle is pushed back off by the proxy/extension_bt (finding 3). */
+    if (s.faulted) {
+        LOG_WRN("extension '%s' is faulted — activation rejected (`ext select` to reset)",
+                s.displayName);
+        return false;
+    }
+
     sandbox_stop();
-    s.faulted = false;
     k_sem_reset(&sReqSem);
     k_sem_reset(&sDoneSem);
 
@@ -360,12 +449,27 @@ bool activate(size_t slot) {
 }
 
 void deactivate(size_t slot) {
+    HostLockGuard lock;
     if (sActiveSlot == static_cast<int>(slot)) {
         sandbox_stop();
     }
 }
 
+void clearFault(size_t slot) {
+    if (slot >= sSlotCount) {
+        return;
+    }
+    HostLockGuard lock;
+    sSlots[slot].faulted = false;
+}
+
 bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
+    /* Held across the whole handshake: an Is Active write on the BT RX
+     * thread must not abort/recreate the sandbox thread while this tick is
+     * between the request and done semaphores (finding 1). Worst-case hold
+     * is the tick deadline, which bounds how long a concurrent activation
+     * can block. */
+    HostLockGuard lock;
     if (!isLoaded(slot) || sSlots[slot].faulted || sActiveSlot != static_cast<int>(slot)) {
         return false;
     }
@@ -419,24 +523,10 @@ int cmd_ext_list(const struct shell *sh, size_t, char **) {
     for (size_t i = 0; i < sSlotCount; i++) {
         shell_print(sh, "[%zu] id=0x%02x '%s' file=%s params=%zu%s%s", i,
                     (unsigned)(kAnimationIdBase + i), sSlots[i].displayName,
-                    extension_registry::name(i), sSlots[i].nParams,
+                    extension_registry::name(sSlots[i].fileIndex), sSlots[i].nParams,
                     sActiveSlot == (int)i ? " [active]" : "",
                     sSlots[i].faulted ? " [FAULTED]" : "");
     }
-    return 0;
-}
-
-/* Debug aid: re-run discovery/loading interactively so its log output lands
- * on a connected shell instead of in the boot-log burst. Only permitted when
- * nothing loaded at boot — init() is not idempotent (registry/GATT slots
- * would double-register). */
-int cmd_ext_scan(const struct shell *sh, size_t, char **) {
-    if (sSlotCount != 0) {
-        shell_error(sh, "extensions already loaded; scan only works from empty");
-        return -EBUSY;
-    }
-    extension_host::init();
-    shell_print(sh, "scan complete: %zu extension(s) loaded", sSlotCount);
     return 0;
 }
 
@@ -470,6 +560,9 @@ int cmd_ext_select(const struct shell *sh, size_t argc, char **argv) {
         shell_error(sh, "no extension in slot %zu", slot);
         return -ENOENT;
     }
+    /* The shell is the deliberate developer retry path for a dead extension:
+     * clear the fault so activate() accepts it (BLE activation never does). */
+    clearFault(slot);
     int ret = pattern_controller_change_to_animation(animationId(slot));
     if (ret == 0) {
         shell_print(sh, "switched to extension '%s'", sSlots[slot].displayName);
@@ -481,12 +574,11 @@ int cmd_ext_select(const struct shell *sh, size_t argc, char **argv) {
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_ext, SHELL_CMD(list, NULL, "List loaded animation extensions", cmd_ext_list),
-    SHELL_CMD(scan, NULL, "Re-run extension discovery (debug; empty registry only)",
-              cmd_ext_scan),
     SHELL_CMD_ARG(param, NULL, "Get/set a param: ext param <slot> <index> [<value>]",
                   cmd_ext_param, 3, 1),
-    SHELL_CMD_ARG(select, NULL, "Activate extension animation: ext select <slot>", cmd_ext_select,
-                  2, 0),
+    SHELL_CMD_ARG(select, NULL,
+                  "Activate extension animation (clears a fault): ext select <slot>",
+                  cmd_ext_select, 2, 0),
     SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(ext, &sub_ext, "Animation extension host", NULL);
 
