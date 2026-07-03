@@ -335,6 +335,13 @@ sent, corrupting it (observed as `command not found` on the very first call afte
 reset). `_run_command` sends Ctrl+C before every command to cancel whatever's
 sitting in the line editor, not just on the first call — cheap and fully general.
 
+**Old boot logs flushing on port-open look like a spontaneous reboot — they aren't.**
+The USB CDC shell buffers unread output while no terminal is attached; freshly
+opening the port can dump a backlog that starts with `[00:00:00.xxx]` boot logs
+from a reset that happened minutes earlier. Before concluding the board just
+rebooted (or crashed), run `kernel uptime` — if uptime is large, you're reading
+backlog, not a fresh boot.
+
 **Trying out new GLIM content:** `GlimPlayerAnimation` (`anim set glim_player`) replaced the
 old per-file `bad_apple`/`nyan_cat` animations — it enumerates every `.glim` file under
 `/NAND:/glim` on boot (`glim_registry`) and can play any of them, picked via BLE (a
