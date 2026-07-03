@@ -38,3 +38,13 @@ void tilt_animation_bind_default_imu_dependencies() {
     TiltAnimation::getInstance()->setImuSource(&sImuSource);
 }
 #endif
+
+#if defined(CONFIG_APP_EXTENSION_HOST)
+#include <extensions/extension_host.h>
+/* Sandboxed extensions receive the same drain-and-cache IMU snapshot via
+ * rgbx_inputs (the host copies the getters into the extension's input block
+ * each tick — extensions never touch this source directly). */
+void extension_host_bind_default_imu_dependencies() {
+    extension_host::set_imu_source(&sImuSource);
+}
+#endif

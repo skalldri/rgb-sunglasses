@@ -10,7 +10,9 @@ struct AnimationRegistryEntry {
     AnimationIsActiveSetter activeSetter;
 };
 
-static constexpr size_t kMaxRegistryEntries = 16;
+// 13 built-in Animation enum values + up to 4 runtime extension animations
+// (CONFIG_APP_EXTENSION_HOST, ids 0x20+) with headroom.
+static constexpr size_t kMaxRegistryEntries = 24;
 static AnimationRegistryEntry sRegistry[kMaxRegistryEntries];
 static size_t sRegistryCount = 0;
 

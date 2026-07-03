@@ -29,6 +29,10 @@
 #include <animations/tilt_animation.h>
 #endif
 
+#if defined(CONFIG_APP_EXTENSION_HOST)
+#include <extensions/extension_host.h>
+#endif
+
 namespace {
 class RegistryActiveStateObserver : public AnimationActiveStateObserver {
    public:
@@ -312,6 +316,12 @@ int animation_registry_register_defaults() {
 
     tilt_animation_bind_default_imu_dependencies();
     tilt_animation_bind_default_bt_dependencies();
+#endif
+
+#if defined(CONFIG_APP_EXTENSION_HOST) && defined(CONFIG_IMU)
+    // Give sandboxed extensions the shared IMU snapshot source (rgbx_inputs
+    // accel/gyro read as zeros when this isn't wired, e.g. IMU-less builds).
+    extension_host_bind_default_imu_dependencies();
 #endif
 
     return 0;
