@@ -47,10 +47,27 @@ static void imu_thread_func(void* a, void* b, void* c) {
 
     struct sensor_value odr;
     odr.val1 = 25;
+    // val2 (the microhertz component) was previously left uninitialized. The BMI270
+    // driver converts this struct with sensor_value_to_double() (val1 + val2/1e6) and
+    // matches the result against exact ODR ranges -- garbage val2 shifts the value out
+    // of the intended 25Hz bin, and a large negative value lands below every bin,
+    // which powers the sensor off entirely (odr_bits == 0 in set_accel_odr_osr()).
+    // That killed the DRDY interrupt and with it the Tilt animation: the old -Og
+    // build happened to get benign stack garbage, the -Os/K_USER build did not.
+    odr.val2 = 0;
 
-    // Start the accel and gyro at 25Hz
-    sensor_attr_set(s_imu_dev, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr);
-    sensor_attr_set(s_imu_dev, SENSOR_CHAN_GYRO_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr);
+    // Start the accel and gyro at 25Hz. A failure here means the sensor never
+    // samples, no DRDY interrupt ever fires, and this thread blocks forever below --
+    // so log it loudly instead of failing silently.
+    int ret = sensor_attr_set(s_imu_dev, SENSOR_CHAN_ACCEL_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY,
+                              &odr);
+    if (ret) {
+        LOG_ERR("accel ODR set failed: %d", ret);
+    }
+    ret = sensor_attr_set(s_imu_dev, SENSOR_CHAN_GYRO_XYZ, SENSOR_ATTR_SAMPLING_FREQUENCY, &odr);
+    if (ret) {
+        LOG_ERR("gyro ODR set failed: %d", ret);
+    }
 
     while (true) {
         /* Block until the BMI270 data-ready interrupt fires. */
@@ -60,7 +77,7 @@ static void imu_thread_func(void* a, void* b, void* c) {
             continue;
         }
 
-        int ret = sensor_sample_fetch(s_imu_dev);
+        ret = sensor_sample_fetch(s_imu_dev);
         if (ret) {
             LOG_ERR("sensor_sample_fetch failed: %d", ret);
             continue;
