@@ -2,28 +2,35 @@
  * extension_host.cpp — sandboxed LLEXT animation extension host (issue #85).
  *
  * Executes extension code exclusively on one dedicated K_USER thread confined
- * to the active extension's memory domain. The kernel side (this file + the
- * pattern controller proxy) does all privileged work: filesystem loading,
- * domain setup, input snapshots, and framebuffer copy-out. Extension code can
- * only touch its own llext-allocated regions (TEXT/RODATA/DATA/BSS
- * partitions, added by llext_add_domain()) plus z_libc_partition (TLS
- * pointer — see the CONFIG_USERSPACE notes in fw/CLAUDE.md for why every
- * user thread needs it). 5 partitions total; hardware-verified to fit the
- * nRF5340's MPU budget (the issue #85 "MPU spike").
+ * to a single shared memory domain, re-initialized per activation. The kernel
+ * side (this file + the pattern controller proxy) does all privileged work:
+ * filesystem loading, domain setup, input snapshots, and framebuffer
+ * copy-out. Extension code can only touch its own llext-allocated regions
+ * (TEXT/RODATA/DATA/BSS partitions, added by llext_add_domain()) plus
+ * z_libc_partition (TLS pointer — see the CONFIG_USERSPACE notes in
+ * fw/CLAUDE.md for why every user thread needs it). 5 partitions total;
+ * hardware-verified to fit the nRF5340's MPU budget (8 hardware regions,
+ * ~4-5 usable partitions per domain after Zephyr's fixed background
+ * mappings).
  *
- * Sandbox lifecycle: the thread is recreated on every activation and after
- * every fault/deadline overrun. The extension's init/tick function pointers
- * travel as thread arguments, so the user thread reads no kernel-side state;
- * the two handshake semaphores are kernel objects reached via syscall and
- * granted at each creation. An MPU fault inside the extension aborts only
- * the sandbox thread (Zephyr's fatal handler; the thread is not essential),
- * which the next tick observes as a deadline overrun.
+ * Lifecycle (load-on-activate): boot discovery loads each extension
+ * TRANSIENTLY to validate + copy out its manifest, then unloads it. Only the
+ * active extension is llext-resident; activation records a pending load that
+ * the pattern-controller thread performs lazily on the first tick() —
+ * keeping FAT I/O and relocation off the BLE RX / shell threads. The
+ * sandbox thread is recreated on every activation and after every fault or
+ * deadline overrun; the extension's init/tick function pointers travel as
+ * thread arguments, so the user thread reads no kernel-side state. An MPU
+ * fault inside the extension aborts only the sandbox thread (see the fatal
+ * handler override below), which the in-flight tick observes as a deadline
+ * overrun.
  */
 
 #include <animations/animation_registry.h>
 #include <extensions/extension_animation_proxy.h>
 #include <extensions/extension_bt.h>
 #include <extensions/extension_host.h>
+#include <extensions/extension_manifest.h>
 #include <extensions/extension_registry.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
@@ -39,38 +46,66 @@
 #include <cstdlib>
 #include <cstring>
 
+#if defined(CONFIG_AUDIO)
+#include <sound/audio_dsp.h>
+/* The rgbx ABI freezes the audio shape; if the DSP ever changes its band or
+ * bucket counts this must become a translation layer, not a memcpy. */
+static_assert(RGBX_AUDIO_NUM_BANDS == AUDIO_NUM_BANDS,
+              "rgbx ABI audio band count must match the audio DSP");
+static_assert(RGBX_AUDIO_NUM_DISPLAY_BUCKETS == AUDIO_NUM_DISPLAY_BUCKETS,
+              "rgbx ABI display bucket count must match the audio DSP");
+#endif
+
 LOG_MODULE_REGISTER(ext_host);
 
 namespace extension_host {
 namespace {
 
+/* Number of physical buttons feeding rgbx_inputs.buttons_pressed: sw0-sw3
+ * (Up/Left/Right/Down on proto0) + the wake button. Matches kMaxButtons in
+ * button_animation_source.cpp. */
+constexpr size_t kNumButtons = 5;
+
 struct Slot {
-    bool loaded = false;
+    bool loaded = false;   // discovered, validated, and registered (NOT llext-resident)
     bool faulted = false;
     size_t fileIndex = 0;  // extension_registry index this slot was loaded from
-    struct llext *ext = nullptr;
-    struct k_mem_domain domain;
-    char displayName[kMaxNameLen] = {};
-    uint32_t width = 0;
-    uint32_t height = 0;
-    size_t nParams = 0;
-    ParamInfo params[RGBX_MAX_PARAMS] = {};
+    extension_manifest::Metadata meta = {};
+    /* Authoritative parameter values (host-owned so BLE reads/writes work
+     * while the extension is not resident). */
     uint32_t paramValues[RGBX_MAX_PARAMS] = {};
-    /* Addresses inside the extension's (user) memory, cached at load time.
-     * Kernel mode may read/write them directly. */
-    struct rgbx_inputs *inputs = nullptr;
-    uint8_t *framebuffer = nullptr;
-    void (*initFn)() = nullptr;
-    void (*tickFn)() = nullptr;
+    char stringValues[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX] = {};
+    /* Tick-handshake profiling (cycles), reset on every activation. */
+    uint32_t tickMinCyc = 0;
+    uint32_t tickMaxCyc = 0;
+    uint64_t tickSumCyc = 0;
+    uint32_t tickCount = 0;
 };
 
 Slot sSlots[kMaxExtensions];
 size_t sSlotCount = 0;
 
+/* The one llext-resident extension (see file-top lifecycle comment). Only
+ * touched under sHostLock. */
+struct {
+    struct llext *ext = nullptr;
+    struct rgbx_inputs *inputs = nullptr;
+    uint8_t *framebuffer = nullptr;
+    void (*initFn)() = nullptr;
+    void (*tickFn)() = nullptr;
+} sResident;
+
 K_THREAD_STACK_DEFINE(sSandboxStack, CONFIG_APP_EXT_HOST_STACK_SIZE);
 struct k_thread sSandboxThread;
 bool sSandboxAlive = false;
-int sActiveSlot = -1;
+int sActiveSlot = -1;       // slot the pattern controller should tick (-1 none)
+int sPendingLoadSlot = -1;  // slot awaiting its lazy first-tick load (-1 none)
+
+/* One shared sandbox domain, re-initialized per activation. Safe because
+ * k_mem_domain_init() fully resets the object and the sandbox thread is
+ * always aborted (which unlinks it from the domain) before re-init — the
+ * "abort before re-init" invariant every teardown path preserves. */
+struct k_mem_domain sSandboxDomain;
 
 /* Handshake: host gives sReqSem to request one tick; sandbox gives sDoneSem
  * when the tick (or init) finished. Max count 1 — the protocol is strictly
@@ -79,12 +114,15 @@ K_SEM_DEFINE(sReqSem, 0, 1);
 K_SEM_DEFINE(sDoneSem, 0, 1);
 
 /* Serializes every entry point that touches the singleton sandbox state
- * (thread object, handshake semaphores, sActiveSlot) or slot param values.
- * Needed because pattern_controller_change_to_animation() runs the switch
- * synchronously on the CALLER's thread — activate()/deactivate() arrive on
- * the BT RX thread (Is Active GATT write) or the shell thread while tick()
- * runs on the pattern-controller thread (PR #89 review finding 1). k_mutex
- * is owner-recursive, so nested locking within one entry point is safe. */
+ * (thread object, handshake semaphores, sActiveSlot/sPendingLoadSlot,
+ * sResident) or slot param values. Needed because
+ * pattern_controller_change_to_animation() runs the switch synchronously on
+ * the CALLER's thread — activate()/deactivate() arrive on the BT RX thread
+ * (Is Active GATT write) or the shell thread while tick() runs on the
+ * pattern-controller thread. k_mutex is owner-recursive, so nested locking
+ * within one entry point is safe. tick() holds the lock across the one-time
+ * lazy load (FAT I/O + relocation, tens of ms) — a concurrent BLE write
+ * blocks that long, once, at activation. */
 K_MUTEX_DEFINE(sHostLock);
 
 struct HostLockGuard {
@@ -93,6 +131,8 @@ struct HostLockGuard {
 };
 
 AnimationImuSource *sImuSource = nullptr;
+AnimationAudioSource *sAudioSource = nullptr;
+AnimationButtonSource *sButtonSource = nullptr;
 
 /* Runs in user mode inside the active extension's domain. p1/p2 are the
  * extension's init/tick entry points, resolved kernel-side at load time;
@@ -125,19 +165,32 @@ void sandbox_stop() {
         k_thread_abort(&sSandboxThread);
         sSandboxAlive = false;
     }
-    sActiveSlot = -1;
 }
 
-/* Marks the active slot dead after a deadline overrun / fault and tears the
- * sandbox down so the pattern controller can keep running (issue #85
- * recovery). The slot stays faulted — activate() rejects it — until
- * clearFault() (shell `ext select`) explicitly resets it. Un-marking
- * Is Active notifies the app so it disables the dead animation's toggle. */
-void sandbox_fault(Slot &slot, const char *what) {
-    LOG_ERR("extension '%s': %s — aborting sandbox (`ext select` to retry)", slot.displayName,
-            what);
-    slot.faulted = true;
+/* Tears down the sandbox AND unloads the resident extension (heap frees
+ * only — no FS I/O — so this is safe on the BLE RX thread too). */
+void unload_resident() {
     sandbox_stop();
+    if (sResident.ext != nullptr) {
+        llext_unload(&sResident.ext);
+    }
+    sResident = {};
+    sActiveSlot = -1;
+    sPendingLoadSlot = -1;
+}
+
+/* Marks the active slot dead after a load failure / deadline overrun /
+ * fault, tears the sandbox down, and unloads the extension so the pattern
+ * controller can keep running (issue #85 recovery). The slot stays faulted —
+ * activate() rejects it — until clearFault() (shell `ext select`) explicitly
+ * resets it. Un-marking Is Active notifies the app so it disables the dead
+ * animation's toggle; the proxy renders the fault screen until the user
+ * switches away. */
+void sandbox_fault(Slot &slot, const char *what) {
+    LOG_ERR("extension '%s': %s — aborting sandbox (`ext select` to retry)",
+            slot.meta.displayName, what);
+    slot.faulted = true;
+    unload_resident();
     animation_registry_set_is_active(animationId(static_cast<size_t>(&slot - sSlots)), false);
 }
 
@@ -193,16 +246,74 @@ bool in_ext_memory(const struct llext *ext, const void *ptr, size_t len) {
     return len > 0 && ext_region_remaining(ext, ptr) >= len;
 }
 
-/* NUL-terminated string fully inside extension memory (NUL included)? */
-bool ext_string_ok(const struct llext *ext, const char *str) {
-    const size_t cap = ext_region_remaining(ext, str);
-    return cap > 0 && memchr(str, '\0', cap) != nullptr;
+/* extension_manifest::InRegionFn thunk (ctx = the llext handle). */
+bool in_region_thunk(void *ctx, const void *ptr, size_t len) {
+    return in_ext_memory(static_cast<const struct llext *>(ctx), ptr, len);
 }
 
-/* Loads registry entry `fileIndex` into slot `slotIndex`. The two diverge as
- * soon as one file fails validation and is skipped, so the slot records its
- * file index for diagnostics (`ext list`). */
-bool load_slot(size_t fileIndex, size_t slotIndex) {
+/* Resolved required exports of a loaded extension. */
+struct Exports {
+    const struct rgbx_manifest *manifest;
+    struct rgbx_inputs *inputs;
+    uint8_t *framebuffer;
+    void (*initFn)();
+    void (*tickFn)();
+};
+
+/* Resolves the five required symbols and bounds-checks the exported data
+ * blocks (an export whose real object is smaller than the ABI-required size
+ * would otherwise have the kernel touching memory past it). */
+bool resolve_exports(struct llext *ext, const char *path, Exports &out) {
+    /* llext_find_sym returns const void*; inputs/framebuffer really are
+     * writable extension globals, hence the const_casts. */
+    out.manifest = static_cast<const struct rgbx_manifest *>(
+        llext_find_sym(&ext->exp_tab, RGBX_SYM_MANIFEST));
+    out.inputs = static_cast<struct rgbx_inputs *>(
+        const_cast<void *>(llext_find_sym(&ext->exp_tab, RGBX_SYM_INPUTS)));
+    out.framebuffer = static_cast<uint8_t *>(
+        const_cast<void *>(llext_find_sym(&ext->exp_tab, RGBX_SYM_FRAMEBUFFER)));
+    out.initFn = reinterpret_cast<void (*)()>(llext_find_sym(&ext->exp_tab, RGBX_SYM_INIT));
+    out.tickFn = reinterpret_cast<void (*)()>(llext_find_sym(&ext->exp_tab, RGBX_SYM_TICK));
+
+    if (!out.manifest || !out.inputs || !out.framebuffer || !out.initFn || !out.tickFn) {
+        LOG_ERR("%s: missing required rgbx exports", path);
+        return false;
+    }
+    return true;
+}
+
+/* Validates a loaded extension's manifest and data exports against the
+ * display config; fills `meta` with the copied-out metadata. */
+bool validate_loaded(struct llext *ext, const char *path, const Exports &exports,
+                     extension_manifest::Metadata &meta) {
+    const LedConfig *cfg = get_current_led_config();
+    const extension_manifest::Env env = {
+        .expectedWidth = static_cast<uint32_t>(cfg->displayWidth),
+        .expectedHeight = static_cast<uint32_t>(cfg->displayHeight),
+        .inRegion = in_region_thunk,
+        .ctx = ext,
+    };
+    const extension_manifest::Result res =
+        extension_manifest::validate(exports.manifest, env, meta);
+    if (res != extension_manifest::Result::Ok) {
+        LOG_ERR("%s: manifest rejected: %s", path, extension_manifest::result_str(res));
+        return false;
+    }
+
+    if (!in_ext_memory(ext, exports.inputs, sizeof(struct rgbx_inputs)) ||
+        !in_ext_memory(ext, exports.framebuffer, (size_t)meta.width * meta.height * 3)) {
+        LOG_ERR("%s: inputs/framebuffer exports too small or outside extension memory", path);
+        return false;
+    }
+    return true;
+}
+
+/* Boot-time discovery of registry entry `fileIndex` into slot `slotIndex`:
+ * loads the ELF transiently, validates it, copies the metadata out, seeds
+ * the parameter values, and unloads again (load-on-activate lifecycle). The
+ * two indices diverge as soon as one file fails validation and is skipped,
+ * so the slot records its file index for diagnostics (`ext list`). */
+bool scan_slot(size_t fileIndex, size_t slotIndex) {
     Slot &slot = sSlots[slotIndex];
 
     char path[64];
@@ -212,119 +323,143 @@ bool load_slot(size_t fileIndex, size_t slotIndex) {
 
     struct llext_fs_loader fs_loader = LLEXT_FS_LOADER(path);
     struct llext_load_param ldr_parm = LLEXT_LOAD_PARAM_DEFAULT;
+    struct llext *ext = nullptr;
 
-    int ret =
-        llext_load(&fs_loader.loader, extension_registry::name(fileIndex), &slot.ext, &ldr_parm);
+    int ret = llext_load(&fs_loader.loader, extension_registry::name(fileIndex), &ext, &ldr_parm);
     if (ret < 0) {
         LOG_ERR("llext_load(%s) failed: %d", path, ret);
         return false;
     }
 
-    /* llext_find_sym returns const void*; inputs/framebuffer really are
-     * writable extension globals, hence the const_casts. */
-    const auto *manifest = static_cast<const struct rgbx_manifest *>(
-        llext_find_sym(&slot.ext->exp_tab, RGBX_SYM_MANIFEST));
-    slot.inputs = static_cast<struct rgbx_inputs *>(
-        const_cast<void *>(llext_find_sym(&slot.ext->exp_tab, RGBX_SYM_INPUTS)));
-    slot.framebuffer = static_cast<uint8_t *>(
-        const_cast<void *>(llext_find_sym(&slot.ext->exp_tab, RGBX_SYM_FRAMEBUFFER)));
-    slot.initFn =
-        reinterpret_cast<void (*)()>(llext_find_sym(&slot.ext->exp_tab, RGBX_SYM_INIT));
-    slot.tickFn =
-        reinterpret_cast<void (*)()>(llext_find_sym(&slot.ext->exp_tab, RGBX_SYM_TICK));
-
-    if (!manifest || !slot.inputs || !slot.framebuffer || !slot.initFn || !slot.tickFn) {
-        LOG_ERR("%s: missing required rgbx exports", path);
-        llext_unload(&slot.ext);
-        return false;
-    }
-
-    /* Validate the manifest before trusting any of it. Its embedded pointers
-     * (name, params, each param's name) are untrusted relocated values from
-     * the ELF: a corrupt or hostile file can make them point anywhere, and a
-     * kernel-mode deref of a wild pointer faults a NON-sandbox thread — a
-     * whole-system halt (PR #89 review finding 2). Every pointer is
-     * bounds-checked against the extension's own regions before the copy-out
-     * below, and nothing kernel-side dereferences extension manifest memory
-     * after load. */
-    if (!in_ext_memory(slot.ext, manifest, sizeof(*manifest))) {
-        LOG_ERR("%s: manifest outside extension memory", path);
-        llext_unload(&slot.ext);
-        return false;
-    }
-    const LedConfig *cfg = get_current_led_config();
-    if (manifest->abi_version != RGBX_ABI_VERSION) {
-        LOG_ERR("%s: ABI version %u != %u", path, manifest->abi_version, RGBX_ABI_VERSION);
-        llext_unload(&slot.ext);
-        return false;
-    }
-    if (manifest->width != cfg->displayWidth || manifest->height != cfg->displayHeight) {
-        LOG_ERR("%s: framebuffer %ux%u != display %ux%u", path, manifest->width, manifest->height,
-                (unsigned)cfg->displayWidth, (unsigned)cfg->displayHeight);
-        llext_unload(&slot.ext);
-        return false;
-    }
-    if (manifest->param_count > RGBX_MAX_PARAMS ||
-        (manifest->param_count > 0 &&
-         !in_ext_memory(slot.ext, manifest->params,
-                        manifest->param_count * sizeof(struct rgbx_param_desc)))) {
-        LOG_ERR("%s: bad param table (count %u)", path, manifest->param_count);
-        llext_unload(&slot.ext);
-        return false;
-    }
-    if (manifest->name != nullptr && !ext_string_ok(slot.ext, manifest->name)) {
-        LOG_ERR("%s: manifest name outside extension memory", path);
-        llext_unload(&slot.ext);
-        return false;
-    }
-    /* The exported blocks the host reads/writes every tick must also be
-     * fully inside extension memory — an export whose real object is smaller
-     * than the ABI-required size would otherwise have the kernel touching
-     * memory past it. */
-    if (!in_ext_memory(slot.ext, slot.inputs, sizeof(struct rgbx_inputs)) ||
-        !in_ext_memory(slot.ext, slot.framebuffer,
-                       (size_t)manifest->width * manifest->height * 3)) {
-        LOG_ERR("%s: inputs/framebuffer exports too small or outside extension memory", path);
-        llext_unload(&slot.ext);
+    Exports exports;
+    if (!resolve_exports(ext, path, exports) ||
+        !validate_loaded(ext, path, exports, slot.meta)) {
+        llext_unload(&ext);
         return false;
     }
 
     slot.fileIndex = fileIndex;
-    slot.width = manifest->width;
-    slot.height = manifest->height;
-    strncpy(slot.displayName, manifest->name ? manifest->name : "unnamed", kMaxNameLen - 1);
-    slot.nParams = manifest->param_count;
-    for (size_t p = 0; p < slot.nParams; p++) {
-        const struct rgbx_param_desc &desc = manifest->params[p];
-        if (desc.name != nullptr && !ext_string_ok(slot.ext, desc.name)) {
-            LOG_ERR("%s: param %zu name outside extension memory", path, p);
-            llext_unload(&slot.ext);
-            return false;
-        }
-        strncpy(slot.params[p].name, desc.name ? desc.name : "param", kMaxParamNameLen - 1);
-        slot.params[p].type = desc.type;
-        slot.params[p].defaultValue = desc.default_value;
-        slot.paramValues[p] = desc.default_value;
+    for (size_t p = 0; p < slot.meta.paramCount; p++) {
+        slot.paramValues[p] = slot.meta.params[p].defaultValue;
     }
+    memcpy(slot.stringValues, slot.meta.stringDefaults, sizeof(slot.stringValues));
 
-    /* Domain = z_libc_partition + the extension's 4 llext partitions. */
-    struct k_mem_partition *parts[] = {&z_libc_partition};
-    ret = k_mem_domain_init(&slot.domain, ARRAY_SIZE(parts), parts);
-    if (ret != 0) {
-        LOG_ERR("%s: k_mem_domain_init failed: %d", path, ret);
-        llext_unload(&slot.ext);
-        return false;
-    }
-    ret = llext_add_domain(slot.ext, &slot.domain);
-    if (ret != 0) {
-        LOG_ERR("%s: llext_add_domain failed: %d", path, ret);
-        llext_unload(&slot.ext);
-        return false;
-    }
+    const size_t heapBytes = ext->alloc_size;
+    llext_unload(&ext);
 
     slot.loaded = true;
-    LOG_INF("loaded extension '%s' from %s (%zu bytes heap, %zu params)", slot.displayName, path,
-            slot.ext->alloc_size, slot.nParams);
+    LOG_INF("discovered extension '%s' from %s (%zu bytes heap while loaded, %zu params)",
+            slot.meta.displayName, path, heapBytes, slot.meta.paramCount);
+    return true;
+}
+
+/* Performs the deferred activation load on the pattern-controller thread
+ * (kernel mode — fs_* is legal here): loads the ELF, re-validates it,
+ * cross-checks against the boot-time metadata, builds the shared domain, and
+ * starts the sandbox thread through its rgbx_init() deadline. Returns false
+ * with everything torn down on any failure. */
+bool runtime_load(size_t slotIndex) {
+    Slot &slot = sSlots[slotIndex];
+
+    char path[64];
+    if (!extension_registry::full_path(slot.fileIndex, path, sizeof(path))) {
+        return false;
+    }
+
+    struct llext_fs_loader fs_loader = LLEXT_FS_LOADER(path);
+    struct llext_load_param ldr_parm = LLEXT_LOAD_PARAM_DEFAULT;
+    struct llext *ext = nullptr;
+
+    int ret =
+        llext_load(&fs_loader.loader, extension_registry::name(slot.fileIndex), &ext, &ldr_parm);
+    if (ret < 0) {
+        LOG_ERR("llext_load(%s) failed: %d", path, ret);
+        return false;
+    }
+
+    /* Re-validate from scratch and cross-check against what boot discovery
+     * saw: FAT can't change under the firmware without a reboot, but the
+     * checks are cheap and a mismatch would otherwise hand the app stale
+     * GATT metadata for a different param table. */
+    Exports exports;
+    extension_manifest::Metadata meta;
+    bool ok = resolve_exports(ext, path, exports) && validate_loaded(ext, path, exports, meta);
+    if (ok) {
+        ok = strcmp(meta.displayName, slot.meta.displayName) == 0 &&
+             meta.paramCount == slot.meta.paramCount &&
+             meta.stringParamCount == slot.meta.stringParamCount;
+        for (size_t p = 0; ok && p < meta.paramCount; p++) {
+            ok = meta.params[p].type == slot.meta.params[p].type;
+        }
+        if (!ok) {
+            LOG_ERR("%s: extension changed since boot discovery", path);
+        }
+    }
+    if (!ok) {
+        llext_unload(&ext);
+        return false;
+    }
+
+    /* Domain = z_libc_partition + the extension's 4 llext partitions
+     * (re-initializing the shared domain object is safe — see its
+     * declaration). */
+    struct k_mem_partition *parts[] = {&z_libc_partition};
+    ret = k_mem_domain_init(&sSandboxDomain, ARRAY_SIZE(parts), parts);
+    if (ret != 0) {
+        LOG_ERR("%s: k_mem_domain_init failed: %d", path, ret);
+        llext_unload(&ext);
+        return false;
+    }
+    ret = llext_add_domain(ext, &sSandboxDomain);
+    if (ret != 0) {
+        LOG_ERR("%s: llext_add_domain failed: %d", path, ret);
+        llext_unload(&ext);
+        return false;
+    }
+
+    k_sem_reset(&sReqSem);
+    k_sem_reset(&sDoneSem);
+
+    k_tid_t tid = k_thread_create(&sSandboxThread, sSandboxStack,
+                                  K_THREAD_STACK_SIZEOF(sSandboxStack), sandbox_entry,
+                                  reinterpret_cast<void *>(exports.initFn),
+                                  reinterpret_cast<void *>(exports.tickFn), ext,
+                                  CONFIG_APP_EXT_HOST_THREAD_PRIORITY, K_FP_REGS | K_USER,
+                                  K_FOREVER);
+    k_thread_name_set(tid, "ext_sandbox");
+    k_thread_access_grant(tid, &sReqSem, &sDoneSem);
+    ret = k_mem_domain_add_thread(&sSandboxDomain, tid);
+    if (ret != 0) {
+        LOG_ERR("k_mem_domain_add_thread failed: %d", ret);
+        k_thread_abort(tid);
+        llext_unload(&ext);
+        return false;
+    }
+    k_thread_start(tid);
+    sSandboxAlive = true;
+
+    sResident.ext = ext;
+    sResident.inputs = exports.inputs;
+    sResident.framebuffer = exports.framebuffer;
+    sResident.initFn = exports.initFn;
+    sResident.tickFn = exports.tickFn;
+
+    /* Wait for the extension's rgbx_init() to finish (same deadline as a
+     * tick — init runs sandboxed too, and a hang there must not stall the
+     * pattern controller forever). */
+    if (k_sem_take(&sDoneSem, K_MSEC(CONFIG_APP_EXT_TICK_DEADLINE_MS)) != 0) {
+        LOG_ERR("%s: rgbx_init() missed deadline", path);
+        unload_resident();
+        return false;
+    }
+
+    slot.tickMinCyc = 0;
+    slot.tickMaxCyc = 0;
+    slot.tickSumCyc = 0;
+    slot.tickCount = 0;
+
+    LOG_INF("extension '%s' loaded and activated (%zu bytes heap)", slot.meta.displayName,
+            ext->alloc_size);
     return true;
 }
 
@@ -334,12 +469,29 @@ void init() {
     extension_registry::init();
 
     for (size_t i = 0; i < extension_registry::count() && sSlotCount < kMaxExtensions; i++) {
-        if (!load_slot(i, sSlotCount)) {
+        if (!scan_slot(i, sSlotCount)) {
             continue;
         }
-        size_t slot = sSlotCount++;
-        extension_animation_proxy_register(slot);
-        extension_bt_register(slot);
+        /* Count the slot first (the register functions validate against
+         * isLoaded/count), then roll back on registration failure: the BLE
+         * service registers before the proxy because it is the only one of
+         * the two that can be unregistered. */
+        const size_t slot = sSlotCount++;
+        int ret = extension_bt_register(slot);
+        if (ret != 0) {
+            LOG_ERR("slot %zu: BLE service registration failed: %d", slot, ret);
+            sSlots[slot].loaded = false;
+            sSlotCount--;
+            continue;
+        }
+        ret = extension_animation_proxy_register(slot);
+        if (ret != 0) {
+            LOG_ERR("slot %zu: animation registry registration failed: %d", slot, ret);
+            extension_bt_unregister(slot);
+            sSlots[slot].loaded = false;
+            sSlotCount--;
+            continue;
+        }
     }
     if (sSlotCount > 0) {
         LOG_INF("%zu extension animation(s) registered (ids 0x%02x..0x%02x)", sSlotCount,
@@ -360,35 +512,62 @@ bool isFaulted(size_t slot) {
 }
 
 const char *name(size_t slot) {
-    return slot < sSlotCount ? sSlots[slot].displayName : nullptr;
+    return slot < sSlotCount ? sSlots[slot].meta.displayName : nullptr;
 }
 
 size_t paramCount(size_t slot) {
-    return slot < sSlotCount ? sSlots[slot].nParams : 0;
+    return slot < sSlotCount ? sSlots[slot].meta.paramCount : 0;
 }
 
 const ParamInfo *paramInfo(size_t slot, size_t index) {
-    if (slot >= sSlotCount || index >= sSlots[slot].nParams) {
+    if (slot >= sSlotCount || index >= sSlots[slot].meta.paramCount) {
         return nullptr;
     }
-    return &sSlots[slot].params[index];
+    return &sSlots[slot].meta.params[index];
 }
 
 uint32_t paramValue(size_t slot, size_t index) {
-    if (slot >= sSlotCount || index >= sSlots[slot].nParams) {
+    if (slot >= sSlotCount || index >= sSlots[slot].meta.paramCount) {
         return 0;
     }
     return sSlots[slot].paramValues[index];
 }
 
 void setParamValue(size_t slot, size_t index, uint32_t value) {
-    if (slot >= sSlotCount || index >= sSlots[slot].nParams) {
+    if (slot >= sSlotCount || index >= sSlots[slot].meta.paramCount) {
         return;
     }
     /* Serialized against tick()'s params snapshot so one frame can't observe
-     * a mix of old and new values across params (finding 6). */
+     * a mix of old and new values across params. */
     HostLockGuard lock;
     sSlots[slot].paramValues[index] = value;
+}
+
+const char *paramString(size_t slot, size_t index) {
+    const ParamInfo *info = paramInfo(slot, index);
+    if (info == nullptr || info->type != RGBX_PARAM_STRING ||
+        info->stringSlot >= RGBX_MAX_STRING_PARAMS) {
+        return "";
+    }
+    return sSlots[slot].stringValues[info->stringSlot];
+}
+
+bool writeParamString(size_t slot, size_t index, size_t offset, const void *data, size_t len) {
+    const ParamInfo *info = paramInfo(slot, index);
+    if (info == nullptr || info->type != RGBX_PARAM_STRING ||
+        info->stringSlot >= RGBX_MAX_STRING_PARAMS) {
+        return false;
+    }
+    /* Mirror the built-in string characteristics: the write plus its forced
+     * NUL terminator must fit the buffer. */
+    if (offset + len >= RGBX_PARAM_STRING_MAX) {
+        return false;
+    }
+    HostLockGuard lock;
+    char *dst = sSlots[slot].stringValues[info->stringSlot];
+    memcpy(dst + offset, data, len);
+    dst[offset + len] = '\0';
+    return true;
 }
 
 Animation animationId(size_t slot) {
@@ -397,6 +576,14 @@ Animation animationId(size_t slot) {
 
 void set_imu_source(AnimationImuSource *source) {
     sImuSource = source;
+}
+
+void set_audio_source(AnimationAudioSource *source) {
+    sAudioSource = source;
+}
+
+void set_button_source(AnimationButtonSource *source) {
+    sButtonSource = source;
 }
 
 bool activate(size_t slot) {
@@ -408,50 +595,27 @@ bool activate(size_t slot) {
 
     /* A faulted extension stays dead until explicitly reset (clearFault via
      * shell `ext select`) — BLE re-activation is rejected and the app's
-     * toggle is pushed back off by the proxy/extension_bt (finding 3). */
+     * toggle is pushed back off by the proxy/extension_bt. */
     if (s.faulted) {
         LOG_WRN("extension '%s' is faulted — activation rejected (`ext select` to reset)",
-                s.displayName);
+                s.meta.displayName);
         return false;
     }
 
-    sandbox_stop();
-    k_sem_reset(&sReqSem);
-    k_sem_reset(&sDoneSem);
-
-    k_tid_t tid = k_thread_create(&sSandboxThread, sSandboxStack,
-                                  K_THREAD_STACK_SIZEOF(sSandboxStack), sandbox_entry,
-                                  reinterpret_cast<void *>(s.initFn),
-                                  reinterpret_cast<void *>(s.tickFn), s.ext,
-                                  CONFIG_APP_EXT_HOST_THREAD_PRIORITY, K_FP_REGS | K_USER,
-                                  K_FOREVER);
-    k_thread_name_set(tid, "ext_sandbox");
-    k_thread_access_grant(tid, &sReqSem, &sDoneSem);
-    int ret = k_mem_domain_add_thread(&s.domain, tid);
-    if (ret != 0) {
-        LOG_ERR("k_mem_domain_add_thread failed: %d", ret);
-        k_thread_abort(tid);
-        return false;
-    }
-    k_thread_start(tid);
-    sSandboxAlive = true;
+    /* Cheap host-side work only (this commonly runs on the BLE RX thread):
+     * tear down whatever is resident and defer the FAT load + sandbox
+     * bring-up to the pattern-controller thread's first tick(). */
+    unload_resident();
     sActiveSlot = static_cast<int>(slot);
-
-    /* Wait for the extension's rgbx_init() to finish (same deadline as a
-     * tick — init runs sandboxed too, and a hang there must not stall the
-     * pattern controller forever). */
-    if (k_sem_take(&sDoneSem, K_MSEC(CONFIG_APP_EXT_TICK_DEADLINE_MS)) != 0) {
-        sandbox_fault(s, "rgbx_init() missed deadline");
-        return false;
-    }
-    LOG_INF("extension '%s' activated", s.displayName);
+    sPendingLoadSlot = static_cast<int>(slot);
+    LOG_INF("extension '%s' activation queued", s.meta.displayName);
     return true;
 }
 
 void deactivate(size_t slot) {
     HostLockGuard lock;
     if (sActiveSlot == static_cast<int>(slot)) {
-        sandbox_stop();
+        unload_resident();
     }
 }
 
@@ -464,34 +628,71 @@ void clearFault(size_t slot) {
 }
 
 bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
-    /* Held across the whole handshake: an Is Active write on the BT RX
-     * thread must not abort/recreate the sandbox thread while this tick is
-     * between the request and done semaphores (finding 1). Worst-case hold
-     * is the tick deadline, which bounds how long a concurrent activation
-     * can block. */
+    /* Held across the whole handshake (and the one-time lazy load): an
+     * Is Active write on the BT RX thread must not abort/recreate the
+     * sandbox thread while this tick is between the request and done
+     * semaphores. */
     HostLockGuard lock;
     if (!isLoaded(slot) || sSlots[slot].faulted || sActiveSlot != static_cast<int>(slot)) {
         return false;
     }
     Slot &s = sSlots[slot];
 
-    /* Input snapshot, written directly into the extension's exported input
-     * block (kernel mode may access user memory). */
-    s.inputs->dt_ms = dtMs;
-    memcpy(s.inputs->params, s.paramValues, sizeof(s.inputs->params));
-    if (sImuSource != nullptr) {
-        sImuSource->update();
-        s.inputs->accel[0] = sImuSource->getAccelX();
-        s.inputs->accel[1] = sImuSource->getAccelY();
-        s.inputs->accel[2] = sImuSource->getAccelZ();
-        s.inputs->gyro[0] = sImuSource->getGyroX();
-        s.inputs->gyro[1] = sImuSource->getGyroY();
-        s.inputs->gyro[2] = sImuSource->getGyroZ();
-    } else {
-        memset(s.inputs->accel, 0, sizeof(s.inputs->accel));
-        memset(s.inputs->gyro, 0, sizeof(s.inputs->gyro));
+    if (sPendingLoadSlot == static_cast<int>(slot)) {
+        sPendingLoadSlot = -1;
+        if (!runtime_load(slot)) {
+            sandbox_fault(s, "activation load failed");
+            return false;
+        }
+    }
+    if (sResident.ext == nullptr) {
+        return false;
     }
 
+    /* Input snapshot, written directly into the extension's exported input
+     * block (kernel mode may access user memory). Absent sources read as
+     * zeros per the ABI contract. */
+    struct rgbx_inputs *in = sResident.inputs;
+    in->dt_ms = dtMs;
+    memcpy(in->params, s.paramValues, sizeof(in->params));
+    memcpy(in->param_strings, s.stringValues, sizeof(in->param_strings));
+    if (sImuSource != nullptr) {
+        sImuSource->update();
+        in->accel[0] = sImuSource->getAccelX();
+        in->accel[1] = sImuSource->getAccelY();
+        in->accel[2] = sImuSource->getAccelZ();
+        in->gyro[0] = sImuSource->getGyroX();
+        in->gyro[1] = sImuSource->getGyroY();
+        in->gyro[2] = sImuSource->getGyroZ();
+    } else {
+        memset(in->accel, 0, sizeof(in->accel));
+        memset(in->gyro, 0, sizeof(in->gyro));
+    }
+    if (sAudioSource != nullptr) {
+        sAudioSource->update();
+        for (size_t b = 0; b < RGBX_AUDIO_NUM_BANDS; b++) {
+            in->audio_band_energy[b] = sAudioSource->getBandEnergy(b);
+            in->audio_beat[b] = sAudioSource->isBeat(b) ? 1 : 0;
+        }
+        for (size_t i = 0; i < RGBX_AUDIO_NUM_DISPLAY_BUCKETS; i++) {
+            in->audio_display_bucket[i] = sAudioSource->getDisplayBucketEnergy(i);
+        }
+    } else {
+        memset(in->audio_band_energy, 0, sizeof(in->audio_band_energy));
+        memset(in->audio_beat, 0, sizeof(in->audio_beat));
+        memset(in->audio_display_bucket, 0, sizeof(in->audio_display_bucket));
+    }
+    in->buttons_pressed = 0;
+    if (sButtonSource != nullptr) {
+        sButtonSource->update();
+        for (size_t id = 0; id < kNumButtons; id++) {
+            if (sButtonSource->wasPressed(id)) {
+                in->buttons_pressed |= (1u << id);
+            }
+        }
+    }
+
+    const uint32_t startCyc = k_cycle_get_32();
     k_sem_give(&sReqSem);
     if (k_sem_take(&sDoneSem, K_MSEC(CONFIG_APP_EXT_TICK_DEADLINE_MS)) != 0) {
         /* Deadline overrun — either the extension is spinning or it MPU-
@@ -500,11 +701,20 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
         sandbox_fault(s, "tick missed deadline (hang or fault)");
         return false;
     }
+    const uint32_t tickCyc = k_cycle_get_32() - startCyc;
+    if (s.tickCount == 0 || tickCyc < s.tickMinCyc) {
+        s.tickMinCyc = tickCyc;
+    }
+    if (tickCyc > s.tickMaxCyc) {
+        s.tickMaxCyc = tickCyc;
+    }
+    s.tickSumCyc += tickCyc;
+    s.tickCount++;
 
     /* Copy the extension's finished frame out to the real renderer. */
-    for (uint32_t y = 0; y < s.height; y++) {
-        for (uint32_t x = 0; x < s.width; x++) {
-            const uint8_t *px = &s.framebuffer[RGBX_PIXEL_INDEX(s.width, x, y)];
+    for (uint32_t y = 0; y < s.meta.height; y++) {
+        for (uint32_t x = 0; x < s.meta.width; x++) {
+            const uint8_t *px = &sResident.framebuffer[RGBX_PIXEL_INDEX(s.meta.width, x, y)];
             renderer.setPixel(x, y, px[0], px[1], px[2]);
         }
     }
@@ -522,10 +732,25 @@ int cmd_ext_list(const struct shell *sh, size_t, char **) {
     }
     for (size_t i = 0; i < sSlotCount; i++) {
         shell_print(sh, "[%zu] id=0x%02x '%s' file=%s params=%zu%s%s", i,
-                    (unsigned)(kAnimationIdBase + i), sSlots[i].displayName,
-                    extension_registry::name(sSlots[i].fileIndex), sSlots[i].nParams,
+                    (unsigned)(kAnimationIdBase + i), sSlots[i].meta.displayName,
+                    extension_registry::name(sSlots[i].fileIndex), sSlots[i].meta.paramCount,
                     sActiveSlot == (int)i ? " [active]" : "",
                     sSlots[i].faulted ? " [FAULTED]" : "");
+    }
+    return 0;
+}
+
+int cmd_ext_stats(const struct shell *sh, size_t, char **) {
+    for (size_t i = 0; i < sSlotCount; i++) {
+        const Slot &s = sSlots[i];
+        if (s.tickCount == 0) {
+            shell_print(sh, "[%zu] '%s': no ticks recorded", i, s.meta.displayName);
+            continue;
+        }
+        shell_print(sh, "[%zu] '%s': %u ticks, handshake min/avg/max = %u/%u/%u us", i,
+                    s.meta.displayName, s.tickCount, k_cyc_to_us_near32(s.tickMinCyc),
+                    k_cyc_to_us_near32((uint32_t)(s.tickSumCyc / s.tickCount)),
+                    k_cyc_to_us_near32(s.tickMaxCyc));
     }
     return 0;
 }
@@ -537,16 +762,45 @@ int cmd_ext_param(const struct shell *sh, size_t argc, char **argv) {
     }
     size_t slot = strtoul(argv[1], nullptr, 10);
     size_t index = strtoul(argv[2], nullptr, 10);
-    if (slot >= sSlotCount || index >= sSlots[slot].nParams) {
+    const ParamInfo *info = paramInfo(slot, index);
+    if (info == nullptr) {
         shell_error(sh, "no such param");
         return -ENOENT;
     }
+
+    if (info->type == RGBX_PARAM_STRING) {
+        if (argc == 4) {
+            if (!writeParamString(slot, index, 0, argv[3], strlen(argv[3]))) {
+                shell_error(sh, "string too long (max %u bytes)", RGBX_PARAM_STRING_MAX - 1);
+                return -EINVAL;
+            }
+        }
+        shell_print(sh, "%s.%s = \"%s\"", sSlots[slot].meta.displayName, info->name,
+                    paramString(slot, index));
+        return 0;
+    }
+
     if (argc == 4) {
-        setParamValue(slot, index, strtoul(argv[3], nullptr, 0));
+        uint32_t value = strtoul(argv[3], nullptr, 0);
+        if (info->type == RGBX_PARAM_BOOL) {
+            value = value ? 1 : 0;
+        }
+        setParamValue(slot, index, value);
     }
     uint32_t value = paramValue(slot, index);
-    shell_print(sh, "%s.%s = %u (0x%x)", sSlots[slot].displayName, sSlots[slot].params[index].name,
-                value, value);
+    switch (info->type) {
+        case RGBX_PARAM_BOOL:
+            shell_print(sh, "%s.%s = %u", sSlots[slot].meta.displayName, info->name, value);
+            break;
+        case RGBX_PARAM_COLOR:
+            shell_print(sh, "%s.%s = 0x%06x", sSlots[slot].meta.displayName, info->name,
+                        value & 0x00FFFFFF);
+            break;
+        default:
+            shell_print(sh, "%s.%s = %u (0x%x)", sSlots[slot].meta.displayName, info->name,
+                        value, value);
+            break;
+    }
     return 0;
 }
 
@@ -565,7 +819,7 @@ int cmd_ext_select(const struct shell *sh, size_t argc, char **argv) {
     clearFault(slot);
     int ret = pattern_controller_change_to_animation(animationId(slot));
     if (ret == 0) {
-        shell_print(sh, "switched to extension '%s'", sSlots[slot].displayName);
+        shell_print(sh, "switched to extension '%s'", sSlots[slot].meta.displayName);
     } else {
         shell_error(sh, "switch failed: %d", ret);
     }
@@ -574,6 +828,8 @@ int cmd_ext_select(const struct shell *sh, size_t argc, char **argv) {
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_ext, SHELL_CMD(list, NULL, "List loaded animation extensions", cmd_ext_list),
+    SHELL_CMD(stats, NULL, "Per-extension tick-handshake timing (min/avg/max us)",
+              cmd_ext_stats),
     SHELL_CMD_ARG(param, NULL, "Get/set a param: ext param <slot> <index> [<value>]",
                   cmd_ext_param, 3, 1),
     SHELL_CMD_ARG(select, NULL,

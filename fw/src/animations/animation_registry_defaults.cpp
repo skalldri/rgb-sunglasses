@@ -324,5 +324,19 @@ int animation_registry_register_defaults() {
     extension_host_bind_default_imu_dependencies();
 #endif
 
+#if defined(CONFIG_APP_EXTENSION_HOST) && defined(CONFIG_AUDIO)
+    // Same for the audio analysis source (band energies / beats / display
+    // buckets in rgbx_inputs; zeros on audio-less builds). NOTE: the adapter
+    // lives in audio_animations_sound.cpp, which is only compiled when a
+    // built-in audio animation is enabled OR the extension host is on — see
+    // fw/CMakeLists.txt.
+    extension_host_bind_default_sound_dependencies();
+#endif
+
+#if defined(CONFIG_APP_EXTENSION_HOST)
+    // And the always-registered button source (buttons_pressed bitmask).
+    extension_host_bind_default_button_dependencies();
+#endif
+
     return 0;
 }

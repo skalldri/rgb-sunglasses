@@ -1,6 +1,7 @@
-/*
- * rgbx_animation.h — header-only C++ convenience wrapper over the flat C
- * extension ABI in rgbx_api.h.
+/**
+ * @file rgbx_animation.h
+ * @brief Header-only C++ convenience wrapper over the flat C extension ABI
+ *        in rgbx_api.h.
  *
  * Lets an extension author write a class instead of raw exports:
  *
@@ -18,7 +19,8 @@
  *     };
  *
  *     RGBX_ANIMATION(Plasma, "Plasma", 40, 12,
- *                    RGBX_PARAM("Speed", RGBX_PARAM_UINT32, 50));
+ *                    RGBX_PARAM("Speed", RGBX_PARAM_UINT32, 50),
+ *                    RGBX_PARAM_STR("Label", "HI"));
  *
  * Everything here compiles *inside* the extension: no vtables or C++ objects
  * cross the host boundary — the RGBX_ANIMATION macro emits exactly the five
@@ -48,16 +50,17 @@
 namespace rgbx {
 
 /**
- * Extension-side analog of the firmware's BaseAnimation. Subclass it and
- * instantiate with RGBX_ANIMATION() below.
+ * @brief Extension-side analog of the firmware's BaseAnimation. Subclass it
+ * and instantiate with RGBX_ANIMATION() below.
  */
 class Animation {
    public:
-    /** Called once, on the sandboxed thread, before the first tick. */
+    /** @brief Called once, on the sandboxed thread, after every (re)load and
+     *  before the first tick. */
     virtual void init() {}
 
-    /** Called once per frame; render into the framebuffer via setPixel()/
-     *  fill(). dt_ms is the nominal time since the previous tick. */
+    /** @brief Called once per frame; render into the framebuffer via
+     *  setPixel()/fill(). @param dt_ms nominal ms since the previous tick. */
     virtual void tick(uint32_t dt_ms) = 0;
 
    protected:
@@ -66,10 +69,12 @@ class Animation {
      * delete, which the sandbox does not provide. */
     ~Animation() = default;
 
+    /** @brief Framebuffer width in pixels (manifest value). */
     size_t width() const { return rgbx_manifest.width; }
+    /** @brief Framebuffer height in pixels (manifest value). */
     size_t height() const { return rgbx_manifest.height; }
 
-    /** Write one pixel (out-of-range coordinates are ignored). */
+    /** @brief Write one pixel (out-of-range coordinates are ignored). */
     void setPixel(size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b) {
         if (x >= width() || y >= height()) {
             return;
@@ -80,7 +85,7 @@ class Animation {
         px[2] = b;
     }
 
-    /** Fill the whole framebuffer with one color. */
+    /** @brief Fill the whole framebuffer with one color. */
     void fill(uint8_t r, uint8_t g, uint8_t b) {
         const size_t n = width() * height();
         for (size_t i = 0; i < n; i++) {
@@ -91,32 +96,93 @@ class Animation {
         }
     }
 
-    /** Current value of manifest parameter i (0 if out of range). */
-    uint32_t param(size_t i) const {
+    /* --- typed parameter accessors (manifest declaration order) ---------- */
+
+    /** @brief Value of UINT32 parameter i (0 if out of range). */
+    uint32_t paramU32(size_t i) const {
         return (i < RGBX_MAX_PARAMS) ? rgbx_inputs.params[i] : 0u;
     }
 
-    /* IMU snapshot accessors (zeros when the source is absent). */
-    float accelX() const { return rgbx_inputs.accel[0]; }
-    float accelY() const { return rgbx_inputs.accel[1]; }
-    float accelZ() const { return rgbx_inputs.accel[2]; }
-    float gyroX() const { return rgbx_inputs.gyro[0]; }
-    float gyroY() const { return rgbx_inputs.gyro[1]; }
-    float gyroZ() const { return rgbx_inputs.gyro[2]; }
+    /** @brief Alias of paramU32() kept for early extensions. */
+    uint32_t param(size_t i) const { return paramU32(i); }
+
+    /** @brief Value of COLOR parameter i as 0x00RRGGBB (0 if out of range). */
+    uint32_t paramColor(size_t i) const { return paramU32(i) & 0x00FFFFFFu; }
+
+    /** @brief Value of BOOL parameter i (false if out of range). */
+    bool paramBool(size_t i) const { return paramU32(i) != 0u; }
+
+    /** @brief Value of STRING parameter i (always NUL-terminated; "" if i is
+     *  out of range or not a string parameter). String values live in
+     *  rgbx_inputs.param_strings, slotted by declaration order among the
+     *  string-typed params — this accessor does that mapping for you. */
+    const char *paramString(size_t i) const {
+        if (i >= rgbx_manifest.param_count ||
+            rgbx_manifest.params[i].type != RGBX_PARAM_STRING) {
+            return "";
+        }
+        size_t slot = 0;
+        for (size_t p = 0; p < i; p++) {
+            if (rgbx_manifest.params[p].type == RGBX_PARAM_STRING) {
+                slot++;
+            }
+        }
+        return (slot < RGBX_MAX_STRING_PARAMS) ? rgbx_inputs.param_strings[slot] : "";
+    }
+
+    /* --- IMU snapshot accessors (zeros when the source is absent) -------- */
+
+    float accelX() const { return rgbx_inputs.accel[0]; } /**< m/s^2 */
+    float accelY() const { return rgbx_inputs.accel[1]; } /**< m/s^2 */
+    float accelZ() const { return rgbx_inputs.accel[2]; } /**< m/s^2 */
+    float gyroX() const { return rgbx_inputs.gyro[0]; }   /**< rad/s */
+    float gyroY() const { return rgbx_inputs.gyro[1]; }   /**< rad/s */
+    float gyroZ() const { return rgbx_inputs.gyro[2]; }   /**< rad/s */
+
+    /* --- audio snapshot accessors (zeros when the source is absent) ------ */
+
+    /** @brief Number of coarse audio bands. */
+    static constexpr size_t numBands() { return RGBX_AUDIO_NUM_BANDS; }
+    /** @brief Smoothed energy of coarse band b (0 if out of range). */
+    float bandEnergy(size_t b) const {
+        return (b < RGBX_AUDIO_NUM_BANDS) ? rgbx_inputs.audio_band_energy[b] : 0.0f;
+    }
+    /** @brief True if a beat fired in band b this frame. */
+    bool isBeat(size_t b) const {
+        return (b < RGBX_AUDIO_NUM_BANDS) && rgbx_inputs.audio_beat[b] != 0u;
+    }
+    /** @brief Number of fine-grained display buckets. */
+    static constexpr size_t numDisplayBuckets() { return RGBX_AUDIO_NUM_DISPLAY_BUCKETS; }
+    /** @brief Energy of display bucket i, ~0..1 (0 if out of range). */
+    float displayBucket(size_t i) const {
+        return (i < RGBX_AUDIO_NUM_DISPLAY_BUCKETS) ? rgbx_inputs.audio_display_bucket[i]
+                                                    : 0.0f;
+    }
+
+    /* --- button accessors (zeros when the source is absent) -------------- */
+
+    /** @brief Raw pressed-since-last-tick bitmask (bit i = button i). */
+    uint32_t buttonsPressed() const { return rgbx_inputs.buttons_pressed; }
+    /** @brief True if button id was pressed since the previous tick.
+     *  proto0 mapping: 0=Up, 1=Left, 2=Right, 3=Down, 4=Wake. */
+    bool buttonWasPressed(size_t id) const {
+        return id < 32 && (rgbx_inputs.buttons_pressed & (1u << id)) != 0u;
+    }
 };
 
 }  // namespace rgbx
 
-/** Parameter entry for RGBX_ANIMATION()'s variadic tail. */
-#define RGBX_PARAM(name_, type_, default_) {(name_), (uint8_t)(type_), (default_)}
-
 /**
- * Instantiates ClassName as the extension's animation and emits the five
- * required C exports (see rgbx_api.h). Use at namespace scope in exactly one
- * translation unit — which is naturally the only one, since an .llext is a
- * single object file. The variadic tail is zero or more RGBX_PARAM(...)
- * entries (a zero-length param array relies on the GNU zero-length-array
- * extension, which the EDK toolchain permits).
+ * @brief Instantiates ClassName as the extension's animation and emits the
+ * five required C exports (see rgbx_api.h).
+ *
+ * Use at namespace scope in exactly one translation unit — which is
+ * naturally the only one, since an .llext is a single object file. The
+ * variadic tail is zero or more RGBX_PARAM(...) / RGBX_PARAM_STR(...)
+ * entries. With an empty tail the manifest gets param_count == 0 and
+ * params == NULL, exactly as the ABI contract requires (`NULL ? NULL : x`
+ * below evaluates to NULL when __VA_OPT__ emits nothing and to the params
+ * array when it doesn't).
  *
  * __cxa_pure_virtual is defined here because the vtable of any class with a
  * pure-virtual member references it, and the sandbox links no C++ runtime;
@@ -133,14 +199,14 @@ class Animation {
     /* Definitions below pick up C language linkage from the declarations in rgbx_api.h. */    \
     struct rgbx_inputs rgbx_inputs;                                                             \
     uint8_t rgbx_framebuffer[(size_t)(W) * (size_t)(H) * 3u];                                   \
-    static const struct rgbx_param_desc rgbx_wrapper_params_[] = {__VA_ARGS__};                 \
+    __VA_OPT__(static const struct rgbx_param_desc rgbx_wrapper_params_[] = {__VA_ARGS__};)     \
     const struct rgbx_manifest rgbx_manifest = {                                                \
         RGBX_ABI_VERSION,                                                                       \
         (DisplayName),                                                                          \
         (W),                                                                                    \
         (H),                                                                                    \
-        sizeof(rgbx_wrapper_params_) / sizeof(rgbx_wrapper_params_[0]),                         \
-        rgbx_wrapper_params_,                                                                   \
+        0u __VA_OPT__(+sizeof(rgbx_wrapper_params_) / sizeof(rgbx_wrapper_params_[0])),         \
+        NULL __VA_OPT__(? NULL : rgbx_wrapper_params_),                                         \
     };                                                                                          \
     static ClassName rgbx_wrapper_instance_;                                                    \
     void rgbx_init(void) { rgbx_wrapper_instance_.init(); }                                     \

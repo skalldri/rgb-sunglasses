@@ -11,6 +11,11 @@ BtGattPrimaryService<kTiltConfigServiceUuid> tiltPrimaryService;
 using TiltIsActiveCharacteristic = IsActiveCharacteristic<Animation::Tilt>;
 TiltIsActiveCharacteristic tiltIsActive;
 
+/* Every animation-name characteristic in fw/src/bluetooth/animation_adapters
+ * uses this size; kAnimationNameMaxLen (animation_types.h) is the shared
+ * constant extension display names also honor. */
+static_assert(kAnimationNameMaxLen == 24,
+              "BtGattString<24> name characteristics must match kAnimationNameMaxLen");
 constexpr BtGattString<24> kTiltAnimationName = makeBtGattString<24>("Tilt");
 BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name", BtGattString<24>,
                              kTiltAnimationName>

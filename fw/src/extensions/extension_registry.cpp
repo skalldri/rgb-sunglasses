@@ -14,15 +14,15 @@ namespace {
 std::array<char[kMaxNameLen], kMaxFiles> sNames = {};
 size_t sCount = 0;
 
-constexpr const char *kLlextExtension = ".llext";
+constexpr const char kLlextExtension[] = ".llext";
+constexpr size_t kLlextExtensionLen = sizeof(kLlextExtension) - 1;
 
 bool hasLlextExtension(const char *fileName) {
     size_t nameLen = strlen(fileName);
-    size_t extLen = strlen(kLlextExtension);
-    if (nameLen < extLen) {
+    if (nameLen < kLlextExtensionLen) {
         return false;
     }
-    return strcmp(fileName + (nameLen - extLen), kLlextExtension) == 0;
+    return strcmp(fileName + (nameLen - kLlextExtensionLen), kLlextExtension) == 0;
 }
 }  // namespace
 
@@ -77,13 +77,16 @@ void init() {
     // directory order.
     for (size_t i = 1; i < sCount; i++) {
         char tmp[kMaxNameLen];
-        strcpy(tmp, sNames[i]);
+        strncpy(tmp, sNames[i], kMaxNameLen - 1);
+        tmp[kMaxNameLen - 1] = '\0';
         size_t j = i;
         while (j > 0 && strcmp(sNames[j - 1], tmp) > 0) {
-            strcpy(sNames[j], sNames[j - 1]);
+            strncpy(sNames[j], sNames[j - 1], kMaxNameLen - 1);
+            sNames[j][kMaxNameLen - 1] = '\0';
             j--;
         }
-        strcpy(sNames[j], tmp);
+        strncpy(sNames[j], tmp, kMaxNameLen - 1);
+        sNames[j][kMaxNameLen - 1] = '\0';
     }
 
     LOG_INF("Discovered %zu extension(s) in %s", sCount, kDirectory);

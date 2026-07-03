@@ -6,40 +6,21 @@
  * below is constructed by the extension's init arrays, which the host runs
  * inside the sandbox via llext_bringup().
  *
- * Sandbox-recovery test hooks (issue #85 demo): writing a magic value to
- * the Speed parameter makes the next tick misbehave on purpose —
- *   0xDEAD (57005): write to address 0 -> MPU fault -> thread aborted
- *   0xF00D (61453): infinite loop      -> tick deadline -> thread aborted
- * Either way the firmware must keep running and recover on re-activation.
+ * (The deliberate crash/hang sandbox-recovery hooks that used to live here
+ * moved to the `hello` kitchen-sink extension — plasma ships clean.)
  */
 
 #include <rgbx/rgbx_animation.h>
 
 namespace {
 
-constexpr uint32_t kCrashMagic = 0xDEAD;
-constexpr uint32_t kHangMagic = 0xF00D;
-
 class Plasma : public rgbx::Animation {
    public:
     void tick(uint32_t dt_ms) override {
-        const uint32_t speed = param(0);
-        if (speed == kCrashMagic) {
-            /* Deliberate MPU fault: kernel SRAM is never in the sandbox
-             * domain, so a user-mode store here MemManage-faults. (Not
-             * address 0 — that's MCUboot's fprotect/SPU-guarded flash,
-             * which raises a different, harsher fault class.) */
-            *reinterpret_cast<volatile uint32_t *>(0x20000000) = 1;
-        }
-        if (speed == kHangMagic) {
-            while (true) { /* deliberate deadline overrun */
-            }
-        }
-
         /* speed is a percentage of nominal (50 == 1x). */
-        t_ += dt_ms * speed / 50u;
+        t_ += dt_ms * paramU32(0) / 50u;
 
-        const uint32_t color = param(1);
+        const uint32_t color = paramColor(1);
         const uint8_t cr = (color >> 16) & 0xFF;
         const uint8_t cg = (color >> 8) & 0xFF;
         const uint8_t cb = color & 0xFF;

@@ -58,3 +58,15 @@ void fft_bars_animation_bind_default_sound_dependencies() {
     FftBarsAnimation::getInstance()->setAudioSource(sSoundSource);
 }
 #endif
+
+#if defined(CONFIG_APP_EXTENSION_HOST)
+#include <extensions/extension_host.h>
+/* Sandboxed extensions receive the same drain-and-cache audio snapshot via
+ * rgbx_inputs (the host copies the band/bucket getters into the extension's
+ * input block each tick — extensions never touch this source directly).
+ * Sharing the single static source is safe for the same reason the two
+ * built-in audio animations share it: only one animation ticks at a time. */
+void extension_host_bind_default_sound_dependencies() {
+    extension_host::set_audio_source(&sSoundSource);
+}
+#endif

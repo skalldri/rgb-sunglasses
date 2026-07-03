@@ -23,6 +23,10 @@ EXT_SRC_DIR="$REPO_ROOT/fw/extensions"
 
 # Locate the Zephyr SDK cross toolchain the same way the firmware build does.
 TOOLCHAIN_BIN=$(ls -d /root/ncs/toolchains/*/opt/zephyr-sdk/arm-zephyr-eabi/bin 2>/dev/null | head -1)
+if [ -z "$TOOLCHAIN_BIN" ]; then
+    echo "error: Zephyr SDK toolchain not found under /root/ncs/toolchains/*/opt/zephyr-sdk" >&2
+    exit 1
+fi
 CC="$TOOLCHAIN_BIN/arm-zephyr-eabi-gcc"
 CXX="$TOOLCHAIN_BIN/arm-zephyr-eabi-g++"
 LD="$TOOLCHAIN_BIN/arm-zephyr-eabi-ld"

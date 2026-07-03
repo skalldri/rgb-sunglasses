@@ -125,23 +125,73 @@ ssize_t write_is_active(struct bt_conn *, const struct bt_gatt_attr *attr, const
     return len;
 }
 
+/* Both callbacks dispatch on the validated param type, mirroring the wire
+ * conventions of the equivalent built-in characteristic types
+ * (bt_gatt_traits.h / bt_service_cpp.h): BOOL = 1 byte, STRING = UTF-8 up to
+ * RGBX_PARAM_STRING_MAX-1 bytes with a forced NUL, UINT32/COLOR = 4-byte LE. */
 ssize_t read_param(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len,
                    uint16_t offset) {
     const auto *ctx = static_cast<const ParamCtx *>(attr->user_data);
-    uint32_t value = extension_host::paramValue(ctx->slot, ctx->index);
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
+    const extension_host::ParamInfo *info = extension_host::paramInfo(ctx->slot, ctx->index);
+    if (info == nullptr) {
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+    switch (info->type) {
+        case RGBX_PARAM_BOOL: {
+            const uint8_t value = extension_host::paramValue(ctx->slot, ctx->index) ? 1 : 0;
+            return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
+        }
+        case RGBX_PARAM_STRING: {
+            const char *value = extension_host::paramString(ctx->slot, ctx->index);
+            return bt_gatt_attr_read(conn, attr, buf, len, offset, value, strlen(value));
+        }
+        default: {
+            const uint32_t value = extension_host::paramValue(ctx->slot, ctx->index);
+            return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
+        }
+    }
 }
 
 ssize_t write_param(struct bt_conn *, const struct bt_gatt_attr *attr, const void *buf,
-                    uint16_t len, uint16_t offset, uint8_t) {
-    if (offset != 0 || len != sizeof(uint32_t)) {
-        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-    }
+                    uint16_t len, uint16_t offset, uint8_t flags) {
     const auto *ctx = static_cast<const ParamCtx *>(attr->user_data);
-    uint32_t value;
-    memcpy(&value, buf, sizeof(value));
-    extension_host::setParamValue(ctx->slot, ctx->index, value);
-    return len;
+    const extension_host::ParamInfo *info = extension_host::paramInfo(ctx->slot, ctx->index);
+    if (info == nullptr) {
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+    switch (info->type) {
+        case RGBX_PARAM_BOOL: {
+            if (offset != 0 || len != 1) {
+                return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+            }
+            extension_host::setParamValue(ctx->slot, ctx->index,
+                                          *static_cast<const uint8_t *>(buf) ? 1 : 0);
+            return len;
+        }
+        case RGBX_PARAM_STRING: {
+            /* Same long-write handling as the built-in string
+             * characteristics (bt_service_cpp.h _write): allow the prepare
+             * phase, then bounds-check data + forced NUL against the value
+             * buffer. */
+            if (flags & BT_GATT_WRITE_FLAG_PREPARE) {
+                return 0;
+            }
+            if (!extension_host::writeParamString(ctx->slot, ctx->index, offset, buf, len)) {
+                return BT_GATT_ERR(offset != 0 ? BT_ATT_ERR_INVALID_OFFSET
+                                               : BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+            }
+            return len;
+        }
+        default: {
+            if (offset != 0 || len != sizeof(uint32_t)) {
+                return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+            }
+            uint32_t value;
+            memcpy(&value, buf, sizeof(value));
+            extension_host::setParamValue(ctx->slot, ctx->index, value);
+            return len;
+        }
+    }
 }
 
 /* --- runtime attribute assembly ----------------------------------------- */
@@ -222,13 +272,13 @@ constexpr auto kIsActiveSetters = make_is_active_setters(std::make_index_sequenc
 
 }  // namespace
 
-void extension_bt_register(size_t slot) {
+int extension_bt_register(size_t slot) {
     if (slot >= kMaxExtensions || !extension_host::isLoaded(slot)) {
-        return;
+        return -EINVAL;
     }
     BtSlot *bs = &sBtSlots[slot];
     if (bs->registered) {
-        return;
+        return 0;
     }
     bs->slot = slot;
 
@@ -283,7 +333,21 @@ void extension_bt_register(size_t slot) {
         const extension_host::ParamInfo *info = extension_host::paramInfo(slot, p);
         bs->paramUuids[p] = composeAutoCharacteristicUuid(bs->svcUuid, static_cast<uint16_t>(p + 1));
         bs->paramCtx[p] = {static_cast<uint8_t>(slot), static_cast<uint8_t>(p)};
-        const bt_gatt_cpf *cpf = (info->type == RGBX_PARAM_COLOR) ? &kCpfColor : &kCpfUint32;
+        const bt_gatt_cpf *cpf;
+        switch (info->type) {
+            case RGBX_PARAM_COLOR:
+                cpf = &kCpfColor;
+                break;
+            case RGBX_PARAM_BOOL:
+                cpf = &kCpfBool;
+                break;
+            case RGBX_PARAM_STRING:
+                cpf = &kCpfUtf8;
+                break;
+            default:
+                cpf = &kCpfUint32;
+                break;
+        }
         attrIdx = append_characteristic(bs, attrIdx, chrcIdx++,
                                         reinterpret_cast<const bt_uuid *>(&bs->paramUuids[p]),
                                         /*writable=*/true, read_param, write_param,
@@ -296,7 +360,7 @@ void extension_bt_register(size_t slot) {
     int ret = bt_gatt_service_register(&bs->svc);
     if (ret != 0) {
         LOG_ERR("bt_gatt_service_register failed for slot %zu: %d", slot, ret);
-        return;
+        return ret;
     }
     bs->registered = true;
 
@@ -305,4 +369,17 @@ void extension_bt_register(size_t slot) {
 
     LOG_INF("registered BLE service for extension '%s' (%zu attrs)",
             extension_host::name(slot), attrIdx);
+    return 0;
+}
+
+void extension_bt_unregister(size_t slot) {
+    if (slot >= kMaxExtensions) {
+        return;
+    }
+    BtSlot *bs = &sBtSlots[slot];
+    if (!bs->registered) {
+        return;
+    }
+    (void)bt_gatt_service_unregister(&bs->svc);
+    bs->registered = false;
 }

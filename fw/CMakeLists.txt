@@ -49,6 +49,7 @@ target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_deco
 target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_registry.cpp)
 target_sources_ifdef(CONFIG_APP_MCUBOOT_UPDATER app PRIVATE src/storage/appcfg_erase.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_host.cpp)
+target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_manifest.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_registry.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_animation_proxy.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_bt.cpp)
@@ -62,11 +63,14 @@ target_sources_ifdef(CONFIG_ANIMATION_MATRIX_CODE app PRIVATE src/animations/mat
 target_sources_ifdef(CONFIG_IMU app PRIVATE src/imu/imu.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_TILT app PRIVATE src/animations/tilt_animation.cpp)
 
-if(CONFIG_ANIMATION_BEAT OR CONFIG_ANIMATION_FFT_BARS)
+# The extension host also binds these adapter sources (rgbx_inputs audio/IMU
+# snapshots), so they must compile whenever it is enabled with the matching
+# subsystem — not only when a built-in animation wants them.
+if(CONFIG_ANIMATION_BEAT OR CONFIG_ANIMATION_FFT_BARS OR (CONFIG_APP_EXTENSION_HOST AND CONFIG_AUDIO))
   target_sources(app PRIVATE src/sound/animation_adapters/audio_animations_sound.cpp)
 endif()
 
-if(CONFIG_ANIMATION_TILT)
+if(CONFIG_ANIMATION_TILT OR (CONFIG_APP_EXTENSION_HOST AND CONFIG_IMU))
   target_sources(app PRIVATE src/imu/animation_adapters/imu_animations_imu.cpp)
 endif()
 
