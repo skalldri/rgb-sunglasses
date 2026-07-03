@@ -1,0 +1,13 @@
+tests:
+  drivers.emul_bmi270:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+  drivers.emul_bmi270.trigger:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_BMI270_TRIGGER_OWN_THREAD=y

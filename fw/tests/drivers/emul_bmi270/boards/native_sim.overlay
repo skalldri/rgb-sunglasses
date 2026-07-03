@@ -1,0 +1,20 @@
+/*
+ * Instantiate a BMI270 on native_sim's emulated SPI controller so the real
+ * upstream driver initializes against the out-of-tree emulator
+ * (fw/drivers/emul_bmi270).
+ *
+ * irq-gpios mirrors the proto0 node's INT1/INT2 pair, pointed at native_sim's
+ * gpio_emul controller. The driver maps data-ready to INT2 (irq-gpios index
+ * 1, here gpio0 pin 1) — the trigger test fires that pin via
+ * gpio_emul_input_set().
+ */
+
+&spi0 {
+	bmi270: bmi270@0 {
+		compatible = "bosch,bmi270";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		irq-gpios = <&gpio0 0 GPIO_ACTIVE_HIGH>,
+			    <&gpio0 1 GPIO_ACTIVE_HIGH>;
+	};
+};
