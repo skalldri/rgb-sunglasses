@@ -94,9 +94,15 @@ ssize_t read_is_active(struct bt_conn *conn, const struct bt_gatt_attr *attr, vo
 /* Same semantics as AnimationIsActiveBinding::onRemoteActiveChange for the
  * built-ins: write true switches to this animation; write false deactivates
  * it (back to None) only if it is the current one. Unlike built-ins,
- * activation can FAIL (faulted slot, sandbox bring-up death) — every
- * rejected/failed true-write pushes Is Active = false back so the app's
- * optimistic toggle reverts (PR #89 review finding 3). */
+ * activation can FAIL:
+ *  - a FAULTED slot rejects the write with an ATT error, so the app's own
+ *    optimistic-update revert turns the toggle back off (a success + notify
+ *    pushback loses a race against the app's optimistic update, which lands
+ *    AFTER the write response and clobbers the notified value — observed on
+ *    hardware);
+ *  - a sandbox that dies later (the load is deferred to the first tick)
+ *    is reported by the fault path's Is Active = false notification.
+ * Only `ext select` (deliberate developer action) resets a faulted slot. */
 ssize_t write_is_active(struct bt_conn *, const struct bt_gatt_attr *attr, const void *buf,
                         uint16_t len, uint16_t offset, uint8_t) {
     if (offset != 0 || len != 1) {
@@ -107,17 +113,13 @@ ssize_t write_is_active(struct bt_conn *, const struct bt_gatt_attr *attr, const
     const Animation id = extension_host::animationId(bs->slot);
     if (active) {
         if (extension_host::isFaulted(bs->slot)) {
-            /* Dead sandbox: don't switch to an animation that can't run —
-             * only `ext select` (deliberate developer action) resets it. */
-            push_is_active(bs);
-            return len;
+            return BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED);
         }
         pattern_controller_change_to_animation(id);
         if (bs->isActive == 0) {
-            /* The switch happened but the sandbox died in rgbx_init(): the
-             * proxy already recorded inactive; make sure the writer hears it
-             * (the value never changed, so no notify fired). */
-            push_is_active(bs);
+            /* The switch was refused synchronously (e.g. raced a concurrent
+             * fault): reject so the app reverts. */
+            return BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED);
         }
     } else if (pattern_controller_get_current_animation() == id) {
         pattern_controller_change_to_animation(Animation::None);
@@ -364,12 +366,24 @@ int extension_bt_register(size_t slot) {
     }
     bs->registered = true;
 
-    animation_registry_register_is_active(extension_host::animationId(slot),
-                                          kIsActiveSetters[slot]);
-
     LOG_INF("registered BLE service for extension '%s' (%zu attrs)",
             extension_host::name(slot), attrIdx);
     return 0;
+}
+
+int extension_bt_bind_is_active(size_t slot) {
+    if (slot >= kMaxExtensions || !sBtSlots[slot].registered) {
+        return -EINVAL;
+    }
+    /* Must run AFTER extension_animation_proxy_register():
+     * animation_registry_register_is_active refuses (-ENOENT) ids that have
+     * no registry entry yet, and the proxy's registration is what creates
+     * it. (Learned the hard way — binding from extension_bt_register(),
+     * which runs before the proxy for rollback reasons, silently left the
+     * Is Active mirror dead: reads returned 0 for the active extension and
+     * fault notifications never fired.) */
+    return animation_registry_register_is_active(extension_host::animationId(slot),
+                                                 kIsActiveSetters[slot]);
 }
 
 void extension_bt_unregister(size_t slot) {

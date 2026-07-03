@@ -17,7 +17,7 @@
  * @brief extension_host — kernel-side owner of sandboxed LLEXT animation
  * extensions (issue #85).
  *
- * Lifecycle (load-on-activate): at boot every /NAND:/ext/*.llext is loaded
+ * Lifecycle (load-on-activate): at boot every .llext file in /NAND:/ext is loaded
  * TRANSIENTLY — its manifest is validated (extension_manifest.h) and copied
  * out — then immediately unloaded, so discovery costs no steady-state llext
  * heap. Only the ACTIVE extension is resident: activation records a pending

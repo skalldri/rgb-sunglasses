@@ -6,7 +6,8 @@
 
 /**
  * extension_registry — boot-time enumeration of animation extension files
- * (/NAND:/ext/*.llext), mirroring glim_registry's shape. Entries are sorted
+ * (.llext files in /NAND:/ext), mirroring glim_registry's shape. Entries are
+ * sorted
  * by filename so extension animation IDs (kAnimationIdBase + index, see
  * extension_limits.h) are deterministic for a given file set.
  *

@@ -28,3 +28,13 @@ int extension_bt_register(size_t slot);
  * fails. No-op if the slot isn't registered.
  */
 void extension_bt_unregister(size_t slot);
+
+/**
+ * @brief Binds the slot's Is Active mirror/notify setter into the animation
+ * registry. Must be called AFTER extension_animation_proxy_register() — the
+ * registry rejects setters for ids that have no entry yet (the proxy's
+ * registration creates it).
+ *
+ * @return 0 on success, negative errno otherwise.
+ */
+int extension_bt_bind_is_active(size_t slot);

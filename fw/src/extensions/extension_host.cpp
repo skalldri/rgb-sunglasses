@@ -492,6 +492,19 @@ void init() {
             sSlotCount--;
             continue;
         }
+        /* Last, because the registry only accepts setters for ids the proxy
+         * registration just created. Failure would leave Is Active
+         * reads/notifies dead for this slot, so treat it like the other
+         * registration failures (the proxy entry can't be unregistered, but
+         * an uncounted slot renders black and is invisible over BLE). */
+        ret = extension_bt_bind_is_active(slot);
+        if (ret != 0) {
+            LOG_ERR("slot %zu: is-active binding failed: %d", slot, ret);
+            extension_bt_unregister(slot);
+            sSlots[slot].loaded = false;
+            sSlotCount--;
+            continue;
+        }
     }
     if (sSlotCount > 0) {
         LOG_INF("%zu extension animation(s) registered (ids 0x%02x..0x%02x)", sSlotCount,
