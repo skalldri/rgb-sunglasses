@@ -230,6 +230,19 @@ See `src/imu/imu.cpp`'s `imu_init()` for the working reference implementation of
 
 **MPU region budget**: nRF5340's Cortex-M33 MPU has 8 hardware regions; 2 are permanently consumed by Zephyr's default flash/RAM background map, leaving ~6 dynamic regions (~4-5 usable partitions per active memory domain in practice) — a real constraint for anyone adding more domains.
 
+**Note the old per-thread conversion plan above is superseded for the LLEXT case** by the extension-host design (issue #85, implemented below): only extension code runs in user mode; `pattern_controller_thread`/`led_display_thread`/`status_led_thread` stay kernel-mode, so no `led_strip_update_rgb` syscall or FS-hoisting is needed.
+
+### Sandboxed animation extensions (issue #85, `src/extensions/` + `fw/extensions/`)
+
+`.llext` animation extensions are discovered at boot from `/NAND:/ext/`, loaded with the llext fs loader, and executed **exclusively on one K_USER sandbox thread** confined to the extension's memory domain (`z_libc_partition` + llext's 4 TEXT/RODATA/DATA/BSS partitions = 5, hardware-verified to fit the MPU budget). The kernel-side pattern controller exchanges data purely through the extension's own exported globals (ABI in `include/rgbx/rgbx_api.h`; C++ wrapper `include/rgbx/rgbx_animation.h`), enforces a per-tick deadline (`CONFIG_APP_EXT_TICK_DEADLINE_MS`), and recovers from hangs/faults by aborting and recreating the sandbox thread. Extensions appear as first-class animations: runtime GATT services (`extension_bt.cpp`, `CONFIG_BT_GATT_DYNAMIC_DB=y`, ids `0x20 + slot`) that the app renders with zero app-side changes (no metadata blob; the app's per-descriptor fallback covers it). Developer docs: `fw/extensions/README.md`. Non-obvious facts learned the hard way:
+
+- **`k_sys_fatal_error_handler` is overridden in `extension_host.cpp`** (root-caused via GDB+SWD): Zephyr's default weak handler halts the WHOLE system on any fault — z_fatal_error() only demotes to a thread abort if the handler *returns*. The override returns only for faults on the sandbox thread; all other faults keep the stock halt-for-GDB behavior. Without it, an extension MPU fault parked the CPU in `arch_system_halt()`.
+- **C++ extensions require a partial link** (`ld -r`, done by `fw/extensions/build.sh`): COMDAT group sections (`.text._Z...`) interleave with `.data`/`.bss` file offsets in a single object and fail llext's region-overlap check ("Region 0 ELF file range ... overlaps with 1").
+- **The `llext-edk` cmake target does not rebuild when headers change** — delete `build/fw/zephyr/llext-edk.tar.xz` first (build.sh does).
+- **Extension init arrays run inside the sandbox** via `llext_bringup()` from the user-mode thread entry (`llext_get_fn_table` is a syscall) — needed for C++ static constructors, though GCC constant-initializes simple instances (vtable pointer via `.rel.data`).
+- The fs loader copies the whole ELF into `llext_heap` (`CONFIG_LLEXT_HEAP_SIZE=64` KB; appcore RAM went 75.5% → ~89%).
+- Debug shell: `ext list` / `ext select <slot>` / `ext param <slot> <idx> [<value>]` / `ext scan`. The plasma demo doubles as the recovery test (Speed `0xDEAD` = MPU fault, `0xF00D` = hang).
+
 ### Scope reminder
 
 Prefer changes under `/workspaces/rgb-sunglasses/fw` (app code). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
