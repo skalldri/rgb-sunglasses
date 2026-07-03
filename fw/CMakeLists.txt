@@ -48,6 +48,7 @@ target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/storage.c
 target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_decoder.cpp)
 target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_registry.cpp)
 target_sources_ifdef(CONFIG_APP_MCUBOOT_UPDATER app PRIVATE src/storage/appcfg_erase.cpp)
+target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_host.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_MY_EYES app PRIVATE src/animations/my_eyes_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/animations/rainbow_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_ZIGZAG app PRIVATE src/animations/zigzag_animation.cpp)
