@@ -36,6 +36,12 @@ namespace {
  * (the only float-printing code in the app) formats via fixed-point integers instead.
  * Renders v with 4 decimal places into buf, e.g. "0.0123" / "-1.5000". */
 const char *fmt_fixed4(float v, char *buf, size_t len) {
+    /* Casting a non-finite float to unsigned below is undefined; print the value's
+     * class by name instead of garbage digits. */
+    if (!isfinite(v)) {
+        snprintf(buf, len, "%s", isnan(v) ? "nan" : (v < 0.0f ? "-inf" : "inf"));
+        return buf;
+    }
     const char *sign = "";
     if (v < 0.0f) {
         sign = "-";
@@ -44,6 +50,21 @@ const char *fmt_fixed4(float v, char *buf, size_t len) {
     unsigned scaled = (unsigned)(v * 10000.0f + 0.5f);
     snprintf(buf, len, "%s%u.%04u", sign, scaled / 10000u, scaled % 10000u);
     return buf;
+}
+
+/* Parse a complete, finite float from s. Rejects empty input, trailing garbage
+ * (partial parses), and NaN/Inf. The NaN rejection matters: range checks of the
+ * form (v < lo || v > hi) are both false for NaN, so without this a "nan" argument
+ * would sail through validation and poison the AGC threshold comparisons (which
+ * are then always false, silently disabling gain adjustment). */
+bool parse_finite_float(const char *s, float *out) {
+    char *end = nullptr;
+    float v = strtof(s, &end);
+    if (end == s || *end != '\0' || !isfinite(v)) {
+        return false;
+    }
+    *out = v;
+    return true;
 }
 
 /* AGC gain register → tenths of a dB, exactly (each step = 0.5 dB, 0x00 = −20 dB).
@@ -635,9 +656,9 @@ static int cmd_sound_agc_target_low(const struct shell *shell, size_t argc, char
         shell_error(shell, "Usage: sound agc target-low [<value>]");
         return -EINVAL;
     }
-    float val = (float)strtof(argv[1], NULL);
-    if (val < 0.001f || val > 0.1f) {
-        shell_error(shell, "Value must be in range [0.001, 0.1]");
+    float val;
+    if (!parse_finite_float(argv[1], &val) || val < 0.001f || val > 0.1f) {
+        shell_error(shell, "Value must be a number in range [0.001, 0.1]");
         return -EINVAL;
     }
     sAgcProvider->setTargetLow(val);
@@ -657,9 +678,9 @@ static int cmd_sound_agc_target_high(const struct shell *shell, size_t argc, cha
         shell_error(shell, "Usage: sound agc target-high [<value>]");
         return -EINVAL;
     }
-    float val = (float)strtof(argv[1], NULL);
-    if (val < 0.001f || val > 0.2f) {
-        shell_error(shell, "Value must be in range [0.001, 0.2]");
+    float val;
+    if (!parse_finite_float(argv[1], &val) || val < 0.001f || val > 0.2f) {
+        shell_error(shell, "Value must be a number in range [0.001, 0.2]");
         return -EINVAL;
     }
     sAgcProvider->setTargetHigh(val);
