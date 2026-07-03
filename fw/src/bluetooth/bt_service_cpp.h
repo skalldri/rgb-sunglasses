@@ -341,8 +341,16 @@ class BtGattServer {
         // and so are never instantiated (class template members are only instantiated
         // when used), costing zero flash on boards where this is off.
         if constexpr (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC)) {
+            // Single N+1-ary tuple_cat (all provider tuples + the metadata tuple in one
+            // call) rather than nesting a second top-level tuple_cat around an
+            // already-flattened intermediate result. Concatenation is
+            // associativity-invariant so the resulting tuple type/values are identical --
+            // this just avoids libstdc++'s __tuple_concater re-walking the already-flat
+            // provider tuple a second time, which was generating a large amount of
+            // redundant template-instantiated code (issue #79 flash investigation;
+            // dominant cost on services with many providers, e.g. text/my_eyes).
             attrs_ = tupleToArray(
-                std::tuple_cat(concatenateAttrTuples(providers...), getMetadataAttrsTuple()),
+                std::tuple_cat(providers.getAttrsTuple()..., getMetadataAttrsTuple()),
                 std::make_index_sequence<kTotalAttrCount>{});
         } else {
             attrs_ = tupleToArray(concatenateAttrTuples(providers...),

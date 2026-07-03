@@ -6,6 +6,7 @@
 #include <zephyr/drivers/vm3011/vm3011.h>
 #endif
 #include <math.h> /* sqrtf */
+#include <stdio.h> /* snprintf (fmt_fixed4) */
 #include <stdlib.h>
 #include <zephyr/audio/dmic.h>
 #include <zephyr/fs/fs.h>
@@ -30,6 +31,46 @@
 #define AGC_GAIN_MAX 0x50 /* +20 dB (PDM GAINL/GAINR register ceiling) */
 
 namespace {
+/* %f-free float printing (issue #79 ROM investigation): CONFIG_CBPRINTF_FP_SUPPORT and
+ * CONFIG_PICOLIBC_IO_FLOAT are disabled project-wide to save ~10KB FLASH, so this file
+ * (the only float-printing code in the app) formats via fixed-point integers instead.
+ * Renders v with 4 decimal places into buf, e.g. "0.0123" / "-1.5000". */
+const char *fmt_fixed4(float v, char *buf, size_t len) {
+    /* Casting a non-finite float to unsigned below is undefined; print the value's
+     * class by name instead of garbage digits. */
+    if (!isfinite(v)) {
+        snprintf(buf, len, "%s", isnan(v) ? "nan" : (v < 0.0f ? "-inf" : "inf"));
+        return buf;
+    }
+    const char *sign = "";
+    if (v < 0.0f) {
+        sign = "-";
+        v = -v;
+    }
+    unsigned scaled = (unsigned)(v * 10000.0f + 0.5f);
+    snprintf(buf, len, "%s%u.%04u", sign, scaled / 10000u, scaled % 10000u);
+    return buf;
+}
+
+/* Parse a complete, finite float from s. Rejects empty input, trailing garbage
+ * (partial parses), and NaN/Inf. The NaN rejection matters: range checks of the
+ * form (v < lo || v > hi) are both false for NaN, so without this a "nan" argument
+ * would sail through validation and poison the AGC threshold comparisons (which
+ * are then always false, silently disabling gain adjustment). */
+bool parse_finite_float(const char *s, float *out) {
+    char *end = nullptr;
+    float v = strtof(s, &end);
+    if (end == s || *end != '\0' || !isfinite(v)) {
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
+/* AGC gain register → tenths of a dB, exactly (each step = 0.5 dB, 0x00 = −20 dB).
+ * Integer math so it can be printed without %f. */
+int agc_gain_db10(uint8_t gain) { return (int)gain * 5 - 200; }
+
 /* Default AgcConfigProvider: identical defaults/clamps to the historical static
  * variables this replaces, used until sound_set_agc_config_provider() injects the real
  * BT-backed implementation (see audio_dsp_bind_default_bt_dependencies() below). */
@@ -315,9 +356,11 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
                 /* Gain discontinuity invalidates the flux history. */
                 audio_dsp_reset_history();
                 s_agc_frames_since = 0;
-                float db = (float)s_agc_gain * 0.5f - 20.0f;
-                LOG_DBG("AGC: gain=0x%02x (%.1f dB) smoothed_rms=%.4f", s_agc_gain, (double)db,
-                        (double)s_smoothed_rms);
+                int db10 = agc_gain_db10(s_agc_gain);
+                char rms_buf[16];
+                LOG_DBG("AGC: gain=0x%02x (%s%d.%u dB) smoothed_rms=%s", s_agc_gain,
+                        db10 < 0 ? "-" : "", abs(db10) / 10, (unsigned)(abs(db10) % 10),
+                        fmt_fixed4(s_smoothed_rms, rms_buf, sizeof(rms_buf)));
             }
         }
 
@@ -329,12 +372,16 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
         for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
             // Disabled output for now
             if (false && result.beat[b]) {
+                char e_buf[16], m_buf[16], sg_buf[16], t_buf[16];
                 LOG_INF(
-                    "beat band=%d energy=%.5f mean=%.5f sigma=%.5f "
-                    "threshold=%.5f seq=%u",
-                    b, (double)result.band_energy[b], (double)result.band_mean[b],
-                    (double)result.band_sigma[b],
-                    (double)(result.band_mean[b] + 2.0f * result.band_sigma[b]), result.seq);
+                    "beat band=%d energy=%s mean=%s sigma=%s "
+                    "threshold=%s seq=%u",
+                    b, fmt_fixed4(result.band_energy[b], e_buf, sizeof(e_buf)),
+                    fmt_fixed4(result.band_mean[b], m_buf, sizeof(m_buf)),
+                    fmt_fixed4(result.band_sigma[b], sg_buf, sizeof(sg_buf)),
+                    fmt_fixed4(result.band_mean[b] + 2.0f * result.band_sigma[b], t_buf,
+                               sizeof(t_buf)),
+                    result.seq);
             }
         }
 
@@ -581,53 +628,64 @@ static int cmd_sound_agc_status(const struct shell *shell, size_t argc, char **a
     ARG_UNUSED(argv);
 
     /* Each register step = 0.5 dB; 0x00 = −20 dB, 0x28 = 0 dB, 0x50 = +20 dB. */
-    float db = (float)s_agc_gain * 0.5f - 20.0f;
+    int db10 = agc_gain_db10(s_agc_gain);
     float peak_norm = (float)s_latest_peak / 32768.0f;
-    shell_print(shell, "AGC gain: 0x%02x (%.1f dB)", s_agc_gain, (double)db);
-    shell_print(shell, "  Smoothed RMS (1s): %.4f | Instantaneous: %.4f", (double)s_smoothed_rms,
-                (double)s_latest_rms);
-    shell_print(shell, "  Peak: %d (%.4f norm)", s_latest_peak, (double)peak_norm);
-    shell_print(shell, "  Target window: [%.4f, %.4f] | Rate limit: %u frames",
-                (double)sAgcProvider->getTargetLow(), (double)sAgcProvider->getTargetHigh(),
+    char b1[16], b2[16];
+    shell_print(shell, "AGC gain: 0x%02x (%s%d.%u dB)", s_agc_gain, db10 < 0 ? "-" : "",
+                abs(db10) / 10, (unsigned)(abs(db10) % 10));
+    shell_print(shell, "  Smoothed RMS (1s): %s | Instantaneous: %s",
+                fmt_fixed4(s_smoothed_rms, b1, sizeof(b1)),
+                fmt_fixed4(s_latest_rms, b2, sizeof(b2)));
+    shell_print(shell, "  Peak: %d (%s norm)", s_latest_peak,
+                fmt_fixed4(peak_norm, b1, sizeof(b1)));
+    shell_print(shell, "  Target window: [%s, %s] | Rate limit: %u frames",
+                fmt_fixed4(sAgcProvider->getTargetLow(), b1, sizeof(b1)),
+                fmt_fixed4(sAgcProvider->getTargetHigh(), b2, sizeof(b2)),
                 sAgcProvider->getRateLimitFrames());
     return 0;
 }
 
 static int cmd_sound_agc_target_low(const struct shell *shell, size_t argc, char **argv) {
     if (argc == 1) {
-        shell_print(shell, "AGC target low: %.4f", (double)sAgcProvider->getTargetLow());
+        char buf[16];
+        shell_print(shell, "AGC target low: %s",
+                    fmt_fixed4(sAgcProvider->getTargetLow(), buf, sizeof(buf)));
         return 0;
     }
     if (argc != 2) {
         shell_error(shell, "Usage: sound agc target-low [<value>]");
         return -EINVAL;
     }
-    float val = (float)strtof(argv[1], NULL);
-    if (val < 0.001f || val > 0.1f) {
-        shell_error(shell, "Value must be in range [0.001, 0.1]");
+    float val;
+    if (!parse_finite_float(argv[1], &val) || val < 0.001f || val > 0.1f) {
+        shell_error(shell, "Value must be a number in range [0.001, 0.1]");
         return -EINVAL;
     }
     sAgcProvider->setTargetLow(val);
-    shell_print(shell, "AGC target low set to %.4f", (double)val);
+    char buf[16];
+    shell_print(shell, "AGC target low set to %s", fmt_fixed4(val, buf, sizeof(buf)));
     return 0;
 }
 
 static int cmd_sound_agc_target_high(const struct shell *shell, size_t argc, char **argv) {
     if (argc == 1) {
-        shell_print(shell, "AGC target high: %.4f", (double)sAgcProvider->getTargetHigh());
+        char buf[16];
+        shell_print(shell, "AGC target high: %s",
+                    fmt_fixed4(sAgcProvider->getTargetHigh(), buf, sizeof(buf)));
         return 0;
     }
     if (argc != 2) {
         shell_error(shell, "Usage: sound agc target-high [<value>]");
         return -EINVAL;
     }
-    float val = (float)strtof(argv[1], NULL);
-    if (val < 0.001f || val > 0.2f) {
-        shell_error(shell, "Value must be in range [0.001, 0.2]");
+    float val;
+    if (!parse_finite_float(argv[1], &val) || val < 0.001f || val > 0.2f) {
+        shell_error(shell, "Value must be a number in range [0.001, 0.2]");
         return -EINVAL;
     }
     sAgcProvider->setTargetHigh(val);
-    shell_print(shell, "AGC target high set to %.4f", (double)val);
+    char buf[16];
+    shell_print(shell, "AGC target high set to %s", fmt_fixed4(val, buf, sizeof(buf)));
     return 0;
 }
 
@@ -656,11 +714,14 @@ static int cmd_sound_rms(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argv);
 
     float peak_norm = (float)s_latest_peak / 32768.0f;
-    shell_print(shell, "Smoothed RMS (1s): %.4f", (double)s_smoothed_rms);
-    shell_print(shell, "Instantaneous RMS: %.4f | Peak: %d (%.4f norm)", (double)s_latest_rms,
-                s_latest_peak, (double)peak_norm);
-    shell_print(shell, "Target window: [%.4f, %.4f]", (double)sAgcProvider->getTargetLow(),
-                (double)sAgcProvider->getTargetHigh());
+    char b1[16], b2[16];
+    shell_print(shell, "Smoothed RMS (1s): %s", fmt_fixed4(s_smoothed_rms, b1, sizeof(b1)));
+    shell_print(shell, "Instantaneous RMS: %s | Peak: %d (%s norm)",
+                fmt_fixed4(s_latest_rms, b1, sizeof(b1)), s_latest_peak,
+                fmt_fixed4(peak_norm, b2, sizeof(b2)));
+    shell_print(shell, "Target window: [%s, %s]",
+                fmt_fixed4(sAgcProvider->getTargetLow(), b1, sizeof(b1)),
+                fmt_fixed4(sAgcProvider->getTargetHigh(), b2, sizeof(b2)));
     return 0;
 }
 
