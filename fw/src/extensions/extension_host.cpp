@@ -27,10 +27,12 @@
 #include <extensions/extension_registry.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
+#include <zephyr/fatal.h>
 #include <zephyr/kernel.h>
 #include <zephyr/llext/fs_loader.h>
 #include <zephyr/llext/llext.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/sys/libc-hooks.h>
 
@@ -78,10 +80,20 @@ K_SEM_DEFINE(sDoneSem, 0, 1);
 AnimationImuSource *sImuSource = nullptr;
 
 /* Runs in user mode inside the active extension's domain. p1/p2 are the
- * extension's init/tick entry points, resolved kernel-side at load time. */
-void sandbox_entry(void *p1, void *p2, void *) {
+ * extension's init/tick entry points, resolved kernel-side at load time;
+ * p3 is the llext handle, needed to run the extension's init arrays. */
+void sandbox_entry(void *p1, void *p2, void *p3) {
     auto initFn = reinterpret_cast<void (*)()>(p1);
     auto tickFn = reinterpret_cast<void (*)()>(p2);
+    auto ext = static_cast<struct llext *>(p3);
+
+    /* Run the extension's C++ static constructors (init arrays) inside the
+     * sandbox — llext_bringup() fetches the function table through the
+     * llext_get_fn_table syscall, so this works from user mode and the
+     * constructors execute with sandbox privileges, never kernel ones.
+     * Required by the rgbx C++ wrapper (its static Animation instance's
+     * vtable pointer is set here); a no-op for plain-C extensions. */
+    (void)llext_bringup(ext);
 
     initFn();
     k_sem_give(&sDoneSem);
@@ -113,6 +125,39 @@ void sandbox_fault(Slot &slot, const char *what) {
 
 /* Loads registry entry `fileIndex` into slot `slotIndex`. The two diverge as
  * soon as one file fails validation and is skipped. */
+}  // namespace
+}  // namespace extension_host
+
+/* Sandbox fault containment (issue #85, hardware-root-caused via GDB+SWD):
+ * Zephyr's default (weak) k_sys_fatal_error_handler halts the ENTIRE system
+ * on any fault — z_fatal_error() only demotes a fault to a thread abort if
+ * this handler RETURNS, which the default never does. Without this override,
+ * an MPU fault inside a sandboxed extension (verified: PC inside the llext
+ * heap, reason 19) parked the CPU in arch_system_halt() and took down the
+ * whole firmware, defeating the sandbox.
+ *
+ * The override returns — allowing z_fatal_error() to abort just the
+ * offending thread — if and only if the faulting thread is the extension
+ * sandbox thread (which is never essential). Kernel panics and faults on any
+ * other thread keep the stock halt-everything behavior, preserving today's
+ * debugging workflow (GDB attach to the halted CPU) for real firmware bugs.
+ * Runs in exception context: keep it minimal. */
+extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf) {
+    ARG_UNUSED(esf);
+    if (reason != K_ERR_KERNEL_PANIC &&
+        k_current_get() == &extension_host::sSandboxThread) {
+        LOG_ERR("fault (reason %u) in extension sandbox — aborting only the sandbox thread",
+                reason);
+        return;
+    }
+    log_panic();
+    LOG_ERR("Halting system (reason %u)", reason);
+    k_fatal_halt(reason);
+}
+
+namespace extension_host {
+namespace {
+
 bool load_slot(size_t fileIndex, size_t slotIndex) {
     Slot &slot = sSlots[slotIndex];
 
@@ -288,7 +333,7 @@ bool activate(size_t slot) {
     k_tid_t tid = k_thread_create(&sSandboxThread, sSandboxStack,
                                   K_THREAD_STACK_SIZEOF(sSandboxStack), sandbox_entry,
                                   reinterpret_cast<void *>(s.initFn),
-                                  reinterpret_cast<void *>(s.tickFn), nullptr,
+                                  reinterpret_cast<void *>(s.tickFn), s.ext,
                                   CONFIG_APP_EXT_HOST_THREAD_PRIORITY, K_FP_REGS | K_USER,
                                   K_FOREVER);
     k_thread_name_set(tid, "ext_sandbox");
@@ -395,6 +440,26 @@ int cmd_ext_scan(const struct shell *sh, size_t, char **) {
     return 0;
 }
 
+int cmd_ext_param(const struct shell *sh, size_t argc, char **argv) {
+    if (argc != 3 && argc != 4) {
+        shell_error(sh, "Usage: ext param <slot> <index> [<value>]");
+        return -EINVAL;
+    }
+    size_t slot = strtoul(argv[1], nullptr, 10);
+    size_t index = strtoul(argv[2], nullptr, 10);
+    if (slot >= sSlotCount || index >= sSlots[slot].nParams) {
+        shell_error(sh, "no such param");
+        return -ENOENT;
+    }
+    if (argc == 4) {
+        setParamValue(slot, index, strtoul(argv[3], nullptr, 0));
+    }
+    uint32_t value = paramValue(slot, index);
+    shell_print(sh, "%s.%s = %u (0x%x)", sSlots[slot].displayName, sSlots[slot].params[index].name,
+                value, value);
+    return 0;
+}
+
 int cmd_ext_select(const struct shell *sh, size_t argc, char **argv) {
     if (argc != 2) {
         shell_error(sh, "Usage: ext select <slot>");
@@ -418,6 +483,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_ext, SHELL_CMD(list, NULL, "List loaded animation extensions", cmd_ext_list),
     SHELL_CMD(scan, NULL, "Re-run extension discovery (debug; empty registry only)",
               cmd_ext_scan),
+    SHELL_CMD_ARG(param, NULL, "Get/set a param: ext param <slot> <index> [<value>]",
+                  cmd_ext_param, 3, 1),
     SHELL_CMD_ARG(select, NULL, "Activate extension animation: ext select <slot>", cmd_ext_select,
                   2, 0),
     SHELL_SUBCMD_SET_END);
