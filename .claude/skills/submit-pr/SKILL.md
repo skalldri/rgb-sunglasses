@@ -1,7 +1,7 @@
 ---
 name: submit-pr
-description: Pre-PR validation gate for firmware — builds both boards, runs tests, checks patch coverage ≥ 50%, then creates the GitHub PR
-allowed-tools: Bash, Read, AskUserQuestion
+description: Pre-PR validation gate for firmware — builds both boards, runs tests, checks patch coverage ≥ 50%, requires on-device + companion-app verification for any change touching device↔app communication, then creates the GitHub PR
+allowed-tools: Bash, Read, AskUserQuestion, mcp__serial, mcp__execbro
 ---
 
 Run all pre-PR checks for firmware changes, then push and open a pull request. **Do not push or create a PR if any check fails.**
@@ -103,7 +103,31 @@ If the lcov extract produces an empty tracefile (i.e., the changed files are not
 
 ---
 
-## 6. Push and create PR
+## 6. On-device + companion-app verification (REQUIRED for anything touching device↔app communication)
+
+Determine whether the branch could **conceivably** affect the companion app or device↔app communication. Err on the side of yes. Triggers include (not exhaustive):
+
+- Anything under `fw/src/bluetooth/`, `fw/src/extensions/`, or any `*_bt.cpp` adapter
+- GATT surface changes: services, characteristics, descriptors (CUD/CPF/CCC), UUIDs, the metadata blob, notification behavior, write/read handler semantics
+- Animation registration, animation IDs / `Animation` enum, is-active plumbing, persisted last-active
+- MCUmgr / firmware-update flow, advertising/pairing/connection parameters, MTU or connection tuning
+- Value encodings the app decodes (colors, strings, dropdowns, bool wire sizes)
+
+If none apply (e.g. pure internal refactor, audio DSP math, docs), note "device/app verification: N/A — <reason>" in the PR body and skip to step 7.
+
+If any apply, **build-and-test gates alone are not sufficient** — flash the board (`fw/scripts/jlink-flash.sh`) and verify against the real companion app over BLE:
+
+1. Connect the app (phone via ADB + execbro, or ask the user to drive their phone; read `app/CLAUDE.md` first for launch/tap/fiber procedures) and confirm discovery completes with no fallback/mismatch warnings.
+2. Exercise every changed read/write/notify path end-to-end **and cross-check against the firmware's own source of truth** (the `mcp__serial__*` shell, e.g. `ext param`, `glim`), not just the app UI — optimistic updates make the UI lie (see app/CLAUDE.md "Verifying a write/notify round-trip").
+3. If the change involves notifications, verify the app *receives* them (a value changes in the app without a re-read) — notify failures are firmware-log-only and completely silent app-side.
+
+**Why this gate exists**: shell-level testing cannot see BLE-visible state. On PR #89 the extensions' Is Active mirror was completely dead (a registration-ordering bug returned `-ENOENT` into an ignored return value) while every build, Twister suite, and serial-shell check passed — only a real app connection exposed it, plus a second bug (a pushback notification losing a race against the app's optimistic update) that needed an ATT error instead.
+
+**Gate**: if no board or phone is available, use AskUserQuestion to ask whether to proceed without this verification — never silently skip it. Record what was verified (or why it was waived) in the PR body.
+
+---
+
+## 7. Push and create PR
 
 All gates passed. Push the branch and open a PR:
 
@@ -125,6 +149,8 @@ gh pr create --title "<title>" --body "$(cat <<'EOF'
 - DK build: PASS
 - Twister tests: PASS (<N> tests)
 - Patch coverage: PASS (<X>% on changed files)
+- Device/app verification: <what was verified on hardware + app, or "N/A — <reason>">
+
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF

@@ -18,6 +18,7 @@ Hardware iterations are slow and mistakes can cause damage. Before flashing anyt
 - Read the relevant source code to confirm assumptions (Kconfig deps, handler logic, buffer sizes)
 - Verify changes in `build/fw/zephyr/include/generated/zephyr/autoconf.h` before uploading
 - Don't rely on web search results for Kconfig symbol names — check the actual NCS source under `/root/ncs/v3.1.1/`
+- Verify memory-accounting claims against the linker map (`build/fw/zephyr/zephyr.map`) before proposing size/config changes — e.g. `.noinit` buffers (like the llext heap) ARE counted in the linker's RAM percentage, and secondary reports (footprint scripts) use different accounting than what governs link success
 
 ## "Remember" instructions
 
@@ -26,6 +27,11 @@ When the user says "Remember" (or "Remember that"), update the appropriate CLAUD
 ## Git workflow — ALWAYS branch before committing
 
 **Never commit directly to `main`.** Always create a feature branch first (`git checkout -b <branch-name>`), then commit, push the branch, and open a PR. Do this before editing any files if possible, but at minimum before the first `git commit`.
+
+### GitHub PR review comments via `gh api`
+
+- While this account has a **pending (draft) review** on a PR, the API rejects ALL new review comments from it with 422 "user can only have one pending review per pull request" — both `POST /pulls/<n>/reviews` and standalone `POST /pulls/<n>/comments` (standalone line comments are single-comment reviews internally). Never touch or submit the user's pending review; fall back to regular PR comments (`gh pr comment`) with `https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>` permalinks, which render the referenced snippet inline.
+- Once a review is submitted, reply to its line-comment threads with `gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body=...`.
 
 ## Process management — NEVER use pkill
 

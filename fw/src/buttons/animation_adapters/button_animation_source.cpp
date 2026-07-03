@@ -69,3 +69,14 @@ void glim_player_animation_bind_default_button_dependencies() {
     GlimPlayerAnimation::getInstance()->setButtonSource(button_animation_source());
 }
 #endif
+
+#if defined(CONFIG_APP_EXTENSION_HOST)
+#include <extensions/extension_host.h>
+/* Sandboxed extensions receive the pressed-since-last-tick bitmask via
+ * rgbx_inputs.buttons_pressed (the host queries wasPressed() per button each
+ * tick — extensions never touch this source directly). Sharing the single
+ * always-registered source is safe: only one animation ticks at a time. */
+void extension_host_bind_default_button_dependencies() {
+    extension_host::set_button_source(&sButtonAnimationSource);
+}
+#endif

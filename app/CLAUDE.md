@@ -306,6 +306,9 @@ Note: `BaseExpoRouterLink` children are not a bare string in the fiber props —
 - `Animation::Rainbow = 5` → service `0500`, Is Active (3rd char, index 2) → `12345678-1234-5678-0500-56789abd0002`
 - Find current value first: iterate `CharacteristicBoolean` fibers, read `charInfo.value` (`AA==`=false, `AQ==`=true)
 - Animation enum values are in `fw/src/animations/animation_types.h`
+- **Extension animations** (`fw/src/extensions/`, ids `0x40 + slot`) → service groups `4000`, `4100`, … Their "Is Active" uses the FIXED shared UUID `...-bbbb-...0000` — the same literal UUID appears in every animation service, so **always disambiguate by `charInfo.characteristic.serviceUUID`, never by `charUuid` alone**. Their param characteristics use auto UUIDs `...-{group}-56789abd0001/0002/...` in manifest declaration order (ids start at 1).
+
+**Per-CPF fiber component names** (all take the same `onWrite(charUuid, encodedNewValue, encodedPreviousValue)` prop, so the CharacteristicBoolean recipe above works for every type): `CharacteristicBoolean`, `CharacteristicUint32` (4-byte LE, e.g. 50 = `MgAAAA==`), `CharacteristicColor` (4 bytes `b,g,r,0`), `CharacteristicUtf8` (write with `btoa("text")`). These fibers only exist while the screen that renders them is mounted — Is Active toggles live on the Controls list, per-param characteristics only on that animation's detail page (navigate there first or the walk returns "not found").
 
 ### BLE Optimistic UI and Notification Behaviour
 
@@ -315,6 +318,7 @@ Practical implications:
 
 - A write that succeeds in the app may still show a different value if the device sends a notification with a different (e.g., clamped or normalised) value shortly after.
 - Characteristic values that are not persisted in NVS reset to firmware defaults after a device reboot.
+- **A notification that arrives BEFORE the write response is silently lost** (hardware-verified): the optimistic update runs in the write promise's `.then()`, which resolves after the notification was already processed — so the optimistic value clobbers the notified one and the UI shows the write as accepted. Firmware therefore must refuse unacceptable writes with an ATT **error** (triggering the app's catch-and-revert), never with "success + corrective notify" — see the matching rule in `fw/CLAUDE.md` (`bt_service_cpp.h` section). Notifications only work reliably for device-originated changes that happen well after the write completes (e.g. an extension sandbox fault flipping Is Active off).
 
 ### Verifying a write/notify round-trip — don't trust a single "it updated" observation
 

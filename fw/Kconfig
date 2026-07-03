@@ -204,6 +204,44 @@ config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	  CONFIG_BT_SETTINGS_DELAYED_STORE_MS, which only governs Bluetooth's
 	  own bonding/CCC storage.
 
+config APP_EXTENSION_HOST
+	bool "Sandboxed LLEXT animation extension host"
+	depends on LLEXT && USERSPACE && FAT_FILESYSTEM_ELM
+	default n
+	help
+	  Discovers .llext animation extensions on /NAND:/ext at boot, loads
+	  them via the llext filesystem loader, and executes their code
+	  exclusively on a dedicated K_USER thread confined to a per-extension
+	  memory domain (issue #85). The kernel-side pattern controller
+	  exchanges data with the extension purely through the extension's own
+	  exported globals (see include/rgbx/rgbx_api.h), enforcing a per-tick
+	  deadline with abort/recreate/fallback recovery. Proto0 only — the DK
+	  has neither LLEXT nor USERSPACE enabled.
+
+config APP_EXT_HOST_THREAD_PRIORITY
+	int "Extension host thread priority"
+	default 7
+	depends on APP_EXTENSION_HOST
+	help
+	  Preemptive Zephyr priority for the sandboxed extension thread. Must
+	  be numerically greater than the pattern controller thread (priority
+	  6) so a runaway extension can always be preempted by the thread that
+	  enforces its deadline.
+
+config APP_EXT_HOST_STACK_SIZE
+	int "Extension host thread stack size (bytes)"
+	default 2048
+	depends on APP_EXTENSION_HOST
+
+config APP_EXT_TICK_DEADLINE_MS
+	int "Extension tick deadline (ms)"
+	default 50
+	depends on APP_EXTENSION_HOST
+	help
+	  How long the pattern controller waits for the sandboxed extension to
+	  finish one tick before declaring it hung, aborting the host thread,
+	  and falling back (issue #85 recovery path).
+
 config STATUS_LED
 	bool "Onboard status LED module (led_strip_2)"
 	depends on LED_STRIP && WS2812_STRIP_SPI

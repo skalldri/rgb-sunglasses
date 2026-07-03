@@ -1,0 +1,33 @@
+# Doxygen configuration for the rgbx animation-extension API.
+#
+#   doxygen fw/extensions/Doxyfile        (run from anywhere; paths below are
+#                                          relative to this file's directory)
+#
+# Output lands in fw/build/doxygen/html (fw/build is gitignored). Covers the
+# public extension API surface (include/rgbx) with fw/extensions/README.md as
+# the main page.
+
+PROJECT_NAME           = "RGB Sunglasses Animation Extension API"
+PROJECT_BRIEF          = "rgbx ABI + C++ wrapper for sandboxed .llext animations"
+OUTPUT_DIRECTORY       = ../build/doxygen
+
+INPUT                  = ../include/rgbx README.md
+USE_MDFILE_AS_MAINPAGE = README.md
+FILE_PATTERNS          = *.h *.md
+
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+JAVADOC_AUTOBRIEF      = YES
+
+# The headers are consumed both as C and C++; document the C++ wrapper parts
+# too by predefining __cplusplus (and neutralize the C-only #error guard).
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = NO
+PREDEFINED             = __cplusplus
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HAVE_DOT               = NO
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO

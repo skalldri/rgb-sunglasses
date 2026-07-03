@@ -72,6 +72,11 @@ Known non-blocking warning: `multi-line comment [-Wcomment]` in `src/bluetooth/b
 - **Preserve existing comments.** Never delete comments unless they are factually incorrect about the code that remains (e.g., a comment that describes a removed code path). Refactoring to change an API does not justify removing comments — update variable/function names in the comment text to match the new API, but keep the explanation.
 - **Commented-out code (`/*...*/` or `//`) is intentional.** Developers in embedded projects often comment out alternative implementations, debug printk calls, or reference snippets as quick-enable stubs. Do not remove these blocks.
 - **Add comments to non-obvious logic.** If you write code whose purpose or mechanism is not immediately clear from reading the code alone, add a comment.
+- **Never put a `/*` sequence inside a comment** — glob paths like `/NAND:/ext/*.llext` trip `-Wcomment` ("/* within comment"). Rephrase as ".llext files in /NAND:/ext".
+
+## Coding rules
+
+- **Always use bounded string copies** (`strncpy` + explicit NUL, `snprintf`, `memcpy` with a checked length) — never `strcpy`/`sprintf`, even when the buffers are provably the same size today (PR #89 review feedback).
 
 This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED sunglasses. The target SoC is an nRF53 series device. The codebase is mixed C/C++; `main.c` is C but most application logic is C++23.
 
@@ -88,7 +93,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 - `src/animations/animation_base.h` — pure abstract `BaseAnimation` with `init()`, `tick()`, and `setActive()`.
 - `src/animations/animation.h` — `BaseAnimationTemplate<T, A>` CRTP base that adds a Meyer's singleton (`getInstance()`) and wires `setActive()` to the registry.
 - `src/animations/animation_types.h` — `Animation` enum (ZigZag, Text, Rainbow, BtAdvertising, etc.).
-- `src/animations/animation_registry.{h,cpp}` — runtime map of `Animation` → factory function + optional is-active setter callback. BT-free. Populated by `animation_registry_register_defaults()`.
+- `src/animations/animation_registry.{h,cpp}` — runtime map of `Animation` → factory function + optional is-active setter callback. BT-free. Populated by `animation_registry_register_defaults()`. **Registration order matters and returns must be checked**: `animation_registry_register_is_active()` returns `-ENOENT` unless `animation_registry_register()` already created the id's entry — an ignored return here silently killed the extensions' entire Is Active read/notify path on PR #89 (invisible to every build/test/shell gate; only a real app connection exposed it).
 - `src/animations/animation_registry_defaults.cpp` — registers all animations and calls each animation's `bind_default_dependencies()` helper; conditionally compiled via `CONFIG_ANIMATION_*` Kconfig symbols.
 - Each animation (`zigzag`, `rainbow`, `text`, `my_eyes`) has a dependency struct holding `const` references to `AnimationUint32ParameterSource` (or similar abstract interfaces). The animation's `tick()` reads parameters only through these interfaces, keeping animation logic BT-free.
 
@@ -105,6 +110,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
   - Write hooks: if a characteristic class defines `onWrite(const T&)`, it is called automatically after each successful remote write.
   - `src/bluetooth/persistent_characteristic.h` — `BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>`: a `BtGattAutoCharacteristicExt` subclass (same shape as `IsActiveCharacteristic` below) that backs a plain POD/`BtGattColor`/`BtGattString<N>` characteristic with Zephyr's settings subsystem, so its value survives a power cycle. `Key` is an explicit string literal (e.g. `"core/brightness"`) — never derive it from declaration order, since `BtGattServer`'s auto-UUID assignment is positional but settings keys must stay stable across reorderings. See "Settings-backed config persistence" below for the full mechanism. `BtGattDropdownList<N>` characteristics (glim selection/loop mode) don't fit this generic mixin and persist by hand instead — see `glim_player_animation_bt.cpp`.
   - **`notify()` only sends the actual string length for string-backed types (`BtGattString<N>`/`BtGattDropdownList<N>`), matching `read()`'s `strnlen()`-based length** — not `sizeof(storage_)` (the full fixed-capacity buffer). A `bt_gatt_notify()` call cannot fragment a value across multiple ATT PDUs the way long writes/reads can; the whole payload must fit in one packet bounded by the connection's negotiated ATT MTU. Before this was fixed, a `BtGattDropdownList<512>` characteristic (e.g. `GlimSelectionCharacteristic`) always tried to notify the full 512-byte buffer regardless of how short the actual string content was, so every notify failed (`bt_att: No ATT channel for MTU ...` / `Notify failed: -12`) even with a 2-file (~28-byte) selection list — a real bug, not a hypothetical. On failure, `notify()` now logs the characteristic's `Description` and attempted payload length so an MTU-related failure can be traced to which characteristic caused it without guessing. The app side also needs an adequately large negotiated MTU in the first place — see `requestMTU` in `app/CLAUDE.md`'s Known Issues section.
+  - **Refusing a GATT write: return an ATT error, never "success + corrective notify"** (hardware-verified on PR #89). The app applies its optimistic update when the write *response* arrives, and a notification sent from inside the write handler reaches the phone *before* that response — so the optimistic update lands last and clobbers the corrective value; the UI shows the write as accepted. Returning `BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED)` instead makes the app's own catch-and-revert restore the previous value deterministically (see `write_is_active` in `src/extensions/extension_bt.cpp`). Notifications are the right tool only for state changes that originate device-side (e.g. a sandbox fault long after the write completed).
 - `src/animations/bt_animations.{h,cpp}` — BT-aware animation classes for the visual BT status indicators (advertising pulse, connecting flash, pairing code display). These are intentionally mixed-concern; they are the correct place to keep BT in animation code.
 - `src/animations/animation_is_active_binding.h` — BT-free template that bridges the registry's `setActive` callback to a GATT characteristic setter; also routes remote BLE writes back to `pattern_controller_change_to_animation`.
 - `src/animations/animation_is_active_characteristic.h` — `IsActiveCharacteristic<A>`: a `BtGattAutoCharacteristicExt` subclass that hooks `onWrite` to `AnimationIsActiveBinding<A>::onRemoteActiveChange`.
@@ -230,6 +236,23 @@ See `src/imu/imu.cpp`'s `imu_init()` for the working reference implementation of
 
 **MPU region budget**: nRF5340's Cortex-M33 MPU has 8 hardware regions; 2 are permanently consumed by Zephyr's default flash/RAM background map, leaving ~6 dynamic regions (~4-5 usable partitions per active memory domain in practice) — a real constraint for anyone adding more domains.
 
+**Note the old per-thread conversion plan above is superseded for the LLEXT case** by the extension-host design (issue #85, implemented below): only extension code runs in user mode; `pattern_controller_thread`/`led_display_thread`/`status_led_thread` stay kernel-mode, so no `led_strip_update_rgb` syscall or FS-hoisting is needed.
+
+### Sandboxed animation extensions (issue #85, `src/extensions/` + `fw/extensions/`)
+
+`.llext` animation extensions are discovered at boot from `/NAND:/ext/` and executed **exclusively on one K_USER sandbox thread** confined to a single shared memory domain re-initialized per activation (`z_libc_partition` + llext's 4 TEXT/RODATA/DATA/BSS partitions = 5, hardware-verified to fit the MPU budget). The kernel-side pattern controller exchanges data purely through the extension's own exported globals (ABI in `include/rgbx/rgbx_api.h` — 16 params of type UINT32/COLOR/BOOL/STRING, IMU + audio + button inputs; C++ wrapper `include/rgbx/rgbx_animation.h`), enforces a per-tick deadline (`CONFIG_APP_EXT_TICK_DEADLINE_MS`), and recovers from hangs/faults by tearing the sandbox down. Extensions appear as first-class animations: runtime GATT services (`extension_bt.cpp`, `CONFIG_BT_GATT_DYNAMIC_DB=y`, ids `0x40 + slot`, capacity/ID constants + static_asserts in `extension_limits.h`) that the app renders with zero app-side changes (no metadata blob; the app's per-descriptor fallback covers it). Manifest validation is a pure function (`extension_manifest.cpp`, covered by the `extensions.manifest` native_sim suite) — every manifest-embedded pointer is untrusted and bounds-checked before any kernel-mode dereference. Developer docs: `fw/extensions/README.md`; API docs: `doxygen fw/extensions/Doxyfile`. Non-obvious facts learned the hard way:
+
+- **Load-on-activate**: boot discovery loads each ELF transiently (validate + copy metadata), then unloads; only the ACTIVE extension is llext-resident. `activate()` (often on the BT RX thread) only queues the load — the pattern-controller thread performs the FAT read + relocation + sandbox bring-up lazily on the first `tick()`, so an `rgbx_init` failure is reported *asynchronously* (fault + Is Active notify), not as an `activate()` return value. Consequence: the heap only needs the largest single extension (`CONFIG_LLEXT_HEAP_SIZE=24` KB) and 16 slots fit.
+- **The llext heap buffer is `.noinit` but IS counted in the linker's RAM percentage** (verified in zephyr.map — don't "discover" 64 KB of free RAM that isn't there).
+- **`k_sys_fatal_error_handler` is overridden in `extension_host.cpp`** (root-caused via GDB+SWD): Zephyr's default weak handler halts the WHOLE system on any fault — z_fatal_error() only demotes to a thread abort if the handler *returns*. The override returns only for faults on the sandbox thread; all other faults keep the stock halt-for-GDB behavior. Without it, an extension MPU fault parked the CPU in `arch_system_halt()`.
+- **C++ extensions require a partial link** (`ld -r`, done by `fw/extensions/build.sh`): COMDAT group sections (`.text._Z...`) interleave with `.data`/`.bss` file offsets in a single object and fail llext's region-overlap check ("Region 0 ELF file range ... overlaps with 1").
+- **The `llext-edk` cmake target does not rebuild when headers change** — delete `build/fw/zephyr/llext-edk.tar.xz` first (build.sh does).
+- **Extension init arrays run inside the sandbox** via `llext_bringup()` from the user-mode thread entry (`llext_get_fn_table` is a syscall) — needed for C++ static constructors, though GCC constant-initializes simple instances (vtable pointer via `.rel.data`).
+- Re-initializing the shared `k_mem_domain` is safe **only after the sandbox thread is aborted** (`k_mem_domain_init` fully resets the object; `k_thread_abort` unlinks the thread) — every teardown path preserves that order.
+- Debug shell: `ext list` / `ext select <slot>` / `ext param <slot> <idx> [<value>]` (type-aware: bools 0/1, strings as text) / `ext stats` (tick-handshake min/avg/max µs). The hello kitchen-sink demo doubles as the recovery test (`Crash`/`Hang` bool params).
+- **Animations must render near full-scale (255) channel values**: the pattern controller multiplies every pixel by the global brightness factor (default 20/1000 = 0.02), so a "dim" animation drawing at 32/255 is invisible on the panel. This looked like a crash on the original hello demo — it was just arithmetic.
+- **Fault recovery is deliberate**: a dead sandbox is unloaded, un-marks + notifies the animation's Is Active characteristic (app toggle turns off), scrolls a `FAULT: <name>` banner on the panel (proxy), and BLE re-activation is rejected; only `ext select <slot>` clears the fault and retries. The host serializes activate/deactivate/tick/param-writes with a mutex — `pattern_controller_change_to_animation()` runs synchronously on the *caller's* thread (BT RX for GATT writes, shell), so nothing here may assume pattern-controller thread context.
+
 ### Scope reminder
 
 Prefer changes under `/workspaces/rgb-sunglasses/fw` (app code). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
@@ -269,7 +292,7 @@ Note: `JLinkExe -CommandFile` only opens the USB connection lazily, on the first
 
 **Wait for boot before sending commands.** Boot log output interleaves with shell echoed input and causes `command not found` errors. Wait until `uart:~$` appears before issuing any shell commands.
 
-**Sending newlines correctly.** `serial_write` with `data: "\r\n"` sends the four literal characters `\`, `r`, `\`, `n` — not a CR+LF. Always use one of these instead:
+**Sending newlines correctly.** `serial_write` with `data: "\r\n"` sends the four literal characters `\`, `r`, `\`, `n` — not a CR+LF. The same applies to every escape sequence: `"\x03"` sends four literal characters, NOT Ctrl+C — and those literal bytes land in the shell's line editor and corrupt the next command (`command not found` on otherwise-correct input; recover with flush + resend). To send control characters use the `as: "hex"` form or the `rgb_sunglasses` plugin's commands (which handle Ctrl+C internally). Always use one of these instead:
 
 ```jsonc
 // Option 1 — append_newline flag (preferred)
@@ -314,6 +337,13 @@ can land in the shell's own input line editor before the first command is ever
 sent, corrupting it (observed as `command not found` on the very first call after
 reset). `_run_command` sends Ctrl+C before every command to cancel whatever's
 sitting in the line editor, not just on the first call — cheap and fully general.
+
+**Old boot logs flushing on port-open look like a spontaneous reboot — they aren't.**
+The USB CDC shell buffers unread output while no terminal is attached; freshly
+opening the port can dump a backlog that starts with `[00:00:00.xxx]` boot logs
+from a reset that happened minutes earlier. Before concluding the board just
+rebooted (or crashed), run `kernel uptime` — if uptime is large, you're reading
+backlog, not a fresh boot.
 
 **Trying out new GLIM content:** `GlimPlayerAnimation` (`anim set glim_player`) replaced the
 old per-file `bad_apple`/`nyan_cat` animations — it enumerates every `.glim` file under

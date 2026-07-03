@@ -17,6 +17,9 @@
 #if defined(CONFIG_FAT_FILESYSTEM_ELM)
 #include <storage/glim_registry.h>
 #endif
+#if defined(CONFIG_APP_EXTENSION_HOST)
+#include <extensions/extension_host.h>
+#endif
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
@@ -180,6 +183,14 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     if (ret) {
         LOG_ERR("Failed to register default animations: %d", ret);
     } else {
+#if defined(CONFIG_APP_EXTENSION_HOST)
+        // Discover, load, and register sandboxed animation extensions (issue #85).
+        // Must run here (kernel-mode thread context): it scans the FAT filesystem
+        // (fs_* has no syscall coverage) after the prio-90 SYS_INIT mount, and it
+        // registers into the animation registry, so it goes between
+        // register_defaults() and init_registered().
+        extension_host::init();
+#endif
         animation_registry_init_registered();
     }
 
