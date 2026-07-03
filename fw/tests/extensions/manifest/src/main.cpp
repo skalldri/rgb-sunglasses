@@ -36,7 +36,7 @@ struct Arena {
 
     const char *str(const char *s) {
         char *p = static_cast<char *>(alloc(strlen(s) + 1));
-        strcpy(p, s);
+        memcpy(p, s, strlen(s) + 1);
         return p;
     }
 };
