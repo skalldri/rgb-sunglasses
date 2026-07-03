@@ -159,7 +159,9 @@ CONFIG_ANIMATION_RAINBOW=y
 CONFIG_ANIMATION_ZIGZAG=y
 ```
 
-Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_SIZE_OPTIMIZATIONS=y`).
+Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_CBPRINTF_FP_SUPPORT=n`); `CONFIG_SIZE_OPTIMIZATIONS=y` lives in the proto0 **board** conf, not `prj.conf`.
+
+**No `%f`/`%g` in log or shell format strings.** `CONFIG_CBPRINTF_FP_SUPPORT` and `CONFIG_PICOLIBC_IO_FLOAT` are disabled (~10KB FLASH, issue #79 ROM pass); a `%f` prints the literal specifier instead of the value (no crash). Print floats via integer fixed-point instead — see `fmt_fixed4()` / `agc_gain_db10()` in `src/sound/sound.cpp` (the only float-printing code in the app).
 
 **Don't reuse a Kconfig symbol from one subsystem to configure unrelated code in another, even if the value/semantics happen to line up.** E.g. a BT-free module's debounce/delay tunable should get its own `CONFIG_APP_*` symbol, not borrow `CONFIG_BT_SETTINGS_DELAYED_STORE_MS` just because the timing happens to match — that creates a hidden cross-subsystem dependency and works against this project's general push to decouple BT from non-BT code (see the animation/BT decoupling refactor above).
 
@@ -204,7 +206,14 @@ Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suit
 
 Enabled on proto0 (`CONFIG_USERSPACE=y` in `boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`). **Not enabled on DK** — its flash budget is already tight (~95% used) and the motivation (future LLEXT animation sandboxing) is proto0-only anyway.
 
-**FLASH cost**: `CONFIG_USERSPACE=y` alone (no threads converted) costs ~105-246KB — mostly `z_vrfy_*`/`z_mrsh_*` syscall verifier functions Zephyr generates for every syscall-covered API already compiled in (GPIO, I2C, SPI, flash, sensor, LED, etc.), regardless of whether anything actually calls them from user mode. This is generated per-Kconfig-enabled-subsystem, not per-actual-usage — **there is no way to selectively emit syscalls for only the subsystems a converted thread needs**; confirmed by reading `parse_syscalls.py`/`gen_syscalls.py`/`syscall_dispatch.c`. `CONFIG_EMIT_ALL_SYSCALLS` only widens emission further, never narrows it. Fitting this required a dedicated flash-reduction pass first: `CONFIG_DUMP_DEVICE_REGISTERS=n` (~94KB, see the comment at its Kconfig line), `CONFIG_FLASH_SIMULATOR_STATS=n` in `prj.conf` (~4KB), and a `tuple_cat` collapse in `bt_service_cpp.h` (see that file's comment). Current proto0 fw appcore build: ~96.4% FLASH.
+**FLASH cost**: `CONFIG_USERSPACE=y` alone (no threads converted) costs ~105-246KB — mostly `z_vrfy_*`/`z_mrsh_*` syscall verifier functions Zephyr generates for every syscall-covered API already compiled in (GPIO, I2C, SPI, flash, sensor, LED, etc.), regardless of whether anything actually calls them from user mode. This is generated per-Kconfig-enabled-subsystem, not per-actual-usage — **there is no way to selectively emit syscalls for only the subsystems a converted thread needs**; confirmed by reading `parse_syscalls.py`/`gen_syscalls.py`/`syscall_dispatch.c`. `CONFIG_EMIT_ALL_SYSCALLS` only widens emission further, never narrows it. Fitting this required a dedicated flash-reduction pass first: `CONFIG_DUMP_DEVICE_REGISTERS=n` (~94KB, see the comment at its Kconfig line), `CONFIG_FLASH_SIMULATOR_STATS=n` in `prj.conf` (~4KB), and a `tuple_cat` collapse in `bt_service_cpp.h` (see that file's comment).
+
+**Second ROM pass (issue #79 follow-up)** took the appcore from 94.6% to **64.6% FLASH** (624,492 B of the 966,144 B `app` slot), measured deltas:
+- `CONFIG_SIZE_OPTIMIZATIONS=y` replacing `CONFIG_DEBUG_OPTIMIZATIONS=y` (proto0 board conf): **~255KB**. The entire image had been compiling `-Og`. Flip back temporarily for deep GDB sessions if needed.
+- Shell pruning (`CONFIG_SENSOR_SHELL=n`, `CONFIG_FLASH_SHELL=n`, `CONFIG_DEVMEM_SHELL=n`): **~29KB** FLASH + ~21KB RAM.
+- Float printf removal (`CONFIG_CBPRINTF_FP_SUPPORT=n`, `CONFIG_PICOLIBC_IO_FLOAT=n`, after converting `sound.cpp` to integer prints): **~4.9KB**.
+- Deliberately kept: LLEXT (+shell/EDK, ~20-30KB — groundwork for the loadable-extensions branch), DEBUG_COREDUMP (feature planned), CMSIS-DSP (all four sub-options genuinely used by `audio_dsp.cpp`: rfft_fast/cmplx_mag_squared/mean/std/hanning).
+- Biggest remaining single item: `bt_service_cpp.h` template instantiations, **~70KB** of `fw/src`'s ~152KB (per-service `BtGattServer<...>` constructors + `tupleToArray` expansions). Recovering it means building the `bt_gatt_attr` tables at runtime instead of per-service templates — a separate, riskier refactor (tracked as a follow-up issue).
 
 **`imu_thread` (`src/imu/imu.cpp`) is the first (and so far only) thread converted to `K_USER`.** Two real, non-obvious crashes were hit converting it — both root-caused via GDB+SWD (USB never enumerates when either crash happens at boot, so serial logs aren't available):
 
