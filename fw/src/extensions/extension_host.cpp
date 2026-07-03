@@ -111,18 +111,21 @@ void sandbox_fault(Slot &slot, const char *what) {
     sandbox_stop();
 }
 
-bool load_slot(size_t index) {
-    Slot &slot = sSlots[index];
+/* Loads registry entry `fileIndex` into slot `slotIndex`. The two diverge as
+ * soon as one file fails validation and is skipped. */
+bool load_slot(size_t fileIndex, size_t slotIndex) {
+    Slot &slot = sSlots[slotIndex];
 
     char path[64];
-    if (!extension_registry::full_path(index, path, sizeof(path))) {
+    if (!extension_registry::full_path(fileIndex, path, sizeof(path))) {
         return false;
     }
 
     struct llext_fs_loader fs_loader = LLEXT_FS_LOADER(path);
     struct llext_load_param ldr_parm = LLEXT_LOAD_PARAM_DEFAULT;
 
-    int ret = llext_load(&fs_loader.loader, extension_registry::name(index), &slot.ext, &ldr_parm);
+    int ret =
+        llext_load(&fs_loader.loader, extension_registry::name(fileIndex), &slot.ext, &ldr_parm);
     if (ret < 0) {
         LOG_ERR("llext_load(%s) failed: %d", path, ret);
         return false;
@@ -209,7 +212,7 @@ void init() {
     extension_registry::init();
 
     for (size_t i = 0; i < extension_registry::count() && sSlotCount < kMaxExtensions; i++) {
-        if (!load_slot(sSlotCount)) {
+        if (!load_slot(i, sSlotCount)) {
             continue;
         }
         size_t slot = sSlotCount++;
@@ -378,6 +381,20 @@ int cmd_ext_list(const struct shell *sh, size_t, char **) {
     return 0;
 }
 
+/* Debug aid: re-run discovery/loading interactively so its log output lands
+ * on a connected shell instead of in the boot-log burst. Only permitted when
+ * nothing loaded at boot — init() is not idempotent (registry/GATT slots
+ * would double-register). */
+int cmd_ext_scan(const struct shell *sh, size_t, char **) {
+    if (sSlotCount != 0) {
+        shell_error(sh, "extensions already loaded; scan only works from empty");
+        return -EBUSY;
+    }
+    extension_host::init();
+    shell_print(sh, "scan complete: %zu extension(s) loaded", sSlotCount);
+    return 0;
+}
+
 int cmd_ext_select(const struct shell *sh, size_t argc, char **argv) {
     if (argc != 2) {
         shell_error(sh, "Usage: ext select <slot>");
@@ -399,6 +416,8 @@ int cmd_ext_select(const struct shell *sh, size_t argc, char **argv) {
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_ext, SHELL_CMD(list, NULL, "List loaded animation extensions", cmd_ext_list),
+    SHELL_CMD(scan, NULL, "Re-run extension discovery (debug; empty registry only)",
+              cmd_ext_scan),
     SHELL_CMD_ARG(select, NULL, "Activate extension animation: ext select <slot>", cmd_ext_select,
                   2, 0),
     SHELL_SUBCMD_SET_END);
