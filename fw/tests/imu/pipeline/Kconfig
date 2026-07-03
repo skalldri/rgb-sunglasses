@@ -1,0 +1,14 @@
+source "Kconfig.zephyr"
+
+rsource "../../../drivers/Kconfig"
+
+# imu.cpp consumes these two app symbols. They're defined in fw/Kconfig, which
+# standalone Twister apps don't see — redeclared here with the same names and
+# defaults.
+config IMU_THREAD_PRIORITY
+	int "IMU thread priority"
+	default 7
+
+config IMU_THREAD_STACK_SIZE
+	int "IMU thread stack size (bytes)"
+	default 1024
