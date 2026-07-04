@@ -46,20 +46,22 @@ Use the project skills — `/build-proto0`, `/build-dk`, `/test-fw` — instead 
 
 ```bash
 # First time build (pristine, setup build system, very slow! Only run if build folder is empty / nonexistent)
-west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+west build --build-dir fw/build fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="$(pwd)/fw"
 
 # Full incremental build of proto0 (preferred for daily dev)
-west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+west build --build-dir fw/build fw --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
 
 # DK build (pre-PR validation)
-west build --build-dir /workspaces/rgb-sunglasses/fw/build-dk /workspaces/rgb-sunglasses/fw --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+west build --build-dir fw/build-dk fw --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
 
 # Run all tests on native simulator
-twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim
+twister -T fw/tests -p native_sim
 
 # Run a single test suite
-twister -T /workspaces/rgb-sunglasses/fw/tests/animations/animation_registry -p native_sim
+twister -T fw/tests/animations/animation_registry -p native_sim
 ```
+
+Commands above are relative to the repo root (or worktree root) — always run them from there, not from inside `fw/`.
 
 Treat successful `west build` as the primary validation step after any change. The NCS SDK lives at `/root/ncs/v3.1.1`.
 
@@ -255,7 +257,7 @@ See `src/imu/imu.cpp`'s `imu_init()` for the working reference implementation of
 
 ### Scope reminder
 
-Prefer changes under `/workspaces/rgb-sunglasses/fw` (app code). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
+Prefer changes under `fw/` (app code, relative to the current repo/worktree root). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
 
 ### Zephyr RTOS
 

@@ -26,11 +26,11 @@ Run the exact build from `/build-proto0`:
 
 ```bash
 west build \
-  --build-dir /workspaces/rgb-sunglasses/fw/build \
-  /workspaces/rgb-sunglasses/fw \
+  --build-dir fw/build \
+  fw \
   --board rgb_sunglasses_proto0/nrf5340/cpuapp \
   --sysbuild \
-  -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+  -- -DBOARD_ROOT="$(pwd)/fw"
 ```
 
 **Gate**: if this fails, stop. Do not proceed to the DK build or any subsequent step. Report the error clearly.
@@ -43,11 +43,11 @@ Run the exact build from `/build-dk`:
 
 ```bash
 west build \
-  --build-dir /workspaces/rgb-sunglasses/fw/build-dk \
-  /workspaces/rgb-sunglasses/fw \
+  --build-dir fw/build-dk \
+  fw \
   --board rgb_sunglasses_dk/nrf5340/cpuapp \
   --sysbuild \
-  -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+  -- -DBOARD_ROOT="$(pwd)/fw"
 ```
 
 **Gate**: if this fails, stop. Report the error, especially if it is a flash overflow (the DK has a tight budget).
@@ -58,11 +58,11 @@ west build \
 
 ```bash
 twister \
-  -T /workspaces/rgb-sunglasses/fw/tests \
+  -T fw/tests \
   -p native_sim \
   --coverage \
   --coverage-tool lcov \
-  --outdir /workspaces/rgb-sunglasses/fw/twister-out
+  --outdir fw/twister-out
 ```
 
 **Gate**: if any test fails or errors, stop. List the failing suites and do not proceed.
@@ -90,7 +90,7 @@ PATTERNS=$(git diff --name-only origin/main...HEAD -- 'fw/src/**' \
 
 # Extract and summarise
 eval lcov \
-  --extract /workspaces/rgb-sunglasses/fw/twister-out/coverage/coverage.info \
+  --extract fw/twister-out/coverage/coverage.info \
   $PATTERNS \
   --output-file /tmp/patch-coverage.info
 

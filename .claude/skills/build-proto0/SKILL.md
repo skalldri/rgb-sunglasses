@@ -8,11 +8,11 @@ Build the proto0 firmware. Build dir: `fw/build`. Never use `--pristine` unless 
 
 ```bash
 west build \
-  --build-dir /workspaces/rgb-sunglasses/fw/build \
-  /workspaces/rgb-sunglasses/fw \
+  --build-dir fw/build \
+  fw \
   --board rgb_sunglasses_proto0/nrf5340/cpuapp \
   --sysbuild \
-  -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+  -- -DBOARD_ROOT="$(pwd)/fw"
 ```
 
 ## Steps
