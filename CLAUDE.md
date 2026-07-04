@@ -43,8 +43,9 @@ When installing any new CLI tool or dependency, **always add it to the devcontai
 
 ## Session startup
 
-At the start of every new conversation, run `/check-hardware` and `/check-software` before doing anything else.
-Report both results to the user as a brief summary table. If `/check-software` reports any tool as NOT AUTHENTICATED or NOT READY, call it out explicitly — don't wait until it blocks a later step (e.g. `gh` auth blocks PR creation).
+**Your first output in every new conversation must be the environment status summary table — before any task work, even when the user opens with a specific request.** A `SessionStart` hook (configured in `.claude/settings.json`) already runs `check-hardware` and `check-software` automatically and injects their output into context as "Environment status (auto-checked at session start)", so you normally do **not** need to re-run the skills — just read that injected block and surface it. Only run `/check-hardware` / `/check-software` yourself if that injected block is missing.
+
+Render the results as a brief markdown table (hardware: dev board, J-Link, Android/ADB; software: `gh` and any other tools). If any tool is NOT AUTHENTICATED or NOT READY, call it out explicitly in that first message — **don't wait until it blocks a later step** (e.g. `gh` auth blocks PR creation). Having the data in context is not enough; the user needs to see it up front.
 
 Before working on any subsystem, **read its CLAUDE.md first** — those files are the project's persistent memory and contain critical workflow rules (correct commands, known pitfalls, launch procedures) that are not derivable from the code alone. Skipping them leads to doing the wrong thing (e.g. launching the Android app incorrectly). Specifically:
 
