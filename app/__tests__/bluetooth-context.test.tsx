@@ -175,6 +175,46 @@ describe('BluetoothProvider', () => {
     });
   });
 
+  // A device notification (or overlapping write) can update the value while a write is in flight.
+  // If that write later fails, the compare-and-swap revert must NOT clobber the fresher value.
+  it('does not revert a value changed mid-write when the write later fails', async () => {
+    const getApi = setupProvider();
+    let rejectWrite!: (e: Error) => void;
+    const deferredWrite = new Promise<void>((_resolve, reject) => {
+      rejectWrite = reject;
+    });
+    deferredWrite.catch(() => {}); // pre-attach so the pending rejection is never "unhandled"
+    const writeWithResponse = jest.fn(() => deferredWrite);
+
+    act(() => {
+      getApi().setSelectedDevice(buildSelectedDevice(writeWithResponse, btoa('old')));
+    });
+
+    let writePromise!: Promise<boolean>;
+    act(() => {
+      writePromise = getApi().writeToCharacteristic('char-1', btoa('new'));
+    });
+
+    // Device notification lands mid-write carrying the device's real value.
+    act(() => {
+      getApi().updateCharValue('char-1', btoa('device'));
+    });
+
+    let result = true;
+    await act(async () => {
+      rejectWrite(new Error('write failed'));
+      result = await writePromise;
+    });
+    expect(result).toBe(false);
+
+    await waitFor(() => {
+      const charInfo = getApi().getCharacteristicInfo('char-1');
+      expect(charInfo?.isUpdateInProgress).toBe(false);
+      // The mid-write notification value survives; it is NOT clobbered back to 'old'.
+      expect(charInfo?.value).toBe(btoa('device'));
+    });
+  });
+
   it('skips the optimistic value update when skipOptimisticUpdate is set, without affecting success/progress reporting', async () => {
     const getApi = setupProvider();
     const writeWithResponse = jest.fn(async () => undefined);
@@ -347,6 +387,43 @@ describe('BluetoothProvider', () => {
         const charInfo = getApi().getServiceCharacteristicInfo('service-a', 'dup-char');
         expect(charInfo?.isUpdateInProgress).toBe(false);
         expect(charInfo?.value).toBe(btoa('a-old'));
+      });
+    });
+
+    it('writeServiceCharacteristic keeps a mid-write notification value when the write later fails', async () => {
+      const getApi = setupProvider();
+      let rejectWrite!: (e: Error) => void;
+      const deferredWrite = new Promise<void>((_resolve, reject) => {
+        rejectWrite = reject;
+      });
+      deferredWrite.catch(() => {});
+      const writeA = jest.fn(() => deferredWrite);
+      const writeB = jest.fn(async () => undefined);
+
+      act(() => {
+        getApi().setSelectedDevice(buildDeviceWithDuplicatedCharUuid(writeA, writeB));
+      });
+
+      let writePromise!: Promise<boolean>;
+      act(() => {
+        writePromise = getApi().writeServiceCharacteristic('service-a', 'dup-char', btoa('a-new'));
+      });
+
+      // A notification for service-a's "Is Active" lands mid-write with the device's real value.
+      act(() => {
+        getApi().updateServiceCharacteristicValue('service-a', 'dup-char', btoa('a-device'));
+      });
+
+      let result = true;
+      await act(async () => {
+        rejectWrite(new Error('write failed'));
+        result = await writePromise;
+      });
+      expect(result).toBe(false);
+
+      await waitFor(() => {
+        // Notified value survives the failed write; not reverted to 'a-old'.
+        expect(getApi().getServiceCharacteristicInfo('service-a', 'dup-char')?.value).toBe(btoa('a-device'));
       });
     });
 

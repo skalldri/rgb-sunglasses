@@ -99,13 +99,23 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         return device.characteristics?.[charUuid] ?? null;
     }, []);
 
-    // Shared helper: patches fields on a characteristic in both the flat and nested maps
-    const updateCharFields = useCallback((charUuid: string, fields: Partial<CharacteristicInfo>) => {
+    // Shared helper: patches fields on a characteristic in both the flat and nested maps. `fields`
+    // may be a plain patch object, or a function of the characteristic's current state that returns
+    // a patch (or null to make it a no-op) — the function form runs inside the state updater, so it
+    // always sees the latest committed value, which is what makes conditional/compare-and-swap
+    // updates race-free.
+    const updateCharFields = useCallback((
+        charUuid: string,
+        fields: Partial<CharacteristicInfo> | ((current: CharacteristicInfo) => Partial<CharacteristicInfo> | null)
+    ) => {
         setSelectedDevice(prevDevice => {
             if (!prevDevice) return null;
 
             const updatedChar = prevDevice.characteristics[charUuid];
             if (!updatedChar) return prevDevice;
+
+            const resolvedFields = typeof fields === 'function' ? fields(updatedChar) : fields;
+            if (!resolvedFields) return prevDevice;
 
             const serviceUuid = Object.keys(prevDevice.serviceCharacteristics || {}).find(
                 svc => prevDevice.serviceCharacteristics[svc].includes(charUuid)
@@ -116,7 +126,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
                 ...prevDevice,
                 characteristics: {
                     ...prevDevice.characteristics,
-                    [charUuid]: { ...updatedChar, ...fields }
+                    [charUuid]: { ...updatedChar, ...resolvedFields }
                 },
                 characteristicsByService: {
                     ...prevDevice.characteristicsByService,
@@ -124,7 +134,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
                         ...prevDevice.characteristicsByService[serviceUuid],
                         [charUuid]: {
                             ...prevDevice.characteristicsByService[serviceUuid][charUuid],
-                            ...fields
+                            ...resolvedFields
                         }
                     }
                 }
@@ -180,15 +190,19 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
             return true;
         } catch (error) {
+            // Revert the optimistic value — but only if it's still what we wrote. A device
+            // notification (or a newer overlapping write) may have landed during the in-flight
+            // write; blindly restoring previousValue would clobber that fresher state with a stale
+            // one. The compare-and-swap runs inside the state updater so it sees the latest value.
             if (!options?.skipOptimisticUpdate) {
-                updateCharValue(charUuid, previousValue);
+                updateCharFields(charUuid, current => current.value === newEncodedValue ? { value: previousValue } : null);
             }
             console.log(`Error writing value to characteristic ${charUuid}: ${error}`);
             return false;
         } finally {
             setCharUpdateInProgress(charUuid, false);
         }
-    }, [getCharacteristicInfo, setCharUpdateInProgress, updateCharValue]);
+    }, [getCharacteristicInfo, setCharUpdateInProgress, updateCharValue, updateCharFields]);
 
     // Service-aware lookup for characteristics whose UUID is reused across services (e.g. "Is
     // Active"), where the flat characteristics map can only ever hold one (ambiguous) entry.
@@ -203,15 +217,22 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     // updateCharFields relies on, which is ambiguous for a charUuid reused across services). Only
     // patches the flat map too if that charUuid actually lives there (it won't, for reused-UUID
     // characteristics), so this is safe to use generically.
-    const updateServiceCharacteristicFields = useCallback((serviceUuid: string, charUuid: string, fields: Partial<CharacteristicInfo>) => {
+    const updateServiceCharacteristicFields = useCallback((
+        serviceUuid: string,
+        charUuid: string,
+        fields: Partial<CharacteristicInfo> | ((current: CharacteristicInfo) => Partial<CharacteristicInfo> | null)
+    ) => {
         setSelectedDevice(prevDevice => {
             if (!prevDevice) return null;
 
             const existingInService = prevDevice.characteristicsByService?.[serviceUuid]?.[charUuid];
             if (!existingInService) return prevDevice;
 
+            const resolvedFields = typeof fields === 'function' ? fields(existingInService) : fields;
+            if (!resolvedFields) return prevDevice;
+
             const updatedFlat = prevDevice.characteristics[charUuid]
-                ? { ...prevDevice.characteristics, [charUuid]: { ...prevDevice.characteristics[charUuid], ...fields } }
+                ? { ...prevDevice.characteristics, [charUuid]: { ...prevDevice.characteristics[charUuid], ...resolvedFields } }
                 : prevDevice.characteristics;
 
             return {
@@ -221,7 +242,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
                     ...prevDevice.characteristicsByService,
                     [serviceUuid]: {
                         ...prevDevice.characteristicsByService[serviceUuid],
-                        [charUuid]: { ...existingInService, ...fields },
+                        [charUuid]: { ...existingInService, ...resolvedFields },
                     },
                 },
             };
@@ -272,15 +293,18 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
             return true;
         } catch (error) {
+            // Compare-and-swap revert: only undo our optimistic value if nothing else (a device
+            // notification, an overlapping write) changed it while the write was in flight. Runs
+            // inside the state updater so it sees the latest value. See writeToCharacteristic.
             if (!options?.skipOptimisticUpdate) {
-                updateServiceCharacteristicValue(serviceUuid, charUuid, previousValue);
+                updateServiceCharacteristicFields(serviceUuid, charUuid, current => current.value === newEncodedValue ? { value: previousValue } : null);
             }
             console.log(`Error writing value to characteristic ${charUuid} in service ${serviceUuid}: ${error}`);
             return false;
         } finally {
             setServiceCharUpdateInProgress(serviceUuid, charUuid, false);
         }
-    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue]);
+    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue, updateServiceCharacteristicFields]);
 
     const contextValue = useMemo(() => ({
         selectedDevice,
