@@ -118,6 +118,40 @@ describe('BluetoothProvider', () => {
     });
   });
 
+  // Regression test for issue #91 (controlled Switch flicker): the optimistic value must be applied
+  // synchronously alongside isUpdateInProgress=true, BEFORE the BLE write resolves, so a controlled
+  // input never renders with its stale value mid-write.
+  it('applies the optimistic value before the write resolves', async () => {
+    const getApi = setupProvider();
+    let resolveWrite!: () => void;
+    const deferredWrite = new Promise<void>((resolve) => {
+      resolveWrite = resolve;
+    });
+    const writeWithResponse = jest.fn(() => deferredWrite);
+
+    act(() => {
+      getApi().setSelectedDevice(buildSelectedDevice(writeWithResponse));
+    });
+
+    let writePromise!: Promise<boolean>;
+    act(() => {
+      writePromise = getApi().writeToCharacteristic('char-1', btoa('new'));
+    });
+
+    // While the write is still in flight, the value is ALREADY the new value (not the old one) and
+    // the update-in-progress flag is set — both from the same synchronous, pre-await render.
+    await waitFor(() => {
+      const charInfo = getApi().getCharacteristicInfo('char-1');
+      expect(charInfo?.isUpdateInProgress).toBe(true);
+      expect(charInfo?.value).toBe(btoa('new'));
+    });
+
+    await act(async () => {
+      resolveWrite();
+      await writePromise;
+    });
+  });
+
   it('toggles isUpdateInProgress and preserves previous value on failed writes', async () => {
     const getApi = setupProvider();
     const writeWithResponse = jest.fn(async () => {
@@ -254,6 +288,65 @@ describe('BluetoothProvider', () => {
         expect(getApi().getServiceCharacteristicInfo('service-a', 'dup-char')?.value).toBe(btoa('a-new'));
         // service-b's entry for the same UUID is untouched.
         expect(getApi().getServiceCharacteristicInfo('service-b', 'dup-char')?.value).toBe(btoa('b-old'));
+      });
+    });
+
+    // Regression test for issue #91: the "Is Active" toggle is the flat-map-excluded, service-scoped
+    // characteristic that actually flickered. Its optimistic value must land before the write
+    // resolves, same as the bare-UUID path.
+    it('writeServiceCharacteristic applies the optimistic value before the write resolves', async () => {
+      const getApi = setupProvider();
+      let resolveWrite!: () => void;
+      const deferredWrite = new Promise<void>((resolve) => {
+        resolveWrite = resolve;
+      });
+      const writeA = jest.fn(() => deferredWrite);
+      const writeB = jest.fn(async () => undefined);
+
+      act(() => {
+        getApi().setSelectedDevice(buildDeviceWithDuplicatedCharUuid(writeA, writeB));
+      });
+
+      let writePromise!: Promise<boolean>;
+      act(() => {
+        writePromise = getApi().writeServiceCharacteristic('service-a', 'dup-char', btoa('a-new'));
+      });
+
+      await waitFor(() => {
+        const charInfo = getApi().getServiceCharacteristicInfo('service-a', 'dup-char');
+        expect(charInfo?.isUpdateInProgress).toBe(true);
+        expect(charInfo?.value).toBe(btoa('a-new'));
+      });
+      // The sibling service's identically-UUID'd entry is untouched throughout.
+      expect(getApi().getServiceCharacteristicInfo('service-b', 'dup-char')?.value).toBe(btoa('b-old'));
+
+      await act(async () => {
+        resolveWrite();
+        await writePromise;
+      });
+    });
+
+    it('writeServiceCharacteristic reverts the optimistic value when the write is rejected', async () => {
+      const getApi = setupProvider();
+      const writeA = jest.fn(async () => {
+        throw new Error('write failed');
+      });
+      const writeB = jest.fn(async () => undefined);
+
+      act(() => {
+        getApi().setSelectedDevice(buildDeviceWithDuplicatedCharUuid(writeA, writeB));
+      });
+
+      let result = true;
+      await act(async () => {
+        result = await getApi().writeServiceCharacteristic('service-a', 'dup-char', btoa('a-new'));
+      });
+      expect(result).toBe(false);
+
+      await waitFor(() => {
+        const charInfo = getApi().getServiceCharacteristicInfo('service-a', 'dup-char');
+        expect(charInfo?.isUpdateInProgress).toBe(false);
+        expect(charInfo?.value).toBe(btoa('a-old'));
       });
     });
 

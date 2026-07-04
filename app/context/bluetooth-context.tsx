@@ -166,13 +166,23 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         setCharUpdateInProgress(charUuid, true);
 
+        // Apply the optimistic value update synchronously, BEFORE awaiting the BLE write, so it is
+        // batched into the same render as isUpdateInProgress=true. A controlled input (e.g. the
+        // boolean Switch) then never renders with its stale value while the async write is in
+        // flight, which is what caused the on->off->on toggle flicker (issue #91). Reverted in the
+        // catch below if the write is rejected.
+        const previousValue = charInfo.value ?? '';
+        if (!options?.skipOptimisticUpdate) {
+            updateCharValue(charUuid, newEncodedValue);
+        }
+
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
-            if (!options?.skipOptimisticUpdate) {
-                updateCharValue(charUuid, newEncodedValue);
-            }
             return true;
         } catch (error) {
+            if (!options?.skipOptimisticUpdate) {
+                updateCharValue(charUuid, previousValue);
+            }
             console.log(`Error writing value to characteristic ${charUuid}: ${error}`);
             return false;
         } finally {
@@ -250,13 +260,21 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         setServiceCharUpdateInProgress(serviceUuid, charUuid, true);
 
+        // Optimistic value update BEFORE the await, batched with isUpdateInProgress=true, so the
+        // controlled "Is Active" Switch never flickers back to its old value mid-write (issue #91).
+        // See the matching comment in writeToCharacteristic. Reverted on write rejection below.
+        const previousValue = charInfo.value ?? '';
+        if (!options?.skipOptimisticUpdate) {
+            updateServiceCharacteristicValue(serviceUuid, charUuid, newEncodedValue);
+        }
+
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
-            if (!options?.skipOptimisticUpdate) {
-                updateServiceCharacteristicValue(serviceUuid, charUuid, newEncodedValue);
-            }
             return true;
         } catch (error) {
+            if (!options?.skipOptimisticUpdate) {
+                updateServiceCharacteristicValue(serviceUuid, charUuid, previousValue);
+            }
             console.log(`Error writing value to characteristic ${charUuid} in service ${serviceUuid}: ${error}`);
             return false;
         } finally {
