@@ -103,7 +103,9 @@ void bt_thread_func(void *a, void *b, void *c);
 
 // Stack size verified against real connect/disconnect/GATT-write traffic (issue #75):
 // high-water mark stayed at 724 B out of the previous 8096 B budget. 2048 B leaves ~2.8x margin.
-K_THREAD_DEFINE(bt_thread, 2048, bt_thread_func, NULL, NULL, NULL, 6, 0, 0);
+// Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
+// this stack can never host a K_USER thread.
+K_KERNEL_THREAD_DEFINE(bt_thread, 2048, bt_thread_func, NULL, NULL, NULL, 6, 0, 0);
 
 // Diagnostic-only (issue #41 investigation): tracks the currently connected peer so the
 // `bt_conn_info` shell command (below) can report live LE connection parameters on demand,

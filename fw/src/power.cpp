@@ -104,7 +104,9 @@ enum class Bq25792ChargeStatus : uint8_t {
 
 static void charger_status_thread_func(void *, void *, void *);
 
-K_THREAD_DEFINE(charger_status_thread, 1024, charger_status_thread_func, NULL, NULL, NULL, 7, 0,
+// Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
+// this stack can never host a K_USER thread.
+K_KERNEL_THREAD_DEFINE(charger_status_thread, 1024, charger_status_thread_func, NULL, NULL, NULL, 7, 0,
                 0);
 
 static void charger_status_thread_func(void *, void *, void *) {

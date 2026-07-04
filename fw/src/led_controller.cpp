@@ -28,7 +28,10 @@ static ConfigurationProvider &getLedConfig() {
 
 void led_display_thread_func(void *a, void *b, void *c);
 
-K_THREAD_DEFINE(led_display_thread, 4096, led_display_thread_func, NULL, NULL, NULL, 6, 0, 0);
+// Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
+// this stack can never host a K_USER thread.
+K_KERNEL_THREAD_DEFINE(led_display_thread, 4096, led_display_thread_func, NULL, NULL, NULL, 6, 0,
+                       0);
 
 // Device Tree Node ID's for the LED strips
 #define LED_STRIP_0_NODE_ID DT_ALIAS(led_strip_0)

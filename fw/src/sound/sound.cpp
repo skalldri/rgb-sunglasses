@@ -203,12 +203,14 @@ void audio_dsp_thread_func(void *a, void *b, void *c);
 // Stack size verified against real beat/fft_bars animation load (issue #75): high-water
 // mark stayed at 692 B out of the previous 8096 B budget. 2048 B leaves ~3x margin
 // (includes headroom for K_FP_REGS' FPU context save).
-K_THREAD_DEFINE(audio_dsp_thread,
-                2048,  // stack size
-                audio_dsp_thread_func, NULL, NULL, NULL,
-                -7,         // Priority
-                K_FP_REGS,  // Options
-                0           // Startup delay
+// Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
+// this stack can never host a K_USER thread.
+K_KERNEL_THREAD_DEFINE(audio_dsp_thread,
+                       2048,  // stack size
+                       audio_dsp_thread_func, NULL, NULL, NULL,
+                       -7,         // Priority
+                       K_FP_REGS,  // Options
+                       0           // Startup delay
 );
 
 int configure_pdm() {

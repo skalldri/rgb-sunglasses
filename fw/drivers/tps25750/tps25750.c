@@ -607,7 +607,9 @@ int tps25750_clear_dead_battery(const struct device *dev) {
 #define TPS25750_WORKQ_STACK_SIZE 1024
 #define TPS25750_WORKQ_PRIORITY 5
 
-K_THREAD_STACK_DEFINE(tps25750_workq_stack_area, TPS25750_WORKQ_STACK_SIZE);
+/* Kernel-only work queue: K_KERNEL_STACK_* skips the 1KB CONFIG_USERSPACE privileged
+ * stack; this stack can never host a K_USER thread. */
+K_KERNEL_STACK_DEFINE(tps25750_workq_stack_area, TPS25750_WORKQ_STACK_SIZE);
 struct k_work_q tps25750_work_q;
 
 void tps25750_irq_work(struct k_work *item) {
@@ -697,7 +699,7 @@ static int tps25750_init(const struct device *dev) {
 
     k_work_queue_init(&tps25750_work_q);
     k_work_queue_start(&tps25750_work_q, tps25750_workq_stack_area,
-                       K_THREAD_STACK_SIZEOF(tps25750_workq_stack_area), TPS25750_WORKQ_PRIORITY,
+                       K_KERNEL_STACK_SIZEOF(tps25750_workq_stack_area), TPS25750_WORKQ_PRIORITY,
                        NULL);
 
     k_work_init_delayable(&data->work, tps25750_irq_work);
