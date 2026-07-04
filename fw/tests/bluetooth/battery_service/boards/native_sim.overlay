@@ -1,0 +1,10 @@
+/ {
+	/* Placeholder node so battery_service.cpp's DEVICE_DT_GET(DT_NODELABEL(bq25792))
+	 * resolves. The device object itself is defined in the test's main.cpp with a
+	 * no-op init; the bq25792_* driver functions are stubbed there too, so no I2C
+	 * bus or real driver is involved. */
+	bq25792: bq25792 {
+		compatible = "zephyr,fake-bq25792";
+		status = "okay";
+	};
+};
