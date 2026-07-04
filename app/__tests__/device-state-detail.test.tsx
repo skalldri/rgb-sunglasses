@@ -8,6 +8,7 @@ import {
   BLE_GATT_CPF_FORMAT_CUSTOM_COLOR,
   BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
   BLE_GATT_CPF_FORMAT_FLOAT32,
+  BLE_GATT_CPF_FORMAT_SINT32,
   BLE_GATT_CPF_FORMAT_UINT32,
   BLE_GATT_CPF_FORMAT_UTF8S,
 } from '@/constants/bluetooth';
@@ -278,6 +279,34 @@ describe('DeviceStateDetailScreen', () => {
 
     const { queryByTestId } = render(<DeviceStateDetailScreen />);
     expect(queryByTestId('write-error-indicator')).toBeNull();
+  });
+
+  it('renders non-writable characteristics as read-only text, not an editable input', () => {
+    // A read-only SINT32 telemetry characteristic (e.g. Battery Current): the device
+    // declares no write property, so the app must show plain text instead of an input.
+    const selectedDevice = buildSelectedDevice([
+      {
+        uuid: 'battery-current-char',
+        cpfFormat: BLE_GATT_CPF_FORMAT_SINT32,
+        value: encodeUint32ToBase64(-350 >>> 0), // two's-complement bytes for -350
+        name: 'Battery Current (mA)',
+      },
+    ]);
+    selectedDevice.characteristics['battery-current-char'].characteristic = {
+      isWritableWithResponse: false,
+      isWritableWithoutResponse: false,
+    };
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getByText, queryByPlaceholderText } = render(<DeviceStateDetailScreen />);
+    expect(getByText('-350')).toBeTruthy();
+    expect(queryByPlaceholderText('Enter number')).toBeNull();
+    expect(queryByPlaceholderText('Enter value')).toBeNull();
   });
 
   it('syncs pendingValues when a BLE notification updates a characteristic value', async () => {

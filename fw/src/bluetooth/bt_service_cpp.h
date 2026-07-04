@@ -215,6 +215,24 @@ concept BtGattWriteHook =
     requires(TInstance &instance, const TValue &value) { instance.onWrite(value); };
 
 /**
+ * @brief Detects whether a characteristic type exposes a *fallible* write hook.
+ *
+ * `int onWriteChecked(const T&)` is invoked after the value is copied into app
+ * storage; a non-zero return rejects the remote write — storage is restored to
+ * its previous value and the ATT operation fails with
+ * BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED). Use this when accepting the write
+ * depends on a side effect that can fail (e.g. an I2C register write), so the
+ * app's optimistic UI update reverts deterministically instead of relying on a
+ * corrective notify (see the "Refusing a GATT write" rule in fw/CLAUDE.md).
+ *
+ * A characteristic type must define either onWrite or onWriteChecked, not both.
+ */
+template <typename TInstance, typename TValue>
+concept BtGattCheckedWriteHook = requires(TInstance &instance, const TValue &value) {
+    { instance.onWriteChecked(value) } -> std::convertible_to<int>;
+};
+
+/**
  * @brief Base mixin for providers that need attribute-array back-references.
  *
  * Instances are non-owning: @ref bind stores a pointer to the server's flattened
@@ -490,7 +508,17 @@ template <typename TInstance, typename T>
 static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
                       uint16_t len, uint16_t offset, uint8_t flags, TInstance *instance,
                       T &storage) {
+    static_assert(!(BtGattWriteHook<TInstance, T> && BtGattCheckedWriteHook<TInstance, T>),
+                  "Define either onWrite or onWriteChecked on a characteristic type, not both");
+
     if constexpr (BtGattStringTraits<T>::kIsString) {
+        // Checked write hooks are not supported for string-backed types: long/prepared
+        // writes land in storage chunk-by-chunk across multiple ATT ops, so there is no
+        // single point where "the written value" can be validated and atomically rolled
+        // back. Extend this if a string characteristic ever needs rejectable writes.
+        static_assert(!BtGattCheckedWriteHook<TInstance, T>,
+                      "onWriteChecked is not supported for string-backed characteristics");
+
         if (flags & BT_GATT_WRITE_FLAG_PREPARE) {
             return 0;
         }
@@ -511,10 +539,22 @@ static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr, con
         return len;
     }
 
+    // Snapshot taken before the copy so a failing onWriteChecked hook can restore it.
+    // Cheap for the POD types this branch handles.
+    T previous = storage;
+
     ssize_t writeRet = _write(conn, attr, buf, len, offset, flags,
                               reinterpret_cast<std::byte *>(&storage), sizeof(storage));
     if (writeRet > 0) {
-        _writeHook(instance, storage);
+        if constexpr (BtGattCheckedWriteHook<TInstance, T>) {
+            int hookRet = instance->onWriteChecked(storage);
+            if (hookRet != 0) {
+                storage = previous;
+                return BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED);
+            }
+        } else {
+            _writeHook(instance, storage);
+        }
     }
 
     return writeRet;
@@ -734,10 +774,14 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
     T storage_ = Default;
     bool sendNotifications_ = false;
     bt_gatt_cpf characteristic_cpf_ = BtGattCpfTraits<T>::kValue;
+    // The properties byte must reflect ReadOnly: advertising WRITE on a read-only
+    // characteristic made BLE clients (e.g. react-native-ble-plx's isWritableWithResponse)
+    // believe every characteristic was writable, so the companion app rendered editable
+    // inputs for values whose writes could only ever fail at the ATT permission layer.
     bt_gatt_chrc characteristic_ =
         BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U,
-                          Notify ? (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY)
-                                 : (BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE));
+                          BT_GATT_CHRC_READ | (ReadOnly ? 0U : BT_GATT_CHRC_WRITE) |
+                              (Notify ? BT_GATT_CHRC_NOTIFY : 0U));
     bt_gatt_ccc_managed_user_data_with_app_user_data ccc_data_ = {
         .ccc_managed = BT_GATT_CCC_MANAGED_USER_DATA_INIT(cccCfgChanged, NULL, NULL),
         .app_user_data = this,

@@ -839,7 +839,18 @@ class BQ25792_ADC_CURRENT_UnitConversion {
    public:
     static inline const char *unit() { return "mA"; }
 
-    static inline int64_t conversion(uint32_t val) { return val; }
+    static inline int64_t conversion(uint32_t val) {
+        uint64_t bigVal = val;
+
+        // Current ADC registers (IBUS_ADC/IBAT_ADC) are 16-bit 2's compliment,
+        // 1 mA/LSB. Negative = battery discharging / reverse (OTG) input current.
+        // Sign-extend if needed
+        if (bigVal & (1 << 15)) {
+            bigVal |= 0xFFFFFFFFFFFF0000;
+        }
+
+        return static_cast<int64_t>(bigVal);
+    }
 };
 
 class BQ25792_ADC_VOLTAGE_UnitConversion {

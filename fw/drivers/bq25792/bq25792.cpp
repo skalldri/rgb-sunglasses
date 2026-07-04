@@ -169,10 +169,72 @@ int bq25792_get_vbat_mv(const struct device* dev, int32_t* vbat_mv) {
 }
 
 int bq25792_set_charge_enable(const struct device* dev, bool enabled) {
+    if (!dev) {
+        LOG_ERR("NULL-device pointer");
+        return -ENODEV;
+    }
     const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
     BQ25792_CHARGER_CONTROL_0 chargerControl0(cfg);
     LOG_INF("Setting EN_CHG to %u", enabled ? 1 : 0);
-    chargerControl0.set<BQ25792_CHARGER_CONTROL_0_EN_CHG>(enabled ? 1 : 0, true /* flush */);
+    // Propagate the I2C flush result — callers (e.g. the BLE charging toggle)
+    // must be able to reject the request when the bus write fails.
+    return chargerControl0.set<BQ25792_CHARGER_CONTROL_0_EN_CHG>(enabled ? 1 : 0, true /* flush */);
+}
+
+int bq25792_get_charge_enable(const struct device* dev, bool* enabled) {
+    if (!dev || !enabled) {
+        return -EINVAL;
+    }
+    const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
+    BQ25792_CHARGER_CONTROL_0 reg(cfg);
+    *enabled = reg.get<BQ25792_CHARGER_CONTROL_0_EN_CHG>(0, true /* read from hw */) != 0;
+    return 0;
+}
+
+int bq25792_ibat_sense_enable(const struct device* dev, bool enable) {
+    if (!dev) {
+        LOG_ERR("NULL-device pointer");
+        return -ENODEV;
+    }
+    const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
+    BQ25792_CHARGER_CONTROL_5 reg(cfg);
+
+    uint32_t en_ibat = enable ? 1 : 0;
+    LOG_INF("Setting EN_IBAT to %u", en_ibat);
+
+    return reg.set<BQ25792_CHARGER_CONTROL_5_EN_IBAT>(en_ibat, true /* flush */);
+}
+
+int bq25792_get_ibat_ma(const struct device* dev, int32_t* ibat_ma) {
+    if (!dev || !ibat_ma) {
+        return -EINVAL;
+    }
+    const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
+    BQ25792_IBAT_ADC reg(cfg);
+    uint32_t raw = reg.get<BQ25792_IBAT_ADC_IBAT_ADC>(0, true /* read from hw */);
+    *ibat_ma = (int32_t)BQ25792_ADC_CURRENT_UnitConversion::conversion(raw);
+    return 0;
+}
+
+int bq25792_get_vbus_mv(const struct device* dev, int32_t* vbus_mv) {
+    if (!dev || !vbus_mv) {
+        return -EINVAL;
+    }
+    const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
+    BQ25792_VBUS_ADC reg(cfg);
+    uint32_t raw = reg.get<BQ25792_VBUS_ADC_VBUS_ADC>(0, true /* read from hw */);
+    *vbus_mv = (int32_t)BQ25792_ADC_VOLTAGE_UnitConversion::conversion(raw);
+    return 0;
+}
+
+int bq25792_get_ibus_ma(const struct device* dev, int32_t* ibus_ma) {
+    if (!dev || !ibus_ma) {
+        return -EINVAL;
+    }
+    const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
+    BQ25792_IBUS_ADC reg(cfg);
+    uint32_t raw = reg.get<BQ25792_IBUS_ADC_IBUS_ADC>(0, true /* read from hw */);
+    *ibus_ma = (int32_t)BQ25792_ADC_CURRENT_UnitConversion::conversion(raw);
     return 0;
 }
 

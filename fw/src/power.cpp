@@ -13,6 +13,11 @@
 #include <status_led/status_led.h>
 #endif
 
+#if defined(CONFIG_APP_BATTERY_MONITOR)
+// BT-free API only (see battery_service.h) - power.cpp stays free of BT headers.
+#include <bluetooth/battery_service.h>
+#endif
+
 #if defined(CONFIG_FLASH)
 #include <zephyr/drivers/flash.h>
 #endif
@@ -120,6 +125,13 @@ static void charger_status_thread_func(void *, void *, void *) {
     bq25792_adc_enable(bq, true);
     bq25792_temp_override(bq, true);
 
+#if defined(CONFIG_APP_BATTERY_MONITOR)
+    /* Enable IBAT sensing and apply the persisted charging-enable setting.
+     * Safe to do here: settings_load() ran in bluetooth_init() at
+     * SYS_INIT(APPLICATION, 1), before any K_THREAD_DEFINE thread runs. */
+    battery_service_apply_boot_state();
+#endif
+
     while (true) {
         /* Read VBAT first — the charger may report TrickleCharge even with no
          * battery present, so we must gate on voltage before trusting CHG_STAT. */
@@ -127,7 +139,21 @@ static void charger_status_thread_func(void *, void *, void *) {
         bool vbat_ok    = (bq25792_get_vbat_mv(bq, &vbat_mv) == 0);
 
         uint8_t chg_stat = 0;
-        if (bq25792_get_charge_status(bq, &chg_stat) == 0) {
+        bool chg_ok      = (bq25792_get_charge_status(bq, &chg_stat) == 0);
+
+#if defined(CONFIG_APP_BATTERY_MONITOR)
+        /* Publish battery telemetry to the BLE characteristics. Only publish a
+         * complete, successfully-read sample — never garbage from a failed read. */
+        int32_t ibat_ma = 0;
+        int32_t vbus_mv = 0;
+        int32_t ibus_ma = 0;
+        if (vbat_ok && chg_ok && bq25792_get_ibat_ma(bq, &ibat_ma) == 0 &&
+            bq25792_get_vbus_mv(bq, &vbus_mv) == 0 && bq25792_get_ibus_ma(bq, &ibus_ma) == 0) {
+            battery_service_update(vbat_mv, ibat_ma, vbus_mv, ibus_ma, chg_stat);
+        }
+#endif
+
+        if (chg_ok) {
 #if defined(CONFIG_STATUS_LED)
             StatusIndication       indication;
             StatusColor            color  = StatusColor::Green;
@@ -234,7 +260,31 @@ static int cmd_power_bq_dump_charge_params(const struct shell *shell, size_t arg
 static int cmd_power_bq_charge_enable(const struct shell *shell, size_t argc, char **argv,
                                       void *data) {
     int selection = (int)data;
+    // Known accepted gap: this bypasses the BLE "Charging Enabled" characteristic
+    // (battery_service.cpp), so a connected app shows a stale toggle until it
+    // re-reads. Debug-only command; the app path is the source of truth.
     bq25792_set_charge_enable(bq, (bool)selection);
+    return 0;
+}
+
+static int cmd_power_bq_status(const struct shell *shell, size_t argc, char **argv, void *data) {
+    int32_t vbat_mv  = 0;
+    int32_t ibat_ma  = 0;
+    int32_t vbus_mv  = 0;
+    int32_t ibus_ma  = 0;
+    uint8_t chg_stat = 0;
+    bool en_chg      = false;
+
+    bq25792_get_vbat_mv(bq, &vbat_mv);
+    bq25792_get_ibat_ma(bq, &ibat_ma);
+    bq25792_get_vbus_mv(bq, &vbus_mv);
+    bq25792_get_ibus_ma(bq, &ibus_ma);
+    bq25792_get_charge_status(bq, &chg_stat);
+    bq25792_get_charge_enable(bq, &en_chg);
+
+    /* Integer prints only - no %f (CONFIG_CBPRINTF_FP_SUPPORT=n). */
+    shell_print(shell, "VBAT=%d mV IBAT=%d mA VBUS=%d mV IBUS=%d mA CHG_STAT=%u EN_CHG=%u",
+                vbat_mv, ibat_ma, vbus_mv, ibus_ma, chg_stat, en_chg ? 1 : 0);
     return 0;
 }
 
@@ -355,6 +405,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_charge,
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_power_bq, SHELL_CMD(dump, NULL, "Dump BQ25792 Registers to console", cmd_power_bq_dump),
+    SHELL_CMD(status, NULL, "Print battery/VBUS voltage, current, charge status and EN_CHG",
+              cmd_power_bq_status),
     SHELL_CMD(temp_override, &sub_temp_override, "Override BQ25792 battery temperature monitoring",
               NULL),
     SHELL_CMD(adc, &sub_adc, "Enable/Disable BQ25792 ADC", NULL),

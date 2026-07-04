@@ -70,6 +70,64 @@ int bq25792_get_charge_status(const struct device* dev, uint8_t* chg_stat);
  */
 int bq25792_get_vbat_mv(const struct device* dev, int32_t* vbat_mv);
 
+/**
+ * @brief Read back the EN_CHG bit from CHARGER_CONTROL_0.
+ *
+ * @param dev     BQ25792 device pointer.
+ * @param enabled Output: true if battery charging is enabled.
+ * @return 0 on success, negative errno on failure.
+ */
+int bq25792_get_charge_enable(const struct device* dev, bool* enabled);
+
+/**
+ * @brief Enable or disable battery discharge-current sensing (EN_IBAT).
+ *
+ * EN_IBAT defaults to 0 at reset; without it the IBAT_ADC register reads 0
+ * while the battery is discharging. Required for bq25792_get_ibat_ma() to
+ * report discharge current.
+ *
+ * @param dev    BQ25792 device pointer.
+ * @param enable true to enable IBAT sensing.
+ * @return 0 on success, negative errno on failure.
+ */
+int bq25792_ibat_sense_enable(const struct device* dev, bool enable);
+
+/**
+ * @brief Read the battery current from the IBAT_ADC register.
+ *
+ * ADC must be enabled first via bq25792_adc_enable(), and IBAT sensing via
+ * bq25792_ibat_sense_enable(). Positive = charging (current into the
+ * battery), negative = discharging.
+ *
+ * @param dev     BQ25792 device pointer.
+ * @param ibat_ma Output: battery current in milliamps (signed).
+ * @return 0 on success, negative errno on failure.
+ */
+int bq25792_get_ibat_ma(const struct device* dev, int32_t* ibat_ma);
+
+/**
+ * @brief Read the USB input voltage from the VBUS_ADC register.
+ *
+ * ADC must be enabled first via bq25792_adc_enable().
+ *
+ * @param dev     BQ25792 device pointer.
+ * @param vbus_mv Output: VBUS voltage in millivolts.
+ * @return 0 on success, negative errno on failure.
+ */
+int bq25792_get_vbus_mv(const struct device* dev, int32_t* vbus_mv);
+
+/**
+ * @brief Read the USB input current from the IBUS_ADC register.
+ *
+ * ADC must be enabled first via bq25792_adc_enable(). Positive = current
+ * flowing in from VBUS, negative = reverse (OTG) mode.
+ *
+ * @param dev     BQ25792 device pointer.
+ * @param ibus_ma Output: VBUS input current in milliamps (signed).
+ * @return 0 on success, negative errno on failure.
+ */
+int bq25792_get_ibus_ma(const struct device* dev, int32_t* ibus_ma);
+
 #ifdef __cplusplus
 };
 #endif

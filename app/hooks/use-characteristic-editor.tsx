@@ -2,6 +2,7 @@ import { CharacteristicBoolean } from "@/components/characteristic-boolean";
 import { CharacteristicColor } from "@/components/characteristic-color";
 import { CharacteristicDropdown } from "@/components/characteristic-dropdown";
 import { CharacteristicFloat32 } from "@/components/characteristic-float32";
+import { CharacteristicReadonly } from "@/components/characteristic-readonly";
 import { CharacteristicUint32 } from "@/components/characteristic-uint32";
 import { CharacteristicUtf8 } from "@/components/characteristic-utf8";
 import {
@@ -183,6 +184,14 @@ export function useCharacteristicEditor() {
     }
 
     function renderCharacteristicInput(serviceUuid: string, charUuid: string, charInfo: CharacteristicInfo) {
+        // Read-only telemetry (e.g. the Battery service's voltage/current) declares no write
+        // property, so an editable input would only ever produce failing writes. Explicit
+        // `=== false` checks so test fixtures / characteristics without these props keep the
+        // old editable behavior.
+        if (charInfo.characteristic.isWritableWithResponse === false &&
+            charInfo.characteristic.isWritableWithoutResponse === false) {
+            return <CharacteristicReadonly charInfo={charInfo} />;
+        }
         if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_BOOLEAN) {
             return (
                 <CharacteristicBoolean

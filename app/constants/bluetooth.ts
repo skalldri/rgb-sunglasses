@@ -10,6 +10,7 @@ export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0002-56789abc0000": "Audio Analysis Config",
     "12345678-1234-5678-0003-56789abc0000": "Bootloader Info",
     "12345678-1234-5678-0004-56789abc0000": "MCUboot Updater",
+    "12345678-1234-5678-0005-56789abc0000": "Battery",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
@@ -26,6 +27,17 @@ export const UUID_MCUBOOT_UPDATER_SERVICE = "12345678-1234-5678-0004-56789abc000
 export const UUID_MCUBOOT_UPDATER_STATUS  = "12345678-1234-5678-0004-56789abc0001";
 export const UUID_MCUBOOT_UPDATER_DATA    = "12345678-1234-5678-0004-56789abc0002";
 export const UUID_MCUBOOT_UPDATER_CONTROL = "12345678-1234-5678-0004-56789abc0003";
+
+// Battery monitoring service (service ID 5, issue #97). Proto0 only.
+// Characteristic UUIDs are auto-assigned in firmware declaration order — these must
+// match the declaration order in fw/src/bluetooth/battery_service.cpp.
+export const UUID_BATTERY_SERVICE        = "12345678-1234-5678-0005-56789abc0000";
+export const UUID_BATTERY_VOLTAGE        = "12345678-1234-5678-0005-56789abc0000"; // int32, mV
+export const UUID_BATTERY_CURRENT        = "12345678-1234-5678-0005-56789abc0001"; // int32, mA (+ = charging)
+export const UUID_BATTERY_VBUS_VOLTAGE   = "12345678-1234-5678-0005-56789abc0002"; // int32, mV
+export const UUID_BATTERY_VBUS_CURRENT   = "12345678-1234-5678-0005-56789abc0003"; // int32, mA
+export const UUID_BATTERY_CHARGE_STATUS  = "12345678-1234-5678-0005-56789abc0004"; // uint8, raw BQ25792 CHG_STAT
+export const UUID_BATTERY_CHARGE_ENABLE  = "12345678-1234-5678-0005-56789abc0005"; // boolean, read/write
 
 // Fixed characteristic UUID, identical across every animation service, exposing that
 // animation's human-readable name. Must match kAnimationNameCharacteristicUuid in

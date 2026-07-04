@@ -1,3 +1,4 @@
+import { BatteryCard } from "@/components/battery-card";
 import { CharacteristicBoolean } from "@/components/characteristic-boolean";
 import { WriteErrorIndicator } from "@/components/characteristic-write-error";
 import { ThemedText } from "@/components/themed-text";
@@ -8,7 +9,7 @@ import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { Section } from "@/components/ui/section";
-import { getServiceName, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE } from "@/constants/bluetooth";
+import { getServiceName, UUID_BATTERY_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useThemeColors } from "@/hooks/use-theme-color";
@@ -60,8 +61,12 @@ export default function DeviceStateMenuScreen() {
             service.uuid !== SMP_SERVICE_UUID &&
             service.uuid !== UUID_MCUBOOT_INFO_SERVICE &&
             service.uuid !== UUID_MCUBOOT_UPDATER_SERVICE &&
+            // Battery gets its own dedicated card (BatteryCard) instead of a generic
+            // settings row, same special-treatment pattern as the mcuboot services.
+            service.uuid !== UUID_BATTERY_SERVICE &&
             selectedDevice?.serviceDisplayNames?.[service.uuid] == null
     );
+    const hasBatteryService = visibleServices.some(service => service.uuid === UUID_BATTERY_SERVICE);
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>
@@ -114,6 +119,8 @@ export default function DeviceStateMenuScreen() {
                             </Section>
                         </Card>
                     )}
+
+                    {hasBatteryService && <BatteryCard style={styles.card} />}
 
                     {firmwareService && (
                         <Card style={styles.card}>
