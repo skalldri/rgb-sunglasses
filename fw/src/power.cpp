@@ -27,7 +27,6 @@
 
 #include <array>
 
-#include "lz4.h"
 LOG_MODULE_REGISTER(power);
 
 #if !defined(CONFIG_ZTEST)

@@ -12,8 +12,24 @@
 #include "tps25750/tps25750-config-compressed.h"
 #include "tps25750/tps25750-config.h"
 #include "tps25750/tps25750_priv.h"
+// Included LAST: this header #defines tps25750_patch to alias
+// tps25750x_lowRegion_i2c_array, which would rewrite the compressed header's
+// extern declaration if it came first. Its TPS25750_PATCH_UNCOMPRESSED_SIZE
+// macro is an identical redefinition of the compressed header's (both 14592).
+#include "tps25750/tps25750-config-uncompressed.h"
 
 ZTEST_SUITE(tps25750_patch_decompression_tests, NULL, NULL, NULL, NULL, NULL);
+
+// The uncompressed adapter header (used by proto0 to serve the patch straight
+// from rodata) hardcodes TPS25750_PATCH_UNCOMPRESSED_SIZE rather than using
+// sizeof, since the array is defined in a separate translation unit. Pin the
+// literal to the real array size so the two can never drift apart.
+ZTEST(tps25750_patch_decompression_tests, test_uncompressed_header_size) {
+    zassert_equal((size_t)gSizeLowRegionArray, (size_t)TPS25750_PATCH_UNCOMPRESSED_SIZE,
+                  "tps25750-config-uncompressed.h size literal (%d) != "
+                  "sizeof(tps25750x_lowRegion_i2c_array) (%d)",
+                  TPS25750_PATCH_UNCOMPRESSED_SIZE, gSizeLowRegionArray);
+}
 
 ZTEST(tps25750_patch_decompression_tests, test_decompression) {
     const char *decompressed_data;

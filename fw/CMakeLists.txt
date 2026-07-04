@@ -38,8 +38,17 @@ target_sources(
     src/animations/animation_base.cpp
     src/fonts/FontAtlas.cpp
     src/fonts/FontShell.cpp
-    misc/tps25750/tps25750-config-compressed.c
 )
+
+# The TPS25750 patch blob: LZ4-compressed (decompressed into RAM at first use) or
+# uncompressed rodata, selected per-board — see CONFIG_TPS25750_COMPRESSED_PATCH in
+# prj.conf (proto0: uncompressed, saves 14.3KB RAM) and the DK board .conf (compressed,
+# saves ~4.8KB of its nearly-full FLASH slot).
+if(CONFIG_TPS25750_COMPRESSED_PATCH)
+  target_sources(app PRIVATE misc/tps25750/tps25750-config-compressed.c)
+elseif(CONFIG_TPS25750_INTERNAL_PATCH)
+  target_sources(app PRIVATE misc/tps25750/tps25750-config.c)
+endif()
 
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/sound.cpp)
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/audio_dsp.cpp)
