@@ -4,10 +4,6 @@
 #include <cstdint>
 #include <functional>
 
-struct Pixel {
-    uint8_t rgb[3];
-};
-
 // The callback function that the FontAtlas will execute when printing a character
 using FontPrintFunc = std::function<void(size_t x, size_t y, bool filled)>;
 
@@ -29,10 +25,13 @@ class FontAtlas {
     static constexpr size_t atlasPixelWidthPerChar = atlasWidth / atlasTotalChars;
 
    private:
-    FontAtlas();
+    // The atlas itself is decoded from fonts/Consolas.h at compile time into a
+    // 1-bit-per-pixel rodata table (see kAtlasBits in FontAtlas.cpp) -- the font is
+    // monochrome, so the old 3-bytes-per-pixel RAM copy (23.7KB of .bss) stored only
+    // 1 meaningful bit per pixel (issue #75 follow-up RAM pass). No per-instance
+    // state remains.
+    FontAtlas() = default;
 
     void PrintSpace(FontPrintFunc func);
     void PrintUnsupported(FontPrintFunc func);
-
-    Pixel atlasBuffer[atlasPixels];
 };
