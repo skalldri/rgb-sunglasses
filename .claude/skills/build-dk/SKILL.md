@@ -8,11 +8,11 @@ Build the DK firmware. Build dir: `fw/build-dk`. This is a SEPARATE directory fr
 
 ```bash
 west build \
-  --build-dir /workspaces/rgb-sunglasses/fw/build-dk \
-  /workspaces/rgb-sunglasses/fw \
+  --build-dir fw/build-dk \
+  fw \
   --board rgb_sunglasses_dk/nrf5340/cpuapp \
   --sysbuild \
-  -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
+  -- -DBOARD_ROOT="$(pwd)/fw"
 ```
 
 ## Steps

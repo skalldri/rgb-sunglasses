@@ -8,11 +8,11 @@ Run all firmware tests using Twister with lcov coverage. Output goes to `fw/twis
 
 ```bash
 twister \
-  -T /workspaces/rgb-sunglasses/fw/tests \
+  -T fw/tests \
   -p native_sim \
   --coverage \
   --coverage-tool lcov \
-  --outdir /workspaces/rgb-sunglasses/fw/twister-out
+  --outdir fw/twister-out
 ```
 
 ## Steps
@@ -22,7 +22,7 @@ twister \
 3. Report: number of test cases passed, failed, and errored. List any failing test suites by name.
 4. Report the overall line coverage percentage from:
    ```bash
-   lcov --summary /workspaces/rgb-sunglasses/fw/twister-out/coverage/coverage.info
+   lcov --summary fw/twister-out/coverage/coverage.info
    ```
 5. If any tests **failed**: do NOT proceed with a PR. Fix the failing test(s) and re-run.
 6. The coverage report (`fw/twister-out/coverage/coverage.info`) is consumed by `/submit-pr` to check patch coverage.
