@@ -1,4 +1,5 @@
 import { CharacteristicBoolean } from "@/components/characteristic-boolean";
+import { WriteErrorIndicator } from "@/components/characteristic-write-error";
 import { ThemedText } from "@/components/themed-text";
 import { AppButton } from "@/components/ui/app-button";
 import { Badge } from "@/components/ui/badge";
@@ -97,11 +98,14 @@ export default function DeviceStateMenuScreen() {
                                                 label={selectedDevice.serviceDisplayNames?.[service.uuid] ?? getServiceName(service.uuid)}
                                                 href={`/(tabs)/device-state/${service.uuid}`}
                                                 rightSlot={isActiveInfo && (
-                                                    <CharacteristicBoolean
-                                                        charUuid={UUID_IS_ACTIVE_CHARACTERISTIC}
-                                                        charInfo={isActiveInfo}
-                                                        onWrite={(charUuid, encoded) => writeServiceCharacteristic(service.uuid, charUuid, encoded)}
-                                                    />
+                                                    <>
+                                                        <WriteErrorIndicator charInfo={isActiveInfo} />
+                                                        <CharacteristicBoolean
+                                                            charUuid={UUID_IS_ACTIVE_CHARACTERISTIC}
+                                                            charInfo={isActiveInfo}
+                                                            onWrite={(charUuid, encoded) => writeServiceCharacteristic(service.uuid, charUuid, encoded)}
+                                                        />
+                                                    </>
                                                 )}
                                             />
                                         </React.Fragment>

@@ -187,6 +187,25 @@ npx expo run:android --device <device name> --app-id com.autom8ed.rgbsunglassesa
 
 Poll `http://localhost:8081/status` until Metro reports `packager-status:running` before trying to interact with the app.
 
+#### Running the app from inside a git worktree — MANDATORY procedure (read before doing anything)
+
+A fresh worktree (`.claude/worktrees/<name>/app`) has **no `node_modules` and no `android/` of its own.** There is exactly one correct way to run the app from it. Follow it verbatim; the tempting shortcuts below are all forbidden because each one has already broken a session.
+
+**DO — the only supported sequence:**
+
+1. `cd <worktree>/app && npm ci` — a **real** install into the worktree. Takes ~30s and reapplies the ble-plx patch via `postinstall`. This is required for `jest`/`tsc` **and** for Metro. Eat this cost.
+2. `npx expo run:android --app-id com.autom8ed.rgbsunglassesapp.dev` — launched as a **harness-managed background task** (Bash `run_in_background: true`). This one command runs `expo prebuild` (generates `android/`), builds via gradle (fast once the shared gradle cache is warm — ~1 min), starts Metro, installs the APK, and launches the app pointing at its own Metro. Leave it running for the whole session — it owns Metro.
+3. Poll `http://localhost:8081/status` for `packager-status:running`, then screenshot to confirm the app loaded.
+
+**DON'T — every one of these has caused a failure, do not attempt any of them:**
+
+- **NEVER symlink `node_modules`** from the main checkout into the worktree (`ln -s /workspaces/rgb-sunglasses/app/node_modules ...`). The gradle build tolerates it, but **Metro's JS resolver cannot resolve modules through a symlink whose realpath is outside the worktree project root** — you get `UnableToResolveError: Unable to resolve module ./app/node_modules/expo-router/entry` and a red-screen `development server returned response error code: 404` on the device. Always `npm ci` for a real `node_modules`.
+- **NEVER background `expo run:android` by hand with `&` and/or `> log 2>&1`.** That daemonizes it yourself, the harness sees the wrapper "complete" immediately, loses track of the task, and Metro gets reaped — the app then can't fetch its bundle. Use Bash `run_in_background: true` with the bare command (no `&`, no redirect) so the harness keeps it alive as a tracked task.
+- **NEVER substitute `expo start --dev-client` + `adb reverse` + a `rgbsunglassesapp.dev://expo-development-client/?url=...` deep link** to avoid the native build. The installed dev client resumes its stale bundle without re-fetching, the deep link doesn't reliably trigger a fresh bundle against the new Metro, and you burn more time than a build would cost. Also don't pass `--android` to a separate `expo start` (it launches Expo Go, not the dev client).
+- **NEVER kill the `expo run:android` process** to "restart Metro." If Metro seems wrong, fix the actual cause (usually a stale/symlinked `node_modules`), then relaunch the one command above.
+
+In short: in a worktree, **`npm ci` then `npx expo run:android --app-id ... ` as a background task.** No symlinks, no manual daemonizing, no `expo start` deep-link dance. Eat the full build cost — it is cheaper than every workaround.
+
 **Root cause of `CommandError: No development build (com.autom8ed.rgbsunglassesapp) for this project is installed`, and the real fix (not a workaround)**: this project's `plugins/withDevVariant.js` config plugin intentionally injects `applicationIdSuffix ".dev"` into the debug build type (`android/app/build.gradle`) so the debug and release APKs can be installed side-by-side with distinct icons/schemes — the actual installed runtime package id is `com.autom8ed.rgbsunglassesapp.dev`, not the bare `applicationId`. Expo CLI's package-id resolver (`@expo/config-plugins`'s `Package.getApplicationIdAsync()`, called from `AndroidAppIdResolver`) only regexes the literal `applicationId '...'` line out of `build.gradle` — it has no knowledge of per-buildType `applicationIdSuffix`. So `expo run:android` always computes the unsuffixed id, checks whether _that_ is installed (`PlatformManager.openProjectInCustomRuntimeAsync` → `isAppInstalledAndIfSoReturnContainerPathForIOSAsync`), finds it isn't (only the suffixed `.dev` one is), and throws — even immediately after its own build+install step succeeded. This will happen on every `expo run:android` invocation as long as `withDevVariant.js`'s suffix exists, build success or not.
 
 Expo CLI has a built-in flag for exactly this situation — `--app-id <appId>` — which makes it check/install/launch the given id instead of guessing one from `build.gradle`:

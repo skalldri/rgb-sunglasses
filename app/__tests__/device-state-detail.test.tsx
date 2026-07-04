@@ -1,6 +1,6 @@
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Animated } from 'react-native';
+import { Alert, Animated } from 'react-native';
 
 import DeviceStateDetailScreen from '@/app/(tabs)/device-state/[serviceUuid]';
 import {
@@ -235,6 +235,49 @@ describe('DeviceStateDetailScreen', () => {
     fireEvent.press(getByText('Loop One'));
     expect(getByText('Play All')).toBeTruthy();
     expect(getByText('Stop After One')).toBeTruthy();
+  });
+
+  it('shows a tappable write-error indicator for a characteristic whose last write failed (issue #92)', () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const selectedDevice = buildSelectedDevice([
+      {
+        uuid: 'uint-char',
+        cpfFormat: BLE_GATT_CPF_FORMAT_UINT32,
+        value: encodeUint32ToBase64(7),
+      },
+    ]);
+    // Both maps share the same info object, so this sets the failure state everywhere it's read.
+    selectedDevice.characteristics['uint-char'].lastWriteError = 'The device refused the change.';
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getByTestId } = render(<DeviceStateDetailScreen />);
+    const indicator = getByTestId('write-error-indicator');
+    expect(indicator).toBeTruthy();
+
+    fireEvent.press(indicator);
+    expect(alertSpy).toHaveBeenCalledWith('Write failed', 'The device refused the change.');
+  });
+
+  it('does not show a write-error indicator when the last write succeeded', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildSelectedDevice([
+        {
+          uuid: 'uint-char',
+          cpfFormat: BLE_GATT_CPF_FORMAT_UINT32,
+          value: encodeUint32ToBase64(7),
+        },
+      ]),
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { queryByTestId } = render(<DeviceStateDetailScreen />);
+    expect(queryByTestId('write-error-indicator')).toBeNull();
   });
 
   it('syncs pendingValues when a BLE notification updates a characteristic value', async () => {

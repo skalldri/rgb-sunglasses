@@ -165,6 +165,66 @@ describe('BluetoothProvider', () => {
     });
   });
 
+  it('records lastWriteError on a failed write and clears it on the next attempt and on a fresh value (issue #92)', async () => {
+    const getApi = setupProvider();
+    // First call rejects (write refused), second resolves.
+    const writeWithResponse = jest
+      .fn()
+      .mockRejectedValueOnce({ attErrorCode: 0xfc })
+      .mockResolvedValueOnce(undefined);
+
+    act(() => {
+      getApi().setSelectedDevice(buildSelectedDevice(writeWithResponse, btoa('stable')));
+    });
+
+    // Failed write -> lastWriteError set (in both flat and service-scoped maps).
+    await act(async () => {
+      await getApi().writeToCharacteristic('char-1', btoa('new'));
+    });
+    await waitFor(() => {
+      expect(getApi().getCharacteristicInfo('char-1')?.lastWriteError).toBe('The device refused the change.');
+      expect(getApi().getServiceCharacteristicInfo('service-1', 'char-1')?.lastWriteError).toBe(
+        'The device refused the change.'
+      );
+    });
+
+    // A fresh notification value clears the error (care point 1).
+    act(() => {
+      getApi().updateCharValue('char-1', btoa('recovered'));
+    });
+    await waitFor(() => {
+      expect(getApi().getCharacteristicInfo('char-1')?.lastWriteError).toBeNull();
+    });
+  });
+
+  it('clears lastWriteError at the start of the next write attempt (issue #92, care point a)', async () => {
+    const getApi = setupProvider();
+    const writeWithResponse = jest
+      .fn()
+      .mockRejectedValueOnce({ attErrorCode: 0xfc })
+      .mockResolvedValueOnce(undefined);
+
+    act(() => {
+      getApi().setSelectedDevice(buildSelectedDevice(writeWithResponse, btoa('stable')));
+    });
+
+    await act(async () => {
+      await getApi().writeToCharacteristic('char-1', btoa('new'));
+    });
+    await waitFor(() => {
+      expect(getApi().getCharacteristicInfo('char-1')?.lastWriteError).toBeTruthy();
+    });
+
+    // A subsequent successful write clears the prior error.
+    await act(async () => {
+      await getApi().writeToCharacteristic('char-1', btoa('new2'));
+    });
+    await waitFor(() => {
+      expect(getApi().getCharacteristicInfo('char-1')?.lastWriteError).toBeNull();
+      expect(getApi().getCharacteristicInfo('char-1')?.value).toBe(btoa('new2'));
+    });
+  });
+
   it('updateCharValue updates mapped characteristic values', async () => {
     const getApi = setupProvider();
     const writeWithResponse = jest.fn(async () => undefined);
@@ -271,6 +331,37 @@ describe('BluetoothProvider', () => {
         result = await getApi().writeServiceCharacteristic('service-a', 'missing-char', btoa('x'));
       });
       expect(result).toBe(false);
+    });
+
+    it('records lastWriteError on only the failed service and clears it when that service gets a fresh value (issue #92, care point 2)', async () => {
+      const getApi = setupProvider();
+      const writeA = jest.fn(async () => {
+        throw { attErrorCode: 0xfc };
+      });
+      const writeB = jest.fn(async () => undefined);
+
+      act(() => {
+        getApi().setSelectedDevice(buildDeviceWithDuplicatedCharUuid(writeA, writeB));
+      });
+
+      // Failing write on service-a must not light the icon on service-b's identically-UUID'd row.
+      await act(async () => {
+        await getApi().writeServiceCharacteristic('service-a', 'dup-char', btoa('a-new'));
+      });
+      await waitFor(() => {
+        expect(getApi().getServiceCharacteristicInfo('service-a', 'dup-char')?.lastWriteError).toBe(
+          'The device refused the change.'
+        );
+        expect(getApi().getServiceCharacteristicInfo('service-b', 'dup-char')?.lastWriteError ?? null).toBeNull();
+      });
+
+      // A fresh value on service-a (device-originated recovery notification) clears its error.
+      act(() => {
+        getApi().updateServiceCharacteristicValue('service-a', 'dup-char', btoa('a-recovered'));
+      });
+      await waitFor(() => {
+        expect(getApi().getServiceCharacteristicInfo('service-a', 'dup-char')?.lastWriteError).toBeNull();
+      });
     });
 
     it('updateServiceCharacteristicValue patches only the targeted service entry', async () => {

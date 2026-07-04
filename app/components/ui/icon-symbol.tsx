@@ -24,6 +24,7 @@ const MAPPING = {
   'slider.horizontal.3': 'tune',
   'arrow.clockwise': 'refresh',
   'magnifyingglass': 'search',
+  'exclamationmark.triangle.fill': 'warning',
 } as IconMapping;
 
 /**

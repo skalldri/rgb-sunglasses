@@ -1,3 +1,4 @@
+import { describeWriteError } from "@/services/ble-errors";
 import { McuMgrClient } from "@/services/mcumgr";
 import { createContext, ReactNode, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { Characteristic, Device, Service, Subscription } from "react-native-ble-plx";
@@ -8,6 +9,11 @@ export interface CharacteristicInfo {
     name: string | null;
     cpfFormat: number | null;
     isUpdateInProgress: boolean;
+    // Human-readable reason the most recent write to this characteristic failed, or null/undefined
+    // when the last write succeeded (or none has been attempted). Set in the write helpers' catch,
+    // cleared at the start of the next write and whenever a fresh value arrives (optimistic update
+    // or device notification). Surfaced as a per-row warning icon. See issue #92.
+    lastWriteError?: string | null;
 }
 
 export type BluetoothContextDevice = {
@@ -132,9 +138,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
-    // Helper to update characteristic value in context
+    // Helper to update characteristic value in context. A fresh value (optimistic update or device
+    // notification) also clears any stale lastWriteError - the write that failed has been
+    // superseded, so the warning icon must not outlive it (issue #92, care point 1).
     const updateCharValue = useCallback((charUuid: string, newValue: string) => {
-        updateCharFields(charUuid, { value: newValue });
+        updateCharFields(charUuid, { value: newValue, lastWriteError: null });
     }, [updateCharFields]);
 
     // Helper to set isUpdateInProgress flag
@@ -164,7 +172,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             return false;
         }
 
-        setCharUpdateInProgress(charUuid, true);
+        // Clear any prior failure as the new attempt starts (issue #92, care point a).
+        updateCharFields(charUuid, { isUpdateInProgress: true, lastWriteError: null });
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
@@ -174,11 +183,12 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             return true;
         } catch (error) {
             console.log(`Error writing value to characteristic ${charUuid}: ${error}`);
+            updateCharFields(charUuid, { lastWriteError: describeWriteError(error) });
             return false;
         } finally {
             setCharUpdateInProgress(charUuid, false);
         }
-    }, [getCharacteristicInfo, setCharUpdateInProgress, updateCharValue]);
+    }, [getCharacteristicInfo, setCharUpdateInProgress, updateCharValue, updateCharFields]);
 
     // Service-aware lookup for characteristics whose UUID is reused across services (e.g. "Is
     // Active"), where the flat characteristics map can only ever hold one (ambiguous) entry.
@@ -218,8 +228,10 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
+    // Service-aware sibling of updateCharValue: a fresh value also clears any stale lastWriteError
+    // for that service's characteristic (issue #92, care point 1).
     const updateServiceCharacteristicValue = useCallback((serviceUuid: string, charUuid: string, newValue: string) => {
-        updateServiceCharacteristicFields(serviceUuid, charUuid, { value: newValue });
+        updateServiceCharacteristicFields(serviceUuid, charUuid, { value: newValue, lastWriteError: null });
     }, [updateServiceCharacteristicFields]);
 
     // Service-aware sibling of setCharUpdateInProgress.
@@ -248,7 +260,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             return false;
         }
 
-        setServiceCharUpdateInProgress(serviceUuid, charUuid, true);
+        // Clear any prior failure as the new attempt starts (issue #92, care point a).
+        updateServiceCharacteristicFields(serviceUuid, charUuid, { isUpdateInProgress: true, lastWriteError: null });
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
@@ -258,11 +271,12 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             return true;
         } catch (error) {
             console.log(`Error writing value to characteristic ${charUuid} in service ${serviceUuid}: ${error}`);
+            updateServiceCharacteristicFields(serviceUuid, charUuid, { lastWriteError: describeWriteError(error) });
             return false;
         } finally {
             setServiceCharUpdateInProgress(serviceUuid, charUuid, false);
         }
-    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue]);
+    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue, updateServiceCharacteristicFields]);
 
     const contextValue = useMemo(() => ({
         selectedDevice,
