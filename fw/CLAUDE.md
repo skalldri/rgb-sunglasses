@@ -442,7 +442,7 @@ BLE trace. The decisive tells:
 
 ## USB Flash Disk (`/NAND:` — GLIM/animation assets)
 
-The dev board exposes a 4 MiB FAT filesystem over USB Mass Storage (SCSI Bulk-Only,
+The dev board exposes a ~6.9 MiB FAT filesystem over USB Mass Storage (SCSI Bulk-Only,
 interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts at
 `/NAND:` (`src/storage/storage.cpp`; LUN registered in `src/usb/usb_init.c` as
 `USBD_DEFINE_MSC_LUN(nand, "NAND", "RGB-SG", "FlashDisk", "0.00")`). It's how
@@ -460,7 +460,7 @@ This is exclusive-write access to the board's disk — hold the `board` lock fir
 # by the SCSI string, not a fixed /dev/sdX (the letter shifts based on what else
 # is attached).
 dmesg | grep -A2 "RGB-SG"       # confirms detection, e.g. "scsi 1:0:0:0: Direct-Access RGB-SG FlashDisk"
-lsblk                            # cross-reference the ~4 MiB size to find the device node, e.g. /dev/sdg
+lsblk                            # cross-reference the ~6.9 MiB size to find the device node, e.g. /dev/sdg
 blkid /dev/sdg                   # TYPE="vfat" confirms it's the right one
 
 mkdir -p /mnt/sunglasses-fs
@@ -481,6 +481,60 @@ issuing more serial commands.
 **FAT concurrent access causes read corruption.** The firmware mounts the FAT volume at boot and caches cluster allocations. If you write a file over USB while the firmware still has the volume mounted, the firmware's in-memory FAT doesn't know about the new cluster chain — subsequent reads return stale data (wrong CRC, wrong file content). Always write via USB → sync → umount → **reboot the device** before reading the file from firmware. A warm reboot (`kernel reboot warm`) is sufficient; no J-Link needed. This also applies to `mcuboot.bin` staging.
 
 **Reformatting the NAND filesystem from the shell**: use `fatfs reformat` (requires the firmware to be built with `CONFIG_FILE_SYSTEM_MKFS=y`, which is already on for proto0). This is the correct fix for FAT corruption. After the reformat you must reboot the board and re-copy any files you need.
+
+## Coredumps (issue #80, proto0 only)
+
+A fatal fault captures a Zephyr coredump to the 64 KB internal-flash `coredump_partition`
+(0xF0000) via the NCS `DEBUG_COREDUMP_BACKEND_NRF_FLASH_PARTITION` backend — raw
+`nrfx_nvmc` pokes, the only flash path that works inside the fault handler (IRQs locked;
+the external QSPI driver needs interrupts/scheduler, so dumps can NEVER target external
+flash directly). `z_fatal_error()` writes the dump BEFORE calling
+`k_sys_fatal_error_handler`, so extension-sandbox faults produce dumps too even though
+the handler demotes them to a thread abort.
+
+**Post-fault behavior** (`k_sys_fatal_error_handler` in `src/extensions/extension_host.cpp`):
+sandbox faults → thread abort as before; anything else → cold reboot, UNLESS a debugger
+is attached (DHCSR C_DEBUGEN), in which case it halts for GDB as before. Expect a ~2 s
+freeze during capture (16-page partition erase + write, IRQs locked) — including on
+recoverable sandbox faults.
+
+**Drain + reminder** (`src/debug/coredump_manager.cpp`, `CONFIG_APP_COREDUMP_MANAGER`):
+every `CONFIG_APP_COREDUMP_REMINDER_PERIOD_S` (60 s) a dedicated workqueue checks the
+partition, copies any verified dump to `/NAND:/coredump/core_NNNN.bin`, invalidates the
+partition, and logs a `LOG_WRN` reminder while any `core_*.bin` remains on disk. Delete
+the files (e.g. `coredump-fetch.sh --delete` + board reboot) to stop the reminder. The
+pure logic lives in `coredump_manager_core.cpp` behind a `PartitionOps` seam so
+`tests/debug/coredump_manager` covers it on native_sim (where `DEBUG_COREDUMP` doesn't
+exist).
+
+**Fetch + debug from the host:**
+
+```bash
+fw/scripts/coredump-fetch.sh --delete ./dumps   # mount MSC disk, copy core_*.bin off
+fw/scripts/coredump-debug.sh dumps/core_0000.bin  # gdbserver --pipe + arm-zephyr-eabi-gdb, prints bt
+```
+
+The dump files are the raw Zephyr coredump stream ("ZE" magic) that
+`coredump_gdbserver.py` consumes directly. The ELF passed to coredump-debug.sh must be
+from the build that produced the crash. Serial fallback when USB is unavailable:
+`coredump print` on the shell, then `coredump_serial_log_parser.py` on the captured log.
+The built-in `coredump find/verify/print/erase` shell commands are enabled on proto0.
+
+**Test commands**: `crash panic` (kernel panic) and `crash mpu` (write to RO flash →
+MemManage fault), `CONFIG_APP_CRASH_TEST_COMMANDS`. Full loop: `crash panic` → reboot →
+within ~5 s the manager logs `coredump ... saved to /NAND:/coredump/core_0000.bin` →
+fetch + debug → GDB backtrace shows `cmd_crash_panic` on the shell thread.
+
+**Dump-size budget — 64 KB is a hard cap, not a truncation point.** The NCS backend
+drops the ENTIRE dump if it doesn't fit (`-ENOMEM`, header never written, nothing to
+find on reboot). The budget is enforced by `DEBUG_COREDUMP_THREAD_STACK_TOP_LIMIT=1536`
+(each thread's stack dumped only from SP down, capped at 1536 B) — worst case ~55 KB at
+~27 threads; the arithmetic lives next to the Kconfig in
+`boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`. Redo it before raising the limit or
+adding many threads.
+
+**DK**: coredump support was dropped entirely (`DEBUG_COREDUMP` left `prj.conf` for the
+proto0 board conf) — no partition, no spare flash, legacy board.
 
 ## Flashing via J-Link (fast path)
 

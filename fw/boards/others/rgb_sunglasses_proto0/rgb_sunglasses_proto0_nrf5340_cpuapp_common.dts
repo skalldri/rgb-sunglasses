@@ -25,7 +25,7 @@
 		 * flash_map_partition_manager.c (PM IDs, not DTS IDs). flash_map_pm.h redefines
 		 * FIXED_PARTITION_ID(storage_partition) → PM_SETTINGS_STORAGE_ID = 9, so
 		 * settings_nvs.c's fallback path already routes to the correct external flash region
-		 * at 0x12c000. Adding zephyr,settings-partition would switch to DT_FIXED_PARTITION_ID
+		 * at 0x11c000. Adding zephyr,settings-partition would switch to DT_FIXED_PARTITION_ID
 		 * which collides with PM IDs and opens the wrong partition. */
 	};
 
@@ -352,10 +352,12 @@ led_strip_spi_1: &spi4 {
 			#size-cells = <1>;
 
 			/* App core secondary (upgrade) slot — used by MCUboot for DFU staging.
-			 * Matches PM slot1_partition at 0x0, size 0xEC000. */
+			 * Matches PM slot1_partition at 0x0, size 0xDC000 (shrunk in lockstep
+			 * with mcuboot_primary when the coredump partition was carved from the
+			 * end of internal flash, issue #80). */
 			slot1_partition: partition@0 {
 				label = "image-1";
-				reg = <0x000000 0xEC000>;
+				reg = <0x000000 0xDC000>;
 			};
 
 			/* slot2_partition is the net core's primary partition
@@ -366,23 +368,24 @@ led_strip_spi_1: &spi4 {
 			 * the mcumgr code on the app core to "read" the net core's TLVs
 			 */
 
-			slot3_partition: partition@ec000 {
+			slot3_partition: partition@dc000 {
 				label = "image-3";
-				reg = <0xEC000 0x40000>;
+				reg = <0xDC000 0x40000>;
 			};
 
-			/* NVS settings at 0x12c000 (PM settings_storage, 32 KB) are NOT mapped here.
+			/* NVS settings at 0x11c000 (PM settings_storage, 32 KB) are NOT mapped here.
 			 * NCS replaces Zephyr's flash_map_default.c with flash_map_partition_manager.c,
 			 * so FIXED_PARTITION_ID(storage_partition) already resolves to PM_SETTINGS_STORAGE_ID=9
 			 * (the correct external-flash region). Adding a DTS node and pointing
 			 * zephyr,settings-partition at it would switch settings_nvs.c to DT_FIXED_PARTITION_ID,
 			 * which uses sequential DTS slot numbers that collide with PM IDs. */
 
-			/* 4 MB FAT partition — matches PM fat_storage region (0x134000, 0x3fa000).
+			/* ~6.9 MB FAT partition — matches PM fat_storage region (0x124000, 0x6dc000);
+			 * consumes all external flash after settings_storage (issue #80).
 			 * Referenced by the msc_disk0 flash-disk node above. */
-			fat_partition: partition@134000 {
+			fat_partition: partition@124000 {
 				label = "fat-disk";
-				reg = <0x134000 0x3fa000>;
+				reg = <0x124000 0x6dc000>;
 			};
 		};
 	};
@@ -400,14 +403,14 @@ led_strip_spi_1: &spi4 {
 			label = "mcuboot";
 			reg = <0x00000000 0x00014200>;
 		};
-		/* The app core's primary slot (image-0) is at 0x14200, size 0xEC000.
+		/* The app core's primary slot (image-0) is at 0x14200, size 0xDBE00.
 		 * This is the region that the app core boots from.
 		 * It resides in the NRF5340's internal flash, and is used by MCUboot to
 		 * store the main application image.
 		 */
 		slot0_partition: partition@14200 {
 			label = "image-0";
-			reg = <0x00014200 0x000EC000>;
+			reg = <0x00014200 0x000DBE00>;
 		};
 	};
 };
