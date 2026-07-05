@@ -97,6 +97,33 @@ describe('DeviceStateMenuScreen', () => {
     });
   });
 
+  it('shows the write-error indicator only on the animation whose Is Active write failed (issue #92, care point 2)', () => {
+    const failedInfo = { ...isActiveInfo(false), lastWriteError: 'The device refused the change.' };
+    const selectedDevice = {
+      name: 'RGB Sunglasses',
+      mac: 'AA:BB:CC',
+      device: {},
+      services: [{ uuid: 'anim-service-1' }, { uuid: 'anim-service-2' }],
+      characteristicsByService: {
+        // Same reused Is Active UUID across both animations; only service-1's write failed.
+        'anim-service-1': { [UUID_IS_ACTIVE_CHARACTERISTIC]: failedInfo },
+        'anim-service-2': { [UUID_IS_ACTIVE_CHARACTERISTIC]: isActiveInfo(true) },
+      },
+      characteristics: {},
+      serviceCharacteristics: { 'anim-service-1': [], 'anim-service-2': [] },
+      serviceDisplayNames: { 'anim-service-1': 'Rainbow', 'anim-service-2': 'Plasma' },
+    };
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getAllByTestId } = render(<DeviceStateMenuScreen />);
+    // Exactly one row lights up, not both (they share the ...-bbbb-...0000 Is Active UUID).
+    expect(getAllByTestId('write-error-indicator')).toHaveLength(1);
+  });
+
   it('shows a Firmware Update row for the McuMgr service', () => {
     const selectedDevice = {
       name: 'RGB Sunglasses',

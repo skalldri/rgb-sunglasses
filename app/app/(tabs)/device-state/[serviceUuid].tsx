@@ -1,3 +1,4 @@
+import { WriteErrorIndicator } from "@/components/characteristic-write-error";
 import { ThemedText } from "@/components/themed-text";
 import { AppButton } from "@/components/ui/app-button";
 import { Card } from "@/components/ui/card";
@@ -81,6 +82,7 @@ export default function DeviceStateDetailScreen() {
                                         label={charInfo.name ?? getCharacteristicName(charUuid)}
                                         labelColor={labelColorFor(charUuid)}
                                     >
+                                        <WriteErrorIndicator charInfo={charInfo} />
                                         {isMcuMgrCharacteristic && (
                                             <Link href="/firmware-update-modal" asChild>
                                                 <AppButton title="Update" variant="secondary" />
