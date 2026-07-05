@@ -683,7 +683,11 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
             bt_gatt_attr *attr = getAttr(1);
 
             if (!sendNotifications_) {
-                printk("%p Notifications not enabled, skipping\n", attr);
+                // Expected whenever no central is subscribed to this characteristic (not
+                // connected, or connected but the app hasn't written the CCCD yet) - not an
+                // error, so don't log it. Left commented (not deleted) to match the sibling
+                // debug traces below, which are also silenced by default for the same reason.
+                // printk("%p Notifications not enabled, skipping\n", attr);
                 return;
             }
 
