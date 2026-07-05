@@ -83,8 +83,11 @@ SYS_INIT(pattern_controller_register_bt_observer, APPLICATION, 0);
 
 void pattern_controller_thread_func(void *a, void *b, void *c);
 
-K_THREAD_DEFINE(pattern_controller_thread, 4096, pattern_controller_thread_func, NULL, NULL, NULL,
-                6, 0, 0);
+// Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack; this
+// stack can never host a K_USER thread. (Extension code runs on the extension host's own
+// K_USER sandbox thread, not this one.)
+K_KERNEL_THREAD_DEFINE(pattern_controller_thread, 4096, pattern_controller_thread_func, NULL, NULL,
+                       NULL, 6, 0, 0);
 
 Indicator currentIndicator = Indicator::None;
 Animation currentAnimation = Animation::None;

@@ -11,7 +11,9 @@ static const unsigned int height = 12;
         data++;                                                 \
     }
 
-static const unsigned char header_data_cmap[256][3] = {
+// constexpr (not just const) so FontAtlas.cpp can decode the atlas at compile time
+// into a rodata bit table; a plain const array is not usable in constant expressions.
+static constexpr unsigned char header_data_cmap[256][3] = {
     {0, 0, 0},       {255, 255, 255}, {255, 255, 255}, {255, 255, 255}, {255, 255, 255},
     {255, 255, 255}, {255, 255, 255}, {255, 255, 255}, {255, 255, 255}, {255, 255, 255},
     {255, 255, 255}, {255, 255, 255}, {255, 255, 255}, {255, 255, 255}, {255, 255, 255},
@@ -65,7 +67,7 @@ static const unsigned char header_data_cmap[256][3] = {
     {255, 255, 255}, {255, 255, 255}, {255, 255, 255}, {255, 255, 255}, {255, 255, 255},
     {255, 255, 255}};
 
-static const unsigned char header_data[] = {
+static constexpr unsigned char header_data[] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

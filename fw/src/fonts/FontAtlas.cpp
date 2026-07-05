@@ -3,23 +3,42 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include <array>
+
 LOG_MODULE_REGISTER(FontAtlas);
+
+namespace {
+
+constexpr size_t kAtlasWords = (FontAtlas::atlasPixels + 31) / 32;
+
+// Compile-time equivalent of the old constructor loop + HEADER_PIXEL: Consolas.h is the
+// palette-index variant of the GIMP header export -- header_data holds one cmap index per
+// pixel, and HEADER_PIXEL just looks the index up in header_data_cmap. The atlas is RGB,
+// but it's also white/black, so a pixel is "lit" iff its palette entry's red channel is
+// nonzero (PrintChar only ever consulted rgb[0]). Packing that single bit per pixel at
+// compile time puts the whole atlas in rodata: zero RAM, zero boot-time decode.
+consteval std::array<uint32_t, kAtlasWords> decodeAtlas() {
+    static_assert(width == FontAtlas::atlasWidth);
+    static_assert(height == FontAtlas::atlasHeight);
+
+    std::array<uint32_t, kAtlasWords> bits{};
+    for (size_t i = 0; i < FontAtlas::atlasPixels; i++) {
+        if (header_data_cmap[header_data[i]][0] != 0) {
+            bits[i / 32] |= uint32_t{1} << (i % 32);
+        }
+    }
+    return bits;
+}
+
+constexpr auto kAtlasBits = decodeAtlas();
+
+constexpr bool atlasBit(size_t i) { return (kAtlasBits[i / 32] >> (i % 32)) & 1u; }
+
+}  // namespace
 
 FontAtlas *FontAtlas::getInstance() {
     static FontAtlas atlas;
     return &atlas;
-}
-
-FontAtlas::FontAtlas() {
-    static_assert(width == FontAtlas::atlasWidth);
-    static_assert(height == FontAtlas::atlasHeight);
-
-    const unsigned char *data = header_data;
-
-    // Load the font atlas into RAM
-    for (size_t i = 0; i < atlasPixels; i++) {
-        HEADER_PIXEL(data, atlasBuffer[i].rgb);
-    }
 }
 
 void FontAtlas::PrintSpace(FontPrintFunc func) {
@@ -51,10 +70,8 @@ void FontAtlas::PrintChar(char c, FontPrintFunc func) {
 
         for (size_t y = 0; y < atlasHeight; y++) {
             for (size_t x = 0; x < atlasPixelWidthPerChar; x++) {
-                // The atlas is RGB, but it's also white/black
-                // We can just check the red color channel to see if the pixel is illuminated
-                func(x, y,
-                     atlasBuffer[(y * atlasWidth) + (x + atlasStartingXLocation)].rgb[0] != 0);
+                // One bit per pixel: set = illuminated (see decodeAtlas above)
+                func(x, y, atlasBit((y * atlasWidth) + (x + atlasStartingXLocation)));
             }
         }
     } else {

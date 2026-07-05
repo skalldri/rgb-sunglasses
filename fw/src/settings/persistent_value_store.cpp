@@ -17,7 +17,9 @@ LOG_MODULE_REGISTER(persistent_value_store, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace {
 
-K_THREAD_STACK_DEFINE(persistent_value_store_stack, CONFIG_APP_PERSIST_WORKQ_STACK_SIZE);
+// Kernel-only work queue: K_KERNEL_STACK_* skips the 1KB CONFIG_USERSPACE privileged
+// stack; this stack can never host a K_USER thread.
+K_KERNEL_STACK_DEFINE(persistent_value_store_stack, CONFIG_APP_PERSIST_WORKQ_STACK_SIZE);
 
 struct k_work_q persistent_value_lowpri_workq;
 
@@ -43,7 +45,7 @@ SETTINGS_STATIC_HANDLER_DEFINE(appcfg, "appcfg", NULL, appcfg_handle_set, NULL, 
 int appcfg_settings_init() {
     k_work_queue_init(&persistent_value_lowpri_workq);
     k_work_queue_start(&persistent_value_lowpri_workq, persistent_value_store_stack,
-                       K_THREAD_STACK_SIZEOF(persistent_value_store_stack),
+                       K_KERNEL_STACK_SIZEOF(persistent_value_store_stack),
                        (CONFIG_NUM_PREEMPT_PRIORITIES - 1), NULL);
     return 0;
 }

@@ -74,7 +74,9 @@ static uint8_t s_scratch_buf[kPageSize];
 /* ============================================================================
  * Worker thread
  * ============================================================================ */
-K_THREAD_STACK_DEFINE(s_updater_stack, CONFIG_APP_MCUBOOT_UPDATER_STACK_SIZE);
+// Kernel-only work queue: K_KERNEL_STACK_* skips the 1KB CONFIG_USERSPACE privileged
+// stack; this stack can never host a K_USER thread.
+K_KERNEL_STACK_DEFINE(s_updater_stack, CONFIG_APP_MCUBOOT_UPDATER_STACK_SIZE);
 static struct k_work_q      s_updater_wq;
 static struct k_work        s_erase_work;
 static struct k_work        s_validate_work;
@@ -409,7 +411,7 @@ void mcuboot_updater_init(mcuboot_updater_status_cb_t cb)
 
     k_work_queue_init(&s_updater_wq);
     k_work_queue_start(&s_updater_wq, s_updater_stack,
-                       K_THREAD_STACK_SIZEOF(s_updater_stack),
+                       K_KERNEL_STACK_SIZEOF(s_updater_stack),
                        CONFIG_NUM_PREEMPT_PRIORITIES - 1, NULL);
     k_work_init(&s_erase_work,    erase_work_handler);
     k_work_init(&s_validate_work, validate_work_handler);
