@@ -24,11 +24,64 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|mcp__serial__.*|mcp__execbro__.*",
+        "matcher": "mcp__serial__.*|mcp__execbro__.*",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/hw-lock-guard.sh",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(*jlink-flash.sh*)",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*provision-device.sh*)",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*JLinkExe*)",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*nrfutil*)",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*mcumgr*)",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*west flash*)",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*adb*)",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "if": "Bash(*expo run:android*)",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-guard.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else json.dumps({'hookSpecificOutput':{'hookEventName':'PreToolUse','permissionDecision':'allow'}}).encode()); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
             "timeout": 5
           }
         ]

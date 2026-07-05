@@ -62,10 +62,32 @@ fast, no queueing.
 **A `PreToolUse` hook auto-denies hardware-touching tool calls when the
 relevant lock isn't held** — every `mcp__serial__*`/`mcp__execbro__*` call, and
 Bash commands invoking `jlink-flash.sh`/`provision-device.sh`/`JLinkExe`/
-`mcumgr`/`west flash`/`adb`/`expo run:android`. This is a backstop, not a
-substitute for acquiring proactively — a denial interrupts whatever flow
+`nrfutil`/`mcumgr`/`west flash`/`adb`/`expo run:android`. This is a backstop,
+not a substitute for acquiring proactively — a denial interrupts whatever flow
 triggered it, so acquire the lock *before* starting hardware work rather than
 finding out from a denial mid-task.
+
+Two implementation details worth knowing if you ever touch `.claude/settings.json`'s
+`PreToolUse` config:
+- **The Bash matcher is scoped with `if` conditions per hardware-touching
+  pattern (`Bash(*jlink-flash.sh*)`, `Bash(*mcumgr*)`, etc.), not a bare
+  `"matcher": "Bash"`.** Matching every Bash call unconditionally means the
+  dispatcher spawns on every single command in the session, not just
+  hardware-touching ones — expensive and, worse, means any bug in the
+  dispatcher breaks *all* Bash usage, not just the hardware-related sliver.
+- **The hook `command` never references `${CLAUDE_PROJECT_DIR}`.** That
+  variable is documented to resolve to the git project root "regardless of
+  the working directory when the hook runs" — in this repo, where worktrees
+  nest inside the main checkout, that means it always points at the main
+  checkout, not the worktree actually running the session, so a worktree-only
+  branch's copy of `hw-lock-guard.sh` would never be found (silent allow-by-error
+  at best, hard failures at worst). Instead, `command` is a small inline
+  `python3 -c` bootstrap that reads the hook's own stdin JSON first, pulls the
+  `cwd` field out of it (this *is* reliably the calling session's actual
+  worktree, per Claude Code's hook I/O contract), and only then execs
+  `<cwd>/.claude/hooks/hw-lock-guard.sh` with the same stdin forwarded through.
+  It fails open (allow) if that path doesn't exist, rather than erroring, so
+  an older worktree without this feature isn't broken by it.
 
 ## Launching the companion app
 
