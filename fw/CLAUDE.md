@@ -448,6 +448,15 @@ fw/scripts/jlink-flash.sh -- --skip-rebuild # extra args forwarded to `west flas
 - This triggers a `west build` rebuild-check first (fast no-op if nothing changed), then flashes via the **`nrfutil` runner** (not raw `JLinkExe`) — it programs both `merged_CPUNET.hex` (netcore) and `merged.hex` (appcore), each with erase → program → verify → reset.
 - Typical total time: ~30-45s, plus ~15s for USB re-enumeration afterward. Re-run `/check-hardware` to confirm both ttyACM ports are back before issuing further serial/mcumgr commands.
 - This is the only way to reflash the bootloader (MCUboot/b0n); MCUmgr can only update the application images.
+- **When running from a git worktree, pass the build dir explicitly** (`fw/scripts/jlink-flash.sh "$(pwd)/fw/build"`) — the script's default resolves to the main checkout's `fw/build`, which may not exist.
+
+### J-Link "Cannot connect" / nrfutil "Failed to open connection": missing /dev node — run fix-usb-dev-nodes.sh
+
+The J-Link's USB connection frequently resets mid-flash or when the target re-enumerates (WSL2 passthrough). The devcontainer has no udev, so the re-enumerated probe gets **no `/dev/bus/usb/BBB/DDD` node** — or worse, a bogus 0-byte *regular file* appears at that path (left by a failed `open(O_CREAT)`). Symptoms: `lsusb` shows `1366:0101` fine, but `JLinkExe` says "Cannot connect to J-Link", `nrfutil device recover/x-execute-batch` says "Failed to open connection", or a flash dies mid-way with a "Failed to write DebugPort register" error.
+
+**Fix (approved workflow): run `fw/scripts/fix-usb-dev-nodes.sh`** — it recreates missing/bogus nodes for every USB device in sysfs (char major 189, minor `(busnum-1)*128 + devnum-1`) and prunes stale ones. Run it before every J-Link flash attempt and again after the board re-enumerates (it fixes the board's own node too); a failed flash → `fix-usb-dev-nodes.sh` → retry cycle is normal and converges on the second attempt. This is the USB-device sibling of the ttyACM `mknod` procedure in the serial-console section above.
+
+Distinguish this from the APPROTECT lockout: if the *node is fine* but a flash repeatedly fails at the same verify step with SWD/DebugPort errors, that's the debug-port lockout — recover with `nrfutil device recover --serial-number <sn> --core network` then `--core application` (mass-erases internal flash; bonds survive, they live in the settings partition on external flash) and reflash.
 
 ### Recovering a wedged shell UART without reflashing
 

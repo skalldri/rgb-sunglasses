@@ -190,7 +190,9 @@ int tps25750_read_cmd_status(const struct device *dev) {
         }
 
         // If we get TPS25750_REG_CMD1_VAL_ERROR then an error ocurred
-        if (strncmp(cmd.cmd, TPS25750_REG_CMD1_VAL_ERROR, sizeof(cmd.cmd) == 0)) {
+        // (fixed misplaced paren: the comparison used to sit inside strncmp's length
+        // argument, making n == 0 and this check dead code)
+        if (strncmp(cmd.cmd, TPS25750_REG_CMD1_VAL_ERROR, sizeof(cmd.cmd)) == 0) {
             LOG_ERR("CMD1 register indicates command error!");
             return -EBUSY;
         }
@@ -400,9 +402,13 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
     }
 
     // If we are in mode == PTCH, we can proceed
-    if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode) != 0)) {
+    // (fixed misplaced parens on both strncmp calls: the comparisons used to sit inside
+    // the length argument, so PTCH was matched on 1 char and APP on 0 chars -- which is
+    // why an already-patched boot logged the scary "Cannot download patch!" instead of
+    // "Patch already loaded!")
+    if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode)) != 0) {
         // Check if we are in APP mode
-        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode) == 0)) {
+        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode)) == 0) {
             LOG_INF("Patch already loaded!");
             return 0;
         } else {
@@ -561,7 +567,8 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
     }
 
     // If we are in mode == APP, patch-loading is complete!
-    if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode) != 0)) {
+    // (fixed misplaced paren: the comparison used to sit inside strncmp's length argument)
+    if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode)) != 0) {
         LOG_ERR("MODE is not APP! Patch download failed!");
         return -EFAULT;
     }
@@ -646,9 +653,11 @@ void tps25750_irq_work(struct k_work *item) {
         LOG_INF("MODE: %.*s", sizeof(mode.mode), mode.mode);
 
         // If we are in mode == PTCH, we can proceed
-        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode) != 0)) {
+        // (fixed misplaced parens: the comparisons used to sit inside strncmp's length
+        // argument -- see the matching note in tps25750_download_patch)
+        if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode)) != 0) {
             // Check if we are in APP mode
-            if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode) == 0)) {
+            if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_APP, sizeof(mode.mode)) == 0) {
                 LOG_INF("Patch already loaded!");
                 return;
             } else {

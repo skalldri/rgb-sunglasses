@@ -20,6 +20,36 @@ Hardware iterations are slow and mistakes can cause damage. Before flashing anyt
 - Don't rely on web search results for Kconfig symbol names — check the actual NCS source under `/root/ncs/v3.1.1/`
 - Verify memory-accounting claims against the linker map (`build/fw/zephyr/zephyr.map`) before proposing size/config changes — e.g. `.noinit` buffers (like the llext heap) ARE counted in the linker's RAM percentage, and secondary reports (footprint scripts) use different accounting than what governs link success
 
+### NEVER write unverified commands or data into hardware parts
+
+**Never send a command, register write, 4CC task, or configuration value to a physical
+part (I2C/SPI peripheral, PD controller, charger, sensor, etc.) based on memory,
+inference, or pattern-matching. LLM-recalled datasheet content is a hallucination until
+proven otherwise, and a wrong write can permanently damage or wedge a chip.**
+
+Before ANY write to a hardware part that is not already an established, in-repo,
+hardware-proven code path:
+
+1. **Obtain the authoritative source first** — the actual datasheet / technical
+   reference manual (a PDF or excerpt provided by the user, or a doc checked into the
+   repo). Web search summaries, training-data recall, and "the other constants look
+   like this" pattern-matching do NOT count.
+2. **If the source is not available, STOP and ask the user for it.** Do not "try
+   something plausible and see" — hardware is not a REPL. The user would rather be
+   asked than have a part bricked.
+3. Cite the doc section for the exact bytes/values being written in the code comment,
+   so the next reader can re-verify.
+4. Reads are comparatively safe; writes are the danger. A define existing unused in
+   the codebase is NOT evidence it is correct — unused code was never
+   hardware-validated.
+
+This rule exists because of a real incident (2026-07-05): unverified TPS25750 4CC
+commands ("GO2P"/"Go2P" — spelling and semantics asserted from memory, not from the
+TRM) were written to CMD1 on live hardware while attempting to force a patch
+re-download, and the part ended up in a broken state. The correct move at step zero
+was: "I don't have the TPS25750 host-interface TRM — please provide it before I write
+anything to this chip."
+
 ## "Remember" instructions
 
 When the user says "Remember" (or "Remember that"), update the appropriate CLAUDE.md file immediately with the information. Prefer the root `CLAUDE.md` for cross-cutting rules and `fw/CLAUDE.md` for firmware-specific facts.
