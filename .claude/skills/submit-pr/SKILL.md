@@ -117,6 +117,17 @@ If none apply (e.g. pure internal refactor, audio DSP math, docs), note "device/
 
 If any apply, **build-and-test gates alone are not sufficient** — flash the board (`fw/scripts/jlink-flash.sh`) and verify against the real companion app over BLE:
 
+Acquire both hardware locks up front, together, before doing anything below:
+
+```bash
+scripts/hw-lock.sh acquire board app
+```
+
+If this fails, report who holds the conflicting resource(s) and stop — do not
+fall back to flashing or driving the phone without it. (This is separate from
+the "no board or phone available at all" case below — if hardware simply isn't
+present, skip locking and go straight to the `AskUserQuestion` waiver.)
+
 1. Connect the app (phone via ADB + execbro, or ask the user to drive their phone; read `app/CLAUDE.md` first for launch/tap/fiber procedures) and confirm discovery completes with no fallback/mismatch warnings.
 2. Exercise every changed read/write/notify path end-to-end **and cross-check against the firmware's own source of truth** (the `mcp__serial__*` shell, e.g. `ext param`, `glim`), not just the app UI — optimistic updates make the UI lie (see app/CLAUDE.md "Verifying a write/notify round-trip").
 3. If the change involves notifications, verify the app *receives* them (a value changes in the app without a re-read) — notify failures are firmware-log-only and completely silent app-side.
@@ -124,6 +135,13 @@ If any apply, **build-and-test gates alone are not sufficient** — flash the bo
 **Why this gate exists**: shell-level testing cannot see BLE-visible state. On PR #89 the extensions' Is Active mirror was completely dead (a registration-ordering bug returned `-ENOENT` into an ignored return value) while every build, Twister suite, and serial-shell check passed — only a real app connection exposed it, plus a second bug (a pushback notification losing a race against the app's optimistic update) that needed an ATT error instead.
 
 **Gate**: if no board or phone is available, use AskUserQuestion to ask whether to proceed without this verification — never silently skip it. Record what was verified (or why it was waived) in the PR body.
+
+**Always release both locks when this step finishes**, whether verification
+passed, failed, or was waived after acquiring:
+
+```bash
+scripts/hw-lock.sh release board app
+```
 
 ---
 

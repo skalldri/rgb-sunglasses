@@ -16,8 +16,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import subprocess,json; hw=subprocess.run(['bash','/workspaces/rgb-sunglasses/.devcontainer/scripts/check-hardware.sh'],capture_output=True,text=True,timeout=30); sw=subprocess.run(['bash','/workspaces/rgb-sunglasses/.devcontainer/scripts/check-software.sh'],capture_output=True,text=True,timeout=30); ctx=hw.stdout.strip()+'\\n\\n'+sw.stdout.strip(); print(json.dumps({'hookSpecificOutput':{'hookEventName':'SessionStart','additionalContext':'Environment status (auto-checked at session start):\\n\\n'+ctx}}))\"",
+            "command": "python3 -c \"import subprocess,json; hw=subprocess.run(['bash','.devcontainer/scripts/check-hardware.sh'],capture_output=True,text=True,timeout=30); sw=subprocess.run(['bash','.devcontainer/scripts/check-software.sh'],capture_output=True,text=True,timeout=30); ctx=hw.stdout.strip()+'\\n\\n'+sw.stdout.strip(); print(json.dumps({'hookSpecificOutput':{'hookEventName':'SessionStart','additionalContext':'Environment status (auto-checked at session start):\\n\\n'+ctx}}))\"",
             "timeout": 40
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__serial__.*|mcp__execbro__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/hw-lock-guard.sh",
+            "timeout": 5
           }
         ]
       }

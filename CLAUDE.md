@@ -50,6 +50,43 @@ re-download, and the part ended up in a broken state. The correct move at step z
 was: "I don't have the TPS25750 host-interface TRM — please provide it before I write
 anything to this chip."
 
+## Hardware locking
+
+Multiple agents, each in its own worktree, share one physical dev board
+(+J-Link) and one physical Android phone. Before flashing, provisioning,
+opening an `mcp__serial__*` connection to the board, or driving the phone via
+`mcp__execbro__*`/ADB, acquire the relevant lock:
+
+```bash
+scripts/hw-lock.sh acquire board       # dev board + J-Link
+scripts/hw-lock.sh acquire app         # the one physical Android phone
+scripts/hw-lock.sh release board app   # when done — release everything you took
+```
+
+By default a conflicting `acquire` fails immediately. Pass `--wait SECONDS`
+(e.g. `acquire board --wait 300`) to queue instead of bailing out — a real
+FIFO queue (ticket per resource, oldest arrival goes first), not independent
+agents racing each other when the resource frees up, and still strictly
+all-or-nothing on every attempt so waiting agents can never deadlock on each
+other. `app/scripts/launch-app.sh` accepts the same `--wait` flag.
+
+A `PreToolUse` hook (`.claude/hooks/hw-lock-guard.sh`) auto-denies every
+`mcp__serial__*`/`mcp__execbro__*` call and known hardware-touching Bash
+commands (`jlink-flash.sh`, `provision-device.sh`, `JLinkExe`, `mcumgr`,
+`west flash`, `adb`, `expo run:android`) unless the relevant lock is held —
+this is a backstop, not a substitute for acquiring proactively, since a denial
+interrupts whatever flow triggered it. `fw/scripts/jlink-flash.sh` and
+`fw/scripts/provision-device.sh` additionally hard-refuse to run without the
+`board` lock on their own, independent of the hook, so they're covered even
+outside a Claude Code session. Launch the companion app via
+`app/scripts/launch-app.sh` (never call `npx expo run:android` directly) — it
+holds the `app` lock for Metro's entire lifetime, releases it automatically
+whenever that process stops, and refuses to start a second Metro instance even
+from the same session.
+
+See `.claude/skills/hw-lock/SKILL.md` for the full command surface (status,
+`--steal`, `--force`, `release --all`) and known enforcement limitations.
+
 ## "Remember" instructions
 
 When the user says "Remember" (or "Remember that"), update the appropriate CLAUDE.md file immediately with the information. Prefer the root `CLAUDE.md` for cross-cutting rules and `fw/CLAUDE.md` for firmware-specific facts.
@@ -89,4 +126,6 @@ Before working on any subsystem, **read its CLAUDE.md first** — those files ar
 | `fw/`               | Zephyr RTOS firmware (nRF5340). See `fw/CLAUDE.md` for build/test commands.              |
 | `app/`              | React Native companion app (Expo). See `app/CLAUDE.md` for architecture and agent notes. |
 | `.devcontainer/`    | Devcontainer definition and setup scripts.                                               |
-| `claude/skills/`    | Project skills (slash commands).                                                         |
+| `.claude/skills/`   | Project skills (slash commands).                                                         |
+| `.claude/hooks/`    | Claude Code hooks (e.g. the hardware-lock `PreToolUse` guard).                           |
+| `scripts/`          | Cross-cutting host tooling shared by all subsystems — currently just `hw-lock.sh`, the multi-agent hardware-lock coordinator (see "Hardware locking" above). |

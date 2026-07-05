@@ -6,7 +6,17 @@
 set -euo pipefail
 
 JLINK_VID_PID="1366:0101"
-BUILD_DIR="/workspaces/rgb-sunglasses/fw/build"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+BUILD_DIR="$REPO_ROOT/fw/build"
+
+# Refuse to flash unless this session holds the 'board' hardware lock --
+# flashing resets the board and would race with any other agent using the
+# J-Link/serial console. See scripts/hw-lock.sh, .claude/skills/hw-lock/SKILL.md.
+if ! "$REPO_ROOT/scripts/hw-lock.sh" check board; then
+    echo "[!] Refusing to flash: the 'board' hardware lock is not held by this session." >&2
+    echo "    Run: scripts/hw-lock.sh acquire board   (see the hw-lock skill)" >&2
+    exit 1
+fi
 
 # A first arg that isn't an option (doesn't start with "-") is the build dir;
 # anything else is forwarded to `west flash` as-is.
