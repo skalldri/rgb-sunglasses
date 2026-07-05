@@ -204,6 +204,20 @@ config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	  CONFIG_BT_SETTINGS_DELAYED_STORE_MS, which only governs Bluetooth's
 	  own bonding/CCC storage.
 
+config APP_BATTERY_MONITOR
+	bool "Battery monitoring BLE service"
+	default n
+	depends on BQ25792 && BT
+	help
+	  Exposes battery telemetry read from the BQ25792 charger's internal ADC
+	  (battery voltage/current, VBUS voltage/current, charge status) as a
+	  read/notify BLE GATT service, plus a persisted charging enable/disable
+	  toggle (default ON; persistence requires APP_PERSIST_BT_CONFIG). Sampled
+	  by the existing 500 ms charger status thread in src/power.cpp. Enabled
+	  on rgb_sunglasses_proto0 via its board .conf; left off on
+	  rgb_sunglasses_dk (legacy, no new features, flash budget — see
+	  fw/CLAUDE.md).
+
 config APP_EXTENSION_HOST
 	bool "Sandboxed LLEXT animation extension host"
 	depends on LLEXT && USERSPACE && FAT_FILESYSTEM_ELM

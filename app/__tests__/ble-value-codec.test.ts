@@ -3,7 +3,9 @@ import {
   decodeBooleanFromBase64,
   decodeColorFromBase64,
   decodeFloat32FromBase64,
+  decodeSint32FromBase64,
   decodeUint32FromBase64,
+  decodeUint8FromBase64,
   decodeUtf8FromBase64,
   encodeBooleanToBase64,
   encodeColorToBase64,
@@ -104,6 +106,31 @@ describe('ble-value-codec', () => {
 
   it('throws for invalid color payloads', () => {
     expect(() => decodeColorFromBase64(btoa('ab'))).toThrow('Invalid color payload length');
+  });
+
+  it('decodes signed 32-bit values, little-endian', () => {
+    // encodeUint32ToBase64(v >>> 0) produces the two's-complement wire bytes for
+    // negative values, matching what the firmware's int32 characteristics send.
+    expect(decodeSint32FromBase64(encodeUint32ToBase64(7910))).toBe(7910);
+    expect(decodeSint32FromBase64(encodeUint32ToBase64(0))).toBe(0);
+    expect(decodeSint32FromBase64(encodeUint32ToBase64(-350 >>> 0))).toBe(-350);
+    expect(decodeSint32FromBase64(encodeUint32ToBase64(-1 >>> 0))).toBe(-1);
+    expect(decodeSint32FromBase64(encodeUint32ToBase64(2147483647))).toBe(2147483647);
+    expect(decodeSint32FromBase64(encodeUint32ToBase64(-2147483648 >>> 0))).toBe(-2147483648);
+  });
+
+  it('throws for short sint32 payloads', () => {
+    expect(() => decodeSint32FromBase64(btoa('ab'))).toThrow('Invalid sint32 payload length');
+  });
+
+  it('decodes uint8 values', () => {
+    expect(decodeUint8FromBase64(btoa(String.fromCharCode(0)))).toBe(0);
+    expect(decodeUint8FromBase64(btoa(String.fromCharCode(3)))).toBe(3);
+    expect(decodeUint8FromBase64(btoa(String.fromCharCode(255)))).toBe(255);
+  });
+
+  it('throws for empty uint8 payloads', () => {
+    expect(() => decodeUint8FromBase64(btoa(''))).toThrow('Invalid uint8 payload length');
   });
 
   describe('parseMetadataBlob', () => {

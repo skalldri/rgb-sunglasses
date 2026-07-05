@@ -65,6 +65,29 @@ export function decodeUint32FromBase64(encodedValue: string): number {
   ) >>> 0;
 }
 
+export function decodeSint32FromBase64(encodedValue: string): number {
+  const decoded = atob(encodedValue);
+  if (decoded.length < 4) {
+    throw new Error(`Invalid sint32 payload length: ${decoded.length}`);
+  }
+  // Same little-endian assembly as decodeUint32FromBase64, but signed: | 0 (instead
+  // of >>> 0) keeps the result in two's-complement int32 range.
+  return (
+    (decoded.charCodeAt(0) & 0xff) |
+    ((decoded.charCodeAt(1) & 0xff) << 8) |
+    ((decoded.charCodeAt(2) & 0xff) << 16) |
+    ((decoded.charCodeAt(3) & 0xff) << 24)
+  ) | 0;
+}
+
+export function decodeUint8FromBase64(encodedValue: string): number {
+  const decoded = atob(encodedValue);
+  if (decoded.length < 1) {
+    throw new Error(`Invalid uint8 payload length: ${decoded.length}`);
+  }
+  return decoded.charCodeAt(0) & 0xff;
+}
+
 export function encodeFloat32ToBase64(value: number): string {
   const buffer = new ArrayBuffer(4);
   new DataView(buffer).setFloat32(0, value, true /* littleEndian */);
