@@ -371,6 +371,21 @@ cmd_release() {
             failed=1
             continue
         fi
+        # A lock acquired with --pid (e.g. launch-app.sh) tracks the process
+        # actually using the resource. Releasing the lock dir while that pid
+        # is still alive desyncs the lock from reality: the resource stays in
+        # use (Metro/expo still running, board still open) but looks FREE to
+        # every other session, so someone else can acquire and collide with
+        # it. Require --force here too, same as the cross-session override
+        # above, so this can't happen by an unnoticed bare `release`.
+        local pid reason
+        pid="$(meta_get "$dir/info" pid)"
+        reason="$(meta_get "$dir/info" reason)"
+        if [ -n "$pid" ] && [ "$force" != 1 ] && kill -0 "$pid" 2>/dev/null; then
+            echo "[!] '$r' is still actively held by a live process (pid $pid${reason:+, $reason}) -- releasing now would desync this lock from actual hardware usage while that process keeps running. Stop the owning process instead (it releases the lock automatically on exit), or pass --force to release anyway." >&2
+            failed=1
+            continue
+        fi
         rm -rf "$dir"
         echo "Released '$r'"
     done

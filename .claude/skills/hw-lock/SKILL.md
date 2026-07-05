@@ -129,6 +129,14 @@ longer running — either case auto-reclaims on the next `acquire`.
   without releasing).
 - `scripts/hw-lock.sh release board --force` — release a lock this session
   doesn't own.
+- `scripts/hw-lock.sh release app --force` — release a lock whose tracked
+  process (e.g. `launch-app.sh`'s Metro instance) is **still alive**. A plain
+  `release` refuses this and tells you to stop the owning process instead
+  (which releases the lock automatically) — bypassing that with `--force`
+  leaves the lock FREE while the process keeps actually using the resource,
+  so another agent can now acquire it and collide with your still-running
+  Metro/expo instance. Only reach for this if you specifically want the lock
+  freed *without* stopping the process (rare) and understand that risk.
 
 ## What this does NOT enforce
 
