@@ -177,10 +177,12 @@ First-time pairing requires accepting Android system prompts that are too timing
 
 ### Launching the App
 
-`npx expo run:android` is a blocking command — always run it as a background task. Use `--device <device name>` (the model name, not the ADB IP:port format):
+**Acquire the `app` hardware lock first — and use `app/scripts/launch-app.sh`, not raw `npx expo run:android`.** There is only one physical phone shared across every agent worktree. `app/scripts/launch-app.sh` wraps the exact invocation below, holds the `app` lock for Metro's entire lifetime, releases it automatically whenever that process stops (however it stops), and refuses to start a second Metro instance — even from this same session if you forgot one is already running. A `PreToolUse` hook also auto-denies `mcp__execbro__*` calls and `adb`/`expo run:android` in Bash without the lock (see root `CLAUDE.md` "Hardware locking"). **Never call `npx expo run:android` directly** — doing so bypasses the lock and the single-Metro-instance guarantee, reintroducing exactly the collision risk this exists to prevent.
+
+`app/scripts/launch-app.sh` (which runs `npx expo run:android` internally) is a blocking command — always run it as a background task. Use `--device <device name>` (the model name, not the ADB IP:port format):
 
 ```bash
-npx expo run:android --device <device name> --app-id com.autom8ed.rgbsunglassesapp.dev
+app/scripts/launch-app.sh --device <device name>
 ```
 
 **Never pass an ADB `ip:port` to `--device`.** Expo CLI matches `--device` against its _own_ device list (model/AVD names), not ADB serials, so a wireless target like `--device 192.168.1.34:41181` fails immediately with `CommandError: Could not find device with name: <ip:port>`. Pass the model name (`Pixel_9_Pro`, `LE2125`, …). With exactly one device attached (check `adb devices`), you can also **omit `--device` entirely** and Expo auto-selects it — handy for a wirelessly-connected phone whose model name you don't have to hand.
@@ -194,24 +196,25 @@ A fresh worktree (`.claude/worktrees/<name>/app`) has **no `node_modules` and no
 **DO — the only supported sequence:**
 
 1. `cd <worktree>/app && npm ci` — a **real** install into the worktree. Takes ~30s and reapplies the ble-plx patch via `postinstall`. This is required for `jest`/`tsc` **and** for Metro. Eat this cost.
-2. `npx expo run:android --app-id com.autom8ed.rgbsunglassesapp.dev` — launched as a **harness-managed background task** (Bash `run_in_background: true`). This one command runs `expo prebuild` (generates `android/`), builds via gradle (fast once the shared gradle cache is warm — ~1 min), starts Metro, installs the APK, and launches the app pointing at its own Metro. Leave it running for the whole session — it owns Metro.
+2. `app/scripts/launch-app.sh` — launched as a **harness-managed background task** (Bash `run_in_background: true`). It acquires the shared `app` hardware lock, then runs `expo prebuild` (generates `android/`), builds via gradle (fast once the shared gradle cache is warm — ~1 min), starts Metro, installs the APK, and launches the app pointing at its own Metro. Leave it running for the whole session — it owns Metro, and releases the lock automatically when it stops.
 3. Poll `http://localhost:8081/status` for `packager-status:running`, then screenshot to confirm the app loaded.
 
 **DON'T — every one of these has caused a failure, do not attempt any of them:**
 
+- **NEVER call `npx expo run:android` directly** — always go through `app/scripts/launch-app.sh`. Calling npx directly bypasses the `app` hardware lock and the single-Metro-instance guarantee, so a second agent (or a forgotten earlier launch in this same session) can start a colliding second Metro instance against the one physical phone.
 - **NEVER symlink `node_modules`** from the main checkout into the worktree (`ln -s /workspaces/rgb-sunglasses/app/node_modules ...`). The gradle build tolerates it, but **Metro's JS resolver cannot resolve modules through a symlink whose realpath is outside the worktree project root** — you get `UnableToResolveError: Unable to resolve module ./app/node_modules/expo-router/entry` and a red-screen `development server returned response error code: 404` on the device. Always `npm ci` for a real `node_modules`.
-- **NEVER background `expo run:android` by hand with `&` and/or `> log 2>&1`.** That daemonizes it yourself, the harness sees the wrapper "complete" immediately, loses track of the task, and Metro gets reaped — the app then can't fetch its bundle. Use Bash `run_in_background: true` with the bare command (no `&`, no redirect) so the harness keeps it alive as a tracked task.
+- **NEVER background `launch-app.sh` by hand with `&` and/or `> log 2>&1`.** That daemonizes it yourself, the harness sees the wrapper "complete" immediately, loses track of the task, and Metro gets reaped — the app then can't fetch its bundle. Use Bash `run_in_background: true` with the bare command (no `&`, no redirect) so the harness keeps it alive as a tracked task.
 - **NEVER substitute `expo start --dev-client` + `adb reverse` + a `rgbsunglassesapp.dev://expo-development-client/?url=...` deep link** to avoid the native build. The installed dev client resumes its stale bundle without re-fetching, the deep link doesn't reliably trigger a fresh bundle against the new Metro, and you burn more time than a build would cost. Also don't pass `--android` to a separate `expo start` (it launches Expo Go, not the dev client).
-- **NEVER kill the `expo run:android` process** to "restart Metro." If Metro seems wrong, fix the actual cause (usually a stale/symlinked `node_modules`), then relaunch the one command above.
+- **NEVER kill the underlying `expo run:android` process directly** to "restart Metro." If Metro seems wrong, fix the actual cause (usually a stale/symlinked `node_modules`), then stop the `launch-app.sh` background task (which releases the `app` lock automatically) and relaunch it.
 
-In short: in a worktree, **`npm ci` then `npx expo run:android --app-id ... ` as a background task.** No symlinks, no manual daemonizing, no `expo start` deep-link dance. Eat the full build cost — it is cheaper than every workaround.
+In short: in a worktree, **`npm ci` then `app/scripts/launch-app.sh` as a background task.** No symlinks, no manual daemonizing, no `expo start` deep-link dance. Eat the full build cost — it is cheaper than every workaround.
 
 **Root cause of `CommandError: No development build (com.autom8ed.rgbsunglassesapp) for this project is installed`, and the real fix (not a workaround)**: this project's `plugins/withDevVariant.js` config plugin intentionally injects `applicationIdSuffix ".dev"` into the debug build type (`android/app/build.gradle`) so the debug and release APKs can be installed side-by-side with distinct icons/schemes — the actual installed runtime package id is `com.autom8ed.rgbsunglassesapp.dev`, not the bare `applicationId`. Expo CLI's package-id resolver (`@expo/config-plugins`'s `Package.getApplicationIdAsync()`, called from `AndroidAppIdResolver`) only regexes the literal `applicationId '...'` line out of `build.gradle` — it has no knowledge of per-buildType `applicationIdSuffix`. So `expo run:android` always computes the unsuffixed id, checks whether _that_ is installed (`PlatformManager.openProjectInCustomRuntimeAsync` → `isAppInstalledAndIfSoReturnContainerPathForIOSAsync`), finds it isn't (only the suffixed `.dev` one is), and throws — even immediately after its own build+install step succeeded. This will happen on every `expo run:android` invocation as long as `withDevVariant.js`'s suffix exists, build success or not.
 
 Expo CLI has a built-in flag for exactly this situation — `--app-id <appId>` — which makes it check/install/launch the given id instead of guessing one from `build.gradle`:
 
 ```bash
-npx expo run:android --device <device name> --app-id com.autom8ed.rgbsunglassesapp.dev
+app/scripts/launch-app.sh --device <device name>
 ```
 
 This is the correct fix to reach for, not the manual `adb install` + `monkey`/`android_launch_app` dance — that manual path still works as a fallback (e.g. if Metro itself won't start), but `--app-id` fixes the actual CLI invocation so it works end-to-end unattended. Don't pass `--android` to a separately-running `npx expo start` to reconnect Metro — that flag tries to auto-launch generic Expo Go instead of the custom dev-client app that's actually installed.

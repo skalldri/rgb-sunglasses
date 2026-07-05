@@ -20,56 +20,41 @@ git log --oneline origin/main..HEAD
 
 ---
 
-## 2. Build proto0
+## 2. Build proto0, build DK, and run tests — in parallel
 
-Run the exact build from `/build-proto0`:
+These three are independent of each other (separate build dirs — `fw/build`,
+`fw/build-dk`, `fw/twister-out` — and Twister's `native_sim` target uses the
+host toolchain, not the nRF cross-compiler used by the two board builds), so
+launch all three as **concurrent background tasks** rather than running them
+one after another and waiting on each in turn:
 
 ```bash
-west build \
-  --build-dir fw/build \
-  fw \
-  --board rgb_sunglasses_proto0/nrf5340/cpuapp \
-  --sysbuild \
-  -- -DBOARD_ROOT="$(pwd)/fw"
+# Proto0 (same as /build-proto0)
+west build --build-dir fw/build fw --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
+
+# DK (same as /build-dk)
+west build --build-dir fw/build-dk fw --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
+
+# Tests + coverage
+twister -T fw/tests -p native_sim --coverage --coverage-tool lcov --outdir fw/twister-out
 ```
 
-**Gate**: if this fails, stop. Do not proceed to the DK build or any subsequent step. Report the error clearly.
+Start all three before waiting on any of them, then wait for all three to
+finish before evaluating gates below — don't judge one gate while the others
+are still running, and check every one of the three even if an earlier one
+already failed, so a single report covers everything that's wrong rather than
+surfacing failures one slow retry at a time.
+
+**Gates** (evaluate all three, report every failure found — not just the first):
+- proto0 build failed → stop. Do not proceed to patch coverage or device
+  verification. Report the error clearly.
+- DK build failed → stop. Report the error, especially if it's a flash
+  overflow (the DK has a tight budget).
+- Any Twister test failed or errored → stop. List the failing suites.
 
 ---
 
-## 3. Build DK
-
-Run the exact build from `/build-dk`:
-
-```bash
-west build \
-  --build-dir fw/build-dk \
-  fw \
-  --board rgb_sunglasses_dk/nrf5340/cpuapp \
-  --sysbuild \
-  -- -DBOARD_ROOT="$(pwd)/fw"
-```
-
-**Gate**: if this fails, stop. Report the error, especially if it is a flash overflow (the DK has a tight budget).
-
----
-
-## 4. Run tests and collect coverage
-
-```bash
-twister \
-  -T fw/tests \
-  -p native_sim \
-  --coverage \
-  --coverage-tool lcov \
-  --outdir fw/twister-out
-```
-
-**Gate**: if any test fails or errors, stop. List the failing suites and do not proceed.
-
----
-
-## 5. Check patch coverage ≥ 50%
+## 3. Check patch coverage ≥ 50%
 
 Identify every C/C++ source file changed in this branch relative to `main`:
 
@@ -90,7 +75,7 @@ PATTERNS=$(git diff --name-only origin/main...HEAD -- 'fw/src/**' \
 
 # Extract and summarise
 eval lcov \
-  --extract fw/twister-out/coverage/coverage.info \
+  --extract fw/twister-out/coverage.info \
   $PATTERNS \
   --output-file /tmp/patch-coverage.info
 
@@ -103,7 +88,7 @@ If the lcov extract produces an empty tracefile (i.e., the changed files are not
 
 ---
 
-## 6. On-device + companion-app verification (REQUIRED for anything touching device↔app communication)
+## 4. On-device + companion-app verification (REQUIRED for anything touching device↔app communication)
 
 Determine whether the branch could **conceivably** affect the companion app or device↔app communication. Err on the side of yes. Triggers include (not exhaustive):
 
@@ -113,9 +98,20 @@ Determine whether the branch could **conceivably** affect the companion app or d
 - MCUmgr / firmware-update flow, advertising/pairing/connection parameters, MTU or connection tuning
 - Value encodings the app decodes (colors, strings, dropdowns, bool wire sizes)
 
-If none apply (e.g. pure internal refactor, audio DSP math, docs), note "device/app verification: N/A — <reason>" in the PR body and skip to step 7.
+If none apply (e.g. pure internal refactor, audio DSP math, docs), note "device/app verification: N/A — <reason>" in the PR body and skip to step 5.
 
 If any apply, **build-and-test gates alone are not sufficient** — flash the board (`fw/scripts/jlink-flash.sh`) and verify against the real companion app over BLE:
+
+Acquire both hardware locks up front, together, before doing anything below:
+
+```bash
+scripts/hw-lock.sh acquire board app
+```
+
+If this fails, report who holds the conflicting resource(s) and stop — do not
+fall back to flashing or driving the phone without it. (This is separate from
+the "no board or phone available at all" case below — if hardware simply isn't
+present, skip locking and go straight to the `AskUserQuestion` waiver.)
 
 1. Connect the app (phone via ADB + execbro, or ask the user to drive their phone; read `app/CLAUDE.md` first for launch/tap/fiber procedures) and confirm discovery completes with no fallback/mismatch warnings.
 2. Exercise every changed read/write/notify path end-to-end **and cross-check against the firmware's own source of truth** (the `mcp__serial__*` shell, e.g. `ext param`, `glim`), not just the app UI — optimistic updates make the UI lie (see app/CLAUDE.md "Verifying a write/notify round-trip").
@@ -125,9 +121,16 @@ If any apply, **build-and-test gates alone are not sufficient** — flash the bo
 
 **Gate**: if no board or phone is available, use AskUserQuestion to ask whether to proceed without this verification — never silently skip it. Record what was verified (or why it was waived) in the PR body.
 
+**Always release both locks when this step finishes**, whether verification
+passed, failed, or was waived after acquiring:
+
+```bash
+scripts/hw-lock.sh release board app
+```
+
 ---
 
-## 7. Push and create PR
+## 5. Push and create PR
 
 All gates passed. Push the branch and open a PR:
 

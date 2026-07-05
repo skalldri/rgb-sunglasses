@@ -23,6 +23,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="$REPO_ROOT/fw/build"
 
+# Refuse to provision unless this session holds the 'board' hardware lock --
+# this writes to the board's NAND over USB mass storage and must not race with
+# another agent flashing/resetting/talking to the board.
+if ! "$REPO_ROOT/scripts/hw-lock.sh" check board; then
+    echo "[!] Refusing to provision: the 'board' hardware lock is not held by this session." >&2
+    echo "    Run: scripts/hw-lock.sh acquire board   (see the hw-lock skill)" >&2
+    exit 1
+fi
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --build-dir)

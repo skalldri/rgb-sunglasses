@@ -22,7 +22,7 @@ twister \
 3. Report: number of test cases passed, failed, and errored. List any failing test suites by name.
 4. Report the overall line coverage percentage from:
    ```bash
-   lcov --summary fw/twister-out/coverage/coverage.info
+   lcov --summary fw/twister-out/coverage.info
    ```
 5. If any tests **failed**: do NOT proceed with a PR. Fix the failing test(s) and re-run.
-6. The coverage report (`fw/twister-out/coverage/coverage.info`) is consumed by `/submit-pr` to check patch coverage.
+6. The coverage report (`fw/twister-out/coverage.info`) is consumed by `/submit-pr` to check patch coverage.

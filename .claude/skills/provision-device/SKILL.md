@@ -10,6 +10,18 @@ Provisions a connected board's external NAND flash: confirms the FAT filesystem 
 
 ---
 
+## 0. Acquire the board lock
+
+```bash
+scripts/hw-lock.sh acquire board
+```
+
+If this fails, report who holds it (session, worktree, how long) and stop —
+do not proceed to any step below. Don't retry/steal without asking the user
+first.
+
+---
+
 ## 1. Check hardware
 
 Run `/check-hardware`. Stop if the dev board isn't detected.
@@ -62,3 +74,15 @@ Over `mcp__serial__*`:
 - `ext list` — expect `hello` and `plasma`, neither marked `[FAULTED]`.
 
 Report a short summary table to the user: filesystem health, GLIM files present, extensions present.
+
+---
+
+## 6. Release the board lock
+
+```bash
+scripts/hw-lock.sh release board
+```
+
+Run this in **every** exit path of this skill, including early stops from
+step 2's reformat-confirmation decline or step 3's mount/build-dir failures —
+not just after a successful step 5.
