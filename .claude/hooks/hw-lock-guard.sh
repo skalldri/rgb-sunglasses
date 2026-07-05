@@ -66,6 +66,29 @@ allow() {
     exit 0
 }
 
+# Same as allow(), but for the "you already hold this lock" path: if another
+# session is queued waiting on $1, surface that via additionalContext so the
+# holder sees it right on the tool call it's about to make, not just on its
+# next UserPromptSubmit turn (see hw-lock-waiter-notice.sh for that side).
+allow_with_waiter_notice() {
+    local resource="$1" waiters
+    waiters="$("$HW_LOCK" waiters "$resource" 2>/dev/null || echo 0)"
+    case "$waiters" in
+        ''|*[!0-9]*|0) allow ;;
+    esac
+    python3 -c '
+import json, sys
+resource, waiters = sys.argv[1], sys.argv[2]
+msg = (
+    f"Heads up: {waiters} other agent(s) are queued waiting for the \x27{resource}\x27 "
+    f"hardware lock you are holding. Wrap up and run `scripts/hw-lock.sh release {resource}` "
+    f"as soon as you reasonably can so they are not blocked."
+)
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "additionalContext": msg}}))
+' "$resource" "$waiters"
+    exit 0
+}
+
 deny() {
     python3 -c '
 import json, sys
@@ -83,7 +106,7 @@ if [ ! -x "$HW_LOCK" ]; then
 fi
 
 if "$HW_LOCK" check "$RESOURCE" >/dev/null 2>&1; then
-    allow
+    allow_with_waiter_notice "$RESOURCE"
 fi
 
 STATUS="$("$HW_LOCK" status "$RESOURCE" 2>&1 || true)"

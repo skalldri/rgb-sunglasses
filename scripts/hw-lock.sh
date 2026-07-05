@@ -446,10 +446,22 @@ cmd_check() {
     return 1
 }
 
+# Prints the number of other sessions currently queued (via --wait) for
+# resource $1. Machine-readable counterpart to the "(N waiting)" suffix
+# `status` already prints for humans -- meant for hooks/scripts that want to
+# act on the count (e.g. nudging a holder to wrap up) without parsing prose.
+cmd_waiters() {
+    [ $# -eq 1 ] || usage_err "waiters requires exactly one resource"
+    local r="$1"
+    validate_resource "$r"
+    valid_tickets_for "$r" | grep -c . || true
+}
+
 case "${1:-}" in
     acquire) shift; cmd_acquire "$@" ;;
     release) shift; cmd_release "$@" ;;
     status)  shift; cmd_status "$@" ;;
     check)   shift; cmd_check "$@" ;;
-    *) usage_err "usage: hw-lock.sh {acquire|release|status|check} ..." ;;
+    waiters) shift; cmd_waiters "$@" ;;
+    *) usage_err "usage: hw-lock.sh {acquire|release|status|check|waiters} ..." ;;
 esac

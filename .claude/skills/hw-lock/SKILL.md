@@ -122,6 +122,33 @@ Flags a lock `[STALE]` if its worktree no longer exists on disk, or (for locks
 acquired with `--pid`, like the app-launcher's) if the tracked process is no
 longer running — either case auto-reclaims on the next `acquire`.
 
+```bash
+scripts/hw-lock.sh waiters board          # prints just the queue depth, e.g. "0" or "2"
+```
+
+Machine-readable count of other sessions currently queued (via `--wait`) for
+a resource — the number `status`'s "(N waiting)" suffix is derived from, for
+scripts/hooks that want to act on it directly.
+
+## Getting nudged when someone else is waiting
+
+Holding a lock indefinitely is fine as long as nobody else needs it. Once
+someone does, two hooks surface that fact back into your own conversation
+(there's no way for another session to push a notification into yours
+directly — see "What this does NOT enforce" below):
+
+- Every tool call you make against a resource you hold (`mcp__serial__*`,
+  `mcp__execbro__*`, or the guarded Bash commands) gets an `additionalContext`
+  reminder attached if anyone is queued for it (`.claude/hooks/hw-lock-guard.sh`).
+- Every new turn you take gets the same reminder, even if you're not touching
+  hardware tools at that moment (`.claude/hooks/hw-lock-waiter-notice.sh`,
+  a `UserPromptSubmit` hook) — so it isn't just the holder's own hardware-tool
+  cadence that triggers awareness of a waiter.
+
+Neither ever blocks anything — they're advisory-only, on the `allow` path.
+When you see one, wrap up and release as soon as reasonably possible rather
+than continuing to hold the resource indefinitely.
+
 ## Escape hatches (use sparingly, prefer asking the user first)
 
 - `scripts/hw-lock.sh acquire board --steal` — forcibly take the lock even
@@ -150,3 +177,11 @@ and `fw/scripts/provision-device.sh` additionally hard-refuse to run without
 the `board` lock on their own, independent of the hook, so those two specific
 scripts are covered even outside Claude Code. See root `CLAUDE.md`'s "Hardware
 locking" section.
+
+**There is no way for one session to push a notification directly into a
+different, already-running session.** The "getting nudged" mechanism above
+only works because the *holder's own* hooks fire on the *holder's own* next
+tool call or turn — a waiting session's `acquire --wait` has no channel to
+reach into the holder's conversation directly. If the holder isn't actively
+using its session at all (no tool calls, no new turns), it won't see any
+reminder until it resumes.

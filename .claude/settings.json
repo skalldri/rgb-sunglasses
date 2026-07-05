@@ -22,6 +22,17 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys, json, subprocess, os; data=sys.stdin.buffer.read(); cwd=json.loads(data).get('cwd') or '.'; script=os.path.join(cwd,'.claude','hooks','hw-lock-waiter-notice.sh'); r=subprocess.run([script],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE) if os.path.isfile(script) else None; sys.stdout.buffer.write(r.stdout if r else b'{}'); sys.stderr.buffer.write(r.stderr if r else b''); sys.exit(r.returncode if r else 0)\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "mcp__serial__.*|mcp__execbro__.*",
