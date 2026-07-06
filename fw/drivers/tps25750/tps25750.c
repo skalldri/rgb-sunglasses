@@ -181,8 +181,11 @@ int tps25750_read_cmd1(const struct device *dev, tps25750_cmd1_t *cmd) {
 int tps25750_read_cmd_status(const struct device *dev) {
     tps25750_cmd1_t cmd;
 
-    // Readback the CMD1 register to check command status
-    do {
+    // Readback the CMD1 register to check command status.
+    // Bounded (~1s, vs ~10ms observed completion): a command that never completes must
+    // not hang the calling thread forever -- callers hold the task mutex while polling,
+    // so an unbounded loop here would wedge every other CMD1/DATA1 user too.
+    for (int attempt = 0; attempt < 100; attempt++) {
         int ret = tps25750_read_cmd1(dev, &cmd);
         if (ret) {
             LOG_ERR("tps25750_read_cmd1: %d", ret);
@@ -199,14 +202,15 @@ int tps25750_read_cmd_status(const struct device *dev) {
 
         if (cmd.cmd[0] == '\0') {
             // CMD register containing NULL indicates the command was accepted and executed!
-            break;
+            return 0;
         }
 
         // PD controller isn't finished processing the command yet: sleep for a bit
         k_msleep(10);
-    } while (true);
+    }
 
-    return 0;
+    LOG_ERR("Timed out waiting for CMD1 command to complete");
+    return -ETIMEDOUT;
 }
 
 int tps25750_write_cmd1(const struct device *dev, const char *command) {
@@ -383,12 +387,26 @@ int tps25750_dump(const struct device *dev) {
     return 0;
 }
 
-int tps25750_download_patch(const struct device *dev, const char *patch, uint32_t patchSize) {
-    if (!dev) {
-        LOG_ERR("NULL pointer");
-        return -ENODEV;
-    }
+// The 4CC "task" protocol (write DATA1 request -> write CMD1 4CC -> poll CMD1 ->
+// read DATA1 result) spans multiple I2C transfers that all share the part's single
+// DATA1/CMD1 register pair. Every task sequence must run under this per-device mutex:
+// without it, concurrent callers interleave and corrupt each other's request/result
+// (observed as I2Cm bridge reads failing with "status" 0x6B == 107 -- the other
+// caller's freshly-written target-address byte read back where the result status
+// belongs). k_mutex is recursive for the owning thread, and no caller runs in ISR
+// context (shell, charger-status thread, BT RX, tps25750 work queue).
+static void tps25750_task_lock(const struct device *dev) {
+    struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
+    k_mutex_lock(&data->task_mutex, K_FOREVER);
+}
 
+static void tps25750_task_unlock(const struct device *dev) {
+    struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
+    k_mutex_unlock(&data->task_mutex);
+}
+
+static int tps25750_download_patch_locked(const struct device *dev, const char *patch,
+                                          uint32_t patchSize) {
     int ret;
     tps25750_data1_t data;
     const struct tps25750_dev_config *cfg = dev->config;
@@ -578,6 +596,22 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
     return 0;
 }
 
+int tps25750_download_patch(const struct device *dev, const char *patch, uint32_t patchSize) {
+    if (!dev) {
+        LOG_ERR("NULL pointer");
+        return -ENODEV;
+    }
+
+    // Hold the task mutex for the entire download: an I2Cm bridge access interleaved
+    // mid-download would corrupt the PBMs/PBMc sequence (and the bridge is unusable
+    // in PTCH mode anyway).
+    tps25750_task_lock(dev);
+    int ret = tps25750_download_patch_locked(dev, patch, patchSize);
+    tps25750_task_unlock(dev);
+
+    return ret;
+}
+
 int tps25750_clear_dead_battery(const struct device *dev) {
     if (!dev) {
         LOG_ERR("NULL-device pointer");
@@ -592,23 +626,25 @@ int tps25750_clear_dead_battery(const struct device *dev) {
         return -ENODEV;
     }
 
+    tps25750_task_lock(dev);
+
     // Send a "DBfg" command to the device to clear the dead battery flag
     ret = tps25750_write_cmd1(dev, TPS25750_REG_CMD1_VAL_DBFG);
     if (ret) {
         LOG_ERR("tps25750_write_cmd1: %d", ret);
-        return ret;
+    } else {
+        // Readback the CMD1 register to check command status
+        ret = tps25750_read_cmd_status(dev);
+        if (ret) {
+            LOG_ERR("'%s': tps25750_read_cmd_status: %d", TPS25750_REG_CMD1_VAL_DBFG, ret);
+        } else {
+            LOG_INF("Controller accepted '%s' command!", TPS25750_REG_CMD1_VAL_DBFG);
+        }
     }
 
-    // Readback the CMD1 register to check command status
-    ret = tps25750_read_cmd_status(dev);
-    if (ret) {
-        LOG_ERR("'%s': tps25750_read_cmd_status: %d", TPS25750_REG_CMD1_VAL_DBFG, ret);
-        return ret;
-    }
+    tps25750_task_unlock(dev);
 
-    LOG_INF("Controller accepted '%s' command!", TPS25750_REG_CMD1_VAL_DBFG);
-
-    return 0;
+    return ret;
 }
 
 #define TPS25750_WORKQ_STACK_SIZE 1024
@@ -702,6 +738,10 @@ static int tps25750_init(const struct device *dev) {
     int ret = 0;
     data->dev = dev;
 
+    // Must exist before the first task sequence: the patch download below and the
+    // IRQ work queue both run CMD1/DATA1 tasks under this mutex.
+    k_mutex_init(&data->task_mutex);
+
     LOG_INF("dev: %p", dev);
     LOG_INF("cfg: %p", cfg);
     LOG_INF("data: %p", data);
@@ -752,8 +792,8 @@ static int tps25750_init(const struct device *dev) {
     return 0;
 }
 
-static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8_t reg,
-                                   uint8_t *dataBuff, uint8_t dataSize) {
+static int tps25750_i2cm_write_reg_locked(const struct device *dev, uint8_t addr, uint8_t reg,
+                                          uint8_t *dataBuff, uint8_t dataSize) {
     if (dataSize > TPS25750_MAX_I2C_WRITE) {
         LOG_ERR("Cannot write %u bytes: max write length is %u", dataSize, TPS25750_MAX_I2C_WRITE);
         return -ENOMEM;
@@ -818,8 +858,17 @@ static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8
     return 0;
 }
 
-static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_t reg,
-                                  uint8_t *dataBuff, uint8_t dataSize) {
+static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8_t reg,
+                                   uint8_t *dataBuff, uint8_t dataSize) {
+    tps25750_task_lock(dev);
+    int ret = tps25750_i2cm_write_reg_locked(dev, addr, reg, dataBuff, dataSize);
+    tps25750_task_unlock(dev);
+
+    return ret;
+}
+
+static int tps25750_i2cm_read_reg_locked(const struct device *dev, uint8_t addr, uint8_t reg,
+                                         uint8_t *dataBuff, uint8_t dataSize) {
     if (dataSize > TPS25750_MAX_I2C_READ) {
         LOG_ERR("Cannot read %u bytes: max read length is %u", dataSize, TPS25750_MAX_I2C_READ);
         return -ENOMEM;
@@ -877,6 +926,15 @@ static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_
     memcpy(dataBuff, &data.data[1], copySize);
 
     return 0;
+}
+
+static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_t reg,
+                                  uint8_t *dataBuff, uint8_t dataSize) {
+    tps25750_task_lock(dev);
+    int ret = tps25750_i2cm_read_reg_locked(dev, addr, reg, dataBuff, dataSize);
+    tps25750_task_unlock(dev);
+
+    return ret;
 }
 
 static int i2c_tps25750_i2cm_transfer(const struct device *dev, struct i2c_msg *msgs,
