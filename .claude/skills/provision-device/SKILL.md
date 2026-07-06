@@ -10,10 +10,15 @@ Provisions a connected board's external NAND flash: confirms the FAT filesystem 
 
 ---
 
-## 0. Acquire the board lock
+## 0. Hold the board lock
 
+`hold` is the only way to take a lock — launch it via `Monitor`, then confirm:
+
+```
+Monitor(command: "scripts/hw-lock.sh hold board", description: "board hw-lock heartbeat for provisioning", persistent: true)
+```
 ```bash
-scripts/hw-lock.sh acquire board
+timeout 15 bash -c 'until scripts/hw-lock.sh check board >/dev/null 2>&1; do sleep 0.5; done'
 ```
 
 If this fails, report who holds it (session, worktree, how long) and stop —
@@ -79,8 +84,11 @@ Report a short summary table to the user: filesystem health, GLIM files present,
 
 ## 6. Release the board lock
 
+Stop the `hold` Monitor task from step 0 (`TaskStop` — releases automatically
+via its own exit trap), or:
+
 ```bash
-scripts/hw-lock.sh release board
+scripts/hw-lock.sh release board --force
 ```
 
 Run this in **every** exit path of this skill, including early stops from

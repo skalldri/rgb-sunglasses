@@ -9,15 +9,28 @@
 # particular worktree's own path.
 #
 # Usage:
-#   hw-lock.sh acquire <resource...> [--steal] [--reason TEXT] [--pid N] [--fresh-only]
-#                                    [--wait SECONDS] [--poll-interval SECONDS]
+#   hw-lock.sh hold <resource...> [--steal] [--reason TEXT]
+#                                 [--wait SECONDS] [--poll-interval SECONDS]
 #   hw-lock.sh release <resource...> [--force]
 #   hw-lock.sh release --all [--force]
 #   hw-lock.sh status [resource...]
 #   hw-lock.sh check <resource>
+#   hw-lock.sh waiters <resource>
+#   hw-lock.sh note-metro-pid <resource> <pid>  (internal -- see launch-app.sh)
 #
 # Resources: board (dev board + J-Link, used together), app (the one physical
 # Android phone). See .claude/skills/hw-lock/SKILL.md for the full write-up.
+#
+# `hold` is the *only* way to take a lock -- there is deliberately no bare
+# "acquire and forget" subcommand. It always runs as a long-lived, foregrounded
+# process (launch it via the `Monitor` tool with `persistent: true`) tracking
+# its own pid, and holds the lock for exactly as long as it keeps running --
+# no timer, no hardware-state signal (USB de-enumeration, etc.) ever releases
+# it early. If another session is waiting, `hold` only ever *tells you* (a
+# printed notice, surfaced as a Monitor event even if this session is
+# otherwise idle) -- it never auto-evicts. You decide when to actually
+# release, by stopping the `hold` task (its own exit-trap releases) or by
+# running `release ... --force` yourself.
 #
 # --wait queues fairly (FIFO), it does not just retry-and-race: each waiter
 # registers a ticket per requested resource under that resource's queue/ dir
@@ -76,6 +89,24 @@ write_meta() {
         echo "pid=$pid"
         echo "reason=$reason"
     } > "$(lock_dir_for "$resource")/info"
+}
+
+# Idempotently sets/overwrites a single "key=value" line in resource $1's
+# info file on top of whatever write_meta already wrote (currently just
+# metro_pid, set after the initial acquire -- see cmd_note_metro_pid).
+# Strips any pre-existing line for the same key first, so a relaunch under
+# the same still-held lock (stop Metro, rerun launch-app.sh) updates the
+# value in place rather than leaving stale duplicate lines meta_get's
+# "grep -m1" could pick the wrong one of. Writes to a temp file in the same
+# directory then mv's it into place -- same-filesystem mv is atomic, so a
+# concurrent reader (cmd_status, cmd_release, etc.) never observes a
+# half-written file.
+set_meta_field() {
+    local resource="$1" key="$2" value="$3" dir tmp
+    dir="$(lock_dir_for "$resource")"
+    tmp="$(mktemp "$dir/info.XXXXXX")"
+    { grep -v "^$key=" "$dir/info" 2>/dev/null || true; echo "$key=$value"; } > "$tmp"
+    mv -f "$tmp" "$dir/info"
 }
 
 # Reclaims (deletes) the lock dir for $1 if it's stale: metadata missing, its
@@ -251,45 +282,30 @@ try_acquire_all() {
     return 0
 }
 
-cmd_acquire() {
-    local steal=0 reason="" pid="" wait_seconds=0 poll_interval=5 resources=()
-    FRESH_ONLY=0
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --steal) steal=1; shift ;;
-            --reason) reason="${2:-}"; shift 2 ;;
-            --pid) pid="${2:-}"; shift 2 ;;
-            --fresh-only) FRESH_ONLY=1; shift ;;
-            --wait) wait_seconds="${2:-}"; shift 2 ;;
-            --poll-interval) poll_interval="${2:-}"; shift 2 ;;
-            -*) usage_err "unknown flag $1" ;;
-            *) resources+=("$1"); shift ;;
-        esac
-    done
-    [ ${#resources[@]} -gt 0 ] || usage_err "acquire requires at least one resource (${VALID_RESOURCES[*]})"
-    case "$wait_seconds" in ''|*[!0-9]*) usage_err "--wait requires a non-negative integer number of seconds" ;; esac
-    case "$poll_interval" in ''|*[!0-9]*|0) usage_err "--poll-interval requires a positive integer number of seconds" ;; esac
-
-    local seen=() r
-    for r in "${resources[@]}"; do
-        validate_resource "$r"
-        case " ${seen[*]:-} " in *" $r "*) ;; *) seen+=("$r") ;; esac
-    done
-    RESOURCES=("${seen[@]}")
-
-    mkdir -p "$LOCK_ROOT"
-    REASON="$reason"
-    PID_ARG="$pid"
-    STEAL="$steal"
+# Attempts to acquire every resource in RESOURCES (global array, set by the
+# caller), blocking up to $1 seconds via the FIFO wait queue if the first
+# attempt conflicts (0 = don't wait, fail immediately). Assumes
+# REASON/PID_ARG/STEAL/FRESH_ONLY are already set by the caller, exactly as
+# try_acquire_all expects. Returns 0 on success, 1 on conflict/timeout, with
+# LAST_CONFLICT_RESOURCE/LAST_CONFLICT_MSG set on failure exactly as before.
+# Does not print anything on success or failure -- callers own their own
+# messages. On success, always cleans up this call's own FIFO ticket(s)
+# immediately (register_ticket's entries are only otherwise removed by the
+# EXIT trap below or by another session's dead-pid reaping in
+# valid_tickets_for -- neither fires on a successful acquire, so a caller
+# that queued via --wait and then itself polls `waiters` on the same
+# resource would otherwise see its own leftover ticket and mistake itself
+# for a waiter).
+acquire_resources_blocking() {
+    local wait_seconds="$1" poll_interval="$2"
 
     if try_acquire_all; then
-        echo "Acquired: ${RESOURCES[*]} (session $HOLDER_ID)"
+        remove_my_tickets
         return 0
     fi
 
     if [ "$wait_seconds" -eq 0 ]; then
-        echo "[!] Cannot acquire '$LAST_CONFLICT_RESOURCE': $LAST_CONFLICT_MSG" >&2
-        exit 1
+        return 1
     fi
 
     # --wait: FIFO queue, not a race. Register a ticket per requested resource
@@ -299,6 +315,7 @@ cmd_acquire() {
     # ahead of whoever arrived before us. This also preserves the no-deadlock
     # property: we still never hold a partial set between polls, since
     # try_acquire_all itself rolls back on any conflict as before.
+    local r
     for r in "${RESOURCES[@]}"; do
         register_ticket "$r"
         MY_TICKETS["$r"]="$TICKET_PATH"
@@ -318,19 +335,160 @@ cmd_acquire() {
         done
 
         if [ "$my_turn" = 1 ] && try_acquire_all; then
-            echo "Acquired: ${RESOURCES[*]} (session $HOLDER_ID, after waiting)"
+            remove_my_tickets
             return 0
         fi
 
         local now
         now=$(date +%s)
         if [ "$now" -ge "$deadline" ]; then
-            echo "[!] Timed out after ${wait_seconds}s waiting to acquire '$LAST_CONFLICT_RESOURCE': $LAST_CONFLICT_MSG" >&2
-            exit 1
+            return 1
         fi
         if [ "$now" -ge "$next_log" ]; then
             log "Still waiting -- $(( deadline - now ))s left...$(queue_summary)"
             next_log=$(( now + 30 ))
+        fi
+    done
+}
+
+# Kills any Metro/expo processes (and any lingering launch-app.sh wrapper)
+# still running. Called only once, right after cmd_hold confirms exclusive
+# ownership of the 'app' resource -- so by construction, anything found here
+# is necessarily an orphan (a legitimate concurrent holder would have made
+# our acquire above conflict instead), most likely left behind by a session
+# that was hard-killed or crashed without its exit trap running. Never
+# pkill/killall (banned repo-wide, see root CLAUDE.md "Process management")
+# -- pgrep for exact PIDs, then a targeted kill per PID, SIGTERM with a short
+# grace period, then SIGKILL for stragglers.
+#
+# pgrep -f matches a process's FULL command line, which includes THIS
+# process's own --reason text -- a hold launched with e.g.
+# `--reason "... launch-app.sh ..."` would otherwise match and kill itself
+# (hit for real during testing: a --reason mentioning "launch-app.sh"
+# self-matched and killed the hold process running this very function).
+# Exclude our own pid unconditionally, and exclude any matched pid whose own
+# command line contains "hw-lock.sh" -- a real Metro/expo/launch-app.sh
+# process never does, so this is a safe, principled filter, not a special
+# case just for $$ (it also protects against a *different* concurrent
+# hw-lock.sh invocation's --reason text causing a cross-match).
+kill_orphaned_metro() {
+    local candidates pid cmdline pids=()
+    candidates="$( { pgrep -f 'expo run:android'; pgrep -f 'launch-app\.sh'; } 2>/dev/null | sort -u || true)"
+    [ -n "$candidates" ] || return 0
+
+    for pid in $candidates; do
+        [ "$pid" = "$$" ] && continue
+        cmdline="$(ps -o cmd= -p "$pid" 2>/dev/null || true)"
+        case "$cmdline" in
+            *hw-lock.sh*) continue ;;
+        esac
+        pids+=("$pid")
+    done
+    [ ${#pids[@]} -gt 0 ] || return 0
+
+    log "Found orphaned Metro/launch-app.sh process(es) still running (pid(s): ${pids[*]}) -- killing before considering this hold established."
+    for pid in "${pids[@]}"; do
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    sleep 2
+    for pid in "${pids[@]}"; do
+        kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+    done
+}
+
+# Self-release trap for cmd_hold -- fires on clean exit, kill, or crash.
+# Never triggered by the waiter-poll loop in cmd_hold itself (see below).
+# --force is required and safe here: we ARE the tracked pid for every
+# resource in RESOURCES ($$, set by cmd_hold), so `kill -0 $$` from inside
+# our own still-running trap is trivially true -- this is a deliberate
+# self-release, not a cross-session override.
+hold_release_all() {
+    [ "$RELEASED_ONCE" = 1 ] && return
+    RELEASED_ONCE=1
+    local r
+    for r in "${RESOURCES[@]}"; do
+        "$0" release "$r" --force >/dev/null 2>&1 || true
+    done
+}
+
+# The only subcommand capable of taking a lock. Always meant to be launched
+# as a long-lived foreground process (via the `Monitor` tool, persistent:
+# true) -- it holds the requested resources for exactly as long as it keeps
+# running, and releases them the moment it stops, however it stops. It never
+# releases early on its own: if another session is waiting, it only ever
+# prints a notice (a `Monitor` event, reaching this session even if otherwise
+# idle) -- holding a lock means exclusive access until *you* decide to let
+# it go, never on a timer or because a hardware surface (e.g. the J-Link
+# de-enumerating mid-flash) went quiet.
+cmd_hold() {
+    local steal=0 reason="" wait_seconds=0 acquire_poll_interval=5 resources=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --steal) steal=1; shift ;;
+            --reason) reason="${2:-}"; shift 2 ;;
+            --wait) wait_seconds="${2:-}"; shift 2 ;;
+            --poll-interval) acquire_poll_interval="${2:-}"; shift 2 ;;
+            -*) usage_err "unknown flag $1" ;;
+            *) resources+=("$1"); shift ;;
+        esac
+    done
+    [ ${#resources[@]} -gt 0 ] || usage_err "hold requires at least one resource (${VALID_RESOURCES[*]})"
+    case "$wait_seconds" in ''|*[!0-9]*) usage_err "--wait requires a non-negative integer number of seconds" ;; esac
+    case "$acquire_poll_interval" in ''|*[!0-9]*|0) usage_err "--poll-interval requires a positive integer number of seconds" ;; esac
+
+    local seen=() r
+    for r in "${resources[@]}"; do
+        validate_resource "$r"
+        case " ${seen[*]:-} " in *" $r "*) ;; *) seen+=("$r") ;; esac
+    done
+    RESOURCES=("${seen[@]}")
+
+    mkdir -p "$LOCK_ROOT"
+    REASON="$reason"
+    PID_ARG="$$"
+    STEAL="$steal"
+    FRESH_ONLY=1
+
+    if ! acquire_resources_blocking "$wait_seconds" "$acquire_poll_interval"; then
+        echo "[!] Cannot hold '$LAST_CONFLICT_RESOURCE': $LAST_CONFLICT_MSG" >&2
+        exit 1
+    fi
+
+    echo "Holding: ${RESOURCES[*]} (session $HOLDER_ID, pid $$)"
+
+    for r in "${RESOURCES[@]}"; do
+        if [ "$r" = "app" ]; then
+            kill_orphaned_metro
+            break
+        fi
+    done
+
+    RELEASED_ONCE=0
+    trap hold_release_all EXIT INT TERM
+
+    # Silent in steady state -- only ever prints when the waiter-present
+    # state actually changes, plus an infrequent re-notify if the same
+    # waiter is still around, so a multi-hour hold stays well under
+    # Monitor's "too many events" auto-stop threshold.
+    local notified=0 last_notify=0
+    while true; do
+        sleep "$(( 15 + (RANDOM % 5) ))"
+
+        local total=0
+        for r in "${RESOURCES[@]}"; do
+            total=$(( total + $(cmd_waiters "$r") ))
+        done
+
+        local now
+        now=$(date +%s)
+        if [ "$total" -gt 0 ]; then
+            if [ "$notified" = 0 ] || [ $(( now - last_notify )) -ge 600 ]; then
+                echo "WAITER_PRESENT: $total agent(s) waiting for ${RESOURCES[*]} -- this hold is NOT released automatically. Release when you can: scripts/hw-lock.sh release ${RESOURCES[*]} --force (or stop this task, which releases automatically)."
+                notified=1
+                last_notify=$now
+            fi
+        else
+            notified=0
         fi
     done
 }
@@ -370,6 +528,48 @@ cmd_release() {
             echo "[!] '$r' is held by $sid (worktree $(meta_get "$dir/info" worktree)), not this session. Use --force to override." >&2
             failed=1
             continue
+        fi
+        # `pid` here is always the `hold` process's own $$ (set internally by
+        # cmd_hold via PID_ARG -- there is no caller-supplied --pid flag; an
+        # earlier design where launch-app.sh set its own pid directly was
+        # replaced when the hold-only architecture made `hold` the sole
+        # lock-taking path). Releasing the lock dir while that pid is still
+        # alive desyncs the lock from reality: the resource stays in use (the
+        # `hold` task itself, and for 'app', its separately-tracked Metro
+        # process below) but looks FREE to every other session, so someone
+        # else can acquire and collide with it. Require --force here too,
+        # same as the cross-session override above, so this can't happen by
+        # an unnoticed bare `release`.
+        local pid reason
+        pid="$(meta_get "$dir/info" pid)"
+        reason="$(meta_get "$dir/info" reason)"
+        if [ -n "$pid" ] && [ "$force" != 1 ] && kill -0 "$pid" 2>/dev/null; then
+            echo "[!] '$r' is still actively held by a live process (pid $pid${reason:+, $reason}) -- releasing now would desync this lock from actual hardware usage while that process keeps running. Stop the owning process instead (it releases the lock automatically on exit), or pass --force to release anyway." >&2
+            failed=1
+            continue
+        fi
+        # 'app' locks may separately track the actual Metro/expo process via
+        # metro_pid (see cmd_note_metro_pid) -- distinct from `pid` above,
+        # which is always the `hold` process's own pid. Same-session release
+        # (including hold's own self-release trap) always stops it, so
+        # releasing the lock reliably means Metro has quit too. Cross-session
+        # --force deliberately does NOT kill another session's Metro -- see
+        # the reasoning in scripts/hw-lock.sh's plan/PR history: --force has
+        # never killed a tracked process for any resource, only overridden
+        # lock bookkeeping, and the acquire-time kill_orphaned_metro sweep
+        # already cleans up anything left behind the moment anyone next
+        # holds 'app', so no real collision window is left open either way.
+        local metro_pid
+        metro_pid="$(meta_get "$dir/info" metro_pid || true)"
+        if [ -n "$metro_pid" ] && kill -0 "$metro_pid" 2>/dev/null; then
+            if [ "$sid" = "$HOLDER_ID" ]; then
+                log "Stopping Metro (pid $metro_pid) tracked by this session's '$r' hold before releasing."
+                kill -TERM "$metro_pid" 2>/dev/null || true
+                sleep 2
+                kill -0 "$metro_pid" 2>/dev/null && kill -KILL "$metro_pid" 2>/dev/null || true
+            else
+                echo "[!] '$r' still has a separately-tracked Metro process (pid $metro_pid) running under the now-released session ($sid) -- a cross-session --force release does not kill another session's Metro. It will be cleaned up automatically the next time '$r' is acquired (kill_orphaned_metro), or stop it yourself now: kill -TERM $metro_pid" >&2
+            fi
         fi
         rm -rf "$dir"
         echo "Released '$r'"
@@ -431,10 +631,46 @@ cmd_check() {
     return 1
 }
 
+# Records the pid of the Metro/expo process actually using 'app', as an
+# additional field on that resource's already-held info file. Called by
+# launch-app.sh with its own $$ right before it execs into
+# `npx expo run:android` (exec keeps the same pid, so this *is* Metro's real
+# pid from that point on). Refuses (caller must treat as fatal) unless the
+# resource is currently held by this exact session, so a lock released or
+# reclaimed in the gap between launch-app.sh's `check` and here can never
+# have a stray metro_pid grafted onto whoever holds it next.
+cmd_note_metro_pid() {
+    [ $# -eq 2 ] || usage_err "note-metro-pid requires exactly two arguments: <resource> <pid>"
+    local r="$1" pid="$2"
+    validate_resource "$r"
+    case "$pid" in ''|*[!0-9]*) usage_err "note-metro-pid requires a numeric pid" ;; esac
+    local dir
+    dir="$(lock_dir_for "$r")"
+    if [ ! -d "$dir" ] || [ "$(meta_get "$dir/info" session_id)" != "$HOLDER_ID" ]; then
+        echo "[!] '$r' is not held by this session -- refusing to note metro pid $pid." >&2
+        return 1
+    fi
+    set_meta_field "$r" metro_pid "$pid"
+    log "Recorded metro_pid=$pid for '$r'."
+}
+
+# Prints the number of other sessions currently queued (via --wait) for
+# resource $1. Machine-readable counterpart to the "(N waiting)" suffix
+# `status` already prints for humans -- meant for hooks/scripts that want to
+# act on the count (e.g. nudging a holder to wrap up) without parsing prose.
+cmd_waiters() {
+    [ $# -eq 1 ] || usage_err "waiters requires exactly one resource"
+    local r="$1"
+    validate_resource "$r"
+    valid_tickets_for "$r" | grep -c . || true
+}
+
 case "${1:-}" in
-    acquire) shift; cmd_acquire "$@" ;;
-    release) shift; cmd_release "$@" ;;
-    status)  shift; cmd_status "$@" ;;
-    check)   shift; cmd_check "$@" ;;
-    *) usage_err "usage: hw-lock.sh {acquire|release|status|check} ..." ;;
+    hold)           shift; cmd_hold "$@" ;;
+    release)        shift; cmd_release "$@" ;;
+    status)         shift; cmd_status "$@" ;;
+    check)          shift; cmd_check "$@" ;;
+    waiters)        shift; cmd_waiters "$@" ;;
+    note-metro-pid) shift; cmd_note_metro_pid "$@" ;;
+    *) usage_err "usage: hw-lock.sh {hold|release|status|check|waiters|note-metro-pid} ..." ;;
 esac

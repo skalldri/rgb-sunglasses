@@ -102,10 +102,14 @@ If none apply (e.g. pure internal refactor, audio DSP math, docs), note "device/
 
 If any apply, **build-and-test gates alone are not sufficient** — flash the board (`fw/scripts/jlink-flash.sh`) and verify against the real companion app over BLE:
 
-Acquire both hardware locks up front, together, before doing anything below:
+Hold both hardware locks up front, together, before doing anything below —
+`hold` is the only way to take a lock, launched via `Monitor`:
 
+```
+Monitor(command: "scripts/hw-lock.sh hold board app", description: "board+app hw-lock heartbeat for submit-pr verification", persistent: true)
+```
 ```bash
-scripts/hw-lock.sh acquire board app
+timeout 15 bash -c 'until scripts/hw-lock.sh check board >/dev/null 2>&1 && scripts/hw-lock.sh check app >/dev/null 2>&1; do sleep 0.5; done'
 ```
 
 If this fails, report who holds the conflicting resource(s) and stop — do not
@@ -122,10 +126,11 @@ present, skip locking and go straight to the `AskUserQuestion` waiver.)
 **Gate**: if no board or phone is available, use AskUserQuestion to ask whether to proceed without this verification — never silently skip it. Record what was verified (or why it was waived) in the PR body.
 
 **Always release both locks when this step finishes**, whether verification
-passed, failed, or was waived after acquiring:
+passed, failed, or was waived after acquiring — stop the `hold` Monitor task
+(`TaskStop`, which releases automatically via its own exit trap) or run:
 
 ```bash
-scripts/hw-lock.sh release board app
+scripts/hw-lock.sh release board app --force
 ```
 
 ---
