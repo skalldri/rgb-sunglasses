@@ -1,0 +1,23 @@
+config EMUL_TPS25750
+    bool "Emulate a TI TPS25750 USB-PD controller (native_sim tests)"
+    depends on EMUL && TPS25750
+    help
+      I2C register-file emulator for the TPS25750 PD controller's host
+      interface: the MODE/CMD1/DATA1 4CC task protocol, the I2Cm
+      bridge (serving an embedded BQ25792 register file, so the real
+      bq25792 driver works unmodified behind the real tps25750 bridge
+      driver), and the PBMs/PBMc patch-download flow including the
+      secondary patch-port I2C address. Only useful on native_sim; can
+      never be enabled in hardware builds because CONFIG_EMUL is off
+      there.
+
+config EMUL_TPS25750_BOOT_MODE_PTCH
+    bool "Emulated TPS25750 boots in PTCH mode (awaiting patch)"
+    depends on EMUL_TPS25750
+    default n
+    help
+      When enabled the emulated part powers up in "PTCH" mode with the
+      ReadyForPatch interrupt bit set, so a driver built with
+      CONFIG_TPS25750_INTERNAL_PATCH=y performs a full patch download
+      during init. When disabled the part boots in "APP " mode (patch
+      already loaded), matching proto0's normal EEPROM-booted state.

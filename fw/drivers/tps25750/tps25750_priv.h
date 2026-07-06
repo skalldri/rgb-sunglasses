@@ -166,10 +166,13 @@ BUILD_ASSERT(sizeof(tps25750_cmd1_t) == 5);
                                            PD_STATUS.HardResetDetails for more information.*/      \
     /* 0 Reserved*/
 
-// Define a bunch of functions for accessing bits in the byte array
-#define TPS25750_INT_BIT(_name, _byte, _bit)                     \
-    inline bool tps25750_int_bit_##_name(const uint8_t *bytes) { \
-        return ((bytes[_byte] & (1 << _bit)) == (1 << _bit));    \
+// Define a bunch of functions for accessing bits in the byte array.
+// static inline, not plain inline: C99 plain inline emits no standalone
+// definition, which breaks unoptimized builds (e.g. Twister --coverage)
+// where the calls aren't inlined away.
+#define TPS25750_INT_BIT(_name, _byte, _bit)                            \
+    static inline bool tps25750_int_bit_##_name(const uint8_t *bytes) { \
+        return ((bytes[_byte] & (1 << _bit)) == (1 << _bit));           \
     }
 
 TPS25750_INT_BIT_LIST
@@ -273,6 +276,13 @@ struct tps25750_dev_data {
     struct k_work_delayable work;
     struct gpio_callback callback;
     const struct device *dev;
+    /* Serializes every CMD1/DATA1 4CC-task sequence (I2Cr/I2Cw bridge transfers,
+     * patch download, DBfg). One task spans multiple I2C transfers (write DATA1,
+     * write CMD1, poll CMD1, read DATA1) sharing the single DATA1/CMD1 register
+     * pair on the part, so concurrent callers (charger-status thread, shell,
+     * BT RX, the tps25750 work queue) corrupt each other's request/result
+     * without this lock. */
+    struct k_mutex task_mutex;
 };
 
 struct tps25750_dev_config {
