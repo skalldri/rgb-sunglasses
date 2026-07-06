@@ -337,10 +337,16 @@ zephyr_udc0: &usbd {
 	/* Add a USB UART device */
 	cdc_acm_uart0: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";
+		/* label becomes this interface's USB iInterface string descriptor
+		 * (see zephyr,cdc-acm-uart.yaml) -- distinguishes this COM port from
+		 * cdc_acm_uart1 on the host instead of both showing up as a generic,
+		 * duplicated class name (issue #107). */
+		label = "RGB Sunglasses DK - Shell";
 	};
 
 	cdc_acm_uart1: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
+		label = "RGB Sunglasses DK - MCUMgr";
 	};
 };
 

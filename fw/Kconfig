@@ -218,6 +218,15 @@ config APP_BATTERY_MONITOR
 	  rgb_sunglasses_dk (legacy, no new features, flash budget — see
 	  fw/CLAUDE.md).
 
+config APP_USB_PRODUCT_STRING
+	string "USB device product string"
+	default "RGB Sunglasses"
+	help
+	  The USB Product string descriptor reported to the host (Device
+	  Manager / lsusb / etc). Overridden per-board (see board .conf
+	  files) to distinguish rgb_sunglasses_proto0 from
+	  rgb_sunglasses_dk, mirroring CONFIG_BT_DEVICE_NAME.
+
 config APP_EXTENSION_HOST
 	bool "Sandboxed LLEXT animation extension host"
 	depends on LLEXT && USERSPACE && FAT_FILESYSTEM_ELM
