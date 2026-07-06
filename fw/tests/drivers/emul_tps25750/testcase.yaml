@@ -1,0 +1,20 @@
+tests:
+  drivers.emul_tps25750:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+  # Same suite, but the emulated part boots in PTCH mode and the driver is
+  # built with the internal (uncompressed) patch, so tps25750_init performs
+  # the full PBMs -> chunked upload -> PBMc download during boot; the
+  # patch_download test asserts the recorded outcome (and self-skips in the
+  # default scenario above).
+  drivers.emul_tps25750.patch_download:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_TPS25750_INTERNAL_PATCH=y
+      - CONFIG_TPS25750_PATCH_HEADER_FILE="tps25750/tps25750-config-uncompressed.h"
+      - CONFIG_EMUL_TPS25750_BOOT_MODE_PTCH=y

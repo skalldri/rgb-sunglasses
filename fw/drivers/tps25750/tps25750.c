@@ -735,7 +735,6 @@ void tps25750_irq(const struct device *dev, const struct device *port, struct gp
 static int tps25750_init(const struct device *dev) {
     const struct tps25750_dev_config *cfg = dev->config;
     struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
-    int ret = 0;
     data->dev = dev;
 
     // Must exist before the first task sequence: the patch download below and the
@@ -759,6 +758,9 @@ static int tps25750_init(const struct device *dev) {
     }
 
 #if defined(CONFIG_TPS25750_COMPRESSED_PATCH_PRELOAD) || defined(CONFIG_TPS25750_INTERNAL_PATCH)
+    // ret is only needed by the patch paths; declaring it unguarded trips
+    // -Werror=unused-variable when both patch options are off.
+    int ret = 0;
     const char *patch;
     size_t size;
     ret = tps25750_get_patch(&patch, &size);

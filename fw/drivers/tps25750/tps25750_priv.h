@@ -166,10 +166,13 @@ BUILD_ASSERT(sizeof(tps25750_cmd1_t) == 5);
                                            PD_STATUS.HardResetDetails for more information.*/      \
     /* 0 Reserved*/
 
-// Define a bunch of functions for accessing bits in the byte array
-#define TPS25750_INT_BIT(_name, _byte, _bit)                     \
-    inline bool tps25750_int_bit_##_name(const uint8_t *bytes) { \
-        return ((bytes[_byte] & (1 << _bit)) == (1 << _bit));    \
+// Define a bunch of functions for accessing bits in the byte array.
+// static inline, not plain inline: C99 plain inline emits no standalone
+// definition, which breaks unoptimized builds (e.g. Twister --coverage)
+// where the calls aren't inlined away.
+#define TPS25750_INT_BIT(_name, _byte, _bit)                            \
+    static inline bool tps25750_int_bit_##_name(const uint8_t *bytes) { \
+        return ((bytes[_byte] & (1 << _bit)) == (1 << _bit));           \
     }
 
 TPS25750_INT_BIT_LIST
