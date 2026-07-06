@@ -128,14 +128,24 @@ Monitor(command: "scripts/hw-lock.sh hold app", persistent: true)
 timeout 15 bash -c 'until scripts/hw-lock.sh check app >/dev/null 2>&1; do sleep 0.5; done'
 ```
 
-then launch `app/scripts/launch-app.sh --device <name>` as usual. Metro's
-lifetime and the lock's lifetime are now independent: stopping Metro (or it
-crashing) does **not** release the lock, and stopping the `hold` task does
-**not** stop Metro — manage the two separately. If a leftover Metro/expo
-process is still running from an earlier, now-dead session when `hold app`
-next acquires, `hold` detects and kills it automatically before considering
+then launch `app/scripts/launch-app.sh --device <name>` as usual. The
+relationship between Metro's lifetime and the lock's is asymmetric, not
+fully independent: stopping the `hold` task (or a same-session
+`release app --force`) now also stops Metro if it's still running —
+`launch-app.sh` records its own pid against the lock right before exec-ing
+into Metro (`note-metro-pid`, an internal subcommand), so release can target
+it precisely rather than pattern-matching process names. Releasing the lock
+therefore reliably means Metro has quit. It doesn't run in reverse, though:
+Metro crashing or being stopped on its own still does **not** release the
+lock — you still manage that side yourself. (A *cross-session* `--force`
+override is different: it does not kill the other session's Metro, only
+warns — see the escape-hatch note below.) If a leftover Metro/expo process
+is still running from an earlier, now-dead session when `hold app` next
+acquires, `hold` detects and kills it automatically before considering
 itself established (never `pkill`/`killall` — targeted `pgrep`+`kill` only),
-so you don't have to hunt down orphans by hand.
+so you don't have to hunt down orphans by hand — this pattern-based sweep is
+the backstop for the one case precise pid-tracking can't cover (a `hold`
+killed before it ever got a chance to record anything).
 
 ## When done
 
@@ -221,14 +231,21 @@ than continuing to hold the resource indefinitely.
 - `scripts/hw-lock.sh release board --force` — release a lock this session
   doesn't own.
 - `scripts/hw-lock.sh release app --force` — release a lock whose tracked
-  process (every `hold`, including a still-running `launch-app.sh`'s Metro
-  session tracked via its own `hold`) is **still alive**. A plain `release`
-  refuses this and tells you to stop the owning process instead (which
-  releases the lock automatically) — bypassing that with `--force` leaves
-  the lock FREE while the process keeps actually using the resource, so
-  another agent can now acquire it and collide with it. Only reach for this
-  if you specifically want the lock freed *without* stopping the process
-  (rare) and understand that risk.
+  `hold` process is **still alive**. A plain `release` refuses this and
+  tells you to stop the owning process instead (which releases the lock
+  automatically) — bypassing that with `--force` leaves the lock FREE while
+  the process keeps actually using the resource, so another agent can now
+  acquire it and collide with it. Only reach for this if you specifically
+  want the lock freed *without* stopping the `hold` process (rare) and
+  understand that risk. **Same-session vs. cross-session behave
+  differently for Metro specifically**: if the lock is your own session's,
+  `--force` still stops its tracked Metro process (same as a normal
+  release) — only the `hold` pid's own liveness check is what's being
+  bypassed. If you're forcing open a *different* session's still-live lock,
+  Metro is deliberately left alone (only a warning is printed) — the
+  acquire-time `kill_orphaned_metro` sweep cleans it up automatically the
+  moment anyone next holds `app`, and `--force` has never meant "also
+  terminate another session's live process."
 
 ## What this does NOT enforce
 

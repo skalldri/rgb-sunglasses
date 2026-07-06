@@ -95,12 +95,17 @@ on their own, independent of the hook, so they're covered even outside a
 Claude Code session — and neither ever acquires the lock itself, only checks
 it. Launch the companion app via `app/scripts/launch-app.sh` (never call
 `npx expo run:android` directly) — it follows the same check-only pattern
-now: it refuses to run unless `app` is already held, but it no longer
-acquires or releases the lock itself, so Metro's lifetime and the lock's
-lifetime are independent — manage the `hold` task separately from Metro. If
-a Metro/expo process is still running from an earlier, now-dead session when
-`app` is next held, that hold kills it automatically before considering
-itself established.
+now: it refuses to run unless `app` is already held, and it no longer
+acquires the lock itself, but the relationship isn't fully symmetric.
+Stopping the `hold` task (or `release app`, same-session) now also stops
+Metro if it's still running — releasing the lock guarantees Metro has
+quit. Metro stopping or crashing on its own, though, still does not release
+the lock — you still manage that side yourself. (A human force-releasing a
+*different* session's still-live lock does not kill that session's Metro —
+only same-session release does; the acquire-time cleanup below handles it
+instead.) If a Metro/expo process is still running from an earlier, now-dead
+session when `app` is next held, that hold kills it automatically before
+considering itself established.
 
 While holding a lock, if another agent is queued waiting for it, you'll be
 nudged three ways: an `additionalContext` reminder on your next hardware tool

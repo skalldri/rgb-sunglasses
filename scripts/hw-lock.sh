@@ -16,6 +16,7 @@
 #   hw-lock.sh status [resource...]
 #   hw-lock.sh check <resource>
 #   hw-lock.sh waiters <resource>
+#   hw-lock.sh note-metro-pid <resource> <pid>  (internal -- see launch-app.sh)
 #
 # Resources: board (dev board + J-Link, used together), app (the one physical
 # Android phone). See .claude/skills/hw-lock/SKILL.md for the full write-up.
@@ -88,6 +89,24 @@ write_meta() {
         echo "pid=$pid"
         echo "reason=$reason"
     } > "$(lock_dir_for "$resource")/info"
+}
+
+# Idempotently sets/overwrites a single "key=value" line in resource $1's
+# info file on top of whatever write_meta already wrote (currently just
+# metro_pid, set after the initial acquire -- see cmd_note_metro_pid).
+# Strips any pre-existing line for the same key first, so a relaunch under
+# the same still-held lock (stop Metro, rerun launch-app.sh) updates the
+# value in place rather than leaving stale duplicate lines meta_get's
+# "grep -m1" could pick the wrong one of. Writes to a temp file in the same
+# directory then mv's it into place -- same-filesystem mv is atomic, so a
+# concurrent reader (cmd_status, cmd_release, etc.) never observes a
+# half-written file.
+set_meta_field() {
+    local resource="$1" key="$2" value="$3" dir tmp
+    dir="$(lock_dir_for "$resource")"
+    tmp="$(mktemp "$dir/info.XXXXXX")"
+    { grep -v "^$key=" "$dir/info" 2>/dev/null || true; echo "$key=$value"; } > "$tmp"
+    mv -f "$tmp" "$dir/info"
 }
 
 # Reclaims (deletes) the lock dir for $1 if it's stale: metadata missing, its
@@ -510,13 +529,17 @@ cmd_release() {
             failed=1
             continue
         fi
-        # A lock acquired with --pid (e.g. launch-app.sh) tracks the process
-        # actually using the resource. Releasing the lock dir while that pid
-        # is still alive desyncs the lock from reality: the resource stays in
-        # use (Metro/expo still running, board still open) but looks FREE to
-        # every other session, so someone else can acquire and collide with
-        # it. Require --force here too, same as the cross-session override
-        # above, so this can't happen by an unnoticed bare `release`.
+        # `pid` here is always the `hold` process's own $$ (set internally by
+        # cmd_hold via PID_ARG -- there is no caller-supplied --pid flag; an
+        # earlier design where launch-app.sh set its own pid directly was
+        # replaced when the hold-only architecture made `hold` the sole
+        # lock-taking path). Releasing the lock dir while that pid is still
+        # alive desyncs the lock from reality: the resource stays in use (the
+        # `hold` task itself, and for 'app', its separately-tracked Metro
+        # process below) but looks FREE to every other session, so someone
+        # else can acquire and collide with it. Require --force here too,
+        # same as the cross-session override above, so this can't happen by
+        # an unnoticed bare `release`.
         local pid reason
         pid="$(meta_get "$dir/info" pid)"
         reason="$(meta_get "$dir/info" reason)"
@@ -524,6 +547,29 @@ cmd_release() {
             echo "[!] '$r' is still actively held by a live process (pid $pid${reason:+, $reason}) -- releasing now would desync this lock from actual hardware usage while that process keeps running. Stop the owning process instead (it releases the lock automatically on exit), or pass --force to release anyway." >&2
             failed=1
             continue
+        fi
+        # 'app' locks may separately track the actual Metro/expo process via
+        # metro_pid (see cmd_note_metro_pid) -- distinct from `pid` above,
+        # which is always the `hold` process's own pid. Same-session release
+        # (including hold's own self-release trap) always stops it, so
+        # releasing the lock reliably means Metro has quit too. Cross-session
+        # --force deliberately does NOT kill another session's Metro -- see
+        # the reasoning in scripts/hw-lock.sh's plan/PR history: --force has
+        # never killed a tracked process for any resource, only overridden
+        # lock bookkeeping, and the acquire-time kill_orphaned_metro sweep
+        # already cleans up anything left behind the moment anyone next
+        # holds 'app', so no real collision window is left open either way.
+        local metro_pid
+        metro_pid="$(meta_get "$dir/info" metro_pid || true)"
+        if [ -n "$metro_pid" ] && kill -0 "$metro_pid" 2>/dev/null; then
+            if [ "$sid" = "$HOLDER_ID" ]; then
+                log "Stopping Metro (pid $metro_pid) tracked by this session's '$r' hold before releasing."
+                kill -TERM "$metro_pid" 2>/dev/null || true
+                sleep 2
+                kill -0 "$metro_pid" 2>/dev/null && kill -KILL "$metro_pid" 2>/dev/null || true
+            else
+                echo "[!] '$r' still has a separately-tracked Metro process (pid $metro_pid) running under the now-released session ($sid) -- a cross-session --force release does not kill another session's Metro. It will be cleaned up automatically the next time '$r' is acquired (kill_orphaned_metro), or stop it yourself now: kill -TERM $metro_pid" >&2
+            fi
         fi
         rm -rf "$dir"
         echo "Released '$r'"
@@ -585,6 +631,29 @@ cmd_check() {
     return 1
 }
 
+# Records the pid of the Metro/expo process actually using 'app', as an
+# additional field on that resource's already-held info file. Called by
+# launch-app.sh with its own $$ right before it execs into
+# `npx expo run:android` (exec keeps the same pid, so this *is* Metro's real
+# pid from that point on). Refuses (caller must treat as fatal) unless the
+# resource is currently held by this exact session, so a lock released or
+# reclaimed in the gap between launch-app.sh's `check` and here can never
+# have a stray metro_pid grafted onto whoever holds it next.
+cmd_note_metro_pid() {
+    [ $# -eq 2 ] || usage_err "note-metro-pid requires exactly two arguments: <resource> <pid>"
+    local r="$1" pid="$2"
+    validate_resource "$r"
+    case "$pid" in ''|*[!0-9]*) usage_err "note-metro-pid requires a numeric pid" ;; esac
+    local dir
+    dir="$(lock_dir_for "$r")"
+    if [ ! -d "$dir" ] || [ "$(meta_get "$dir/info" session_id)" != "$HOLDER_ID" ]; then
+        echo "[!] '$r' is not held by this session -- refusing to note metro pid $pid." >&2
+        return 1
+    fi
+    set_meta_field "$r" metro_pid "$pid"
+    log "Recorded metro_pid=$pid for '$r'."
+}
+
 # Prints the number of other sessions currently queued (via --wait) for
 # resource $1. Machine-readable counterpart to the "(N waiting)" suffix
 # `status` already prints for humans -- meant for hooks/scripts that want to
@@ -597,10 +666,11 @@ cmd_waiters() {
 }
 
 case "${1:-}" in
-    hold)    shift; cmd_hold "$@" ;;
-    release) shift; cmd_release "$@" ;;
-    status)  shift; cmd_status "$@" ;;
-    check)   shift; cmd_check "$@" ;;
-    waiters) shift; cmd_waiters "$@" ;;
-    *) usage_err "usage: hw-lock.sh {hold|release|status|check|waiters} ..." ;;
+    hold)           shift; cmd_hold "$@" ;;
+    release)        shift; cmd_release "$@" ;;
+    status)         shift; cmd_status "$@" ;;
+    check)          shift; cmd_check "$@" ;;
+    waiters)        shift; cmd_waiters "$@" ;;
+    note-metro-pid) shift; cmd_note_metro_pid "$@" ;;
+    *) usage_err "usage: hw-lock.sh {hold|release|status|check|waiters|note-metro-pid} ..." ;;
 esac
