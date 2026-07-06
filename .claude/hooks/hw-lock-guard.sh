@@ -110,4 +110,4 @@ if "$HW_LOCK" check "$RESOURCE" >/dev/null 2>&1; then
 fi
 
 STATUS="$("$HW_LOCK" status "$RESOURCE" 2>&1 || true)"
-deny "Refusing: the '$RESOURCE' hardware lock is not held by this session. Run \`scripts/hw-lock.sh acquire $RESOURCE\` first (see the hw-lock skill). Current status: $STATUS"
+deny "Refusing: the '$RESOURCE' hardware lock is not held by this session. Run Monitor(command: \"scripts/hw-lock.sh hold $RESOURCE\", persistent: true) first (see the hw-lock skill). Current status: $STATUS"

@@ -290,7 +290,7 @@ Note: `JLinkExe -CommandFile` only opens the USB connection lazily, on the first
 
 **Always use the `mcp__serial__*` MCP tools to interact with the Zephyr shell.** Never shell out via Bash to read/write `/dev/ttyACM0` directly (e.g. `cat`/`echo` redirects, `screen`, `picocom`) — it races with the MCP server's background reader thread for ownership of the port and produces garbled/lost data.
 
-**Acquire the `board` hardware lock before connecting.** Another agent in a different worktree may be flashing, resetting, or already talking to this same board. Run `scripts/hw-lock.sh acquire board` (see root `CLAUDE.md` "Hardware locking") before opening any `mcp__serial__*` connection here — a `PreToolUse` hook auto-denies these calls without it, so acquire proactively rather than finding out from a denial mid-flow.
+**Hold the `board` hardware lock before connecting.** Another agent in a different worktree may be flashing, resetting, or already talking to this same board. Run `Monitor(command: "scripts/hw-lock.sh hold board", persistent: true)` (see root `CLAUDE.md` "Hardware locking") before opening any `mcp__serial__*` connection here — a `PreToolUse` hook auto-denies these calls without it, so hold it proactively rather than finding out from a denial mid-flow.
 
 **Graduate working shell interactions into serial MCP plugins.** Once you've figured out how to reliably drive a shell subsystem over raw `serial_write`/`serial_read_until` — correct command syntax, response parsing, any device-specific quirks — don't keep repeating that raw sequence in future sessions. Write or extend a plugin under `.serial_mcp/plugins/` (use `serial_plugin_template` to scaffold, `serial_plugin_load`/`serial_plugin_reload` to pick it up) so the next interaction is a single typed tool call instead of hand-rolled read/write. `rgb_sunglasses.py` (see below) is the first instance of this pattern, for the `anim` subsystem — add new plugin files (or new tools in the existing one) the same way for other shell subsystems as they come up.
 
@@ -406,7 +406,7 @@ interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts 
 `bad_apple.glim`, `nyan_cat.glim`, and similar assets get onto the device (see
 `fw/tools/convert_bad_apple.py`, `generate_nyan_cat_glim.py`).
 
-This is exclusive-write access to the board's disk — acquire the `board` lock first (`scripts/hw-lock.sh acquire board`) if doing this by hand instead of via `/provision-device` (which enforces it for you). The hook can't catch an ad-hoc `mount` command — this remains convention-only.
+This is exclusive-write access to the board's disk — hold the `board` lock first (`Monitor(command: "scripts/hw-lock.sh hold board", persistent: true)`) if doing this by hand instead of via `/provision-device` (which enforces it for you). The hook can't catch an ad-hoc `mount` command — this remains convention-only.
 
 **Finding and mounting it from the devcontainer:**
 
@@ -441,7 +441,7 @@ issuing more serial commands.
 
 When `/check-hardware` reports the J-Link `Status: OK`, prefer flashing over it instead of the slow MCUmgr/UART upload path below.
 
-`jlink-flash.sh` refuses to run unless this session holds the `board` hardware lock (`scripts/hw-lock.sh acquire board`) — see root `CLAUDE.md` "Hardware locking".
+`jlink-flash.sh` refuses to run unless this session holds the `board` hardware lock (`Monitor(command: "scripts/hw-lock.sh hold board", persistent: true)`) — see root `CLAUDE.md` "Hardware locking". If you're iterating (build → flash → check behavior over `mcp__serial__*` → adjust → rebuild → reflash), hold the lock across the whole cycle rather than releasing between passes — release once the iteration is actually done, not preemptively between steps you're about to repeat.
 
 ```bash
 fw/scripts/jlink-flash.sh                  # uses fw/build by default

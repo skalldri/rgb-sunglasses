@@ -28,7 +28,7 @@ BUILD_DIR="$REPO_ROOT/fw/build"
 # another agent flashing/resetting/talking to the board.
 if ! "$REPO_ROOT/scripts/hw-lock.sh" check board; then
     echo "[!] Refusing to provision: the 'board' hardware lock is not held by this session." >&2
-    echo "    Run: scripts/hw-lock.sh acquire board   (see the hw-lock skill)" >&2
+    echo "    Run: Monitor(command: \"scripts/hw-lock.sh hold board\", persistent: true)   (see the hw-lock skill)" >&2
     exit 1
 fi
 

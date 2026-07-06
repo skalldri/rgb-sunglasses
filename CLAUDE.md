@@ -55,34 +55,69 @@ anything to this chip."
 Multiple agents, each in its own worktree, share one physical dev board
 (+J-Link) and one physical Android phone. Before flashing, provisioning,
 opening an `mcp__serial__*` connection to the board, or driving the phone via
-`mcp__execbro__*`/ADB, acquire the relevant lock:
+`mcp__execbro__*`/ADB, hold the relevant lock. `hold` is the *only* way to
+take a lock — there is no bare "acquire and forget." Launch it as a
+long-lived task via the `Monitor` tool, then confirm before touching
+hardware:
 
+```
+Monitor(command: "scripts/hw-lock.sh hold board", description: "board hw-lock heartbeat", persistent: true)
+```
 ```bash
-scripts/hw-lock.sh acquire board       # dev board + J-Link
-scripts/hw-lock.sh acquire app         # the one physical Android phone
-scripts/hw-lock.sh release board app   # when done — release everything you took
+timeout 15 bash -c 'until scripts/hw-lock.sh check board >/dev/null 2>&1; do sleep 0.5; done'
 ```
 
-By default a conflicting `acquire` fails immediately. Pass `--wait SECONDS`
-(e.g. `acquire board --wait 300`) to queue instead of bailing out — a real
+When done, either stop the `hold` task (`TaskStop` — its own exit trap
+releases automatically) or run `scripts/hw-lock.sh release board app`
+yourself. **Holding a lock means exclusive access for as long as you keep the
+`hold` task running — full stop.** It's never released by a timer or by a
+hardware surface going quiet (e.g. the J-Link de-enumerating mid-flash is
+normal and is never evidence the lock is safe to release); the only things
+that end a hold are you stopping it, or the process dying (crash, kill,
+container restart), which the stale-pid reclaim already handles safely on
+the next attempt.
+
+By default a conflicting `hold` fails immediately. Pass `--wait SECONDS`
+(e.g. `hold board --wait 300`) to queue instead of bailing out — a real
 FIFO queue (ticket per resource, oldest arrival goes first), not independent
 agents racing each other when the resource frees up, and still strictly
 all-or-nothing on every attempt so waiting agents can never deadlock on each
-other. `app/scripts/launch-app.sh` accepts the same `--wait` flag.
+other.
 
 A `PreToolUse` hook (`.claude/hooks/hw-lock-guard.sh`) auto-denies every
 `mcp__serial__*`/`mcp__execbro__*` call and known hardware-touching Bash
 commands (`jlink-flash.sh`, `provision-device.sh`, `JLinkExe`, `mcumgr`,
 `west flash`, `adb`, `expo run:android`) unless the relevant lock is held —
-this is a backstop, not a substitute for acquiring proactively, since a denial
+this is a backstop, not a substitute for holding proactively, since a denial
 interrupts whatever flow triggered it. `fw/scripts/jlink-flash.sh` and
-`fw/scripts/provision-device.sh` additionally hard-refuse to run without the
-`board` lock on their own, independent of the hook, so they're covered even
-outside a Claude Code session. Launch the companion app via
-`app/scripts/launch-app.sh` (never call `npx expo run:android` directly) — it
-holds the `app` lock for Metro's entire lifetime, releases it automatically
-whenever that process stops, and refuses to start a second Metro instance even
-from the same session.
+`fw/scripts/provision-device.sh` hard-refuse to run without the `board` lock
+on their own, independent of the hook, so they're covered even outside a
+Claude Code session — and neither ever acquires the lock itself, only checks
+it. Launch the companion app via `app/scripts/launch-app.sh` (never call
+`npx expo run:android` directly) — it follows the same check-only pattern
+now: it refuses to run unless `app` is already held, but it no longer
+acquires or releases the lock itself, so Metro's lifetime and the lock's
+lifetime are independent — manage the `hold` task separately from Metro. If
+a Metro/expo process is still running from an earlier, now-dead session when
+`app` is next held, that hold kills it automatically before considering
+itself established.
+
+While holding a lock, if another agent is queued waiting for it, you'll be
+nudged three ways: an `additionalContext` reminder on your next hardware tool
+call, the same on your next turn (`UserPromptSubmit` hook), and — the one
+that reaches you even fully idle — a notice `hold` itself prints, delivered
+via the `Monitor` task's event stream. None of these ever force a release;
+they're purely advisory.
+
+**Release once you're genuinely done — not preemptively, and not so late
+you're just squatting on it.** Don't release and re-acquire between steps of
+one ongoing task you expect to repeat (e.g. a build → flash → test → build →
+flash → test iteration loop) — hold across the whole cycle; releasing
+between passes you're about to repeat just adds a race for zero benefit. But
+don't keep holding "just in case" once the task that needed the resource is
+actually finished — the waiter-notice above tells you exactly when someone
+else needs it, which is the right moment to wrap up, not something to guess
+at preemptively.
 
 See `.claude/skills/hw-lock/SKILL.md` for the full command surface (status,
 `--steal`, `--force`, `release --all`) and known enforcement limitations.
