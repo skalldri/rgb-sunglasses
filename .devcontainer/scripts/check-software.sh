@@ -12,7 +12,10 @@ if ! command -v gh >/dev/null 2>&1; then
 else
     GH_STATUS=$(gh auth status 2>&1)
     if echo "$GH_STATUS" | grep -q "Logged in"; then
-        GH_USER=$(echo "$GH_STATUS" | grep -oE 'as [^ ]+' | head -1 | cut -d' ' -f2)
+        # gh's wording changed across versions: older releases print
+        # "Logged in to github.com as <user>", newer ones print
+        # "Logged in to github.com account <user>". Accept both.
+        GH_USER=$(echo "$GH_STATUS" | grep -oE '(as|account) [^ ]+' | head -1 | awk '{print $2}')
         echo "GitHub CLI (gh): AUTHENTICATED as $GH_USER"
     else
         echo "GitHub CLI (gh): NOT AUTHENTICATED"

@@ -127,13 +127,18 @@ at preemptively.
 See `.claude/skills/hw-lock/SKILL.md` for the full command surface (status,
 `--steal`, `--force`, `release --all`) and known enforcement limitations.
 
+Note the hook's Bash matcher keys on command **text**: even read-only commands
+containing the literal tokens `adb`/`mcumgr`/`JLinkExe` (e.g. a `grep` for them)
+are denied without the lock — use the Read/Grep tools or avoid the tokens
+(see /worktree-setup).
+
 ## "Remember" instructions
 
 When the user says "Remember" (or "Remember that"), update the appropriate CLAUDE.md file immediately with the information. Prefer the root `CLAUDE.md` for cross-cutting rules and `fw/CLAUDE.md` for firmware-specific facts.
 
 ## Git workflow — ALWAYS branch before committing
 
-**Never commit directly to `main`.** Always create a feature branch first (`git checkout -b <branch-name>`), then commit, push the branch, and open a PR. Do this before editing any files if possible, but at minimum before the first `git commit`.
+**Never commit directly to `main`.** Always create a feature branch first (`git checkout -b <branch-name>`), then commit, push the branch, and open a PR. Do this before editing any files if possible, but at minimum before the first `git commit`. A `PreToolUse` hook (`.claude/hooks/destructive-guard.sh`) denies `git commit` while on `main`, so branch creation must come first.
 
 ### GitHub PR review comments via `gh api`
 
@@ -142,7 +147,7 @@ When the user says "Remember" (or "Remember that"), update the appropriate CLAUD
 
 ## Process management — NEVER use pkill
 
-**Never use `pkill` or `killall` inside the devcontainer.** These commands kill processes across the entire container (including the container init, the MCP server, and the VS Code server), which crashes the devcontainer and terminates the session. To stop a background process, use its PID from `$!` or find it with `pgrep` and send a targeted `kill <pid>`. To restart Metro/Expo, just launch a new `npx expo run:android --device <device name> --app-id com.autom8ed.rgbsunglassesapp.dev` — it starts a fresh Metro instance.
+**Never use `pkill` or `killall` inside the devcontainer.** These commands kill processes across the entire container (including the container init, the MCP server, and the VS Code server), which crashes the devcontainer and terminates the session. To stop a background process, use its PID from `$!` or find it with `pgrep` and send a targeted `kill <pid>`. To restart Metro/Expo, just launch a new `npx expo run:android --device <device name> --app-id com.autom8ed.rgbsunglassesapp.dev` — it starts a fresh Metro instance. A `PreToolUse` hook (`.claude/hooks/destructive-guard.sh`) now hard-denies `pkill`/`killall` (and `mkfs`, `reset-project.js`, and commits on `main`) as a backstop — the rule stands regardless.
 
 ## Installing tools
 
@@ -169,3 +174,25 @@ Before working on any subsystem, **read its CLAUDE.md first** — those files ar
 | `.claude/skills/`   | Project skills (slash commands).                                                         |
 | `.claude/hooks/`    | Claude Code hooks (e.g. the hardware-lock `PreToolUse` guard).                           |
 | `scripts/`          | Cross-cutting host tooling shared by all subsystems — currently just `hw-lock.sh`, the multi-agent hardware-lock coordinator (see "Hardware locking" above). |
+
+## Task routing
+
+This is the project's **single** routing table — other docs link here, never copy it. Match your task to a skill before improvising:
+
+| Task | Skill |
+| ---- | ----- |
+| Add or modify a built-in animation | /add-animation |
+| Add or change a GATT service/characteristic (+ app UI) | /add-gatt-characteristic |
+| Write or modify a loadable `.llext` extension | /add-extension |
+| Add or fix a firmware test | /add-fw-test |
+| Debug a firmware symptom | /debug-fw |
+| Debug a device↔app BLE symptom | /debug-ble |
+| Validate app changes without a phone | /validate-app |
+| Memory / FLASH / RAM work | /rom-ram-budget |
+| Flash + on-device verification | /flash-and-verify |
+| Fresh worktree/session orientation | /worktree-setup |
+| Prove a change actually works | /verify |
+| Pre-PR gate | /submit-pr |
+| Cut a release | /release |
+
+Three things sound alike — don't mix them up: a **built-in C++ animation** compiled into firmware = /add-animation; a **loadable `.llext` extension** = /add-extension; a **`.glim` asset file** (stored animation data) = `fw/src/storage/GLIM_FORMAT.md` + the `fw/tools/` converters (see `fw/CLAUDE.md`).

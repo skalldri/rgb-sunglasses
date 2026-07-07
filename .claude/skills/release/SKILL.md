@@ -14,6 +14,19 @@ files need editing** for any release track.
 | App | `app-vX.Y.Z` | `app-release.yml` | `rgb-sunglasses-<version>.apk` |
 | MCUboot bootloader | `mcuboot-vX.Y.Z` | `mcuboot-release.yaml` | `mcuboot-<version>-proto0.bin` |
 
+> **Malformed-tag hazard — always tag a full three-part `X.Y.Z`.** `release.yaml`
+> and `mcuboot-release.yaml` trigger on loose globs (`fw-v*`/`mcuboot-v*`): a
+> two-part `fw-v1.2` WILL fire and stamp a broken VERSION file (empty
+> `PATCHLEVEL`). `app-release.yml` requires strict `app-v[0-9]+.[0-9]+.[0-9]+`,
+> so a malformed `app-v1.2` silently triggers nothing — the opposite failure mode.
+
+**Asset filenames and tag prefixes are a cross-component API.** The in-app updater
+(`app/services/github-releases.ts`) filters release lists by the
+`fw-v`/`app-v`/`mcuboot-v` tag prefixes — never `/releases/latest`, which returns
+the newest release of ANY track and broke the update check (PRs #55/#57) — and
+matches firmware zips by `proto0`/`dk` substring (`findAssetForBoard`) and the APK
+by `.apk` suffix (`findApkAsset`). Renaming assets breaks the in-app updater.
+
 The in-repo `fw/sysbuild/mcuboot/VERSION` is set to `0.0.0` so dev builds always
 report a lower version than any official release, prompting users to upgrade.
 
@@ -75,17 +88,8 @@ structure used for v1.0.0:
   Polish for the app).
 
 **App notes must end with a Download section** referencing the QR asset the workflow
-generates (the curated notes overwrite the CI body, so the QR must be included):
-
-```markdown
-## 📱 Install on Android
-
-Scan to download the APK:
-
-![Download QR code](https://github.com/skalldri/rgb-sunglasses/releases/download/app-v<version>/rgb-sunglasses-<version>-qr.png)
-
-[Direct download: rgb-sunglasses-<version>.apk](https://github.com/skalldri/rgb-sunglasses/releases/download/app-v<version>/rgb-sunglasses-<version>.apk)
-```
+generates (the curated notes overwrite the CI body, so the QR must be included) —
+use the exact markdown template in `references/app-notes-download.md`.
 
 Show the drafted notes to the user for review.
 
@@ -113,11 +117,14 @@ git tag mcuboot-v<version>  <commit> && git push origin mcuboot-v<version>
 
 ## 7. Watch CI, then attach the curated notes
 
-- Find the triggered runs: `gh run list --limit 5`.
-- Watch each to completion: `gh run watch <id> --exit-status`
-  - Firmware (`release.yaml`): ~15–25 min (two pristine NCS builds)
-  - MCUboot (`mcuboot-release.yaml`): ~15–25 min (one pristine NCS build, proto0 only)
-  - App (`app-release.yml`): faster
+- Find the triggered runs: `gh run list --limit 5`. `gh run list` has no duration
+  field — compute elapsed time from `startedAt`/`updatedAt`
+  (`gh run list --json workflowName,status,startedAt,updatedAt`).
+- Watch each to completion: `gh run watch <id> --exit-status`. Observed durations,
+  as of 2026-07 — re-verify: firmware `release.yaml` ~9–13 min, MCUboot
+  `mcuboot-release.yaml` ~9 min, app `app-release.yml` ~19–21 min. The firmware
+  job runs its two pristine NCS builds sequentially (DK first, then proto0), so a
+  proto0-only build failure surfaces only after the DK build finishes, ~5 min in.
 - If a run fails, read its logs (`gh run view <id> --log-failed`), report to the
   user, and **do not** edit release notes. Delete and re-push the tag after a fix:
   `git push --delete origin <tag> && git tag -d <tag>`
