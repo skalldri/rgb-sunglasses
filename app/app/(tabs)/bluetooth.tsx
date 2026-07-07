@@ -32,26 +32,30 @@ export default function BluetoothScreen() {
     const c = useThemeColors();
     const { info: appUpdate } = useAppUpdateCheck();
 
-    // Guards against starting an orphaned scan: requestPermissions() below does
-    // several async native round-trips, so the screen can lose focus (running
-    // the useFocusEffect cleanup, which stops whatever scan is active *right
-    // now*) before startDeviceScan() ever gets called. Without this check, that
-    // startDeviceScan() call fires anyway once the permission check resolves,
-    // with no cleanup left to ever stop it - and react-native-ble-plx does not
-    // stop a prior scan when a new one starts, so each orphaned scan permanently
-    // consumes one of Android's small number of concurrent scan-client slots
-    // until the next SCAN_FAILED_APPLICATION_REGISTRATION_FAILED.
-    const cancelledRef = useRef(false);
+    // Per-invocation generation token that guards against orphaned scans.
+    // startBluetoothScan() awaits requestPermissions() (several native round-
+    // trips), so the screen can lose focus AND regain it (a fast tab flip) while
+    // a call is mid-await. A shared boolean can't tell "this invocation was
+    // superseded" from "we're focused again" - the refocus resets it and the
+    // stale invocation sails through, starting a scan with no cleanup bound to
+    // it. react-native-ble-plx does not stop a prior scan when a new one starts,
+    // so each orphaned scan permanently consumes one of Android's small number of
+    // concurrent scan-client slots until the next
+    // SCAN_FAILED_APPLICATION_REGISTRATION_FAILED. Instead, every focus and every
+    // blur bumps this counter; each startBluetoothScan() call captures its value
+    // and bails after any await (or in the scan callback) once the counter has
+    // moved on - so only the newest invocation ever touches the scanner.
+    const scanGenRef = useRef(0);
 
-    // One automatic retry per focus for a scan that fails to START (most
-    // commonly SCAN_FAILED_APPLICATION_REGISTRATION_FAILED / error code 6 -
-    // Android's phone-wide scanner-client pool momentarily exhausted, observed
-    // on shared hardware with several other BLE apps installed, and typically
-    // transient as other apps' registrations churn). Before this, the error was
-    // only console.logged: no scan was running, but the UI spun on "Scanning…"
-    // forever. Reset on every focus so each visit to the screen gets one fresh
-    // retry.
+    // One automatic retry per focus for a scan that fails to START (most commonly
+    // SCAN_FAILED_APPLICATION_REGISTRATION_FAILED / error code 6 - Android's
+    // phone-wide scanner-client pool momentarily exhausted). Reset on every focus.
     const scanRetriedRef = useRef(false);
+    // Handle for the retry setTimeout above, so the focus-effect cleanup can
+    // cancel a pending retry - otherwise it fires into the next focus session and
+    // starts a second concurrent scan (setDevices([]) also wipes the live scan's
+    // results). null when no retry is scheduled.
+    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     /**
      *
@@ -61,14 +65,14 @@ export default function BluetoothScreen() {
         return allDevices.findIndex((d) => d.mac === newMac) >= 0;
     }
 
-    async function startBluetoothScan() {
+    async function startBluetoothScan(gen: number) {
         console.log('Starting Bluetooth scan...');
         setIsScanning(true);
         setDevices([]);
 
         // Defensive: dispose of any scan orphaned by a previous invocation that
         // resolved its permission check after the screen had already lost focus
-        // (see cancelledRef above) - stopDeviceScan is a safe no-op if nothing
+        // (see scanGenRef above) - stopDeviceScan is a safe no-op if nothing
         // is currently scanning.
         bleManager.stopDeviceScan();
 
@@ -80,17 +84,26 @@ export default function BluetoothScreen() {
                 return;
             }
 
-            // The screen may have lost focus while the permission check above was
-            // in flight - the focus effect's cleanup already ran and could not
-            // stop a scan that hadn't started yet. Bail out here instead of
-            // starting an orphaned scan with no cleanup bound to it.
-            if (cancelledRef.current) {
+            // The screen may have lost focus (and possibly regained it) while the
+            // permission check above was in flight - the focus effect's cleanup
+            // already ran and bumped scanGenRef, and could not stop a scan that
+            // hadn't started yet. Bail out here instead of starting an orphaned
+            // scan; if the screen refocused, a newer invocation now owns the
+            // current generation and will start its own scan.
+            if (scanGenRef.current !== gen) {
                 return;
             }
 
             // startDeviceScan returns void (not a Promise) and delivers per-scan
             // errors to the callback below — not to the surrounding try/catch.
             bleManager.startDeviceScan(null, null, (error, device) => {
+                // This invocation's scan was superseded (screen blurred/refocused)
+                // while the scan was live. Stop it and stop processing callbacks so
+                // we don't append devices into - or clear - a newer scan's results.
+                if (scanGenRef.current !== gen) {
+                    bleManager.stopDeviceScan();
+                    return;
+                }
                 if (error) {
                     console.log('Scan error:', error);
                     // The scan is dead once the callback delivers an error (the
@@ -99,12 +112,16 @@ export default function BluetoothScreen() {
                     // state so the UI shows the empty-state instead of an
                     // indefinite spinner over a scan that isn't running.
                     bleManager.stopDeviceScan();
-                    if (!scanRetriedRef.current && !cancelledRef.current) {
+                    if (!scanRetriedRef.current) {
                         scanRetriedRef.current = true;
                         console.log('Scan failed to start - retrying once in 2s...');
-                        setTimeout(() => {
-                            if (!cancelledRef.current) {
-                                startBluetoothScan();
+                        retryTimerRef.current = setTimeout(() => {
+                            retryTimerRef.current = null;
+                            // Only retry if this generation still owns the screen;
+                            // the focus-effect cleanup also clearTimeout()s this, so
+                            // this guard is belt-and-suspenders.
+                            if (scanGenRef.current === gen) {
+                                startBluetoothScan(gen);
                             }
                         }, 2000);
                     } else {
@@ -172,12 +189,23 @@ export default function BluetoothScreen() {
     // Start scanning when the screen is focused, stop when it loses focus
     useFocusEffect(
         useCallback(() => {
-            cancelledRef.current = false;
+            // Claim a fresh generation for this focus session; the cleanup below
+            // bumps it again so any invocation still mid-await is left behind.
+            const gen = ++scanGenRef.current;
             scanRetriedRef.current = false;
-            startBluetoothScan();
+            startBluetoothScan(gen);
 
             return () => {
-                cancelledRef.current = true;
+                // Invalidate this session's in-flight work (a pending permission
+                // await, or the scan callback) so it can't start/keep a scan after
+                // we've lost focus.
+                scanGenRef.current++;
+                // Cancel a pending failure-retry so it doesn't fire into the next
+                // focus session and start a second concurrent scan.
+                if (retryTimerRef.current) {
+                    clearTimeout(retryTimerRef.current);
+                    retryTimerRef.current = null;
+                }
                 stopBluetoothScan();
             };
         }, [])

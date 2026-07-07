@@ -4,6 +4,7 @@
 #include <bluetooth/bt_gatt_traits.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/kernel.h>
 
 #include <algorithm>
 #include <array>
@@ -38,6 +39,35 @@ inline bool bleAnyConnEncrypted() {
         },
         &anyEncrypted);
     return anyEncrypted;
+}
+
+/**
+ * @brief Rate-limited warning for "a subscribed characteristic wants to notify,
+ * but no connected peer is encrypted yet."
+ *
+ * notify() below skips the bt_gatt_notify() call in this state (see
+ * bleAnyConnEncrypted()) - correct, because during LE Secure Connections pairing
+ * it's a brief, self-healing window. But if the handshake STALLS (the split-brain:
+ * link up + CCCD subscribed, yet encryption never completes), that skip is
+ * permanent and every periodic notify is silently dropped - previously invisible
+ * in the logs, so a stuck link looked identical to a healthy idle one. This makes
+ * the stall diagnosable (pair it with the `bt_state` shell command) while staying
+ * quiet in the normal case.
+ *
+ * Deliberately NON-template and shared: the several notifiable characteristics all
+ * tick at once, so a per-characteristic static would emit N lines/sec during a
+ * stall. One shared limiter caps it at a single line/sec total. The unlocked
+ * read-modify-write of the static can race across notify threads, but the worst
+ * case is one extra line - harmless for a log-throttle.
+ */
+inline void bleWarnNotifyBlockedUnencrypted() {
+    static int64_t lastWarnMs = -10000;  // fire on the first occurrence
+    int64_t now = k_uptime_get();
+    if (now - lastWarnMs >= 1000) {
+        lastWarnMs = now;
+        printk("Notify skipped: link connected but not encrypted - pairing in "
+               "progress, or STALLED (check `bt_state`: CONNECTED + MTU 23 == stuck)\n");
+    }
 }
 
 constexpr bt_uuid_128 composeAutoCharacteristicUuid(const bt_uuid_128 &serviceUuid,
@@ -724,9 +754,13 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
                 // Expected right after a fresh connect, for the duration of LE Secure
                 // Connections pairing - bt_gatt_notify() would reject this the same
                 // way (see bleAnyConnEncrypted()'s doc comment) and log a WRN doing
-                // it. Skip silently and let the next periodic update retry once
-                // encryption completes; nothing is lost, this characteristic always
-                // holds its latest value for read() regardless of notify outcome.
+                // it. Skip and let the next periodic update retry once encryption
+                // completes; nothing is lost, this characteristic always holds its
+                // latest value for read() regardless of notify outcome. A one-off
+                // rate-limited warning (shared across all characteristics) keeps a
+                // *stalled* handshake diagnosable without re-spamming the log during
+                // the normal brief pairing window.
+                bleWarnNotifyBlockedUnencrypted();
                 return;
             }
 

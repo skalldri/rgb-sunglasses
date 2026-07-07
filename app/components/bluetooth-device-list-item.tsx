@@ -37,8 +37,14 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
                             if (isSelected) {
                                 await disconnect();
                             } else {
-                                await connect();
-                                router.navigate('/(tabs)/device-state');
+                                // Only navigate once the device is genuinely connected -
+                                // connect() resolves false on failure (and shares the
+                                // in-flight attempt's result on a duplicate tap), so a
+                                // failed or deduped call no longer pushes an empty
+                                // device-state screen.
+                                if (await connect()) {
+                                    router.navigate('/(tabs)/device-state');
+                                }
                             }
                         }}
                     />

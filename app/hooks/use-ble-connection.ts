@@ -19,7 +19,11 @@ import { ConnectionPriority } from "react-native-ble-plx";
 
 interface UseBleConnectionResult {
     isConnecting: boolean;
-    connect: () => Promise<void>;
+    // Resolves true only once the device is fully connected, discovered, and
+    // selected; false if the attempt failed (the error is logged and the
+    // half-open link cleaned up internally). Callers must gate navigation on the
+    // result rather than assuming a resolved promise means "connected".
+    connect: () => Promise<boolean>;
     disconnect: () => Promise<void>;
 }
 
@@ -40,26 +44,43 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     const isMountedRef = useRef(true);
     useEffect(() => () => { isMountedRef.current = false; }, []);
 
-    // Re-entrancy guard, checked synchronously (unlike isConnecting state,
-    // which is async - a second onPress delivered before the first render
-    // commit sees isConnecting still false and disabled={isConnecting}
+    // Re-entrancy guard AND result-sharing, checked synchronously (unlike
+    // isConnecting state, which is async - a second onPress delivered before the
+    // first render commit sees isConnecting still false and disabled={isConnecting}
     // hasn't taken effect yet). A same-tick second connect() call reaching
     // bleManager.connectToDevice() for the same macAddress makes
     // react-native-ble-plx's native module dispose the FIRST call's pending
-    // subscription (DisposableMap.replaceSubscription always disposes
-    // whatever was already stored under that device's key) - rejecting the
-    // first promise with BleErrorCode.OperationCancelled ("Operation was
-    // cancelled") while the second call's establishConnection() is what
-    // actually completes on the real BluetoothGatt. That produces exactly
-    // the split-brain symptom observed on hardware: the firmware reports a
-    // live, fast-interval connection while the app's connect() throws.
-    const connectingRef = useRef(false);
+    // subscription (DisposableMap.replaceSubscription always disposes whatever was
+    // already stored under that device's key) - rejecting the first promise with
+    // BleErrorCode.OperationCancelled ("Operation was cancelled") while the second
+    // call's establishConnection() is what actually completes on the real
+    // BluetoothGatt. That produces exactly the split-brain symptom observed on
+    // hardware: the firmware reports a live, fast-interval connection while the
+    // app's connect() throws.
+    //
+    // Holding the in-flight PROMISE (not just a boolean) means a duplicate call
+    // returns the real attempt's eventual result instead of resolving immediately:
+    // the caller navigates on genuine success, and a double-tap doesn't push the
+    // device-state screen off a no-op early return before anything is connected.
+    const connectPromiseRef = useRef<Promise<boolean> | null>(null);
 
-    async function connect(): Promise<void> {
-        if (connectingRef.current) {
-            return;
+    function connect(): Promise<boolean> {
+        // Synchronous dedup: the ref is assigned below before runConnect() yields
+        // at its first await, so a second same-tick call sees it and shares the
+        // same promise rather than starting a colliding connectToDevice().
+        if (connectPromiseRef.current) {
+            return connectPromiseRef.current;
         }
-        connectingRef.current = true;
+        const attempt = runConnect();
+        connectPromiseRef.current = attempt;
+        // Clear once settled so a later reconnect starts a fresh attempt. runConnect
+        // resolves true/false and never rejects, so this never leaves a rejection
+        // unhandled.
+        attempt.finally(() => { connectPromiseRef.current = null; });
+        return attempt;
+    }
+
+    async function runConnect(): Promise<boolean> {
         setIsConnecting(true);
         try {
             // A scan running concurrently with connectToDevice() can make the
@@ -440,6 +461,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             });
 
             console.log('Pairing complete');
+            return true;
         } catch (error) {
             console.error(`Connection failed for ${macAddress}:`, error);
             // Discovery can fail partway through, after the native BLE link is already
@@ -451,9 +473,9 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             } catch (disconnectError) {
                 console.log(`Error cancelling connection for ${macAddress}:`, disconnectError);
             }
+            return false;
         } finally {
             setDiscoveryProgress(null);
-            connectingRef.current = false;
             if (isMountedRef.current) setIsConnecting(false);
         }
     }

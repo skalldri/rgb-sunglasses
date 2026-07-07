@@ -778,19 +778,30 @@ static int cmd_bt_state(const struct shell *sh, size_t argc, char **argv) {
     shell_print(sh, "BT state machine: %s", bt_state_to_string(state));
     shell_print(sh, "Advertising: %s", state == BtThreadState::ADVERTISING ? "yes" : "no");
 
-    if (!s_active_conn) {
+    // This shell command runs on the shell thread while disconnected() runs on
+    // the BT RX thread and does `bt_conn_unref(s_active_conn); s_active_conn =
+    // NULL`. Reading the global repeatedly below would race that: it could go
+    // NULL (and its last ref drop) between two of our uses. Take our own ref up
+    // front into a local and use only that - bt_conn objects live in a static
+    // pool, so bt_conn_ref() safely returns NULL if the refcount already hit zero
+    // in the tiny window between reading the global and ref-ing it (we treat that
+    // exactly like "no connection"). Every field below reads `conn`, never the
+    // global, and we drop our ref before returning.
+    struct bt_conn *conn = s_active_conn;
+    conn = conn ? bt_conn_ref(conn) : NULL;
+    if (!conn) {
         shell_print(sh, "Active LE connection: none");
         return 0;
     }
 
     char addr[BT_ADDR_LE_STR_LEN];
-    bt_addr_le_to_str(bt_conn_get_dst(s_active_conn), addr, sizeof(addr));
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
     shell_print(sh, "Active LE connection: %s", addr);
 
     // Security level: 1 = unencrypted (pairing NOT complete), 2 = encrypted,
     // 4 = LE Secure Connections + bonding (what this firmware requires before it
     // will serve GATT). Anything < 4 mid-connection means the handshake stalled.
-    bt_security_t sec = bt_conn_get_security(s_active_conn);
+    bt_security_t sec = bt_conn_get_security(conn);
     shell_print(sh, "Security level: L%d%s", (int)sec,
                 sec >= BT_SECURITY_L4 ? " (LE Secure Connections + bonding)"
                 : sec >= BT_SECURITY_L2 ? " (encrypted)"
@@ -798,17 +809,18 @@ static int cmd_bt_state(const struct shell *sh, size_t argc, char **argv) {
 
     // Negotiated ATT MTU. 23 = the BLE default, i.e. the phone's Exchange MTU
     // Request was never answered/never sent - the hallmark of the split-brain hang.
-    uint16_t mtu = bt_gatt_get_mtu(s_active_conn);
+    uint16_t mtu = bt_gatt_get_mtu(conn);
     shell_print(sh, "ATT MTU: %u%s", mtu,
                 mtu <= 23 ? " (DEFAULT - MTU exchange did not complete)" : "");
 
     struct bt_conn_info info;
-    if (bt_conn_get_info(s_active_conn, &info) == 0 && info.type == BT_CONN_TYPE_LE) {
+    if (bt_conn_get_info(conn, &info) == 0 && info.type == BT_CONN_TYPE_LE) {
         shell_print(sh, "Conn interval: %u units (%u.%02ums), latency: %u, timeout: %ums",
                     info.le.interval, (info.le.interval * 125) / 100,
                     (info.le.interval * 125) % 100, info.le.latency, info.le.timeout * 10);
     }
 
+    bt_conn_unref(conn);
     return 0;
 }
 
