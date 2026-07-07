@@ -2,6 +2,7 @@
 
 #include <animations/animation_types.h>
 #include <bluetooth/bt_gatt_traits.h>
+#include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 
 #include <algorithm>
@@ -10,6 +11,34 @@
 #include <cstring>
 #include <tuple>
 #include <type_traits>
+
+/**
+ * @brief True if at least one connected LE peer meets the encryption level every
+ * auto characteristic's perm bits require (BT_GATT_PERM_READ_ENCRYPT, set below).
+ *
+ * bt_gatt_notify() runs this exact check internally (via the internal-only
+ * bt_gatt_check_perm(), see gatt_internal.h - not something app code can call
+ * directly) and, on failure, unconditionally logs LOG_WRN("Link is not
+ * encrypted") before returning -EPERM. Right after a fresh connect there's a
+ * real window - the length of LE Secure Connections pairing, several seconds -
+ * where the link isn't encrypted yet; any periodic notify (e.g. battery
+ * voltage) fired in that window used to spam one WRN + one "Notify failed"
+ * printk apiece until pairing completed. Checking here lets notify() skip the
+ * call (and both logs) silently, the same way it already skips a call to an
+ * unsubscribed characteristic below.
+ */
+inline bool bleAnyConnEncrypted() {
+    bool anyEncrypted = false;
+    bt_conn_foreach(
+        BT_CONN_TYPE_LE,
+        [](struct bt_conn *conn, void *data) {
+            if (bt_conn_get_security(conn) >= BT_SECURITY_L2) {
+                *static_cast<bool *>(data) = true;
+            }
+        },
+        &anyEncrypted);
+    return anyEncrypted;
+}
 
 constexpr bt_uuid_128 composeAutoCharacteristicUuid(const bt_uuid_128 &serviceUuid,
                                                     uint16_t characteristicId) {
@@ -688,6 +717,16 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
                 // error, so don't log it. Left commented (not deleted) to match the sibling
                 // debug traces below, which are also silenced by default for the same reason.
                 // printk("%p Notifications not enabled, skipping\n", attr);
+                return;
+            }
+
+            if (!bleAnyConnEncrypted()) {
+                // Expected right after a fresh connect, for the duration of LE Secure
+                // Connections pairing - bt_gatt_notify() would reject this the same
+                // way (see bleAnyConnEncrypted()'s doc comment) and log a WRN doing
+                // it. Skip silently and let the next periodic update retry once
+                // encryption completes; nothing is lost, this characteristic always
+                // holds its latest value for read() regardless of notify outcome.
                 return;
             }
 

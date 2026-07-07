@@ -15,7 +15,33 @@ const bleManagerOptions: BleManagerOptions = {
     },
 };
 
+// A JS reload (Metro Fast Refresh full reload, dev-menu Reload, execbro
+// reload_app) tears down this module's JS context but NOT the app process -
+// each reload re-runs this module and constructs a fresh BleManager, whose
+// native side registers a brand-new BLE client while the previous context's
+// client (plus any scanner registration it held) stays alive in the process
+// forever. After a few reloads Android starts refusing new scanner clients for
+// this app with SCAN_FAILED_APPLICATION_REGISTRATION_FAILED (surfaced as
+// ble-plx "Cannot start scanning operation ... (code 6)"), and only restarting
+// the phone's Bluetooth stack clears it (hardware-observed, issue #90
+// follow-up). Stash each context's destroy hook on globalThis so the next
+// context can release its predecessor's native client before creating its own.
+declare global {
+    // eslint-disable-next-line no-var
+    var __blePlxDestroyPreviousClient: (() => void) | undefined;
+}
+if (globalThis.__blePlxDestroyPreviousClient) {
+    try {
+        globalThis.__blePlxDestroyPreviousClient();
+        console.log('Destroyed previous JS context\'s BleManager native client');
+    } catch (error) {
+        console.log('Failed to destroy previous BleManager native client:', error);
+    }
+}
+
 export const bleManager = new BleManager(bleManagerOptions);
+
+globalThis.__blePlxDestroyPreviousClient = () => bleManager.destroy();
 
 const requestAndroid31Permissions = async () => {
     const bluetoothScanPermission = await PermissionsAndroid.request(

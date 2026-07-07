@@ -114,6 +114,13 @@ K_KERNEL_THREAD_DEFINE(bt_thread, 2048, bt_thread_func, NULL, NULL, NULL, 6, 0, 
 // fast-interval request has converged by the time the app's GATT discovery walk runs.
 static struct bt_conn *s_active_conn = NULL;
 
+// Mirrors the BT thread's private ctx.state so the `bt_state` shell command (below) can
+// report ADVERTISING/CONNECTING/CONNECTED from any thread without reaching into the BT
+// thread's stack. Written only from bt_state_change_to() (BT thread), read from the shell
+// thread; a torn read is harmless here (worst case a one-transition-stale label in a
+// human-facing diagnostic), so no lock is needed.
+static volatile BtThreadState s_current_state = BtThreadState::IDLE;
+
 static void connected(struct bt_conn *conn, uint8_t err) {
     if (err) {
         LOG_ERR("Connection failed (err %u)", err);
@@ -408,6 +415,7 @@ int bt_state_change_to(BtThreadContext *ctx, const BtThreadState &targetState) {
     LOG_DBG("State changed from %s -> %s", bt_state_to_string(ctx->state),
             bt_state_to_string(targetState));
     ctx->state = targetState;
+    s_current_state = targetState;  // mirror for the `bt_state` shell command
 
     return 0;
 }
@@ -757,3 +765,54 @@ static int cmd_bt_conn_info(const struct shell *sh, size_t argc, char **argv) {
 }
 
 SHELL_CMD_REGISTER(bt_conn_info, NULL, "Print current LE connection parameters", cmd_bt_conn_info);
+
+// One-shot snapshot of everything that distinguishes a healthy BLE link from a
+// "split-brain" (board thinks it's connected, phone's app timed out). Added after
+// issue #90's multi-day debug of exactly that: the tells are the SECURITY level
+// (did LE Secure Connections pairing finish?) and the negotiated ATT MTU (an MTU
+// still at the 23-byte default means the phone's Exchange MTU never completed and
+// its GATT ops are almost certainly hung). Prefer this over piecing the same
+// picture together from a native `adb logcat` BLE trace.
+static int cmd_bt_state(const struct shell *sh, size_t argc, char **argv) {
+    const BtThreadState state = s_current_state;  // one stable read of the volatile mirror
+    shell_print(sh, "BT state machine: %s", bt_state_to_string(state));
+    shell_print(sh, "Advertising: %s", state == BtThreadState::ADVERTISING ? "yes" : "no");
+
+    if (!s_active_conn) {
+        shell_print(sh, "Active LE connection: none");
+        return 0;
+    }
+
+    char addr[BT_ADDR_LE_STR_LEN];
+    bt_addr_le_to_str(bt_conn_get_dst(s_active_conn), addr, sizeof(addr));
+    shell_print(sh, "Active LE connection: %s", addr);
+
+    // Security level: 1 = unencrypted (pairing NOT complete), 2 = encrypted,
+    // 4 = LE Secure Connections + bonding (what this firmware requires before it
+    // will serve GATT). Anything < 4 mid-connection means the handshake stalled.
+    bt_security_t sec = bt_conn_get_security(s_active_conn);
+    shell_print(sh, "Security level: L%d%s", (int)sec,
+                sec >= BT_SECURITY_L4 ? " (LE Secure Connections + bonding)"
+                : sec >= BT_SECURITY_L2 ? " (encrypted)"
+                                        : " (UNENCRYPTED - pairing not complete)");
+
+    // Negotiated ATT MTU. 23 = the BLE default, i.e. the phone's Exchange MTU
+    // Request was never answered/never sent - the hallmark of the split-brain hang.
+    uint16_t mtu = bt_gatt_get_mtu(s_active_conn);
+    shell_print(sh, "ATT MTU: %u%s", mtu,
+                mtu <= 23 ? " (DEFAULT - MTU exchange did not complete)" : "");
+
+    struct bt_conn_info info;
+    if (bt_conn_get_info(s_active_conn, &info) == 0 && info.type == BT_CONN_TYPE_LE) {
+        shell_print(sh, "Conn interval: %u units (%u.%02ums), latency: %u, timeout: %ums",
+                    info.le.interval, (info.le.interval * 125) / 100,
+                    (info.le.interval * 125) % 100, info.le.latency, info.le.timeout * 10);
+    }
+
+    return 0;
+}
+
+SHELL_CMD_REGISTER(bt_state, NULL,
+                   "Snapshot BLE link health (state, security, ATT MTU) - use first when "
+                   "debugging a connection that looks stuck",
+                   cmd_bt_state);
