@@ -46,6 +46,7 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/sys/libc-hooks.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -81,6 +82,13 @@ struct Slot {
     /* "ext/<sanitized displayName>" — built once in scan_slot(), used as the
      * persistent_value_registry key for this slot's param persistence. */
     char settingsKey[extension_param_persistence::kKeyMaxLen] = {};
+    /* True once THIS slot owns its settingsKey in the persistent_value_registry
+     * (register_slot_persistence() succeeded). False if registration was skipped
+     * (persistence disabled), rolled back, or refused with -EEXIST because another
+     * slot's sanitized display name produced the same key — in which case this
+     * slot must NOT mark-dirty or fault-write that key, or it would clobber the
+     * slot that actually owns it. */
+    bool persistRegistered = false;
     /* Tick-handshake profiling (cycles), reset on every activation. */
     uint32_t tickMinCyc = 0;
     uint32_t tickMaxCyc = 0;
@@ -192,26 +200,48 @@ void unload_resident() {
  * resets it. Un-marking Is Active notifies the app so it disables the dead
  * animation's toggle; the proxy renders the fault screen until the user
  * switches away. */
-void sandbox_fault(Slot &slot, const char *what) {
+/* Seeds a slot's param/string values from its manifest defaults. Shared by boot
+ * discovery (scan_slot) and fault recovery (sandbox_fault) so the two can't
+ * silently diverge if default handling ever changes. */
+void reset_params_to_defaults(Slot &slot) {
+    for (size_t p = 0; p < slot.meta.paramCount; p++) {
+        slot.paramValues[p] = slot.meta.params[p].defaultValue;
+    }
+    memcpy(slot.stringValues, slot.meta.stringDefaults, sizeof(slot.stringValues));
+}
+
+/* @param resetParams true only for faults that occur AFTER params were delivered
+ * to the extension (tick-time crashes) — a persisted value could be the cause, so
+ * reset it. false for load/init-time failures, which the params can't have caused
+ * (they're only copied into the extension's inputs at tick time). */
+void sandbox_fault(Slot &slot, const char *what, bool resetParams) {
     LOG_ERR("extension '%s': %s — aborting sandbox (`ext select` to retry)",
             slot.meta.displayName, what);
     slot.faulted = true;
     unload_resident();
     animation_registry_set_is_active(animationId(static_cast<size_t>(&slot - sSlots)), false);
 
-    /* A persisted param value may be what caused this crash — reset to
-     * manifest defaults immediately, in RAM AND on flash (synchronously,
-     * not via the debounced flush, so the clear can't be lost to a power
-     * cycle landing inside that debounce window), so neither an
-     * `ext select` retry nor a future boot can reproduce the same crash
-     * from the same poisoned value. */
-    for (size_t p = 0; p < slot.meta.paramCount; p++) {
-        slot.paramValues[p] = slot.meta.params[p].defaultValue;
+    if (!resetParams) {
+        /* Load/init-time failure (llext_load I/O error, llext heap exhaustion,
+         * domain/thread setup, rgbx_init deadline miss). Params were never handed
+         * to the extension, so they can't have caused this — leave the user's
+         * saved values (RAM AND flash) intact; a single transient activation
+         * failure must not permanently wipe them. */
+        return;
     }
-    memcpy(slot.stringValues, slot.meta.stringDefaults, sizeof(slot.stringValues));
-    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+
+    /* A tick-time crash: a persisted param value MAY be what caused it — reset to
+     * manifest defaults immediately, in RAM AND on flash (synchronously, not via
+     * the debounced flush, so the clear can't be lost to a power cycle landing
+     * inside that debounce window), so neither an `ext select` retry nor a future
+     * boot can reproduce the same crash from the same poisoned value. Only touch
+     * flash if THIS slot owns its persistence key (see persistRegistered) — else
+     * the write would land on another slot's key. */
+    reset_params_to_defaults(slot);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG) && slot.persistRegistered) {
         extension_param_persistence::Blob defaults;
-        extension_param_persistence::fill_blob(defaults, slot.paramValues, slot.stringValues);
+        extension_param_persistence::fill_blob(defaults, slot.meta, slot.paramValues,
+                                               slot.stringValues);
         persistent_value_store::save_value(slot.settingsKey, &defaults, sizeof(defaults));
     }
 }
@@ -330,16 +360,13 @@ bool validate_loaded(struct llext *ext, const char *path, const Exports &exports
     return true;
 }
 
-/* persistent_value_registry's load/save callbacks for one extension's
- * combined param blob (extension_param_persistence::Blob). Registered from
- * scan_slot() below. ext_params_do_load is reachable only if something
- * re-invokes settings_load()/settings_load_subtree() after this key is
- * registered — it doesn't, today (scan_slot() applies a persisted blob via
- * persistent_value_store::load_value() directly, since registration always
- * happens after the boot-time settings_load() replay has already run) — but
- * it's implemented anyway to satisfy persistent_value_registry_register()'s
- * non-null load/save contract and to stay correct if boot ordering ever
- * changes. */
+/* persistent_value_registry's load/save callbacks for one extension's combined
+ * param blob (extension_param_persistence::Blob). Registered from
+ * register_slot_persistence() during init(). ext_params_do_load is the live load
+ * path: init() calls settings_load_subtree("appcfg/ext") once, AFTER all
+ * extension keys are registered, so the shared "appcfg" handler dispatches each
+ * persisted blob here on top of the seeded defaults (the boot-time settings_load()
+ * in bluetooth_init() ran before these keys existed, so it couldn't). */
 void ext_params_do_load(void *target, const void *data, size_t len) {
     if (len != sizeof(extension_param_persistence::Blob)) {
         return;
@@ -353,8 +380,38 @@ void ext_params_do_load(void *target, const void *data, size_t len) {
 void ext_params_do_save(void *target) {
     auto *slot = static_cast<Slot *>(target);
     extension_param_persistence::Blob blob;
-    extension_param_persistence::fill_blob(blob, slot->paramValues, slot->stringValues);
+    /* Runs on the settings-save workqueue; snapshot the arrays under sHostLock
+     * so a concurrent setParamValue()/writeParamString() on the BT RX thread
+     * can't tear the blob (half of a new string, or param N updated but N+1 not)
+     * on its way to flash. */
+    {
+        HostLockGuard lock;
+        extension_param_persistence::fill_blob(blob, slot->meta, slot->paramValues,
+                                               slot->stringValues);
+    }
     persistent_value_store::save_value(slot->settingsKey, &blob, sizeof(blob));
+}
+
+/* Registers slot `slotIndex`'s param blob with the persistent_value_registry.
+ * Called from init() ONLY after the slot's BLE service has fully registered, so a
+ * slot rolled back on a registration failure never leaves a dangling registry
+ * entry aliasing its settingsKey (which the next extension scanned into the reused
+ * slot would overwrite). Sets persistRegistered on success; on -EEXIST (two
+ * extensions whose sanitized display names collide) leaves it false so this slot
+ * won't clobber the key the other slot owns. */
+void register_slot_persistence(size_t slotIndex) {
+    if (!IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        return;
+    }
+    Slot &slot = sSlots[slotIndex];
+    int ret = persistent_value_registry_register(slot.settingsKey, &slot, ext_params_do_load,
+                                                 ext_params_do_save);
+    if (ret == 0) {
+        slot.persistRegistered = true;
+    } else {
+        LOG_WRN("extension '%s': param persistence unavailable (%d) - values won't survive reboot",
+                slot.meta.displayName, ret);
+    }
 }
 
 /* Boot-time discovery of registry entry `fileIndex` into slot `slotIndex`:
@@ -388,37 +445,19 @@ bool scan_slot(size_t fileIndex, size_t slotIndex) {
     }
 
     slot.fileIndex = fileIndex;
-    for (size_t p = 0; p < slot.meta.paramCount; p++) {
-        slot.paramValues[p] = slot.meta.params[p].defaultValue;
-    }
-    memcpy(slot.stringValues, slot.meta.stringDefaults, sizeof(slot.stringValues));
+    reset_params_to_defaults(slot);
 
-    /* Persisted param values, if any, override the defaults just seeded
-     * above — reusing the same registry/store mechanism every built-in
-     * persisted characteristic uses (see fw/CLAUDE.md's "Settings-backed
-     * config persistence"), keyed by this extension's stable display name
-     * rather than slot index (see extension_param_persistence.h). Loading
-     * here (rather than via the registry's automatic settings_load()-replay
-     * dispatch) is required: that replay already ran in bluetooth_init(),
-     * strictly before this pattern-controller-thread discovery loop, so a
-     * key only known now is structurally too late for it to find. */
+    /* Build the stable persistence key now, from the just-validated manifest
+     * (keyed by the extension's display name, not slot index — see
+     * extension_param_persistence.h). The registry registration and the one-shot
+     * load of any persisted values are deferred to init(): registration happens
+     * only AFTER this slot's BLE service fully registers (so a rolled-back slot
+     * leaves no dangling registry entry), and the load is a single
+     * settings_load_subtree() after the whole discovery loop rather than one
+     * flash scan per slot here. */
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
         extension_param_persistence::build_settings_key(slot.settingsKey, sizeof(slot.settingsKey),
-                                                          slot.meta.displayName);
-        int persistRet = persistent_value_registry_register(slot.settingsKey, &slot, ext_params_do_load,
-                                                              ext_params_do_save);
-        if (persistRet == 0) {
-            extension_param_persistence::Blob loaded;
-            ssize_t loadedLen =
-                persistent_value_store::load_value(slot.settingsKey, &loaded, sizeof(loaded));
-            if (loadedLen == static_cast<ssize_t>(sizeof(loaded))) {
-                extension_param_persistence::apply_blob(loaded, slot.meta, slot.paramValues,
-                                                          slot.stringValues);
-            }
-        } else {
-            LOG_WRN("extension '%s': param persistence unavailable (%d) - values won't survive reboot",
-                    slot.meta.displayName, persistRet);
-        }
+                                                        slot.meta.displayName);
     }
 
     const size_t heapBytes = ext->alloc_size;
@@ -582,7 +621,25 @@ void init() {
             sSlotCount--;
             continue;
         }
+        /* Fully registered — now (and only now) claim this slot's persistence
+         * key. Doing it here rather than in scan_slot() means a slot rolled back
+         * above never left a stale registry entry aliasing its settingsKey. */
+        register_slot_persistence(slot);
     }
+
+    /* One settings scan for every extension key, AFTER all are registered: the
+     * shared "appcfg" handler -> registry dispatch -> ext_params_do_load chain
+     * applies each persisted blob on top of its seeded defaults. Replaces the
+     * former per-slot settings_load_one() (one full flash scan each on the NVS/ZMS
+     * backend). The boot-time settings_load() in bluetooth_init() ran before these
+     * keys existed, so this second, subtree-scoped pass is what actually loads
+     * them; it touches only the appcfg/ext subtree, never other appcfg keys. */
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG) && sSlotCount > 0) {
+        char subtree[16];
+        snprintf(subtree, sizeof(subtree), "%s/ext", persistent_value_store::kSubtreeName);
+        settings_load_subtree(subtree);
+    }
+
     if (sSlotCount > 0) {
         LOG_INF("%zu extension animation(s) registered (ids 0x%02x..0x%02x)", sSlotCount,
                 (unsigned)kAnimationIdBase, (unsigned)(kAnimationIdBase + sSlotCount - 1));
@@ -631,7 +688,10 @@ void setParamValue(size_t slot, size_t index, uint32_t value) {
      * a mix of old and new values across params. */
     HostLockGuard lock;
     sSlots[slot].paramValues[index] = value;
-    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+    /* Only persist if this slot owns its key (see persistRegistered) - a slot
+     * whose registration was refused (-EEXIST on a duplicate display name) would
+     * otherwise mark the OTHER slot's entry dirty and never save its own. */
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG) && sSlots[slot].persistRegistered) {
         persistent_value_registry_mark_dirty(sSlots[slot].settingsKey);
         persistent_value_store::request_save();
     }
@@ -661,7 +721,8 @@ bool writeParamString(size_t slot, size_t index, size_t offset, const void *data
     char *dst = sSlots[slot].stringValues[info->stringSlot];
     memcpy(dst + offset, data, len);
     dst[offset + len] = '\0';
-    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+    /* See setParamValue(): only the slot that owns the key may persist to it. */
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG) && sSlots[slot].persistRegistered) {
         persistent_value_registry_mark_dirty(sSlots[slot].settingsKey);
         persistent_value_store::request_save();
     }
@@ -739,7 +800,7 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
     if (sPendingLoadSlot == static_cast<int>(slot)) {
         sPendingLoadSlot = -1;
         if (!runtime_load(slot)) {
-            sandbox_fault(s, "activation load failed");
+            sandbox_fault(s, "activation load failed", /*resetParams=*/false);
             return false;
         }
     }
@@ -796,7 +857,7 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
         /* Deadline overrun — either the extension is spinning or it MPU-
          * faulted (Zephyr already aborted the thread in that case; aborting
          * again is harmless). */
-        sandbox_fault(s, "tick missed deadline (hang or fault)");
+        sandbox_fault(s, "tick missed deadline (hang or fault)", /*resetParams=*/true);
         return false;
     }
     const uint32_t tickCyc = k_cycle_get_32() - startCyc;

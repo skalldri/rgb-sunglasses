@@ -21,8 +21,31 @@ void build_settings_key(char *out, size_t outLen, const char *displayName) {
     out[pos] = '\0';
 }
 
-void fill_blob(Blob &blob, const uint32_t paramValues[RGBX_MAX_PARAMS],
+uint32_t manifest_fingerprint(const extension_manifest::Metadata &meta) {
+    // FNV-1a over the parameter shape. Order-sensitive by construction (each
+    // param folds in its type, then its name bytes, then a 0 separator so
+    // "ab","c" and "a","bc" can't collide).
+    uint32_t h = 2166136261u;
+    auto mix = [&h](uint8_t b) {
+        h ^= b;
+        h *= 16777619u;
+    };
+    mix(static_cast<uint8_t>(meta.paramCount));
+    mix(static_cast<uint8_t>(meta.stringParamCount));
+    for (size_t p = 0; p < meta.paramCount; p++) {
+        mix(static_cast<uint8_t>(meta.params[p].type));
+        for (const char *n = meta.params[p].name; *n != '\0'; n++) {
+            mix(static_cast<uint8_t>(*n));
+        }
+        mix(0);
+    }
+    return h;
+}
+
+void fill_blob(Blob &blob, const extension_manifest::Metadata &meta,
+               const uint32_t paramValues[RGBX_MAX_PARAMS],
                const char stringValues[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX]) {
+    blob.manifestFingerprint = manifest_fingerprint(meta);
     memcpy(blob.paramValues, paramValues, sizeof(blob.paramValues));
     memcpy(blob.stringValues, stringValues, sizeof(blob.stringValues));
 }
@@ -30,6 +53,12 @@ void fill_blob(Blob &blob, const uint32_t paramValues[RGBX_MAX_PARAMS],
 void apply_blob(const Blob &blob, const extension_manifest::Metadata &meta,
                 uint32_t paramValues[RGBX_MAX_PARAMS],
                 char stringValues[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX]) {
+    // Discard a blob whose manifest shape no longer matches - applying its values
+    // positionally would misassign them to different parameters. Leaves the
+    // caller's already-seeded defaults untouched.
+    if (blob.manifestFingerprint != manifest_fingerprint(meta)) {
+        return;
+    }
     for (size_t p = 0; p < meta.paramCount; p++) {
         uint32_t value = blob.paramValues[p];
         if (meta.params[p].type == RGBX_PARAM_BOOL) {

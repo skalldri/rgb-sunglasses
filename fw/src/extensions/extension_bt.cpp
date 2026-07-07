@@ -29,6 +29,14 @@
 
 LOG_MODULE_REGISTER(ext_bt, LOG_LEVEL_INF);
 
+/* The runtime extension metadata blob (extension_metadata_blob.h) must stay wire-
+ * compatible with the compile-time built-in one (bt_service_cpp.h): same version
+ * byte, or the app misparses extension blobs / silently drops to slow per-
+ * descriptor discovery. This is the one TU that sees both constants, so enforce
+ * their equality at compile time rather than by comment. */
+static_assert(extension_metadata_blob::kVersion == kMetadataBlobVersion,
+              "extension metadata blob version must match the built-in blob version");
+
 namespace {
 
 using extension_host::kMaxExtensions;
@@ -65,14 +73,18 @@ struct BtSlot {
     bt_gatt_ccc_managed_user_data isActiveCcc = {};
     const bt_gatt_attr *isActiveValueAttr = nullptr;  // notify target
     bt_gatt_service svc = {};
+#if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
     /* Bulk metadata blob (issue #90), built once per extension_bt_register()
      * call from the same name/cpf data already fed to append_characteristic()
      * for each characteristic — host-owned static storage, never extension
-     * memory (which is untrusted and vanishes on unload). */
+     * memory (which is untrusted and vanishes on unload). ~390 B/slot, so it's
+     * compiled out (not just left unused) when the characteristic is disabled —
+     * the extension-host + no-metadata combo the shrunken kMaxAttrs supports. */
     uint8_t metadataBlob[extension_metadata_blob::kMaxBlobSize] = {};
     size_t metadataBlobPos = 0;
     uint8_t metadataEntryCount = 0;
     bt_gatt_chrc metadataChrc = {};
+#endif
 };
 
 BtSlot sBtSlots[kMaxExtensions];
@@ -104,11 +116,13 @@ ssize_t read_is_active(struct bt_conn *conn, const struct bt_gatt_attr *attr, vo
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &bs->isActive, sizeof(bs->isActive));
 }
 
+#if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
 ssize_t read_metadata(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
                       uint16_t len, uint16_t offset) {
     const auto *bs = static_cast<const BtSlot *>(attr->user_data);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, bs->metadataBlob, bs->metadataBlobPos);
 }
+#endif
 
 /* Same semantics as AnimationIsActiveBinding::onRemoteActiveChange for the
  * built-ins: write true switches to this animation; write false deactivates
@@ -268,12 +282,12 @@ size_t append_characteristic(BtSlot *bs, size_t attrIdx, size_t chrcIdx, const b
      * already fed into this characteristic's CUD/CPF attrs above, so blob
      * order can never drift from attr/handle order — no second pass over
      * the characteristic list is needed to rebuild it. */
-    if (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC)) {
-        if (extension_metadata_blob::append(bs->metadataBlob, sizeof(bs->metadataBlob),
-                                            &bs->metadataBlobPos, cpf->format, cud)) {
-            bs->metadataEntryCount++;
-        }
+#if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
+    if (extension_metadata_blob::append(bs->metadataBlob, sizeof(bs->metadataBlob),
+                                        &bs->metadataBlobPos, cpf->format, cud)) {
+        bs->metadataEntryCount++;
     }
+#endif
     return attrIdx;
 }
 
@@ -320,11 +334,11 @@ int extension_bt_register(size_t slot) {
     /* Reset the metadata blob on every (re)registration — a slot can be
      * re-registered after unload with a different manifest, so stale
      * entries from a previous registration must not linger. */
-    if (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC)) {
-        extension_metadata_blob::init(bs->metadataBlob);
-        bs->metadataBlobPos = 2;
-        bs->metadataEntryCount = 0;
-    }
+#if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
+    extension_metadata_blob::init(bs->metadataBlob);
+    bs->metadataBlobPos = 2;
+    bs->metadataEntryCount = 0;
+#endif
 
     size_t attrIdx = 0;
     size_t chrcIdx = 0;
@@ -400,31 +414,31 @@ int extension_bt_register(size_t slot) {
      * mirrors BtGattServer's getMetadataAttrsTuple() ordering rule. Reuses
      * the same fixed UUID/version as the compile-time mechanism so the
      * app's existing lookup finds it with zero app-side changes. */
-    if (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC)) {
-        bs->metadataBlobPos =
-            extension_metadata_blob::finish(bs->metadataBlob, bs->metadataBlobPos, bs->metadataEntryCount);
+#if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
+    bs->metadataBlobPos =
+        extension_metadata_blob::finish(bs->metadataBlob, bs->metadataBlobPos, bs->metadataEntryCount);
 
-        bs->metadataChrc.uuid = &kMetadataCharacteristicUuid.uuid;
-        bs->metadataChrc.value_handle = 0;
-        bs->metadataChrc.properties = BT_GATT_CHRC_READ;
+    bs->metadataChrc.uuid = &kMetadataCharacteristicUuid.uuid;
+    bs->metadataChrc.value_handle = 0;
+    bs->metadataChrc.properties = BT_GATT_CHRC_READ;
 
-        bs->attrs[attrIdx++] = {
-            .uuid = BT_UUID_GATT_CHRC,
-            .read = bt_gatt_attr_read_chrc,
-            .write = nullptr,
-            .user_data = &bs->metadataChrc,
-            .handle = 0,
-            .perm = BT_GATT_PERM_READ,
-        };
-        bs->attrs[attrIdx++] = {
-            .uuid = &kMetadataCharacteristicUuid.uuid,
-            .read = read_metadata,
-            .write = nullptr,
-            .user_data = bs,
-            .handle = 0,
-            .perm = BT_GATT_PERM_READ_ENCRYPT,
-        };
-    }
+    bs->attrs[attrIdx++] = {
+        .uuid = BT_UUID_GATT_CHRC,
+        .read = bt_gatt_attr_read_chrc,
+        .write = nullptr,
+        .user_data = &bs->metadataChrc,
+        .handle = 0,
+        .perm = BT_GATT_PERM_READ,
+    };
+    bs->attrs[attrIdx++] = {
+        .uuid = &kMetadataCharacteristicUuid.uuid,
+        .read = read_metadata,
+        .write = nullptr,
+        .user_data = bs,
+        .handle = 0,
+        .perm = BT_GATT_PERM_READ_ENCRYPT,
+    };
+#endif
 
     bs->svc.attrs = bs->attrs;
     bs->svc.attr_count = attrIdx;
