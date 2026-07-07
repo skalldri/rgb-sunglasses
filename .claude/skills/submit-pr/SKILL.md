@@ -99,13 +99,10 @@ If none apply (e.g. pure internal refactor, audio DSP math, docs), note "device/
 
 If any apply, **build-and-test gates alone are not sufficient** — flash the board and
 verify against the real companion app over BLE, following
-[references/device-verification.md](references/device-verification.md) exactly: hold
-BOTH `board` and `app` hw-locks up front (one combined `hold` via `Monitor`; never
-flash or drive the phone without them), exercise every changed read/write/notify path
-end-to-end cross-checked against the firmware serial shell, verify notify reception,
-and always release both locks when the step finishes — pass, fail, or waived. The
-reference also records *why* this gate exists (PR #89: a dead Is Active mirror that
-every build, test, and shell check missed).
+[references/device-verification.md](references/device-verification.md) exactly: it
+carries the full procedure (hold BOTH `board`+`app` hw-locks up front, exercise every
+changed read/write/notify path cross-checked against the firmware serial shell, verify
+notify reception, always release both locks) and *why* the gate exists (PR #89).
 
 **Bugs found here get fixed in the SAME PR and documented in its body** — the house
 norm (PRs #43 and #55 each shipped extra fixes surfaced only by this step). After
@@ -131,13 +128,10 @@ All gates passed. Push the branch and open a PR:
 git push -u origin HEAD
 ```
 
-Draft the title (≤ 70 chars) and body in the house style — full template, worked
-example, and waiver norms in
-[references/pr-body-style.md](references/pr-body-style.md). In short: `## Summary` is
-a root-cause → fix narrative with **measured numbers** (FLASH/RAM deltas, timings);
-`## Pre-PR checks` lists proto0 build PASS w/ FLASH+RAM %, DK build PASS w/ FLASH %
-(no overflow), Twister pass count, patch coverage %, and device/app verification
-**including an honest statement of what was NOT exercised**.
+Draft the title (≤ 70 chars) and body in the house style — the full template
+(`## Summary` with measured numbers, `## Pre-PR checks` fields, the mandatory
+"**not exercised**" statement), worked example, and waiver norms are in
+[references/pr-body-style.md](references/pr-body-style.md).
 
 ```bash
 gh pr create --title "<title>" --body "$(cat <<'EOF'

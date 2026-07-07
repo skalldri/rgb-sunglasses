@@ -7,9 +7,8 @@ description: "Diagnose device↔app Bluetooth problems: phone connects but app h
 
 Every BLE symptom has a firmware side and an app side. Before touching either, read
 `fw/CLAUDE.md` ("Serial Console (Zephyr Shell)") and `app/CLAUDE.md` ("Debugging BLE",
-"Known Issues & Quirks", "Autonomous Agent Notes") — do not re-derive what they already
-document. PR/issue numbers below are background for `gh issue view N` / `gh pr view N`,
-not facts to re-assert; when in doubt the code wins.
+"Known Issues & Quirks", "Autonomous Agent Notes"). PR/issue numbers are background
+(`gh issue view N` / `gh pr view N`), not facts to re-assert; when in doubt the code wins.
 
 **Bash trap:** the PreToolUse guard `.claude/hooks/hw-lock-guard.sh` denies any Bash
 command whose text matches `\bmcumgr\b` or `\badb\b` unless the board/app lock is held —
@@ -34,33 +33,25 @@ Bash) on that file when you don't hold a lock.
 
 Trigger: firmware GATT-layout change (add/remove/reorder) + already-bonded phone.
 
-Diagnose from the firmware shell (source of truth, needs the board lock — see
-"Hardware-side verification" below): run `bt_state`. **`ATT MTU: 23` on a
-CONNECTED/encrypted (L4) link is the signature** (healthy is `ATT MTU: 498`).
-Caveat (as of 2026-07 — re-verify): `bt_state` ships in PR #117 (branch
-`pr2-ble-reliability`); on firmware built from `main` before that merge the command
-doesn't exist — fall back to `bt_conn_info` (interval/latency/timeout only, no MTU) plus
-the app-side symptom (both `requestMTU` and `discoverAllServicesAndCharacteristics`
-time out while the link stays up).
+Diagnose from the firmware shell (source of truth; board lock — see "Hardware-side
+verification"): run `bt_state`. **`ATT MTU: 23` on a CONNECTED/encrypted (L4) link is
+the signature** (healthy is `ATT MTU: 498`). If `bt_state` doesn't exist on the running
+firmware, use the `bt_conn_info` fallback in `references/stale-gatt-cache.md` (PR #117).
 
-Recovery is phone-stack-dependent (issue #115 has the two-phone evidence table):
-- **Stock Android (Pixel-class):** auto-recovers via Service Changed + DB hash
-  (`CONFIG_BT_GATT_SERVICE_CHANGED`/`CONFIG_BT_GATT_CACHING`; verify in
-  `build/fw/zephyr/include/generated/zephyr/autoconf.h` after a build — they're Zephyr
-  defaults, not in `fw/prj.conf`). Nothing to do.
+Recovery is phone-stack-dependent (issue #115; `references/stale-gatt-cache.md`):
+- **Stock Android (Pixel-class):** auto-recovers via Service Changed + DB hash. Nothing
+  to do.
 - **OxygenOS-class (OnePlus 9 Pro):** does NOT honor it. Only fix: phone Settings →
   Bluetooth → forget device → re-pair. No app-side connect option rescues it (verified
   in issue #115); don't burn time toggling `refreshGatt`/`requestMTU` orderings.
 
-Scope check: stale-cache failure on non-compliant stacks is a FULL discovery/MTU hang
-or timeout — never scattered per-characteristic read failures inside an otherwise
-successful discovery loop. Isolated swallowed `read()` errors in
-`app/hooks/use-ble-connection.ts`'s loop (caught + logged; `charInfo.value` stays null,
-rendered `false` by `CharacteristicBoolean`) are transient ATT failures, not issue #115.
+Scope check: stale-cache on non-compliant stacks is a FULL discovery/MTU hang or
+timeout — isolated swallowed `read()` errors inside an otherwise successful discovery
+loop (`app/hooks/use-ble-connection.ts`) are transient ATT failures, not issue #115
+(details: `references/stale-gatt-cache.md`).
 
-The app already passes `refreshGatt: "OnConnected"` (grep `refreshGatt` in
-`app/hooks/use-ble-connection.ts`) — keep it; it fixes the `GATT_INVALID_HANDLE` case
-on compliant stacks (app/CLAUDE.md "Known Issues & Quirks" has the full entry).
+Keep the app's `refreshGatt: "OnConnected"` — fixes `GATT_INVALID_HANDLE` on compliant
+stacks (same reference).
 
 **Prevention:** the GATT table layout is a compatibility surface — append, never
 insert/remove/reorder, in shipped firmware. See the `add-gatt-characteristic` skill
@@ -68,51 +59,47 @@ before changing any service.
 
 ## 2. Stale values after reconnect → read-then-subscribe
 
-A reconnect changes no device state, so no notification fires; a client that only
-subscribes shows stale defaults forever. **Rule: on (re)connect, read the current value
-first, then subscribe.** In-tree precedent: `app/services/mcuboot-updater-client.ts` —
-grep `statusChar.read()` (the read happens before `.monitor(...)`). Background: PR #78.
-Residual window even with read-then-subscribe: in `app/hooks/use-ble-connection.ts`
-values are read per-characteristic during the multi-second discovery loop, but monitors
-are only attached after the entire loop finishes — a device-side change in that window
-(e.g. an extension fault flipping Is Active) is silently missed until the next
-notification.
+A reconnect changes no device state, so no notification fires; a subscribe-only client
+shows stale defaults forever. **Rule: on (re)connect, read the current value first,
+then subscribe.** In-tree precedent: `app/services/mcuboot-updater-client.ts` — grep
+`statusChar.read()` (the read happens before `.monitor(...)`). Background: PR #78.
+Residual window even then: `app/hooks/use-ble-connection.ts` reads values during the
+multi-second discovery loop but attaches monitors only after the entire loop finishes —
+a device-side change in that window (e.g. an extension fault flipping Is Active) is
+silently missed until the next notification.
 
 ## 3. Toggle/Switch flicker on write
 
 The optimistic value must be applied **synchronously before** `await
 writeWithResponse(...)`, batched into the same render as `isUpdateInProgress: true`, and
 reverted compare-and-swap-style inside a functional `setState` updater (so a device
-notification landing mid-write is never clobbered by a stale revert). The canonical
-implementation lives in `app/context/bluetooth-context.tsx` — grep
-`isUpdateInProgress`; the pattern is documented in app/CLAUDE.md "State Updates with
-Optimistic UI". Don't re-derive it, and don't move the optimistic update after the
-`await` (that reintroduces the flicker — PR #98 / issue #91).
+notification landing mid-write is never clobbered by a stale revert). Canonical
+implementation: `app/context/bluetooth-context.tsx` — grep `isUpdateInProgress`;
+documented in app/CLAUDE.md "State Updates with Optimistic UI". Don't move the
+optimistic update after the `await` — that reintroduces the flicker (PR #98 / issue #91).
 
 ## 4. SMP request timeout
 
 `SMP request timeout after 5000ms` on overlapping calls means someone bypassed the
 serialization. ALL SMP exchanges must queue through the `requestChain` promise chain in
 `app/services/mcumgr.ts` (grep `requestChain` — read the field comment; use the
-Read/Grep tools, not Bash, per the trap above). That class keeps single
-`responseResolver`/`responseRejecter` slots on purpose — they're only safe because the
-chain guarantees one in-flight exchange at a time. Never rely on single-slot fields
-without that serialization (two overlapping calls clobber the first's resolver — PR
-#55), and don't "fix" a client by adding a per-sequence-number queue instead: the
-device itself only tracks one in-flight request. A failed request must not poison the
-chain, and `destroy()` fail-fasts queued requests.
+Read/Grep tools, not Bash, per the trap above). Never rely on its single
+`responseResolver`/`responseRejecter` slots without that serialization — they're safe
+only because the chain guarantees one in-flight exchange at a time; two overlapping
+calls clobber the first's resolver (PR #55). Don't "fix" a client with a
+per-sequence-number queue instead: the device itself only tracks one in-flight request.
+A failed request must not poison the chain, and `destroy()` fail-fasts queued requests.
 
 ## 5. Write rejected with androidErrorCode 252
 
-`androidErrorCode: 252` (0xFC) with `attErrorCode: null` is how Android surfaces the
-firmware returning `BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED)` (grep
-`WRITE_REQ_REJECTED` in `fw/src/bluetooth/bt_service_cpp.h` and
-`fw/src/extensions/extension_bt.cpp`). Firmware rejects deliberately when a write's
-hardware side effect fails — rolling back and rejecting is the rule; "ACK then
-corrective notify" is banned (PR #106). App-side, error mapping must probe
-`androidErrorCode` **and** the `reason` string, never just `attErrorCode` — the
-existing decoder is `describeWriteError` in `app/services/ble-errors.ts` (issue #92,
-PR #100); extend it rather than pattern-matching errors ad hoc.
+`androidErrorCode: 252` (0xFC) with `attErrorCode: null` = the firmware returned
+`BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED)` (grep `WRITE_REQ_REJECTED` in
+`fw/src/bluetooth/bt_service_cpp.h` and `fw/src/extensions/extension_bt.cpp`). Firmware
+rejects deliberately when a write's hardware side effect fails — rolling back and
+rejecting is the rule; "ACK then corrective notify" is banned (PR #106). App-side,
+error mapping must probe `androidErrorCode` **and** the `reason` string, never just
+`attErrorCode` — extend `describeWriteError` in `app/services/ble-errors.ts` (issue
+#92, PR #100), not ad-hoc pattern-matching.
 
 ## 6. Slow discovery
 
@@ -135,28 +122,24 @@ it's disconnected, the OS still holds the native link. Fix: force-stop the app s
 OS drops the link, then relaunch. Both triggers (discovery-loop throw, `reload_app` /
 mid-session reflash) and the exact force-stop procedure are in app/CLAUDE.md — see
 "Known Issues & Quirks" and "BLE Link Can Get Orphaned by App Reloads, Not Just
-Discovery Failures". Anything `adb`-shaped needs the `app` lock (hw-lock skill).
+Discovery Failures". Anything `adb`-shaped needs the `app` lock (see final section).
 
 ## 8. Notify silently dropped: payload exceeds negotiated MTU
 
-`bt_gatt_notify()` cannot fragment (unlike long reads/writes) — payload + 3-byte header
-must fit the CURRENT negotiated ATT MTU. The `N` in `bt_att: No ATT channel for MTU N`
-is the attempted PDU size (payload + 3), **not** the MTU: `N` > 247 → payload itself
-oversized; 23 < `N` ≤ 247 → link likely stuck at the 23-byte default (app's `requestMTU:
-247` never took effect — §1 stale-cache family); `N` = 23 exactly → payload (≤ 20 B)
-fits even the un-negotiated default, so it's NOT an MTU-size problem — no usable ATT
-channel existed at the instant the notify fired (teardown/bringup race, see reference).
-No error reaches the app — verify on
-the serial shell (e.g. `glim get_selected`), never from app UI alone. Full diagnostic:
-`references/notify-mtu.md`.
+`bt_gatt_notify()` cannot fragment — payload + 3-byte header must fit the CURRENT
+negotiated ATT MTU. The `N` in the log line is the attempted PDU size (payload + 3),
+**not** the MTU: `N` > 247 → payload itself oversized; 23 < `N` ≤ 247 → link likely
+stuck at the 23-byte default (§1 stale-cache family); `N` = 23 exactly → NOT an
+MTU-size problem but a teardown/bringup race (no usable ATT channel existed at the
+instant the notify fired) — don't chase `requestMTU`. Verify on the serial shell (e.g.
+`glim get_selected`), never from app UI alone. Full diagnostic: `references/notify-mtu.md`.
 
 ## Hardware-side verification (source of truth)
 
 Never conclude from app UI alone — cross-check against the firmware serial shell:
 `anim get` (actual current animation), `bt_state` (link health, see §1 caveat),
-`power bq status` (actual battery voltage/current vs. the app's battery card). This
-requires holding the `board` lock (root CLAUDE.md "Hardware locking") and using the
-`mcp__serial__*` tools per fw/CLAUDE.md "Using the `mcp__serial__*` tools" — never raw
-Bash on `/dev/ttyACM*`. Driving the phone (execbro/adb) needs the `app` lock, and all
-tapping/coordinate-system guidance lives in app/CLAUDE.md "Autonomous Agent Notes" —
-follow it, don't improvise coordinates.
+`power bq status` (actual battery voltage/current vs. the app's battery card). Needs
+the `board` lock (root CLAUDE.md "Hardware locking") and the `mcp__serial__*` tools per
+fw/CLAUDE.md "Using the `mcp__serial__*` tools" — never raw Bash on `/dev/ttyACM*`.
+Driving the phone (execbro/adb) needs the `app` lock; follow app/CLAUDE.md "Autonomous
+Agent Notes" for tapping/coordinates — don't improvise.
