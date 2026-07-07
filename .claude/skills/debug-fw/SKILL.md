@@ -41,6 +41,15 @@ Substitute the right one below.
 | A newly-added `.overlay` file has no effect on incremental rebuilds | Zephyr's overlay auto-discovery is gated on `if(NOT DEFINED DTC_OVERLAY_FILE)`; once a prior configure caches `DTC_OVERLAY_FILE` (even as an empty string) in `fw/build/<image>/CMakeCache.txt`, discovery is permanently skipped on incremental builds | `grep DTC_OVERLAY_FILE fw/build/<image>/CMakeCache.txt` — defined-but-empty means the new overlay is never picked up | `--pristine` rebuild of that build dir; overlay placement rules: `fw/CLAUDE.md`, "Per-image Kconfig/devicetree overlays (sysbuild)" |
 | `error: "/*" within comment [-Werror=comment]` in a **test** build pulling in `bt_service_cpp.h` | Known `-Wcomment` warning in `fw/src/bluetooth/bt_service_cpp.h`; tests build with warnings-as-errors | `grep -rln 'Wno-error=comment' fw/tests` — every suite that includes that header carries the workaround | Add `target_compile_options(app PRIVATE -Wno-error=comment)` to the test's `CMakeLists.txt` (tests only — the main firmware build does not need or use it). Full test scaffolding: `/add-fw-test` |
 
+**Offline Kconfig syntax check (no build needed):** kconfiglib is in-tree at
+`/root/ncs/v3.1.1/zephyr/scripts/kconfig/kconfiglib.py`. A full parse of `fw/Kconfig` as-is
+is impossible without the cmake-generated environment (it dies on `source "Kconfig.zephyr"`,
+then on `$(KCONFIG_BINARY_DIR)` fragments), but stripping that one line gives a working
+best-effort lint of the app tree (including `rsource`d `fw/drivers/*/Kconfig`):
+`cd fw && grep -v 'source "Kconfig.zephyr"' Kconfig > .kc-lint && srctree=/root/ncs/v3.1.1/zephyr PYTHONPATH=/root/ncs/v3.1.1/zephyr/scripts/kconfig python3 -c "import kconfiglib; kconfiglib.Kconfig('$PWD/.kc-lint')"; rm .kc-lint`
+— syntax errors raise `KconfigError` with file:line; ignore undefined-symbol warnings
+(Zephyr symbols aren't loaded). `autoconf.h` after a real build stays the ground truth.
+
 ## Table 2 — Twister / native_sim test failures
 
 Run tests via `/test-fw`. Per-scenario artifacts:

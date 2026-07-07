@@ -1,6 +1,6 @@
 ---
 name: debug-ble
-description: "Diagnose device↔app Bluetooth problems: phone connects but app hangs or times out, GATT_INVALID_HANDLE, stale values after reconnect, toggle/Switch flicker, SMP request timeout, BLE writes rejected with androidErrorCode 252, slow discovery. Covers both firmware and companion-app sides of a BLE symptom."
+description: "Diagnose device↔app Bluetooth problems: phone connects but app hangs or times out, GATT_INVALID_HANDLE, stale values after reconnect, toggle/Switch flicker, SMP request timeout, BLE writes rejected with androidErrorCode 252, slow discovery, and notify failures (Notify failed: -12 / bt_att: No ATT channel for MTU N) where the app silently never sees value changes. Covers both firmware and companion-app sides of a BLE symptom."
 ---
 
 # Debug a device↔app BLE symptom
@@ -143,7 +143,10 @@ Discovery Failures". Anything `adb`-shaped needs the `app` lock (hw-lock skill).
 must fit the CURRENT negotiated ATT MTU. The `N` in `bt_att: No ATT channel for MTU N`
 is the attempted PDU size (payload + 3), **not** the MTU: `N` > 247 → payload itself
 oversized; 23 < `N` ≤ 247 → link likely stuck at the 23-byte default (app's `requestMTU:
-247` never took effect — §1 stale-cache family). No error reaches the app — verify on
+247` never took effect — §1 stale-cache family); `N` = 23 exactly → payload (≤ 20 B)
+fits even the un-negotiated default, so it's NOT an MTU-size problem — no usable ATT
+channel existed at the instant the notify fired (teardown/bringup race, see reference).
+No error reaches the app — verify on
 the serial shell (e.g. `glim get_selected`), never from app UI alone. Full diagnostic:
 `references/notify-mtu.md`.
 

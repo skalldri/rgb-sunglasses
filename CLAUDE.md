@@ -43,6 +43,11 @@ hardware-proven code path:
    the codebase is NOT evidence it is correct — unused code was never
    hardware-validated.
 
+Before implementing any externally-suggested hardware fix for a symptom (e.g. wrong
+current/voltage readings), check `.claude/skills/debug-fw/` first — known root causes
+for these symptoms are catalogued there (BQ25792 sign extension, PR #106; TPS25750
+I2Cm bridge race, PR #111).
+
 This rule exists because of a real incident (2026-07-05): unverified TPS25750 4CC
 commands ("GO2P"/"Go2P" — spelling and semantics asserted from memory, not from the
 TRM) were written to CMD1 on live hardware while attempting to force a patch

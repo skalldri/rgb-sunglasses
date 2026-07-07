@@ -25,7 +25,10 @@ the patch-coverage number the ≥ 50% gate in SKILL.md is evaluated against.
 
 If the extract produces an **empty tracefile** (lcov errors or the summary shows
 no lines), none of the changed files are compiled into any test — SKILL.md
-treats that as 0% coverage.
+treats that as 0% coverage. The fix is `/add-fw-test`; the only alternative is a
+waiver with explicit user approval plus a follow-up issue tracking the missing
+tests, both recorded in the PR body (SKILL.md step 4; precedent: PR #82's
+override, tracked by issue #83) — never waive silently.
 
 To name which specific files are under-covered in the failure report:
 

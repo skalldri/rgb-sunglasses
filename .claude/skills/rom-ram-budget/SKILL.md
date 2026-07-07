@@ -55,6 +55,10 @@ Details:
   `CONFIG_APP_BT_METADATA_CHARACTERISTIC=n`, `CONFIG_APP_MCUBOOT_INFO_SERVICE=n` (+
   retention stack). DK is legacy and doesn't get new features (per `fw/CLAUDE.md`), so
   cutting there is acceptable; follow the file's comment style (each `=n` explains why).
+  An `=n` override only reclaims flash if the feature's code compiles out cleanly when
+  disabled — wrap call sites in `IS_ENABLED(CONFIG_...)` / `if constexpr (IS_ENABLED(...))`
+  or gate the sources with `target_sources_ifdef` in `fw/CMakeLists.txt` (working
+  precedent: `CONFIG_APP_PERSIST_BT_CONFIG`, documented in `fw/CLAUDE.md`).
 - **`default y` Kconfig danger:** a new feature symbol in `fw/Kconfig` with a bare
   `default y` lands on BOTH boards, including the nearly-full DK. Either gate it
   (`default y if BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP` + `default n` — precedent:

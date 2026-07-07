@@ -48,6 +48,7 @@ For which skill fits which task (built-in animation vs. `.llext` extension vs. G
 
 ```bash
 # First time build (pristine, setup build system, very slow! Only run if build folder is empty / nonexistent)
+# Exception: a newly ADDED devicetree overlay file also requires --pristine — see "Per-image Kconfig/devicetree overlays (sysbuild)" below.
 west build --build-dir fw/build fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="$(pwd)/fw"
 
 # Full incremental build of proto0 (preferred for daily dev)

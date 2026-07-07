@@ -35,6 +35,10 @@ west build \
      symbol to `n` in `fw/boards/rgb_sunglasses_dk_nrf5340_cpuapp.conf` (precedent in that file:
      `CONFIG_APP_PERSIST_BT_CONFIG=n`, `CONFIG_APP_BT_METADATA_CHARACTERISTIC=n`,
      `CONFIG_APP_MCUBOOT_INFO_SERVICE=n` — DK is legacy and gets no new features per `fw/CLAUDE.md`).
+     The `=n` override only reclaims flash if the feature's code compiles out cleanly when disabled —
+     wrap call sites in `IS_ENABLED(CONFIG_...)` / `if constexpr (IS_ENABLED(...))` or gate the sources
+     with `target_sources_ifdef` in `fw/CMakeLists.txt` (working precedent:
+     `CONFIG_APP_PERSIST_BT_CONFIG`, documented in `fw/CLAUDE.md`).
      **Path warning**: board Kconfig fragments live FLAT under `fw/boards/`. The directory
      `fw/boards/others/rgb_sunglasses_dk/` holds only the board *definition* (dts, defconfig,
      board.yml) — a `.conf` created there is **silently ignored**. For deeper size analysis

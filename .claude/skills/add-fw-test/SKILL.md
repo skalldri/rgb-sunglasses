@@ -113,7 +113,9 @@ skill.
 `/submit-pr` gates on ≥50% patch coverage and counts an **empty lcov extract as 0%**:
 a changed `.cpp` compiled by no test suite blocks the PR outright. The fix is exactly
 this skill — add a suite that compiles that file via `target_sources`. Open issue #83
-(`imu.cpp` / `sound.cpp`, as of 2026-07 — re-verify) is precisely this situation.
+is precisely this situation: `imu.cpp` is now covered (`fw/tests/imu/pipeline`
+compiles it), but `sound.cpp` still has no suite (only `audio_dsp.cpp` is compiled,
+by `fw/tests/sound/audio_dsp`) — as of 2026-07; re-verify.
 
 Note: not every animation has a DI suite (e.g. `matrix_code` has none) — parity is
 not guaranteed or required; add suites where coverage is needed.

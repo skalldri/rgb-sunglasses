@@ -16,7 +16,12 @@ The GATT table of shipped firmware is a compatibility surface. Violations break 
 1. **NEVER reorder providers in a `BtGattServer(...)` argument list.** Auto-UUID assignment is
    positional (`composeAutoCharacteristicUuid` in `fw/src/bluetooth/bt_service_cpp.h` stamps the
    declaration-order index into the UUID), so reordering silently changes characteristic UUIDs
-   AND the metadata-blob entry order the app zips positionally. Compiles clean, breaks every app.
+   AND the metadata-blob entry order the app zips positionally. This compiles clean and can even
+   render fine on a fresh, unbonded connection (a pure reorder stays self-consistent — labels
+   follow handles), but the app's fixed UUID constants (`UUID_BATTERY_*` etc. in
+   `app/constants/bluetooth.ts`) now silently read the WRONG characteristics, and nothing at
+   runtime detects it — the app's entry-count check catches only a count mismatch, never a
+   same-count reorder (see the "ORDERING ASSUMPTION" comment in `app/hooks/use-ble-connection.ts`).
 2. **Append, never insert/remove/reorder, in shipped firmware.** Android caches GATT handles per
    bonded device; any table restructure breaks bonded phones (issue #115; symptom:
    connected/encrypted link with ATT MTU stuck at 23). Impact is phone-stack-dependent: compliant

@@ -32,6 +32,16 @@ v3.1.1):
   `requestMTU: 247` (grep `requestMTU` in `app/hooks/use-ble-connection.ts`) never took
   effect (SKILL.md §1 stale-cache family — cross-check with `bt_state`'s `ATT MTU`
   line), or the notify fired before the MTU exchange completed.
+- **`N` = 23 exactly** — a payload ≤ 20 bytes fits even the un-negotiated 23-byte
+  default MTU, so this is NOT an MTU-size problem: no usable ATT channel existed at the
+  instant the notify fired. Verified against NCS v3.1.1 `subsys/bluetooth/host/att.c`:
+  a plain notify-after-disconnect logs `Not connected` / `ATT channel not connected`
+  from `att_get()` instead and never reaches this line; the `No ATT channel for MTU 23`
+  form is a narrow race window — teardown (`att_chan_detach()` removes the channel from
+  the list before clearing its CONNECTED flag) or bringup (channel attached to the list
+  before its default MTU is assigned, so it transiently reads MTU 0). Treat it as a
+  timing/lifecycle bug (notify racing connect/disconnect), not a negotiation failure —
+  don't chase `requestMTU`.
 
 ## Verification
 
