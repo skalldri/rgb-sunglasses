@@ -84,6 +84,18 @@ agents racing each other when the resource frees up, and still strictly
 all-or-nothing on every attempt so waiting agents can never deadlock on each
 other.
 
+If **your own session already holds** the resource and you run `hold` again
+(e.g. after a heartbeat/`Monitor` task died or was lost across a context
+reset), the new `hold` **adopts** the lock — it takes over as the tracked
+heartbeat and reports success immediately, rather than refusing or waiting on
+itself. So the recovery move after any board-lock heartbeat failure is simply
+to **re-run `hold`**: if a prior in-session hold is still alive it's adopted, if
+it died cleanly the lock was already released, and if it died hard the stale-pid
+reclaim clears it first — every case ends with you holding a live heartbeat. A
+`--wait` on a lock your own session holds is never futile now (it can't be — the
+adopt path returns before queueing). A **different** session's hold still
+conflicts exactly as before.
+
 A `PreToolUse` hook (`.claude/hooks/hw-lock-guard.sh`) auto-denies every
 `mcp__serial__*`/`mcp__execbro__*` call and known hardware-touching Bash
 commands (`jlink-flash.sh`, `provision-device.sh`, `JLinkExe`, `mcumgr`,

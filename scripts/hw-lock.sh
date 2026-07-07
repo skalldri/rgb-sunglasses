@@ -32,6 +32,17 @@
 # release, by stopping the `hold` task (its own exit-trap releases) or by
 # running `release ... --force` yourself.
 #
+# Re-running `hold` from a session that ALREADY holds the resource ADOPTS it:
+# the new process takes over as the tracked pid/heartbeat and reports success
+# immediately (it does not refuse, and does not futilely --wait on itself -- a
+# session can never be waiting on a lock it is itself holding). This is the
+# recovery path when a prior `hold` task died or was lost (e.g. context reset)
+# but the lock record persists: just run `hold` again. Exclusion is per-session,
+# so a second in-session hold is never a real conflict; the superseded sibling's
+# release is pid-guarded so its later exit can't yank the lock from the adopter.
+# A DIFFERENT session still conflicts exactly as before (fail-fast, or FIFO-queue
+# with --wait).
+#
 # --wait queues fairly (FIFO), it does not just retry-and-race: each waiter
 # registers a ticket per requested resource under that resource's queue/ dir
 # (a fixed-width nanosecond-timestamp filename, so lexical sort == arrival
@@ -43,6 +54,14 @@ set -euo pipefail
 
 VALID_RESOURCES=(board app)
 declare -A MY_TICKETS=()
+# Resources this cmd_hold invocation ADOPTED (took over an existing same-session
+# hold) rather than freshly acquired -- see try_acquire_one. Governs the "adopted"
+# messaging and whether kill_orphaned_metro runs for 'app'.
+declare -A ADOPTED=()
+# For each adopted resource, the tracked pid we displaced -- so an all-or-nothing
+# rollback (a later resource in the same hold conflicts) can hand authority back
+# to the sibling instead of deleting a lock the session legitimately held.
+declare -A ADOPTED_PREV_PID=()
 
 if ! WORKTREE_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
     echo "[!] hw-lock.sh must be run from inside a git worktree of this repo." >&2
@@ -214,9 +233,10 @@ remove_my_tickets() {
 
 # --- Core acquire/release ---------------------------------------------------
 
-# Sets CONFLICT_INFO on failure. Returns: 0 = newly acquired, 1 = conflict,
-# 2 = already held by this session (idempotent no-op), unless FRESH_ONLY=1, in
-# which case an already-held-by-us lock is also treated as a conflict (1).
+# Sets CONFLICT_INFO on failure. Returns: 0 = newly acquired (or, under
+# FRESH_ONLY=1, ADOPTED an existing same-session hold -- ADOPTED[resource] is set
+# to tell the two apart), 1 = conflict (a DIFFERENT session holds it), 2 = already
+# held by this session (idempotent no-op; only when FRESH_ONLY is unset).
 try_acquire_one() {
     local resource="$1"
     local dir
@@ -224,8 +244,29 @@ try_acquire_one() {
     maybe_reclaim_stale "$resource"
 
     if [ -d "$dir" ]; then
-        if [ "$(meta_get "$dir/info" session_id)" = "$HOLDER_ID" ] && [ "${FRESH_ONLY:-0}" != "1" ]; then
-            return 2
+        if [ "$(meta_get "$dir/info" session_id)" = "$HOLDER_ID" ]; then
+            if [ "${FRESH_ONLY:-0}" != "1" ]; then
+                return 2
+            fi
+            # FRESH_ONLY=1 (a `hold`) but THIS session already holds it. Because
+            # maybe_reclaim_stale() above already reclaimed the lock if its tracked
+            # pid were dead, reaching here means a still-LIVE sibling `hold` in this
+            # same session owns it. Don't refuse (the old behavior, which then made
+            # --wait spin futilely -- the waiter and the holder are the same session,
+            # so it could never clear). Instead ADOPT: rewrite the tracked pid to
+            # ours so THIS process becomes the authoritative holder/heartbeat. Safe
+            # because exclusion is per-session -- the session already had exclusive
+            # access, so a second hold within it is never a cross-agent conflict.
+            # The superseded sibling's release is pid-guarded (see hold_release_all),
+            # so its eventual exit won't pull the lock out from under us. This is what
+            # lets an agent re-run `hold` to recover after its heartbeat task died
+            # without its release trap firing (e.g. a hard kill that survived
+            # stale-reclaim only because a sibling kept the pid alive).
+            ADOPTED["$resource"]=1
+            ADOPTED_PREV_PID["$resource"]="$(meta_get "$dir/info" pid)"
+            set_meta_field "$resource" pid "$PID_ARG"
+            [ -n "$REASON" ] && set_meta_field "$resource" reason "$REASON"
+            return 0
         fi
         CONFLICT_INFO="$dir/info"
         return 1
@@ -241,7 +282,17 @@ try_acquire_one() {
         return 0
     fi
 
-    # Lost a race between the -d check and mkdir.
+    # Lost a race between the -d check and mkdir: another process created it
+    # first. If that process is our own session (a sibling `hold` starting at the
+    # same instant), adopt it exactly like the already-existing case above;
+    # otherwise it's a genuine cross-session conflict.
+    if [ "$(meta_get "$dir/info" session_id)" = "$HOLDER_ID" ] && [ "${FRESH_ONLY:-0}" = "1" ]; then
+        ADOPTED["$resource"]=1
+        ADOPTED_PREV_PID["$resource"]="$(meta_get "$dir/info" pid)"
+        set_meta_field "$resource" pid "$PID_ARG"
+        [ -n "$REASON" ] && set_meta_field "$resource" reason "$REASON"
+        return 0
+    fi
     CONFLICT_INFO="$dir/info"
     return 1
 }
@@ -267,14 +318,22 @@ try_acquire_all() {
             0) newly_acquired+=("$r") ;;
             2) : ;;
             1)
+                # A conflict now only ever means a DIFFERENT session holds it --
+                # a same-session hold is adopted (return 0) above, not refused.
                 LAST_CONFLICT_RESOURCE="$r"
-                if [ "${FRESH_ONLY:-0}" = "1" ] && [ "$(meta_get "$CONFLICT_INFO" session_id)" = "$HOLDER_ID" ]; then
-                    LAST_CONFLICT_MSG="already held by this same session ($(describe_conflict "$CONFLICT_INFO")) -- refusing to start a second instance"
-                else
-                    LAST_CONFLICT_MSG="$(describe_conflict "$CONFLICT_INFO")"
-                fi
+                LAST_CONFLICT_MSG="$(describe_conflict "$CONFLICT_INFO")"
+                # Roll back only what THIS call did: delete freshly-created locks,
+                # but hand adopted ones back to the sibling we displaced (deleting
+                # them would release a lock the session legitimately still holds).
                 local r2
-                for r2 in "${newly_acquired[@]}"; do rm -rf "$(lock_dir_for "$r2")"; done
+                for r2 in "${newly_acquired[@]}"; do
+                    if [ -n "${ADOPTED[$r2]:-}" ]; then
+                        set_meta_field "$r2" pid "${ADOPTED_PREV_PID[$r2]}"
+                        unset "ADOPTED[$r2]" "ADOPTED_PREV_PID[$r2]"
+                    else
+                        rm -rf "$(lock_dir_for "$r2")"
+                    fi
+                done
                 return 1
                 ;;
         esac
@@ -398,15 +457,23 @@ kill_orphaned_metro() {
 
 # Self-release trap for cmd_hold -- fires on clean exit, kill, or crash.
 # Never triggered by the waiter-poll loop in cmd_hold itself (see below).
-# --force is required and safe here: we ARE the tracked pid for every
-# resource in RESOURCES ($$, set by cmd_hold), so `kill -0 $$` from inside
-# our own still-running trap is trivially true -- this is a deliberate
-# self-release, not a cross-session override.
+# --force is required and safe here: we ARE the tracked pid for every resource we
+# still hold, so this is a deliberate self-release, not a cross-session override.
+#
+# Pid guard: only release a resource if its lock STILL records our pid. If a later
+# same-session `hold` adopted it (rewrote the tracked pid to its own -- see
+# try_acquire_one), that newer hold is now authoritative and owns the release;
+# releasing here would pull the lock out from under it. Skipping is safe because
+# the adopter's own trap will release when it exits.
 hold_release_all() {
     [ "$RELEASED_ONCE" = 1 ] && return
     RELEASED_ONCE=1
-    local r
+    local r tracked
     for r in "${RESOURCES[@]}"; do
+        tracked="$(meta_get "$(lock_dir_for "$r")/info" pid 2>/dev/null || true)"
+        if [ -n "$tracked" ] && [ "$tracked" != "$$" ]; then
+            continue
+        fi
         "$0" release "$r" --force >/dev/null 2>&1 || true
     done
 }
@@ -455,9 +522,16 @@ cmd_hold() {
     fi
 
     echo "Holding: ${RESOURCES[*]} (session $HOLDER_ID, pid $$)"
+    if [ "${#ADOPTED[@]}" -gt 0 ]; then
+        echo "Adopted existing same-session hold(s) for: ${!ADOPTED[*]} (now tracked by pid $$; a prior heartbeat in this session already held them). This is the authoritative hold now -- stopping it releases."
+    fi
 
     for r in "${RESOURCES[@]}"; do
-        if [ "$r" = "app" ]; then
+        # Skip the Metro-orphan sweep for an ADOPTED 'app' hold: the sibling we
+        # took over already ran it and may have a legitimate Metro running (tracked
+        # via metro_pid); re-sweeping could kill it. Only a FRESH app acquire means
+        # nothing legitimate can be running yet, so anything found is a true orphan.
+        if [ "$r" = "app" ] && [ -z "${ADOPTED[app]:-}" ]; then
             kill_orphaned_metro
             break
         fi
