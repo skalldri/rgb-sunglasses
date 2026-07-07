@@ -1,0 +1,66 @@
+#pragma once
+
+#include <extensions/extension_limits.h>
+#include <extensions/extension_manifest.h>
+#include <rgbx/rgbx_api.h>
+
+#include <cstddef>
+
+/**
+ * @file
+ * @brief Pure (Zephyr-free) helpers for persisting extension parameter values
+ * via the existing persistent_value_registry/persistent_value_store
+ * mechanism (see fw/CLAUDE.md's "Settings-backed config persistence").
+ *
+ * Deliberately dependency-free, like extension_manifest.h, so it compiles on
+ * native_sim and is covered by a Twister suite without pulling in Zephyr/BT.
+ */
+namespace extension_param_persistence {
+
+/** @brief "ext/" prefix + sanitized display name, always NUL-terminated. */
+inline constexpr size_t kKeyMaxLen = 4 + extension_host::kMaxNameLen;
+
+/**
+ * @brief Combined persisted payload for one extension: every scalar param
+ * value plus every string param value.
+ *
+ * One entry per extension (not per param), keyed by the extension's stable
+ * display name (see build_settings_key()) rather than slot index or
+ * declaration order, since slot assignment can shift between boots as
+ * /NAND:/ext/ file sets change.
+ */
+struct Blob {
+    uint32_t paramValues[RGBX_MAX_PARAMS];
+    char stringValues[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX];
+};
+
+/**
+ * @brief Builds the persistent_value_registry key "ext/<sanitized displayName>"
+ * for one extension.
+ *
+ * displayName is untrusted extension-manifest content (see extension_manifest.h)
+ * and may contain '/' or '=', both structurally significant to Zephyr's
+ * settings key parser — both are replaced with '_'. Always NUL-terminates
+ * @p out, truncating if displayName doesn't fit.
+ */
+void build_settings_key(char *out, size_t outLen, const char *displayName);
+
+/** @brief Copies paramValues/stringValues into a Blob ready to persist. */
+void fill_blob(Blob &blob, const uint32_t paramValues[RGBX_MAX_PARAMS],
+               const char stringValues[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX]);
+
+/**
+ * @brief Applies a loaded Blob on top of already-defaulted paramValues/stringValues.
+ *
+ * Only touches indices meta.paramCount/meta.stringParamCount describe as
+ * valid today — a stale blob written under a since-changed manifest (e.g. an
+ * updated .llext with fewer params) can't corrupt anything outside that
+ * range. BOOL params are clamped to 0/1 (mirrors extension_manifest.cpp's
+ * validator, in case a persisted value predates a param changing type).
+ * Every string is force-NUL-terminated within RGBX_PARAM_STRING_MAX.
+ */
+void apply_blob(const Blob &blob, const extension_manifest::Metadata &meta,
+                uint32_t paramValues[RGBX_MAX_PARAMS],
+                char stringValues[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX]);
+
+}  // namespace extension_param_persistence

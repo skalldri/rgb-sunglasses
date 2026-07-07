@@ -8,8 +8,9 @@
  * and registered via bt_gatt_service_register(). The layout mirrors what
  * BtGattServer emits per characteristic — declaration, value, CUD, CPF — so
  * the companion app's generic discovery treats extension services exactly
- * like built-in animation services (minus the optional metadata blob, for
- * which the app has a per-descriptor fallback path).
+ * like built-in animation services, including the optional bulk metadata
+ * characteristic (see extension_metadata_blob.h), built at runtime here
+ * instead of at compile time the way BtGattServer's MetadataBlobBuilder does.
  */
 
 #include <animations/animation_registry.h>
@@ -17,6 +18,7 @@
 #include <bluetooth/gatt_cpf.h>
 #include <extensions/extension_bt.h>
 #include <extensions/extension_host.h>
+#include <extensions/extension_metadata_blob.h>
 #include <pattern_controller.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/logging/log.h>
@@ -34,8 +36,11 @@ using extension_host::kMaxExtensions;
 /* Characteristics per service: Animation Name + Is Active + params. */
 constexpr size_t kMaxChars = 2 + RGBX_MAX_PARAMS;
 /* Attrs per characteristic: declaration + value + CUD + CPF; +1 for the CCC
- * on Is Active (the only notifying characteristic). */
-constexpr size_t kMaxAttrs = 1 /* primary service */ + 4 * kMaxChars + 1;
+ * on Is Active (the only notifying characteristic); +2 for the bulk metadata
+ * characteristic (declaration + value), gated the same way BtGattServer's
+ * compile-time equivalent is (issue #90). */
+constexpr size_t kMaxAttrs = 1 /* primary service */ + 4 * kMaxChars + 1 +
+                             (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC) ? 2 : 0);
 
 constexpr bt_gatt_cpf kCpfUtf8 = {.format = BLE_GATT_CPF_FORMAT_UTF8S};
 constexpr bt_gatt_cpf kCpfBool = {.format = BLE_GATT_CPF_FORMAT_BOOLEAN};
@@ -60,6 +65,14 @@ struct BtSlot {
     bt_gatt_ccc_managed_user_data isActiveCcc = {};
     const bt_gatt_attr *isActiveValueAttr = nullptr;  // notify target
     bt_gatt_service svc = {};
+    /* Bulk metadata blob (issue #90), built once per extension_bt_register()
+     * call from the same name/cpf data already fed to append_characteristic()
+     * for each characteristic — host-owned static storage, never extension
+     * memory (which is untrusted and vanishes on unload). */
+    uint8_t metadataBlob[extension_metadata_blob::kMaxBlobSize] = {};
+    size_t metadataBlobPos = 0;
+    uint8_t metadataEntryCount = 0;
+    bt_gatt_chrc metadataChrc = {};
 };
 
 BtSlot sBtSlots[kMaxExtensions];
@@ -89,6 +102,12 @@ ssize_t read_is_active(struct bt_conn *conn, const struct bt_gatt_attr *attr, vo
                        uint16_t len, uint16_t offset) {
     const auto *bs = static_cast<const BtSlot *>(attr->user_data);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &bs->isActive, sizeof(bs->isActive));
+}
+
+ssize_t read_metadata(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+                      uint16_t len, uint16_t offset) {
+    const auto *bs = static_cast<const BtSlot *>(attr->user_data);
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, bs->metadataBlob, bs->metadataBlobPos);
 }
 
 /* Same semantics as AnimationIsActiveBinding::onRemoteActiveChange for the
@@ -244,6 +263,17 @@ size_t append_characteristic(BtSlot *bs, size_t attrIdx, size_t chrcIdx, const b
         .handle = 0,
         .perm = BT_GATT_PERM_READ,
     };
+
+    /* Bulk metadata blob entry (issue #90): written from the same cud/cpf
+     * already fed into this characteristic's CUD/CPF attrs above, so blob
+     * order can never drift from attr/handle order — no second pass over
+     * the characteristic list is needed to rebuild it. */
+    if (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC)) {
+        if (extension_metadata_blob::append(bs->metadataBlob, sizeof(bs->metadataBlob),
+                                            &bs->metadataBlobPos, cpf->format, cud)) {
+            bs->metadataEntryCount++;
+        }
+    }
     return attrIdx;
 }
 
@@ -286,6 +316,15 @@ int extension_bt_register(size_t slot) {
 
     const uint32_t animId = static_cast<uint32_t>(extension_host::animationId(slot));
     bs->svcUuid = BT_ANIMATION_SERVICE_UUID(animId);
+
+    /* Reset the metadata blob on every (re)registration — a slot can be
+     * re-registered after unload with a different manifest, so stale
+     * entries from a previous registration must not linger. */
+    if (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC)) {
+        extension_metadata_blob::init(bs->metadataBlob);
+        bs->metadataBlobPos = 2;
+        bs->metadataEntryCount = 0;
+    }
 
     size_t attrIdx = 0;
     size_t chrcIdx = 0;
@@ -354,6 +393,37 @@ int extension_bt_register(size_t slot) {
                                         reinterpret_cast<const bt_uuid *>(&bs->paramUuids[p]),
                                         /*writable=*/true, read_param, write_param,
                                         &bs->paramCtx[p], info->name, cpf);
+    }
+
+    /* Bulk metadata characteristic (issue #90): appended AFTER every other
+     * provider attr so it never shifts an earlier characteristic's handle —
+     * mirrors BtGattServer's getMetadataAttrsTuple() ordering rule. Reuses
+     * the same fixed UUID/version as the compile-time mechanism so the
+     * app's existing lookup finds it with zero app-side changes. */
+    if (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC)) {
+        bs->metadataBlobPos =
+            extension_metadata_blob::finish(bs->metadataBlob, bs->metadataBlobPos, bs->metadataEntryCount);
+
+        bs->metadataChrc.uuid = &kMetadataCharacteristicUuid.uuid;
+        bs->metadataChrc.value_handle = 0;
+        bs->metadataChrc.properties = BT_GATT_CHRC_READ;
+
+        bs->attrs[attrIdx++] = {
+            .uuid = BT_UUID_GATT_CHRC,
+            .read = bt_gatt_attr_read_chrc,
+            .write = nullptr,
+            .user_data = &bs->metadataChrc,
+            .handle = 0,
+            .perm = BT_GATT_PERM_READ,
+        };
+        bs->attrs[attrIdx++] = {
+            .uuid = &kMetadataCharacteristicUuid.uuid,
+            .read = read_metadata,
+            .write = nullptr,
+            .user_data = bs,
+            .handle = 0,
+            .perm = BT_GATT_PERM_READ_ENCRYPT,
+        };
     }
 
     bs->svc.attrs = bs->attrs;

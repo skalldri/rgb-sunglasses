@@ -4,6 +4,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 
+#include <errno.h>
+
 #include <cstdio>
 
 // When the feature is disabled (e.g. CONFIG_APP_PERSIST_BT_CONFIG=n on
@@ -79,6 +81,20 @@ void save_value(const char* key, const void* data, size_t len) {
     LOG_INF("Single value Saved in %llu ms", end - start);
 }
 
+ssize_t load_value(const char* key, void* buf, size_t bufLen) {
+    char fullKey[SETTINGS_MAX_NAME_LEN + 1];
+    int ret = snprintf(fullKey, sizeof(fullKey), "%s/%s", kSubtreeName, key);
+    if (ret < 0 || static_cast<size_t>(ret) >= sizeof(fullKey)) {
+        return -EINVAL;
+    }
+
+    ssize_t len = settings_load_one(fullKey, buf, bufLen);
+    if (len < 0) {
+        LOG_ERR("Failed to load persisted value '%s' (err: %zd)", fullKey, len);
+    }
+    return len;
+}
+
 }  // namespace persistent_value_store
 
 #else  // !CONFIG_APP_PERSIST_BT_CONFIG
@@ -88,6 +104,10 @@ namespace persistent_value_store {
 void request_save() {}
 
 void save_value(const char*, const void*, size_t) {}
+
+ssize_t load_value(const char*, void*, size_t) {
+    return -ENOSYS;
+}
 
 }  // namespace persistent_value_store
 

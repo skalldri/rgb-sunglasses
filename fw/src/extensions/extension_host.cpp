@@ -31,9 +31,12 @@
 #include <extensions/extension_bt.h>
 #include <extensions/extension_host.h>
 #include <extensions/extension_manifest.h>
+#include <extensions/extension_param_persistence.h>
 #include <extensions/extension_registry.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
+#include <settings/persistent_value_registry.h>
+#include <settings/persistent_value_store.h>
 #include <zephyr/fatal.h>
 #include <zephyr/kernel.h>
 #include <zephyr/llext/fs_loader.h>
@@ -75,6 +78,9 @@ struct Slot {
      * while the extension is not resident). */
     uint32_t paramValues[RGBX_MAX_PARAMS] = {};
     char stringValues[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX] = {};
+    /* "ext/<sanitized displayName>" — built once in scan_slot(), used as the
+     * persistent_value_registry key for this slot's param persistence. */
+    char settingsKey[extension_param_persistence::kKeyMaxLen] = {};
     /* Tick-handshake profiling (cycles), reset on every activation. */
     uint32_t tickMinCyc = 0;
     uint32_t tickMaxCyc = 0;
@@ -192,6 +198,22 @@ void sandbox_fault(Slot &slot, const char *what) {
     slot.faulted = true;
     unload_resident();
     animation_registry_set_is_active(animationId(static_cast<size_t>(&slot - sSlots)), false);
+
+    /* A persisted param value may be what caused this crash — reset to
+     * manifest defaults immediately, in RAM AND on flash (synchronously,
+     * not via the debounced flush, so the clear can't be lost to a power
+     * cycle landing inside that debounce window), so neither an
+     * `ext select` retry nor a future boot can reproduce the same crash
+     * from the same poisoned value. */
+    for (size_t p = 0; p < slot.meta.paramCount; p++) {
+        slot.paramValues[p] = slot.meta.params[p].defaultValue;
+    }
+    memcpy(slot.stringValues, slot.meta.stringDefaults, sizeof(slot.stringValues));
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        extension_param_persistence::Blob defaults;
+        extension_param_persistence::fill_blob(defaults, slot.paramValues, slot.stringValues);
+        persistent_value_store::save_value(slot.settingsKey, &defaults, sizeof(defaults));
+    }
 }
 
 }  // namespace
@@ -308,6 +330,33 @@ bool validate_loaded(struct llext *ext, const char *path, const Exports &exports
     return true;
 }
 
+/* persistent_value_registry's load/save callbacks for one extension's
+ * combined param blob (extension_param_persistence::Blob). Registered from
+ * scan_slot() below. ext_params_do_load is reachable only if something
+ * re-invokes settings_load()/settings_load_subtree() after this key is
+ * registered — it doesn't, today (scan_slot() applies a persisted blob via
+ * persistent_value_store::load_value() directly, since registration always
+ * happens after the boot-time settings_load() replay has already run) — but
+ * it's implemented anyway to satisfy persistent_value_registry_register()'s
+ * non-null load/save contract and to stay correct if boot ordering ever
+ * changes. */
+void ext_params_do_load(void *target, const void *data, size_t len) {
+    if (len != sizeof(extension_param_persistence::Blob)) {
+        return;
+    }
+    auto *slot = static_cast<Slot *>(target);
+    extension_param_persistence::Blob blob;
+    memcpy(&blob, data, sizeof(blob));
+    extension_param_persistence::apply_blob(blob, slot->meta, slot->paramValues, slot->stringValues);
+}
+
+void ext_params_do_save(void *target) {
+    auto *slot = static_cast<Slot *>(target);
+    extension_param_persistence::Blob blob;
+    extension_param_persistence::fill_blob(blob, slot->paramValues, slot->stringValues);
+    persistent_value_store::save_value(slot->settingsKey, &blob, sizeof(blob));
+}
+
 /* Boot-time discovery of registry entry `fileIndex` into slot `slotIndex`:
  * loads the ELF transiently, validates it, copies the metadata out, seeds
  * the parameter values, and unloads again (load-on-activate lifecycle). The
@@ -343,6 +392,34 @@ bool scan_slot(size_t fileIndex, size_t slotIndex) {
         slot.paramValues[p] = slot.meta.params[p].defaultValue;
     }
     memcpy(slot.stringValues, slot.meta.stringDefaults, sizeof(slot.stringValues));
+
+    /* Persisted param values, if any, override the defaults just seeded
+     * above — reusing the same registry/store mechanism every built-in
+     * persisted characteristic uses (see fw/CLAUDE.md's "Settings-backed
+     * config persistence"), keyed by this extension's stable display name
+     * rather than slot index (see extension_param_persistence.h). Loading
+     * here (rather than via the registry's automatic settings_load()-replay
+     * dispatch) is required: that replay already ran in bluetooth_init(),
+     * strictly before this pattern-controller-thread discovery loop, so a
+     * key only known now is structurally too late for it to find. */
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        extension_param_persistence::build_settings_key(slot.settingsKey, sizeof(slot.settingsKey),
+                                                          slot.meta.displayName);
+        int persistRet = persistent_value_registry_register(slot.settingsKey, &slot, ext_params_do_load,
+                                                              ext_params_do_save);
+        if (persistRet == 0) {
+            extension_param_persistence::Blob loaded;
+            ssize_t loadedLen =
+                persistent_value_store::load_value(slot.settingsKey, &loaded, sizeof(loaded));
+            if (loadedLen == static_cast<ssize_t>(sizeof(loaded))) {
+                extension_param_persistence::apply_blob(loaded, slot.meta, slot.paramValues,
+                                                          slot.stringValues);
+            }
+        } else {
+            LOG_WRN("extension '%s': param persistence unavailable (%d) - values won't survive reboot",
+                    slot.meta.displayName, persistRet);
+        }
+    }
 
     const size_t heapBytes = ext->alloc_size;
     llext_unload(&ext);
@@ -554,6 +631,10 @@ void setParamValue(size_t slot, size_t index, uint32_t value) {
      * a mix of old and new values across params. */
     HostLockGuard lock;
     sSlots[slot].paramValues[index] = value;
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        persistent_value_registry_mark_dirty(sSlots[slot].settingsKey);
+        persistent_value_store::request_save();
+    }
 }
 
 const char *paramString(size_t slot, size_t index) {
@@ -580,6 +661,10 @@ bool writeParamString(size_t slot, size_t index, size_t offset, const void *data
     char *dst = sSlots[slot].stringValues[info->stringSlot];
     memcpy(dst + offset, data, len);
     dst[offset + len] = '\0';
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        persistent_value_registry_mark_dirty(sSlots[slot].settingsKey);
+        persistent_value_store::request_save();
+    }
     return true;
 }
 
