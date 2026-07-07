@@ -18,10 +18,12 @@ The GATT table of shipped firmware is a compatibility surface. Violations break 
    declaration-order index into the UUID), so reordering silently changes characteristic UUIDs
    AND the metadata-blob entry order the app zips positionally. Compiles clean, breaks every app.
 2. **Append, never insert/remove/reorder, in shipped firmware.** Android caches GATT handles per
-   bonded device; any table restructure breaks bonded phones (issue #115 — on OxygenOS only
-   forget+re-pair recovers; symptom: connected/encrypted link with ATT MTU stuck at 23). New
-   characteristics go at the END of the provider list; new services are new tables and are safe.
-   Diagnosing a phone already bitten by this → /debug-ble.
+   bonded device; any table restructure breaks bonded phones (issue #115; symptom:
+   connected/encrypted link with ATT MTU stuck at 23). Impact is phone-stack-dependent: compliant
+   stacks auto-recover via Service Changed + DB hash, and the app already passes
+   `refreshGatt: "OnConnected"` — but OxygenOS-class stacks honor neither and only forget+re-pair
+   recovers, so assume the worst for shipped firmware. New characteristics go at the END of the
+   provider list; new services are new tables and are safe. Details + diagnosis → /debug-ble.
 3. **Settings keys are explicit stable string literals** (e.g. `"battery/charge_enable"`), never
    derived from declaration position — UUIDs may be positional but persisted keys must survive
    any future (pre-ship) reorder.
@@ -56,7 +58,11 @@ one write-hooked characteristic + `BT_GATT_SERVER_REGISTER`. Steps:
    `BtGattPrimaryService<kUuid>` first, then characteristics. Aliases (bottom of
    `bt_service_cpp.h`): `BtGattAutoReadNotifyCharacteristic<"Label", T, Default>`,
    `BtGattAutoReadWriteCharacteristic`, etc.; persisted values use
-   `BtGattPersistentCharacteristic` (`fw/src/bluetooth/persistent_characteristic.h`).
+   `BtGattPersistentCharacteristic` (`fw/src/bluetooth/persistent_characteristic.h`). All
+   persisted characteristics share one fixed-cap registry — `kMaxRegistryEntries = 96` in
+   `fw/src/settings/persistent_value_registry.cpp` (issue #114 tracks removing the cap); a full
+   table drops new entries at boot (`LOG_ERR` "Persisted value table is full", `-ENOMEM` — no
+   build error), so check remaining headroom when adding persisted characteristics.
    The CUD label + CPF format (deduced from `T`) are what the app auto-renders as a control —
    no app change needed for standard types. Assemble with `BtGattServer server(primary, a, b, ...);`
    then `BT_GATT_SERVER_REGISTER(nameStatic, server);` — registration is link-time, no init call.

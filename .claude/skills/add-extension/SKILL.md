@@ -29,6 +29,11 @@ the first `.cpp`, falling back to the first `.c` only if no `.cpp` exists). Copy
 Framebuffer dims: 40×12 on proto0 (the host rejects a manifest whose dims don't match
 the display).
 
+Both templates stamp `RGBX_ABI_VERSION` (currently 1, as of 2026-07 — `#define` in
+`fw/include/rgbx/rgbx_api.h`) into the manifest; the host rejects any `.llext` whose
+`abi_version` doesn't match (`BadAbiVersion` in `fw/src/extensions/extension_manifest.cpp`),
+so every extension must be rebuilt whenever the ABI version bumps.
+
 ## 2. Build (no hardware, no lock, fast)
 
 ```bash
@@ -42,6 +47,12 @@ Requires an **existing configured proto0 build** — it regenerates the LLEXT ED
 like `built .../fw/build/extensions/<name>.llext (NNNN bytes)` per extension; failure
 modes: `error: Zephyr SDK toolchain not found` (bad container), a west/cmake error
 (build dir not configured — run `/build-proto0`), or plain compiler errors.
+
+The loaded extension must fit the LLEXT heap — `CONFIG_LLEXT_HEAP_SIZE=24` (kilobytes)
+in `fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf` (as of 2026-07), sized for the
+largest *single* extension since only the active one is llext-resident. Sanity-check
+build.sh's reported `.llext` byte size against it (a rough proxy: the loader copies
+sections into the heap, so on-heap size ≈ file size, not exactly equal).
 
 ## 3. Guardrails (each one is a real, observed failure)
 

@@ -41,14 +41,15 @@ twister -T fw/tests -p native_sim --coverage --coverage-tool lcov --outdir fw/tw
 ```
 
 Start all three before waiting on any; wait for all three, then evaluate every gate
-even if an earlier one failed — one report should cover everything wrong. Capture each
-build's `Memory region ... %age Used` summary (FLASH/RAM) — the PR body needs it (step 7).
+even if an earlier one failed — one report should cover everything wrong.
 
 **Gates** (evaluate all three, report every failure found — not just the first):
 - proto0 build failed → stop. Do not proceed to later steps. Report the error clearly.
 - DK build failed → stop. Report the error, especially if it's a flash
   overflow (the DK has a tight budget).
 - Any Twister test failed or errored → stop. List the failing suites.
+- Record proto0 and DK FLASH/RAM `%age Used` (the `Memory region` summary in each
+  build log) — required fields in the PR body (step 7).
 
 ## 3. If the diff touches `app/**`: run the /validate-app trio
 

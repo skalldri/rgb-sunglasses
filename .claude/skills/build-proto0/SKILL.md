@@ -5,6 +5,10 @@ allowed-tools: Bash, Read
 ---
 
 Build the proto0 firmware. Build dir: `fw/build`. Never use `--pristine` unless explicitly asked.
+**Exception**: a newly **added** devicetree overlay or Kconfig `.conf` fragment is never picked up
+by an incremental build — `DTC_OVERLAY_FILE`/`CONF_FILE` are cached in
+`fw/build/<image>/CMakeCache.txt`, which permanently gates auto-discovery. `--pristine` is the fix;
+see fw/CLAUDE.md, "Per-image Kconfig/devicetree overlays (sysbuild)".
 
 ```bash
 west build \
@@ -20,8 +24,9 @@ west build \
 0. **First-time build check**: if `[ ! -f fw/build/fw/CMakeCache.txt ]`, no configured build exists yet.
    Run the exact same command — it configures from scratch. This is **very slow (tens of minutes)**: a
    full sysbuild of netcore + MCUboot + app. Do not interrupt or retry it; let it finish. On all
-   subsequent runs the same command builds incrementally — never add `--pristine` unless the user asks
-   or the board/sysbuild config changed incompatibly.
+   subsequent runs the same command builds incrementally — never add `--pristine` unless the user asks,
+   the board/sysbuild config changed incompatibly, or a devicetree overlay / `.conf` fragment was
+   newly added (cached `DTC_OVERLAY_FILE`/`CONF_FILE` gate auto-discovery; see exception above).
 1. Run the build command above.
 2. If it **fails**:
    - Do NOT re-run the build immediately. Read the error from the build output first.

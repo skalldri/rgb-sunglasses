@@ -92,7 +92,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 **LED rendering pipeline**
 
 - `src/led_controller.cpp` — manages dual-bank WS2812 LED strip hardware and a double-framebuffer. Callers claim a buffer via `claimBufferForRender`, write pixels via `set_pixel_in_framebuffer`, then release it.
-- `src/pattern_controller.cpp` — sits above the LED controller. Owns the active animation slot and an optional `Indicator` overlay (BT advertising/connecting/pairing). Callers request an indicator with `pattern_controller_request_indicator` or switch animations with `pattern_controller_change_to_animation`.
+- `src/pattern_controller.cpp` — sits above the LED controller. Owns the active animation slot and an optional `Indicator` overlay (BT advertising/connecting/pairing). Callers request an indicator with `pattern_controller_request_indicator` or switch animations with `pattern_controller_change_to_animation`. **Note `pattern_controller_change_to_animation()` runs synchronously on the caller's thread** — BT RX for GATT writes, the shell thread for `anim set`; only the boot-time restore in the thread entry runs on the pattern-controller thread itself. Nothing in this file may assume pattern-controller-thread context, and no automated gate checks this.
 - `src/led_config.h` — compile-time constants for the frame LED geometry (40×12 logical display over two banks, serpentine wiring) and the devkit LED geometry (8×2). All rendering code receives a `const LedConfig*` so the same logic runs on both targets.
 
 **Animation system**
@@ -148,6 +148,7 @@ grep -rlE 'bluetooth|BT_GATT|BtGatt' fw/src/animations/
   - **Power subsystem: safe vs danger.** All `power` shell commands are registered in `src/power.cpp`.
   - **SAFE (read-only)**: `power bq status`, `power bq dump`, `power pd dump`, `power vreghvout`, and the `bq25792_get_*` driver getters. Caveat: `bq25792_get_*` do **not** propagate I2C errors — a failed read can return stale/zero data that looks plausible (see the emul_tps25750 test notes below).
   - **DANGER (writes)**: any register write, 4CC task, or patch operation — `power pd patch ...` (`tps25750_download_patch()`), `power pd clear_dbfg`, the `power bq charge`/`adc`/`pfm`/`freq`/`temp_override` setters (`bq25792_set_*`), and **especially `power boost`**, which writes UICR `VREGHVOUT` — irreversible without a mass chip erase. Every one of these is governed by root `CLAUDE.md`'s "NEVER write unverified commands or data into hardware parts" rule: authoritative datasheet/TRM in hand first, or stop and ask.
+  - **A wrong/implausible BQ25792 current or voltage report has two known in-repo root-cause classes** — missing two's-complement sign extension in the ADC decode (IBAT/IBUS are 16-bit signed; fixed in PR #106, regression suite `fw/tests/drivers/bq25792_decode`) and interleaved I2Cm bridge transactions (fixed in PR #111 with the `task_mutex`). Rule both out (see `/debug-fw`'s device-symptoms table) before pursuing any external fix or register write. And remember every BQ25792 register access — the bq25792 DT node is a child of the tps25750 node — goes through the TPS25750 I2Cm bridge's CMD1/DATA1 4CC sequence under that `task_mutex` (`fw/drivers/tps25750/tps25750.c`); any new BQ25792 write inherits that path and its serialization requirements.
   - Prefer exercising power code on native_sim first: `tests/drivers/emul_tps25750` runs the **real** tps25750 + bq25792 drivers against an emulated register file — no hardware, no risk.
 - `src/buttons.cpp` — GPIO button handling. Button callback runs in ISR context; dispatch to `ButtonEventListener` is deferred via `K_MSGQ_DEFINE` + `k_work` for thread safety.
 - `src/fonts/` — `FontAtlas` and `FontShell` provide bitmap font rendering used by `TextAnimation` and `BtPairingAnimation`.
@@ -174,6 +175,8 @@ CONFIG_ANIMATION_RAINBOW=y
 CONFIG_ANIMATION_ZIGZAG=y
 ```
 
+App modules are compiled via `target_sources_ifdef(CONFIG_<MODULE> app PRIVATE ...)` lines in `fw/CMakeLists.txt` — that CMake line is the compile gate; in-source `#if DT_HAS_ALIAS(...)` guards (e.g. `led_strip_2` in `fw/src/status_led/status_led.cpp`) are secondary, never the gate. When adding a tunable for an existing module, check that module's `target_sources_ifdef` line first and add `depends on <MODULE>` to the new symbol, matching every other `APP_*` int in `fw/Kconfig` (e.g. `APP_EXT_TICK_DEADLINE_MS` depends on `APP_EXTENSION_HOST`).
+
 Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_CBPRINTF_FP_SUPPORT=n`); `CONFIG_SIZE_OPTIMIZATIONS=y` lives in the proto0 **board** conf, not `prj.conf`.
 
 **No `%f`/`%g` in log or shell format strings.** `CONFIG_CBPRINTF_FP_SUPPORT` and `CONFIG_PICOLIBC_IO_FLOAT` are disabled (~10KB FLASH, issue #79 ROM pass); a `%f` prints the literal specifier instead of the value (no crash). Print floats via integer fixed-point instead — see `fmt_fixed4()` / `agc_gain_db10()` in `src/sound/sound.cpp` (the only float-printing code in the app).
@@ -183,6 +186,8 @@ Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.
 ### SYS_INIT ordering for early registration
 
 `SYS_INIT(fn, APPLICATION, N)` runs before `K_THREAD_DEFINE` threads are scheduled. Lower N runs first. When an observer or listener must be registered before a thread can fire its first event, use `SYS_INIT(APPLICATION, 0)`. Both `bluetooth_init` and `button_init` run at priority 1, so registering observers at priority 0 guarantees the observer is in place before either subsystem starts.
+
+**C++ static constructors run after POST_KERNEL but BEFORE APPLICATION-level SYS_INIT** (`z_static_init_gnu()` in NCS v3.1.1's `zephyr/kernel/init.c` `bg_thread_main`, between the two `z_sys_init_run_level()` calls). Any container that static-init constructors register into — e.g. `src/settings/persistent_value_registry.cpp`, populated by the `BtGattPersistentCharacteristic` / `ChargeEnableCharacteristic` ctors and the `LastActiveAnimationRegistrar` / `GlimPersistenceRegistrar` structs — must be constant-initialized (plain zero-initialized statics, like that file's `sRegistry[]` + `sRegistryCount`), never initialized from an APPLICATION SYS_INIT, which runs after the ctors and would silently discard every registration.
 
 It's very important that SYS_INIT() priority levels must ALWAYS be a plain pre-processor directive that derives to a single number. SYS_INIT() priority levels CANNOT be expressions that require evaluation, they MUST be a plain number or a single pre-processor directive that is replaced directly with a number.
 

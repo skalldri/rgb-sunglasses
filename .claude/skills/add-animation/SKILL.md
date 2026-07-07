@@ -75,10 +75,20 @@ before starting.
     — the scratch `--outdir` is /test-fw's targeted-run rule; without it twister
     drops a non-gitignored `twister-out/` at the repo root), then
     /build-proto0 AND /build-dk (both must link; watch DK FLASH%), then /submit-pr.
-    On-device verification is /flash-and-verify — not part of this skill.
+    On-device verification is /flash-and-verify — not part of this skill. When
+    reporting what remains unverified, explicitly include the Is Active notify path
+    and GATT service registration: the DI suite is BT-free and never exercises
+    either — only the /build-* links plus on-device /flash-and-verify do.
 
 ## RENDERING RULES (every tick() must obey)
 
+- **BLE-writable uint32 parameters can arrive with ANY value** — guard zero AND
+  extreme magnitudes. Beware intermediate multiplies: uint32 products wrap at 2^32
+  on BOTH nRF5340 and native_sim (both 32-bit here), and DI tests use modest values,
+  so overflow bugs pass every Twister run — widen to `uint64_t` or clamp before
+  scaling math.
+- **`setPixel` takes `uint8_t` channels** (`animation_renderer.h`) — compute integer
+  values or cast explicitly; don't pass floats.
 - **Draw at/near 255.** The BLE brightness factor (`core/brightness`, default
   20/1000 = 0.02) is applied downstream — dim source colors render as *black* and
   have been mistaken for a crash before.

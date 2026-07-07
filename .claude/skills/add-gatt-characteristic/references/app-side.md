@@ -42,6 +42,14 @@ on this as of 2026-07.)
      the device canonicalizes the written value and notifies it back (the dropdown does — the
      firmware reorders the option list); the default optimistic path would show a wrong value
      until the notification lands.
+
+   Either way, state which `bluetooth-context.tsx` helper carries the write
+   (`writeToCharacteristic`, or `writeServiceCharacteristic` for per-service UUIDs) — that helper
+   provides the optimistic-update + compare-and-swap revert contract (see the traps below), which
+   is part of the format's correctness story. The revert only fires if the firmware rejects
+   invalid payloads with an ATT error (surfacing as `androidErrorCode: 252`) — never
+   ACK-then-corrective-notify; make the firmware side of any new writable format uphold that
+   (SKILL.md "Write-path rules").
 4. **Dispatch**: add a `charInfo.cpfFormat === ...` branch in `renderCharacteristicInput()`
    (`hooks/use-characteristic-editor.tsx`). Note the guard above the dispatch: characteristics
    with both `isWritableWithResponse === false` and `isWritableWithoutResponse === false` render

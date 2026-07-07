@@ -38,6 +38,11 @@ mirrors), `boards/native_sim.overlay` (ramdisk / flash partitions / emulated dev
 | FAT filesystem / ramdisk I/O | `fw/tests/storage/glim_decoder/` | 2 suites in one binary (pure + `_io` with mkfs/mount fixtures); `boards/native_sim.overlay` with a `zephyr,ram-disk` node |
 | Code needing partition-manager macros | `fw/tests/mcuboot_updater/` | Mock `include/pm_config.h` + `filter:` + flash-partition overlay |
 
+**One home per unit.** If the unit under test already has incidental coverage bolted
+onto another suite, migrate those cases into the new dedicated suite and delete them
+from the foreign file (re-running the foreign suite to confirm it still passes) —
+never leave the same unit tested in two places.
+
 **Mocking policy: this repo uses NO fff (Fake Function Framework), ever.** The four
 sanctioned styles: (a) C++ interface fakes implementing DI abstract classes, (b)
 `extern "C"` link-time recording fakes, (c) DT-registered device emulators
@@ -118,7 +123,9 @@ not guaranteed or required; add suites where coverage is needed.
 - **Time is simulated and coarse**: `k_usleep` rounds up to full 10 ms ticks (see the
   comments in `fw/tests/imu/pipeline/src/main.c` — driver boot takes ~200 ms of
   simulated time). Poll for readiness in suite setup; never sleep fixed "real-world"
-  amounts, and expect closely-spaced emulated interrupts to coalesce.
+  amounts. Space emulated interrupts ~50 ms apart — the sleep must outlast the whole
+  trigger-thread + fetch + msgq-put chain (several ticks), not merely exceed one
+  tick, or pulses coalesce and frames drop (see `fire_drdy()` in that file).
 - **Concurrency tests need an artificial blocking window.** On native_sim a transfer
   with no blocking point never interleaves threads, so races won't reproduce. Use the
   emulator hook (`emul_tps25750_set_cmd_delay_ms()` in

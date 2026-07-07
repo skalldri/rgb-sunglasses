@@ -67,6 +67,9 @@ Details:
    is how DK overflows land.
 2. **Read the FLASH/RAM `%age Used` lines** from the end of each build's output.
    For deltas, compare against a pre-change build of the same board/build dir.
+   When hunting savings, flip ONE config symbol per rebuild so each map delta is
+   attributable to a single change; batch flips only after each has been measured
+   individually, or be prepared to attribute each one via per-section map greps (step 3).
 3. **For any claim about a specific symbol or section** (e.g. "sSlots costs 14.5KB",
    "the llext heap is in .noinit"), grep the map:
    ```bash

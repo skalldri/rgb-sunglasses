@@ -23,6 +23,13 @@ Locks, refs, and branches are shared across worktrees via the common git dir; fi
 not. Before touching a subsystem, read its CLAUDE.md first (root CLAUDE.md rule):
 `fw/CLAUDE.md` for firmware, `app/CLAUDE.md` for the app.
 
+The session's skill index is injected by the harness and may not match **this**
+checkout. Verify `ls .claude/skills/` contains every skill the index advertises, and
+compare `git log -1 -- .claude/skills/` here against the `skill-library` branch (the
+canonical library home as of 2026-07) before trusting a skill's step list. A mismatch
+means this worktree lacks the full or current library — say so explicitly and do not
+guess at what a missing or outdated skill would have said.
+
 ## 2. What a fresh worktree LACKS (expected, not an error)
 
 | Missing | Fix | Notes |
@@ -58,6 +65,13 @@ create the feature branch **first**, ideally before editing anything:
 ```bash
 git checkout -b <feature-branch>
 ```
+
+Before fixing anything that looks stale (docs, configs, comments), run
+`git log --oneline --all -- <file>` — branches are shared across all worktrees via the
+common git dir, and a sibling branch may already carry the fix. A keyword grep over
+commit subjects is **not** sufficient to rule this out (real incident: a `fw/CLAUDE.md`
+staleness fix already on the `skill-library` branch was missed by a keyword-filtered
+log search, producing a duplicate parallel edit).
 
 ## 5. Shared hardware — one board, one phone, many agents
 

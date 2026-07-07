@@ -28,6 +28,7 @@ Bash) on that file when you don't hold a lock.
 | Write fails, `androidErrorCode: 252`, `attErrorCode: null` | Firmware rejected the write — this is deliberate, not a bug per se | 5 |
 | Discovery/connect takes many seconds | Too many sequential ATT ops — do NOT parallelize, do NOT blame the JS bridge (issue #41) | 6 |
 | Device vanished from scans after an app reload or a discovery throw | Orphaned native BLE link — force-stop the app | 7 |
+| Firmware log: `bt_att: No ATT channel for MTU N` + `Notify failed ... -12`; app silently keeps a stale value | Notify payload exceeds negotiated ATT MTU (`bt_gatt_notify` can't fragment) | 8 |
 
 ## 1. Split-brain / stale Android GATT cache
 
@@ -51,6 +52,12 @@ Recovery is phone-stack-dependent (issue #115 has the two-phone evidence table):
   Bluetooth → forget device → re-pair. No app-side connect option rescues it (verified
   in issue #115); don't burn time toggling `refreshGatt`/`requestMTU` orderings.
 
+Scope check: stale-cache failure on non-compliant stacks is a FULL discovery/MTU hang
+or timeout — never scattered per-characteristic read failures inside an otherwise
+successful discovery loop. Isolated swallowed `read()` errors in
+`app/hooks/use-ble-connection.ts`'s loop (caught + logged; `charInfo.value` stays null,
+rendered `false` by `CharacteristicBoolean`) are transient ATT failures, not issue #115.
+
 The app already passes `refreshGatt: "OnConnected"` (grep `refreshGatt` in
 `app/hooks/use-ble-connection.ts`) — keep it; it fixes the `GATT_INVALID_HANDLE` case
 on compliant stacks (app/CLAUDE.md "Known Issues & Quirks" has the full entry).
@@ -65,6 +72,11 @@ A reconnect changes no device state, so no notification fires; a client that onl
 subscribes shows stale defaults forever. **Rule: on (re)connect, read the current value
 first, then subscribe.** In-tree precedent: `app/services/mcuboot-updater-client.ts` —
 grep `statusChar.read()` (the read happens before `.monitor(...)`). Background: PR #78.
+Residual window even with read-then-subscribe: in `app/hooks/use-ble-connection.ts`
+values are read per-characteristic during the multi-second discovery loop, but monitors
+are only attached after the entire loop finishes — a device-side change in that window
+(e.g. an extension fault flipping Is Active) is silently missed until the next
+notification.
 
 ## 3. Toggle/Switch flicker on write
 
@@ -124,6 +136,16 @@ OS drops the link, then relaunch. Both triggers (discovery-loop throw, `reload_a
 mid-session reflash) and the exact force-stop procedure are in app/CLAUDE.md — see
 "Known Issues & Quirks" and "BLE Link Can Get Orphaned by App Reloads, Not Just
 Discovery Failures". Anything `adb`-shaped needs the `app` lock (hw-lock skill).
+
+## 8. Notify silently dropped: payload exceeds negotiated MTU
+
+`bt_gatt_notify()` cannot fragment (unlike long reads/writes) — payload + 3-byte header
+must fit the CURRENT negotiated ATT MTU. The `N` in `bt_att: No ATT channel for MTU N`
+is the attempted PDU size (payload + 3), **not** the MTU: `N` > 247 → payload itself
+oversized; 23 < `N` ≤ 247 → link likely stuck at the 23-byte default (app's `requestMTU:
+247` never took effect — §1 stale-cache family). No error reaches the app — verify on
+the serial shell (e.g. `glim get_selected`), never from app UI alone. Full diagnostic:
+`references/notify-mtu.md`.
 
 ## Hardware-side verification (source of truth)
 
