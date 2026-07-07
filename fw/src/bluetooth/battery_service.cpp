@@ -55,7 +55,11 @@ class ChargeEnableCharacteristic
 
     ChargeEnableCharacteristic() {
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            persistent_value_registry_register(kChargeEnableKey, this, &doLoad, &doSave);
+            mPersistEntry.key = kChargeEnableKey;
+            mPersistEntry.target = this;
+            mPersistEntry.load = &doLoad;
+            mPersistEntry.save = &doSave;
+            persistent_value_registry_register(&mPersistEntry);
         }
     }
 
@@ -79,6 +83,12 @@ class ChargeEnableCharacteristic
     }
 
    private:
+    // Caller-owned registry storage (see persistent_value_registry.h). Not #if-gated: this
+    // is a concrete (non-template) class, so the CONFIG_APP_PERSIST_BT_CONFIG=n build still
+    // semantically checks the disabled register() branch, which references it. It's a few
+    // bytes of BSS and zero flash when persistence is off - DK's constraint is flash.
+    PersistentValueRegistryEntry mPersistEntry{};
+
     // POD-only copies of BtGattPersistentCharacteristic's doLoad/doSave (bool storage).
     static void doLoad(void *target, const void *data, size_t len) {
         auto *self = static_cast<ChargeEnableCharacteristic *>(target);

@@ -10,6 +10,7 @@ namespace {
 struct FakeUint32Entry {
     const char *key;
     uint32_t value;
+    PersistentValueRegistryEntry reg{};  // caller-owned registry storage
 };
 
 size_t sSaveCallCount = 0;
@@ -30,6 +31,7 @@ void uint32_save(void *target) {
 struct FakeStringEntry {
     const char *key;
     char value[32];
+    PersistentValueRegistryEntry reg{};  // caller-owned registry storage
 };
 
 void string_load(void *target, const void *data, size_t len) {
@@ -42,6 +44,18 @@ void string_load(void *target, const void *data, size_t len) {
 void string_save(void *target) {
     auto *entry = static_cast<FakeStringEntry *>(target);
     persistent_value_store::save_value(entry->key, entry->value, strlen(entry->value) + 1);
+}
+
+// Fill a Fake struct's caller-owned entry and register it (registry links it by pointer,
+// so the Fake struct must outlive the registration - here it's a test-local).
+void registerFake(FakeUint32Entry &e) {
+    e.reg = {e.key, &e, uint32_load, uint32_save, false, {}};
+    persistent_value_registry_register(&e.reg);
+}
+
+void registerFake(FakeStringEntry &e) {
+    e.reg = {e.key, &e, string_load, string_save, false, {}};
+    persistent_value_registry_register(&e.reg);
 }
 
 void reset_test_state() {
@@ -62,7 +76,7 @@ ZTEST(persistent_value_store_tests, test_save_and_reload_round_trip) {
     reset_test_state();
 
     FakeUint32Entry before{"test/round_trip", 1234};
-    persistent_value_registry_register(before.key, &before, uint32_load, uint32_save);
+    registerFake(before);
 
     persistent_value_registry_mark_dirty(before.key);
     persistent_value_store::request_save();
@@ -74,7 +88,7 @@ ZTEST(persistent_value_store_tests, test_save_and_reload_round_trip) {
     // target defaulting to 0, should pick up what was actually written to flash.
     persistent_value_registry_reset();
     FakeUint32Entry after{"test/round_trip", 0};
-    persistent_value_registry_register(after.key, &after, uint32_load, uint32_save);
+    registerFake(after);
 
     settings_load();
 
@@ -85,7 +99,7 @@ ZTEST(persistent_value_store_tests, test_rapid_requests_coalesce_into_one_save) 
     reset_test_state();
 
     FakeUint32Entry entry{"test/coalesce", 0};
-    persistent_value_registry_register(entry.key, &entry, uint32_load, uint32_save);
+    registerFake(entry);
 
     entry.value = 1;
     persistent_value_registry_mark_dirty(entry.key);
@@ -108,7 +122,7 @@ ZTEST(persistent_value_store_tests, test_string_value_round_trip) {
     reset_test_state();
 
     FakeStringEntry before{"test/string_round_trip", "hello"};
-    persistent_value_registry_register(before.key, &before, string_load, string_save);
+    registerFake(before);
 
     persistent_value_registry_mark_dirty(before.key);
     persistent_value_store::request_save();
@@ -116,7 +130,7 @@ ZTEST(persistent_value_store_tests, test_string_value_round_trip) {
 
     persistent_value_registry_reset();
     FakeStringEntry after{"test/string_round_trip", ""};
-    persistent_value_registry_register(after.key, &after, string_load, string_save);
+    registerFake(after);
 
     settings_load();
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <zephyr/settings/settings.h>
+#include <zephyr/sys/slist.h>
 
 #include <cstddef>
 
@@ -13,24 +14,46 @@
  * BT-settable config characteristic) share a single subtree handler: each value
  * self-registers a callback pair at static-init time, and the shared handler's h_set
  * dispatches into whichever entry's key matches.
+ *
+ * Storage is an intrusive singly-linked list (sys_slist_t) whose nodes are owned by the
+ * *callers* - each registrant embeds a PersistentValueRegistryEntry in its own long-lived
+ * object (a characteristic instance, an extension Slot, a file-scope static) and passes
+ * its address. This is the same idiom Zephyr's own settings backend uses
+ * (settings_store.c: sys_slist_t settings_load_srcs), and it means the registry has no
+ * fixed capacity and can never drop a registration - there is no -ENOMEM path.
  */
 using PersistentValueLoadFn = void (*)(void *target, const void *data, size_t len);
 using PersistentValueSaveFn = void (*)(void *target);
 
 /**
+ * @brief One persisted value's registration record, owned by the caller.
+ *
+ * The caller fills @c key / @c target / @c load / @c save on a long-lived instance (static
+ * duration, or a member of a static/singleton object) and passes its address to
+ * persistent_value_registry_register(). @c dirty and @c node are registry-internal; the
+ * caller does not touch them (register() zeroes @c dirty). The instance must outlive its
+ * registration - it is linked into the registry by pointer, never copied.
+ */
+struct PersistentValueRegistryEntry {
+    const char *key;
+    void *target;
+    PersistentValueLoadFn load;
+    PersistentValueSaveFn save;
+    bool dirty;
+    sys_snode_t node;  // registry-internal intrusive list link
+};
+
+/**
  * @brief Registers one persisted value.
  *
- * @param key Stable key, WITHOUT the settings subtree prefix (e.g. "core/brightness",
- *            not "appcfg/core/brightness"). Must remain stable across firmware
- *            versions/declaration reordering - never derive it from positional state.
- * @param target Opaque pointer passed back into @p load / @p save.
- * @param load Called with the raw bytes read back from flash for this key.
- * @param save Called when this value should be flushed to flash.
- * @return 0 on success, -EINVAL on a null argument, -EEXIST on a duplicate key,
- *         -ENOMEM if the fixed-size table is full.
+ * @param entry Caller-owned, long-lived record with @c key (stable, WITHOUT the settings
+ *              subtree prefix - e.g. "core/brightness", not "appcfg/core/brightness"),
+ *              @c target, @c load, and @c save filled in. Linked by pointer, so it must
+ *              outlive its registration.
+ * @return 0 on success, -EINVAL on a null @p entry / key / load / save, -EEXIST on a
+ *         duplicate key. (There is no capacity limit, so no -ENOMEM.)
  */
-int persistent_value_registry_register(const char *key, void *target, PersistentValueLoadFn load,
-                                        PersistentValueSaveFn save);
+int persistent_value_registry_register(PersistentValueRegistryEntry *entry);
 
 /**
  * @brief Dispatches a settings_load() callback to the matching registered entry.
