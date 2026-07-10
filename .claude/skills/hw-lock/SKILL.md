@@ -37,6 +37,14 @@ Monitor(command: "scripts/hw-lock.sh hold board --wait 300", persistent: true)  
 - Still all-or-nothing per attempt (partial grabs roll back), so two agents each waiting on a pair the other holds can't deadlock.
 - `--wait` affects only the acquire phase — no "it's your turn" notification; you're blocked in the foreground `check` poll for the duration.
 
+### Re-holding a lock your own session already holds: adoption
+
+Root `CLAUDE.md` covers the core model (adopts instead of refusing/queueing; `--wait` is
+never futile on your own hold). Detail not in `CLAUDE.md`: the superseded sibling process,
+if still alive, becomes a harmless no-op after adoption — its release is pid-guarded, so
+when it eventually exits it won't yank the lock out from under the adopter; only whichever
+process is the *current* tracked pid ever releases.
+
 ## Launching the companion app
 
 Hold `app` first — `app/scripts/launch-app.sh` only verifies the lock, never acquires (usage conventions: `app/CLAUDE.md`):
