@@ -70,6 +70,24 @@ each waiting on a pair of resources the other holds can't deadlock on each
 other this way. Without `--wait` (the default), behavior is unchanged: fail
 fast, no queueing.
 
+### Re-holding a lock your own session already holds: adoption
+
+Running `hold` for a resource **your own session already holds** doesn't
+conflict and doesn't queue — it **adopts** the existing hold: the new process
+rewrites the tracked pid to its own and becomes the authoritative
+heartbeat/holder, reporting success right away. (Queueing on it would be
+futile: a session can't wait on a lock it is itself holding.) This is the
+recovery path when a prior `hold`/`Monitor` task died or was lost across a
+context reset but the lock record persists — **just run `hold` again**. The
+superseded sibling (if still alive) becomes a harmless no-op: its release is
+pid-guarded, so when it eventually exits it won't yank the lock out from under
+the adopter — only whichever process is the *current* tracked pid ever
+releases. A **different** session re-holding still conflicts exactly as
+described above. (A hard-killed prior hold that left a dead-pid record is
+cleared by stale-pid reclaim *before* the adopt check runs, so that path
+fresh-acquires rather than adopting — same end result: you hold a live
+heartbeat.)
+
 Note the asymmetry: `--wait` only affects the *acquire* phase. Once `hold` is
 actually holding the lock, there is no equivalent "notify me the instant it's
 my turn" for the confirm-loop above — you're blocked in that foreground
