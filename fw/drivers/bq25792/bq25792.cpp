@@ -1,3 +1,11 @@
+// NOTE: On both boards the bq25792 devicetree node is a child of the tps25750 node,
+// so every register access here is reached via the TPS25750 I2Cm bridge — each I2C
+// transfer becomes a CMD1/DATA1 4CC task sequence in drivers/tps25750/tps25750.c,
+// serialized by that driver's per-device task_mutex (PR #111). That mutex is internal
+// to the bridge and covers ONE transfer at a time: a multi-transfer sequence here
+// (e.g. a read-modify-write) is NOT atomic against other bridge users (PD-controller
+// 4CC tasks, other bq25792 callers) and must bring its own serialization — see the
+// "multi-step I2C/register transaction" coding rule in fw/CLAUDE.md.
 #include <zephyr/drivers/bq25792/bq25792.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>

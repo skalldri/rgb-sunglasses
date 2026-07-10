@@ -13,13 +13,14 @@ The app mirrors BLE GATT characteristics as UI controls. Each characteristic on 
 **Critical Files:**
 
 - [context/bluetooth-context.tsx](context/bluetooth-context.tsx) - Global BLE state with `BluetoothContextDevice` structure
-- [app/(tabs)/device-state.tsx](<app/(tabs)/device-state.tsx>) - Dynamic UI rendering based on GATT CPF descriptors
+- [app/(tabs)/device-state/](<app/(tabs)/device-state/>) - a **directory**, not a single file: `index.tsx` is the Controls menu (service list), `[serviceUuid].tsx` is the per-service detail screen
+- [hooks/use-characteristic-editor.tsx](hooks/use-characteristic-editor.tsx) - the characteristic dispatch/decode logic: `renderCharacteristicInput()` switches on CPF format to pick a control, `decodeValueForInput()` decodes base64 values per format
 - [constants/bluetooth.ts](constants/bluetooth.ts) - BLE GATT CPF format constants and UUID mappings
 
 ### Data Flow
 
-1. **Connection**: [components/bluetooth-device-list-item.tsx](components/bluetooth-device-list-item.tsx) discovers services/characteristics and reads CPF descriptors to determine data types
-2. **Rendering**: [device-state.tsx](<app/(tabs)/device-state.tsx>) `renderCharacteristicInput()` switches on `cpfFormat` to render appropriate control
+1. **Connection**: `connect()` in [hooks/use-ble-connection.ts](hooks/use-ble-connection.ts) (triggered from [components/bluetooth-device-list-item.tsx](components/bluetooth-device-list-item.tsx)) discovers services/characteristics and reads CPF descriptors to determine data types
+2. **Rendering**: `renderCharacteristicInput()` in [hooks/use-characteristic-editor.tsx](hooks/use-characteristic-editor.tsx) switches on `cpfFormat` to render appropriate control (a `Characteristic*` component from [components/](components/))
 3. **Updates**: Write operations use `writeWithResponse()`, with optimistic updates reverted on error
 4. **Encoding**: All BLE values are base64-encoded (`btoa`/`atob`). Numbers use little-endian byte order
 
@@ -47,13 +48,13 @@ This was originally built and verified on the pre-monorepo standalone app repo (
 
 ### React Native BLE PLX
 
-Singleton `bleManager` in [hooks/use-ble.ts](hooks/use-ble.ts) with state restoration. **Patch applied** via [patches/react-native-ble-plx+3.5.0.patch](patches/react-native-ble-plx+3.5.0.patch) - check patch file before upgrading library.
+Singleton `bleManager` in [hooks/ble-manager.ts](hooks/ble-manager.ts) with state restoration (connect/discovery logic lives in [hooks/use-ble-connection.ts](hooks/use-ble-connection.ts)). **Patch applied** via [patches/react-native-ble-plx+3.5.0.patch](patches/react-native-ble-plx+3.5.0.patch) - check patch file before upgrading library.
 
 The patch's core fix: the library's Android native module (`BlePlxModule.java`) calls `promise.reject(null, errorConverter.toJs(bleError))` on BLE operation errors — `code` is `@NonNull`-annotated in Kotlin's `Promise.reject`, so passing `null` throws a secondary native `NullPointerException` that crashes the entire app process (it's a native crash, not a JS promise rejection, so no JS-level try/catch can stop it). The patch replaces `null` with `bleError.errorCode.name()` at every call site. If a future library upgrade reintroduces this pattern (`grep -n "reject(null" node_modules/react-native-ble-plx/android/.../BlePlxModule.java`), reapply the same fix and regenerate the patch (see the `patch-package` note in Known Issues & Quirks below).
 
 ### Expo Router (File-Based Routing)
 
-- Tabs: [app/(tabs)/](<app/(tabs)/>) directory (bluetooth, device-state, explore, index)
+- Tabs: [app/(tabs)/](<app/(tabs)/>) directory (bluetooth, device-state/ — itself a directory with `index.tsx` + `[serviceUuid].tsx`, index)
 - Modals: [color-picker-modal.tsx](app/color-picker-modal.tsx), [firmware-update-modal.tsx](app/firmware-update-modal.tsx)
 - Query params for modal communication: `charUuid`, `r`, `g`, `b`
 
@@ -101,11 +102,11 @@ There is currently **no iOS dev-variant** (the Android `.dev` side-by-side insta
 
 ### Android Permissions
 
-Android 12+ (API 31+) requires `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `ACCESS_FINE_LOCATION`. Permission handling in [hooks/use-ble.ts](hooks/use-ble.ts) `requestPermissions()`.
+Android 12+ (API 31+) requires `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `ACCESS_FINE_LOCATION`. Permission handling in [hooks/ble-manager.ts](hooks/ble-manager.ts) `requestPermissions()`.
 
 ### Debugging BLE
 
-- Set `bleManager.setLogLevel(LogLevel.Verbose)` in [bluetooth.tsx](<app/(tabs)/bluetooth.tsx>)
+- Verbose BLE logging is already on in dev builds: `if (__DEV__) bleManager.setLogLevel(LogLevel.Verbose)` in [bluetooth.tsx](<app/(tabs)/bluetooth.tsx>)
 - Device name filter: `device.localName?.includes("RGB Sunglasses")`
 - Monitor subscription in `BluetoothDeviceListItem` for live characteristic updates
 
@@ -113,14 +114,16 @@ Android 12+ (API 31+) requires `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `ACCES
 
 ### Adding New Characteristic Types
 
-1. Define CPF format in [constants/bluetooth.ts](constants/bluetooth.ts)
-2. Add decoder logic in `device-state.tsx` useEffect (lines 25-58)
-3. Add encoder/renderer in `renderCharacteristicInput()` (lines 112-257)
-4. Update `pendingXValues` state if user-editable
+Follow the `/add-gatt-characteristic` skill (`.claude/skills/add-gatt-characteristic/`, app steps in its `references/app-side.md`) — do not improvise. The files involved:
+
+1. CPF format constant: [constants/bluetooth.ts](constants/bluetooth.ts)
+2. Decode + dispatch: [hooks/use-characteristic-editor.tsx](hooks/use-characteristic-editor.tsx) — `decodeValueForInput()` (decode), `renderCharacteristicInput()` (per-format control dispatch), `pendingValues` state for user-editable inputs
+3. Encode helpers: [services/ble-value-codec.ts](services/ble-value-codec.ts)
+4. The per-format UI component: `components/characteristic-*.tsx`
 
 ### State Updates with Optimistic UI
 
-Always follow this pattern (see [device-state.tsx](<app/(tabs)/device-state.tsx>) lines 96-112):
+Always follow this pattern (the real implementation is `writeToCharacteristic`/`writeServiceCharacteristic` in [context/bluetooth-context.tsx](context/bluetooth-context.tsx) — see "BLE Optimistic UI and Notification Behaviour" below for the exact ordering rules):
 
 ```typescript
 const previousValue = charInfo.value ?? "";
@@ -135,7 +138,7 @@ charInfo.characteristic
 
 ### Color Encoding
 
-RGB colors are uint32 with lower 24 bits as 0xRRGGBB (little-endian). See [color-picker-modal.tsx](app/color-picker-modal.tsx) for HSV↔RGB conversion and [device-state.tsx](<app/(tabs)/device-state.tsx>) lines 226-243 for encoding.
+RGB colors are uint32 with lower 24 bits as 0xRRGGBB (little-endian, i.e. bytes `b,g,r,0`). Encoding/decoding lives in [services/ble-value-codec.ts](services/ble-value-codec.ts) (`encodeColorToBase64`/`decodeColorFromBase64`); HSV↔RGB conversion in [color-picker-modal.tsx](app/color-picker-modal.tsx).
 
 ## Known Issues & Quirks
 
@@ -156,6 +159,10 @@ RGB colors are uint32 with lower 24 bits as 0xRRGGBB (little-endian). See [color
 Connect to any BLE device with custom services to test UI rendering logic. The app gracefully handles missing descriptors by falling back to UUIDs.
 
 ## Autonomous Agent Notes (Claude / MCP)
+
+### Device-Free Validation Loop
+
+For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) runs jest (plus a debug Android build) but neither tsc nor lint, so a green CI run does not mean the types are clean — run them yourself.
 
 ### App-Update Modal Auto-Opens After Force-Stop + Relaunch
 
@@ -212,7 +219,7 @@ A fresh worktree (`.claude/worktrees/<name>/app`) has **no `node_modules` and no
 **DON'T — every one of these has caused a failure, do not attempt any of them:**
 
 - **NEVER call `npx expo run:android` directly** — always go through `app/scripts/launch-app.sh`. Calling npx directly bypasses the `app` hardware lock check and the single-Metro-instance guarantee, so a second agent (or a forgotten earlier launch in this same session) can start a colliding second Metro instance against the one physical phone.
-- **NEVER symlink `node_modules`** from the main checkout into the worktree (`ln -s /workspaces/rgb-sunglasses/app/node_modules ...`). The gradle build tolerates it, but **Metro's JS resolver cannot resolve modules through a symlink whose realpath is outside the worktree project root** — you get `UnableToResolveError: Unable to resolve module ./app/node_modules/expo-router/entry` and a red-screen `development server returned response error code: 404` on the device. Always `npm ci` for a real `node_modules`.
+- **NEVER symlink `node_modules`** from the main checkout into the worktree (`ln -s <main-checkout>/app/node_modules ...`). The gradle build tolerates it, but **Metro's JS resolver cannot resolve modules through a symlink whose realpath is outside the worktree project root** — you get `UnableToResolveError: Unable to resolve module ./app/node_modules/expo-router/entry` and a red-screen `development server returned response error code: 404` on the device. Always `npm ci` for a real `node_modules`.
 - **NEVER background `launch-app.sh` by hand with `&` and/or `> log 2>&1`.** That daemonizes it yourself, the harness sees the wrapper "complete" immediately, loses track of the task, and Metro gets reaped — the app then can't fetch its bundle. Use Bash `run_in_background: true` with the bare command (no `&`, no redirect) so the harness keeps it alive as a tracked task.
 - **NEVER substitute `expo start --dev-client` + `adb reverse` + a `rgbsunglassesapp.dev://expo-development-client/?url=...` deep link** to avoid the native build. The installed dev client resumes its stale bundle without re-fetching, the deep link doesn't reliably trigger a fresh bundle against the new Metro, and you burn more time than a build would cost. Also don't pass `--android` to a separate `expo start` (it launches Expo Go, not the dev client).
 - **NEVER kill the underlying `expo run:android` process directly** to "restart Metro." If Metro seems wrong, fix the actual cause (usually a stale/symlinked `node_modules`), then stop the `launch-app.sh` background task and relaunch it — this no longer touches the `app` lock either way, since launch-app.sh doesn't own it.
@@ -231,7 +238,7 @@ This is the correct fix to reach for, not the manual `adb install` + `monkey`/`a
 
 ### BLE Link Can Get Orphaned by App Reloads, Not Just Discovery Failures
 
-The "failed per-item BLE read during discovery can orphan the connection" entry in Known Issues & Quirks above covers one trigger. A second, distinct trigger hit repeatedly in this session: reloading the app mid-session (`mcp__execbro__reload_app`, or a firmware-side J-Link reflash/reset while the phone was connected) can leave the **native BLE link** connected at the OS level even though the app's own JS state has been wiped — the device then stops advertising and can't be found by a fresh scan, no matter how long you wait. The fix is the same as the discovery-failure case: `adb shell am force-stop <package>` (then relaunch) so the OS notices the client process is gone and drops the link. Don't waste time waiting longer for the device to reappear in a scan — if `Setting up characteristic monitors...`/a fresh `connect()` cycle hasn't run and the Bluetooth tab is stuck on "Connect to the RGB Sunglasses" with no device listed for more than a few seconds, force-stop immediately.
+The "failed per-item BLE read during discovery can orphan the connection" entry in Known Issues & Quirks above covers one trigger. A second, distinct trigger hit repeatedly in this session: reloading the app mid-session (`mcp__execbro__reload_app`, or a firmware-side J-Link reflash/reset while the phone was connected) can leave the **native BLE link** connected at the OS level even though the app's own JS state has been wiped — the device then stops advertising and can't be found by a fresh scan, no matter how long you wait. The fix is the same as the discovery-failure case: `adb shell am force-stop <package>` (then relaunch) so the OS notices the client process is gone and drops the link. Don't waste time waiting longer for the device to reappear in a scan — if `Setting up characteristic monitors...`/a fresh `connect()` cycle hasn't run and the Bluetooth tab is stuck on "Connect to the RGB Sunglasses" with no device listed for more than a few seconds, force-stop immediately. Note that Fast Refresh (HMR) is not one of these triggers: it preserves JS module state (including the module-scope `bleManager` singleton in [hooks/ble-manager.ts](hooks/ble-manager.ts)) and has not been observed to orphan the link (as of 2026-07); the confirmed triggers are a **full** JS reload (`mcp__execbro__reload_app` / dev-menu Reload) or a firmware reflash/reset while connected.
 
 ### MCP Coordinate Systems
 
@@ -340,7 +347,7 @@ Note: `BaseExpoRouterLink` children are not a bare string in the fiber props —
 - Animation enum values are in `fw/src/animations/animation_types.h`
 - **Extension animations** (`fw/src/extensions/`, ids `0x40 + slot`) → service groups `4000`, `4100`, … Their "Is Active" uses the FIXED shared UUID `...-bbbb-...0000` — the same literal UUID appears in every animation service, so **always disambiguate by `charInfo.characteristic.serviceUUID`, never by `charUuid` alone**. Their param characteristics use auto UUIDs `...-{group}-56789abd0001/0002/...` in manifest declaration order (ids start at 1).
 
-**Per-CPF fiber component names** (all take the same `onWrite(charUuid, encodedNewValue, encodedPreviousValue)` prop, so the CharacteristicBoolean recipe above works for every type): `CharacteristicBoolean`, `CharacteristicUint32` (4-byte LE, e.g. 50 = `MgAAAA==`), `CharacteristicColor` (4 bytes `b,g,r,0`), `CharacteristicUtf8` (write with `btoa("text")`). These fibers only exist while the screen that renders them is mounted — Is Active toggles live on the Controls list, per-param characteristics only on that animation's detail page (navigate there first or the walk returns "not found").
+**Per-CPF fiber component names** (all take the same `onWrite(charUuid, encodedNewValue, encodedPreviousValue)` prop, so the CharacteristicBoolean recipe above works for every type): `CharacteristicBoolean`, `CharacteristicUint32` (4-byte LE, e.g. 50 = `MgAAAA==`), `CharacteristicColor` (4 bytes `b,g,r,0`), `CharacteristicUtf8` (write with `btoa("text")`). The fiber walk matches `fiber.type.displayName || fiber.type.name` — these components are named function exports (`components/characteristic-*.tsx`) with no explicit `displayName`, so it's the function *name* that matches; nothing automated enforces this, so keep those component function names stable as a convention (renaming one silently breaks these recipes). These fibers only exist while the screen that renders them is mounted — Is Active toggles live on the Controls list, per-param characteristics only on that animation's detail page (navigate there first or the walk returns "not found").
 
 ### BLE Optimistic UI and Notification Behaviour
 

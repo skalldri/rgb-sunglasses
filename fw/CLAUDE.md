@@ -37,15 +37,18 @@ Switching boards inside the same build dir forces a full pristine rebuild (minut
 
 Use the project skills — `/build-proto0`, `/build-dk`, `/test-fw` — instead of raw `west build` commands. Use `/submit-pr` instead of manually pushing and creating PRs; it enforces both-board builds and coverage gates.
 
+For which skill fits which task (built-in animation vs. `.llext` extension vs. GATT characteristic, debugging, flashing, releases), see the **Task routing** table in the root `CLAUDE.md` — it is the single routing table; do not duplicate it here.
+
 **Before any `git push` or PR creation**, you must:
 1. Run `/build-proto0` — proto0 must compile clean
 2. Run `/build-dk` — DK must compile clean (no flash overflow)
-3. Run `/test-fw` — all tests must pass, patch coverage ≥ 50%
+3. Run `/test-fw` — all tests must pass. (`/test-fw` reports **overall** coverage only; the ≥ 50% **patch**-coverage gate is checked by `/submit-pr`.)
 
 ## Build and Test Commands (raw — prefer the skills above)
 
 ```bash
 # First time build (pristine, setup build system, very slow! Only run if build folder is empty / nonexistent)
+# Exception: a newly ADDED devicetree overlay file also requires --pristine — see "Per-image Kconfig/devicetree overlays (sysbuild)" below.
 west build --build-dir fw/build fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="$(pwd)/fw"
 
 # Full incremental build of proto0 (preferred for daily dev)
@@ -79,6 +82,9 @@ Known non-blocking warning: `multi-line comment [-Wcomment]` in `src/bluetooth/b
 ## Coding rules
 
 - **Always use bounded string copies** (`strncpy` + explicit NUL, `snprintf`, `memcpy` with a checked length) — never `strcpy`/`sprintf`, even when the buffers are provably the same size today (PR #89 review feedback).
+- **Never do flash/filesystem I/O from a cooperative-priority thread** — a long flash write starves every other thread in the system. Do it from a low-priority workqueue instead (PR #51).
+- **Wrap every multi-step I2C/register transaction in a per-device `k_mutex`** (e.g. the TPS25750 I2Cm bridge's CMD1/DATA1 sequences), with `_locked` inner functions so every early return releases the lock, and bounded poll loops (timeout → `-ETIMEDOUT`) instead of infinite ones. Interleaving corruption shows up as **plausible-but-wrong values** (e.g. VBAT read back as the VBUS value), not as I2C errors (PR #111).
+- **No info-level logs in steady-state/per-tick paths** (render ticks, notify calls, poll loops) — they become permanent log spam that buries real events (PR #110).
 
 This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED sunglasses. The target SoC is an nRF53 series device. The codebase is mixed C/C++; `main.c` is C but most application logic is C++23.
 
@@ -87,7 +93,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 **LED rendering pipeline**
 
 - `src/led_controller.cpp` — manages dual-bank WS2812 LED strip hardware and a double-framebuffer. Callers claim a buffer via `claimBufferForRender`, write pixels via `set_pixel_in_framebuffer`, then release it.
-- `src/pattern_controller.cpp` — sits above the LED controller. Owns the active animation slot and an optional `Indicator` overlay (BT advertising/connecting/pairing). Callers request an indicator with `pattern_controller_request_indicator` or switch animations with `pattern_controller_change_to_animation`.
+- `src/pattern_controller.cpp` — sits above the LED controller. Owns the active animation slot and an optional `Indicator` overlay (BT advertising/connecting/pairing). Callers request an indicator with `pattern_controller_request_indicator` or switch animations with `pattern_controller_change_to_animation`. **Note `pattern_controller_change_to_animation()` runs synchronously on the caller's thread** — BT RX for GATT writes, the shell thread for `anim set`; only the boot-time restore in the thread entry runs on the pattern-controller thread itself. Nothing in this file may assume pattern-controller-thread context, and no automated gate checks this.
 - `src/led_config.h` — compile-time constants for the frame LED geometry (40×12 logical display over two banks, serpentine wiring) and the devkit LED geometry (8×2). All rendering code receives a `const LedConfig*` so the same logic runs on both targets.
 
 **Animation system**
@@ -113,7 +119,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
   - `src/bluetooth/persistent_characteristic.h` — `BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>`: a `BtGattAutoCharacteristicExt` subclass (same shape as `IsActiveCharacteristic` below) that backs a plain POD/`BtGattColor`/`BtGattString<N>` characteristic with Zephyr's settings subsystem, so its value survives a power cycle. `Key` is an explicit string literal (e.g. `"core/brightness"`) — never derive it from declaration order, since `BtGattServer`'s auto-UUID assignment is positional but settings keys must stay stable across reorderings. See "Settings-backed config persistence" below for the full mechanism. `BtGattDropdownList<N>` characteristics (glim selection/loop mode) don't fit this generic mixin and persist by hand instead — see `glim_player_animation_bt.cpp`.
   - **`notify()` only sends the actual string length for string-backed types (`BtGattString<N>`/`BtGattDropdownList<N>`), matching `read()`'s `strnlen()`-based length** — not `sizeof(storage_)` (the full fixed-capacity buffer). A `bt_gatt_notify()` call cannot fragment a value across multiple ATT PDUs the way long writes/reads can; the whole payload must fit in one packet bounded by the connection's negotiated ATT MTU. Before this was fixed, a `BtGattDropdownList<512>` characteristic (e.g. `GlimSelectionCharacteristic`) always tried to notify the full 512-byte buffer regardless of how short the actual string content was, so every notify failed (`bt_att: No ATT channel for MTU ...` / `Notify failed: -12`) even with a 2-file (~28-byte) selection list — a real bug, not a hypothetical. On failure, `notify()` now logs the characteristic's `Description` and attempted payload length so an MTU-related failure can be traced to which characteristic caused it without guessing. The app side also needs an adequately large negotiated MTU in the first place — see `requestMTU` in `app/CLAUDE.md`'s Known Issues section.
   - **Refusing a GATT write: return an ATT error, never "success + corrective notify"** (hardware-verified on PR #89). The app applies its optimistic update when the write *response* arrives, and a notification sent from inside the write handler reaches the phone *before* that response — so the optimistic update lands last and clobbers the corrective value; the UI shows the write as accepted. Returning `BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED)` instead makes the app's own catch-and-revert restore the previous value deterministically (see `write_is_active` in `src/extensions/extension_bt.cpp`). Notifications are the right tool only for state changes that originate device-side (e.g. a sandbox fault long after the write completed).
-- `src/animations/bt_animations.{h,cpp}` — BT-aware animation classes for the visual BT status indicators (advertising pulse, connecting flash, pairing code display). These are intentionally mixed-concern; they are the correct place to keep BT in animation code.
+- `src/animations/bt_animations.{h,cpp}` — animation classes for the visual BT status indicators (advertising pulse, connecting flash, pairing code display). BT-themed by design, but driven externally (via `BtStateObserver`) — see "Animation / BT decoupling" below.
 - `src/animations/animation_is_active_binding.h` — BT-free template that bridges the registry's `setActive` callback to a GATT characteristic setter; also routes remote BLE writes back to `pattern_controller_change_to_animation`.
 - `src/animations/animation_is_active_characteristic.h` — `IsActiveCharacteristic<A>`: a `BtGattAutoCharacteristicExt` subclass that hooks `onWrite` to `AnimationIsActiveBinding<A>::onRemoteActiveChange`.
 
@@ -126,22 +132,25 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 
 **Important: `CoreConfig` getters are non-const.** `getBrightnessFactor()` writes back to clamp the value against the BT characteristic range. Any abstract interface it implements must therefore declare those methods without `const`, otherwise `CoreConfig` becomes abstract and `Singleton<CoreConfig>` fails to instantiate.
 
-### Active refactor: animation / BT decoupling (`animation-refactor-part2` branch)
+### Animation / BT decoupling — COMPLETE
 
-The goal is to remove all BT headers from `src/animations/*_animation.cpp`. Each animation's GATT service, parameter sources, and is-active wiring are being moved to new adapter files in `src/bluetooth/animation_adapters/`. See `docs/animation-bluetooth-decoupling-plan.md` for the full plan, per-file changes, and implementation order.
-
-The refactor is in progress. When editing animation code, check whether the animation has already been split (adapter file exists under `src/bluetooth/animation_adapters/`) or still holds BT code in its `.cpp`.
-
-After the refactor, verify the separation with:
+The `animation-refactor-part2` decoupling is **done**: every parameterized animation's GATT service, parameter sources, and is-active wiring live in an adapter under `src/bluetooth/animation_adapters/` (9 adapters as of 2026-07 — re-verify), and no animation `.cpp` includes BT headers. Keep it that way — new animations get a BT-free `.cpp` plus an adapter file; see `/add-animation` for the full add procedure (including the easy-to-miss registration spots). Verify the separation with (from the repo root, like all commands in this file):
 
 ```bash
-grep -rE 'bluetooth|BT_GATT|BtGatt' src/animations/
-# Expect zero matches outside bt_animations.{h,cpp}
+grep -rlE 'bluetooth|BT_GATT|BtGatt' fw/src/animations/
+# Matches only comments (adapter cross-references, a BtGattString size note) — no code.
 ```
+
+`bt_animations.{h,cpp}` (the visual BT-status animations: advertising pulse, connecting flash, pairing code) stay in `src/animations/` intentionally — they render BT state but are driven externally via `BtStateObserver`, and today contain no BT includes themselves. Do not "fix" or relocate them. `fw/docs/animation-bluetooth-decoupling-plan.md` is the historical plan, now executed.
 
 ### Other subsystems
 
 - `src/power.cpp` / `drivers/` — TPS25750 USB PD controller (custom driver, patch loaded via LZ4-compressed blob) and BQ25792 battery charger (custom driver). I2C-based.
+  - **Power subsystem: safe vs danger.** All `power` shell commands are registered in `src/power.cpp`.
+  - **SAFE (read-only)**: `power bq status`, `power bq dump`, `power pd dump`, `power vreghvout`, and the `bq25792_get_*` driver getters. Caveat: `bq25792_get_*` do **not** propagate I2C errors — a failed read can return stale/zero data that looks plausible (see the emul_tps25750 test notes below).
+  - **DANGER (writes)**: any register write, 4CC task, or patch operation — `power pd patch ...` (`tps25750_download_patch()`), `power pd clear_dbfg`, the `power bq charge`/`adc`/`pfm`/`freq`/`temp_override` setters (`bq25792_set_*`), and **especially `power boost`**, which writes UICR `VREGHVOUT` — irreversible without a mass chip erase. Every one of these is governed by root `CLAUDE.md`'s "NEVER write unverified commands or data into hardware parts" rule: authoritative datasheet/TRM in hand first, or stop and ask.
+  - **A wrong/implausible BQ25792 current or voltage report has two known in-repo root-cause classes** — missing two's-complement sign extension in the ADC decode (IBAT/IBUS are 16-bit signed; fixed in PR #106, regression suite `fw/tests/drivers/bq25792_decode`) and interleaved I2Cm bridge transactions (fixed in PR #111 with the `task_mutex`). Rule both out (see `/debug-fw`'s device-symptoms table) before pursuing any external fix or register write. And remember every BQ25792 register access — the bq25792 DT node is a child of the tps25750 node — goes through the TPS25750 I2Cm bridge's CMD1/DATA1 4CC sequence under that `task_mutex` (`fw/drivers/tps25750/tps25750.c`); any new BQ25792 write inherits that path and its serialization requirements.
+  - Prefer exercising power code on native_sim first: `tests/drivers/emul_tps25750` runs the **real** tps25750 + bq25792 drivers against an emulated register file — no hardware, no risk.
 - `src/buttons.cpp` — GPIO button handling. Button callback runs in ISR context; dispatch to `ButtonEventListener` is deferred via `K_MSGQ_DEFINE` + `k_work` for thread safety.
 - `src/fonts/` — `FontAtlas` and `FontShell` provide bitmap font rendering used by `TextAnimation` and `BtPairingAnimation`.
 - `src/sound/sound.cpp` — PDM microphone via VM3011 driver; conditionally compiled with `CONFIG_AUDIO`.
@@ -167,6 +176,8 @@ CONFIG_ANIMATION_RAINBOW=y
 CONFIG_ANIMATION_ZIGZAG=y
 ```
 
+App modules are compiled via `target_sources_ifdef(CONFIG_<MODULE> app PRIVATE ...)` lines in `fw/CMakeLists.txt` — that CMake line is the compile gate; in-source `#if DT_HAS_ALIAS(...)` guards (e.g. `led_strip_2` in `fw/src/status_led/status_led.cpp`) are secondary, never the gate. When adding a tunable for an existing module, check that module's `target_sources_ifdef` line first and add `depends on <MODULE>` to the new symbol, matching every other `APP_*` int in `fw/Kconfig` (e.g. `APP_EXT_TICK_DEADLINE_MS` depends on `APP_EXTENSION_HOST`).
+
 Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_CBPRINTF_FP_SUPPORT=n`); `CONFIG_SIZE_OPTIMIZATIONS=y` lives in the proto0 **board** conf, not `prj.conf`.
 
 **No `%f`/`%g` in log or shell format strings.** `CONFIG_CBPRINTF_FP_SUPPORT` and `CONFIG_PICOLIBC_IO_FLOAT` are disabled (~10KB FLASH, issue #79 ROM pass); a `%f` prints the literal specifier instead of the value (no crash). Print floats via integer fixed-point instead — see `fmt_fixed4()` / `agc_gain_db10()` in `src/sound/sound.cpp` (the only float-printing code in the app).
@@ -176,6 +187,8 @@ Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.
 ### SYS_INIT ordering for early registration
 
 `SYS_INIT(fn, APPLICATION, N)` runs before `K_THREAD_DEFINE` threads are scheduled. Lower N runs first. When an observer or listener must be registered before a thread can fire its first event, use `SYS_INIT(APPLICATION, 0)`. Both `bluetooth_init` and `button_init` run at priority 1, so registering observers at priority 0 guarantees the observer is in place before either subsystem starts.
+
+**C++ static constructors run after POST_KERNEL but BEFORE APPLICATION-level SYS_INIT** (`z_static_init_gnu()` in NCS v3.1.1's `zephyr/kernel/init.c` `bg_thread_main`, between the two `z_sys_init_run_level()` calls). Any container that static-init constructors register into — e.g. `src/settings/persistent_value_registry.cpp`, populated by the `BtGattPersistentCharacteristic` / `ChargeEnableCharacteristic` ctors and the `LastActiveAnimationRegistrar` / `GlimPersistenceRegistrar` structs — must be constant-initialized (plain zero-initialized statics, like that file's `sRegistry[]` + `sRegistryCount`), never initialized from an APPLICATION SYS_INIT, which runs after the ctors and would silently discard every registration.
 
 It's very important that SYS_INIT() priority levels must ALWAYS be a plain pre-processor directive that derives to a single number. SYS_INIT() priority levels CANNOT be expressions that require evaluation, they MUST be a plain number or a single pre-processor directive that is replaced directly with a number.
 
@@ -199,7 +212,7 @@ To enforce init ordering, use a plain KConfig value and then add `static_assert(
 Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suite has its own `CMakeLists.txt`, `prj.conf`, and `testcase.yaml`:
 
 - `tests/animations/animation_registry/` — unit tests for the registry itself.
-- `tests/animations/*_animation_di/` — dependency-injection tests for each animation, compiling the pure animation `.cpp` without BT. These currently require `CONFIG_BT=y` in their `prj.conf` only because animation `.cpp` files still include BT headers; removing BT from the animations is the goal of the active refactor.
+- `tests/animations/*_animation_di/` — dependency-injection tests per animation, compiling the pure animation `.cpp` without BT. **No DI suite sets `CONFIG_BT`** (as of 2026-07 the only firmware test suite that does is `tests/bluetooth/battery_service` — re-verify from the repo root with `grep -rln CONFIG_BT=y fw/tests --include=prj.conf`). Coverage is not 1:1: `matrix_code` has no DI suite (as of 2026-07).
 - `tests/bt_state_observer/` — interface contract tests for `BtStateObserver` (does not link `bluetooth.cpp`).
 - `tests/configuration_provider/` — interface contract tests for `ConfigurationProvider`.
 - `tests/power/tps25750_patch_decompression/` — verifies the LZ4-compressed TPS25750 patch round-trips correctly.
@@ -407,6 +420,8 @@ interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts 
 `bad_apple.glim`, `nyan_cat.glim`, and similar assets get onto the device (see
 `fw/tools/convert_bad_apple.py`, `generate_nyan_cat_glim.py`).
 
+**GLIM format**: `src/storage/GLIM_FORMAT.md` is the normative spec, with `src/storage/glim_decoder.{h,cpp}` as the reference implementation; converters live in `fw/tools/` and are gated by CI's `python-tests` job (run locally: `cd fw && pytest tools/tests/ -v`). `fw/scripts/img_to_c.py` is a broken stub (it never writes any output) — do not use it.
+
 This is exclusive-write access to the board's disk — hold the `board` lock first (`Monitor(command: "scripts/hw-lock.sh hold board", persistent: true)`) if doing this by hand instead of via `/provision-device` (which enforces it for you). The hook can't catch an ad-hoc `mount` command — this remains convention-only.
 
 **Finding and mounting it from the devcontainer:**
@@ -457,13 +472,9 @@ fw/scripts/jlink-flash.sh -- --skip-rebuild # extra args forwarded to `west flas
 - This is the only way to reflash the bootloader (MCUboot/b0n); MCUmgr can only update the application images.
 - **The default build dir is resolved relative to the script's own location, not the caller's cwd or the main checkout** (`REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"`), so `fw/scripts/jlink-flash.sh` with no arguments correctly uses *this* worktree's `fw/build` when run from a worktree — no need to pass the build dir explicitly.
 
-### J-Link "Cannot connect" / nrfutil "Failed to open connection": missing /dev node — run fix-usb-dev-nodes.sh
+### J-Link "Cannot connect" / nrfutil "Failed to open connection": run fix-usb-dev-nodes.sh
 
-The J-Link's USB connection frequently resets mid-flash or when the target re-enumerates (WSL2 passthrough). The devcontainer has no udev, so the re-enumerated probe gets **no `/dev/bus/usb/BBB/DDD` node** — or worse, a bogus 0-byte *regular file* appears at that path (left by a failed `open(O_CREAT)`). Symptoms: `lsusb` shows `1366:0101` fine, but `JLinkExe` says "Cannot connect to J-Link", `nrfutil device recover/x-execute-batch` says "Failed to open connection", or a flash dies mid-way with a "Failed to write DebugPort register" error.
-
-**Fix (approved workflow): run `fw/scripts/fix-usb-dev-nodes.sh`** — it recreates missing/bogus nodes for every USB device in sysfs (char major 189, minor `(busnum-1)*128 + devnum-1`) and prunes stale ones. Run it before every J-Link flash attempt and again after the board re-enumerates (it fixes the board's own node too); a failed flash → `fix-usb-dev-nodes.sh` → retry cycle is normal and converges on the second attempt. This is the USB-device sibling of the ttyACM `mknod` procedure in the serial-console section above.
-
-Distinguish this from the APPROTECT lockout: if the *node is fine* but a flash repeatedly fails at the same verify step with SWD/DebugPort errors, that's the debug-port lockout — recover with `nrfutil device recover --serial-number <sn> --core network` then `--core application` (mass-erases internal flash; bonds survive, they live in the settings partition on external flash) and reflash.
+Almost always a missing (or bogus 0-byte regular-file) `/dev/bus/usb` node after re-enumeration — the devcontainer has no udev. **Rule: run `fw/scripts/fix-usb-dev-nodes.sh` before every J-Link flash attempt and again after the board re-enumerates**; a failed flash → fix → retry cycle converging on the second attempt is normal. Full symptom table — including the distinct APPROTECT/debug-port lockout and its `nrfutil device recover` procedure — lives in `/debug-fw`.
 
 ### Recovering a wedged shell UART without reflashing
 
@@ -501,28 +512,9 @@ The board exposes two images via MCUmgr (confirmed from `image list`):
 
 Both currently report `version: 0.0.0` — the build version string is not yet wired up.
 
-### Firmware update flow
+### Firmware update flow (OTA via MCUmgr)
 
-```bash
-CONN="--conntype serial --connstring dev=/dev/ttyACM1,baud=115200"
-
-# 1. Upload the signed image (~678 KiB at ~3.5 KiB/s over serial = ~3-4 minutes, be patient)
-mcumgr $CONN image upload fw/build/fw/zephyr/zephyr.signed.bin
-
-# 2. Get the hash of the uploaded image (slot 1 of image 0)
-mcumgr $CONN image list
-
-# 3. Mark it for test boot
-mcumgr $CONN image test <hash>
-
-# 4. Reset — MCUboot will boot the new image
-mcumgr $CONN reset
-
-# 5. Wait ~15 seconds for the board to re-enumerate on USB before issuing further commands
-#    /dev/ttyACM* disappears during reset and takes noticeably longer than expected to return.
-```
-
-After a successful test boot, run `image confirm` (or let the app confirm via BLE) to make it permanent. If the device fails to boot, MCUboot reverts to the previous image automatically.
+`image upload` the signed image (`fw/build/fw/zephyr/zephyr.signed.bin`, ~3-4 min over serial), `image test <hash>`, `reset`, then `image confirm` after a good boot — MCUboot auto-reverts if the test boot fails. The step-by-step procedure (with re-enumeration handling) lives in `/flash-and-verify`; prefer the J-Link fast path above when a J-Link is attached.
 
 ### Commands
 
@@ -598,7 +590,7 @@ e.g. `fw/sysbuild/mcuboot/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.overlay` o
 
 **`add_overlay_dts(${DEFAULT_IMAGE}, ...)` in `fw/conf/<board>/sysbuild.cmake` targets the main "fw" app image, not MCUboot.** `${DEFAULT_IMAGE}` is sysbuild's default/main image, which is `fw` in this project. Don't reach for this mechanism when you actually want to target MCUboot, b0n, or ipc_radio — use the per-image `sysbuild/<image-name>/` directory above instead.
 
-**A newly-added overlay file may not be picked up without a `--pristine` rebuild.** Zephyr's overlay auto-discovery (`zephyr_file(CONF_FILES ... DTC_OVERLAY_FILE ...)`) is gated behind `if(NOT DEFINED DTC_OVERLAY_FILE)` — if a prior configure already ran and cached `DTC_OVERLAY_FILE` (even as an empty string) in `build/<image>/CMakeCache.txt`, the auto-discovery block is permanently skipped on every subsequent incremental build, even after adding the right file in the right place. If a new overlay doesn't seem to take effect, check `grep DTC_OVERLAY_FILE build/<image>/CMakeCache.txt` — if it's defined-but-empty, do a full `--pristine` rebuild instead of debugging the overlay content.
+**A newly-added overlay file may not be picked up without a `--pristine` rebuild.** Zephyr's overlay auto-discovery (`zephyr_file(CONF_FILES ... DTC_OVERLAY_FILE ...)`) is gated behind `if(NOT DEFINED DTC_OVERLAY_FILE)` — if a prior configure already ran and cached `DTC_OVERLAY_FILE` (even as an empty string) in `build/<image>/CMakeCache.txt`, the auto-discovery block is permanently skipped on every subsequent incremental build, even after adding the right file in the right place. If a new overlay doesn't seem to take effect, check `grep DTC_OVERLAY_FILE build/<image>/CMakeCache.txt` — if it's defined-but-empty, do a full `--pristine` rebuild instead of debugging the overlay content. Deleting just `build/<image>/CMakeCache.txt` (as in the MCUboot VERSION-file trick elsewhere in this file) has NOT been validated for overlay rediscovery — use the full `--pristine` rebuild.
 
 ## MCUboot and LED data pins (GPIO retention across warm resets)
 
