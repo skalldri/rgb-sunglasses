@@ -36,10 +36,10 @@ class BtGattPersistentCharacteristic
     BtGattPersistentCharacteristic() {
         // Discarded entirely (no doLoad/doSave codegen, no registry call) when
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
-        // Failures (duplicate/overflow) are logged inside persistent_value_registry_register()
+        // Failures (duplicate key) are logged inside persistent_value_registry_register()
         // itself, which already has the key for context - no need to duplicate that here.
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            persistent_value_registry_register(Key.value, this, &doLoad, &doSave);
+            persistent_value_registry_register(&mPersistEntry, Key.value, this, &doLoad, &doSave);
         }
     }
 
@@ -61,6 +61,14 @@ class BtGattPersistentCharacteristic
     }
 
    private:
+    // Registry storage is caller-owned (see persistent_value_registry.h); this instance is
+    // a long-lived static, so it owns its own entry. Not #if-gated on
+    // CONFIG_APP_PERSIST_BT_CONFIG: the register() call below is inside `if constexpr`, but
+    // an unqualified member name must still resolve at template-definition time, so gating
+    // the member out breaks the disabled build. It's a few bytes of BSS and zero flash when
+    // persistence is off - DK's constraint is flash, not RAM.
+    PersistentValueRegistryEntry mPersistEntry{};
+
     static void doLoad(void *target, const void *data, size_t len) {
         auto *self = static_cast<BtGattPersistentCharacteristic *>(target);
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <zephyr/settings/settings.h>
+#include <zephyr/sys/slist.h>
 
 #include <cstddef>
 
@@ -13,24 +14,50 @@
  * BT-settable config characteristic) share a single subtree handler: each value
  * self-registers a callback pair at static-init time, and the shared handler's h_set
  * dispatches into whichever entry's key matches.
+ *
+ * Storage is an intrusive singly-linked list (sys_slist_t) whose nodes are owned by the
+ * *callers* - each registrant embeds a PersistentValueRegistryEntry in its own long-lived
+ * object (a characteristic instance, an extension Slot, a file-scope static) and passes
+ * its address. This is the same idiom Zephyr's own settings backend uses
+ * (settings_store.c: sys_slist_t settings_load_srcs), and it means the registry has no
+ * fixed capacity and can never drop a registration - there is no -ENOMEM path.
  */
 using PersistentValueLoadFn = void (*)(void *target, const void *data, size_t len);
 using PersistentValueSaveFn = void (*)(void *target);
 
 /**
- * @brief Registers one persisted value.
+ * @brief One persisted value's registration record, owned by the caller.
  *
- * @param key Stable key, WITHOUT the settings subtree prefix (e.g. "core/brightness",
- *            not "appcfg/core/brightness"). Must remain stable across firmware
- *            versions/declaration reordering - never derive it from positional state.
- * @param target Opaque pointer passed back into @p load / @p save.
- * @param load Called with the raw bytes read back from flash for this key.
- * @param save Called when this value should be flushed to flash.
- * @return 0 on success, -EINVAL on a null argument, -EEXIST on a duplicate key,
- *         -ENOMEM if the fixed-size table is full.
+ * The caller only provides long-lived storage (static duration, or a member of a
+ * static/singleton object) and passes its address to persistent_value_registry_register(),
+ * which fills every field itself - the caller never touches them. The instance must
+ * outlive its registration - it is linked into the registry by pointer, never copied.
  */
-int persistent_value_registry_register(const char *key, void *target, PersistentValueLoadFn load,
-                                        PersistentValueSaveFn save);
+struct PersistentValueRegistryEntry {
+    const char *key;
+    void *target;
+    PersistentValueLoadFn load;
+    PersistentValueSaveFn save;
+    bool dirty;
+    sys_snode_t node;  // registry-internal intrusive list link
+};
+
+/**
+ * @brief Registers one persisted value, filling @p entry itself.
+ *
+ * @param entry Caller-owned, long-lived record; every field is written by this call.
+ *              Linked by pointer, so it must outlive its registration.
+ * @param key   Stable settings key WITHOUT the subtree prefix - e.g. "core/brightness",
+ *              not "appcfg/core/brightness". Stored by pointer; must outlive @p entry's
+ *              registration.
+ * @return 0 on success, -EINVAL on a null @p entry / key / load / save, -EEXIST on a
+ *         duplicate key, -EALREADY if @p entry is already linked into the registry
+ *         (re-registering a live entry - even under a new key - would corrupt the
+ *         intrusive list, so it is refused). (There is no capacity limit, so no -ENOMEM.)
+ */
+int persistent_value_registry_register(PersistentValueRegistryEntry *entry, const char *key,
+                                       void *target, PersistentValueLoadFn load,
+                                       PersistentValueSaveFn save);
 
 /**
  * @brief Dispatches a settings_load() callback to the matching registered entry.

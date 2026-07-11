@@ -89,6 +89,9 @@ struct Slot {
      * slot must NOT mark-dirty or fault-write that key, or it would clobber the
      * slot that actually owns it. */
     bool persistRegistered = false;
+    /* Caller-owned registry record for this slot's param persistence (the registry links
+     * it by pointer; the slot outlives the registration - see persistent_value_registry.h). */
+    PersistentValueRegistryEntry persistEntry = {};
     /* Tick-handshake profiling (cycles), reset on every activation. */
     uint32_t tickMinCyc = 0;
     uint32_t tickMaxCyc = 0;
@@ -404,8 +407,10 @@ void register_slot_persistence(size_t slotIndex) {
         return;
     }
     Slot &slot = sSlots[slotIndex];
-    int ret = persistent_value_registry_register(slot.settingsKey, &slot, ext_params_do_load,
-                                                 ext_params_do_save);
+    /* The registry fills the caller-owned record and links it by pointer (issue #114);
+     * the slot outlives the registration. */
+    int ret = persistent_value_registry_register(&slot.persistEntry, slot.settingsKey, &slot,
+                                                 ext_params_do_load, ext_params_do_save);
     if (ret == 0) {
         slot.persistRegistered = true;
     } else {

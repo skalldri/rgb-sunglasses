@@ -5,72 +5,71 @@
 #include <zephyr/logging/log.h>
 
 // When the feature is disabled (e.g. CONFIG_APP_PERSIST_BT_CONFIG=n on
-// rgb_sunglasses_dk), compile out the fixed-size entry table (and the log module that
-// reports failures touching it) entirely rather than just leaving them unreferenced -
-// every call site that populates the table is itself gated by
-// IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG), so these stubs are never invoked there.
+// rgb_sunglasses_dk), compile out the registry (and the log module that reports failures
+// touching it) entirely rather than just leaving it unreferenced - every call site that
+// registers an entry is itself gated by IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG), so these
+// stubs are never invoked there.
 #if defined(CONFIG_APP_PERSIST_BT_CONFIG)
 
 LOG_MODULE_REGISTER(persistent_value_registry, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace {
-struct PersistentValueRegistryEntry {
-    const char *key;
-    void *target;
-    PersistentValueLoadFn load;
-    PersistentValueSaveFn save;
-    bool dirty;
-};
+// Intrusive list of caller-owned PersistentValueRegistryEntry records (each links in via
+// its embedded .node). No fixed capacity - append is O(1) and can never fail for lack of
+// space, so registration cannot be silently dropped. Same idiom as Zephyr's own settings
+// backend (settings_store.c: sys_slist_t settings_load_srcs). Registration is single-
+// threaded at static-init/boot, so no locking is needed (unchanged invariant).
+sys_slist_t sRegistry = SYS_SLIST_STATIC_INIT(&sRegistry);
 
-constexpr size_t kMaxRegistryEntries = 96;
-PersistentValueRegistryEntry sRegistry[kMaxRegistryEntries];
-size_t sRegistryCount = 0;
-
-ssize_t findRegistryIndex(const char *key) {
-    for (size_t i = 0; i < sRegistryCount; i++) {
-        if (strcmp(sRegistry[i].key, key) == 0) {
-            return i;
+PersistentValueRegistryEntry *findRegistryEntry(const char *key) {
+    PersistentValueRegistryEntry *e;
+    SYS_SLIST_FOR_EACH_CONTAINER(&sRegistry, e, node) {
+        if (strcmp(e->key, key) == 0) {
+            return e;
         }
     }
-
-    return -1;
+    return nullptr;
 }
 }  // namespace
 
-int persistent_value_registry_register(const char *key, void *target, PersistentValueLoadFn load,
+int persistent_value_registry_register(PersistentValueRegistryEntry *entry, const char *key,
+                                       void *target, PersistentValueLoadFn load,
                                        PersistentValueSaveFn save) {
-    if (!key || !load || !save) {
-        LOG_ERR("Refusing to register persisted value with a null key/load/save");
+    if (!entry || !key || !load || !save) {
+        LOG_ERR("Refusing to register persisted value with a null entry/key/load/save");
         return -EINVAL;
     }
 
-    if (findRegistryIndex(key) >= 0) {
-        LOG_ERR("Persisted value '%s' is already registered", key);
-        return -EEXIST;
+    // One walk checks both hazards: a duplicate key, and this exact record already being
+    // linked (sys_slist_append on a linked node self-loops or truncates the list, hanging
+    // every later traversal - refuse rather than corrupt).
+    PersistentValueRegistryEntry *e;
+    SYS_SLIST_FOR_EACH_CONTAINER(&sRegistry, e, node) {
+        if (e == entry) {
+            LOG_ERR("Entry for '%s' is already linked into the registry (as '%s')", key, e->key);
+            return -EALREADY;
+        }
+        if (strcmp(e->key, key) == 0) {
+            LOG_ERR("Persisted value '%s' is already registered", key);
+            return -EEXIST;
+        }
     }
 
-    if (sRegistryCount >= kMaxRegistryEntries) {
-        LOG_ERR("Persisted value table is full (max %zu) - dropping '%s'", kMaxRegistryEntries,
-                key);
-        return -ENOMEM;
-    }
-
-    sRegistry[sRegistryCount] = {
-        .key = key,
-        .target = target,
-        .load = load,
-        .save = save,
-        .dirty = false,
-    };
-    sRegistryCount++;
+    entry->key = key;
+    entry->target = target;
+    entry->load = load;
+    entry->save = save;
+    entry->dirty = false;
+    sys_slist_append(&sRegistry, &entry->node);
     return 0;
 }
 
 int persistent_value_registry_dispatch_load(const char *name, size_t len, settings_read_cb read_cb,
                                             void *cb_arg) {
-    for (size_t i = 0; i < sRegistryCount; i++) {
+    PersistentValueRegistryEntry *e;
+    SYS_SLIST_FOR_EACH_CONTAINER(&sRegistry, e, node) {
         const char *next = nullptr;
-        if (!settings_name_steq(name, sRegistry[i].key, &next) || next) {
+        if (!settings_name_steq(name, e->key, &next) || next) {
             continue;
         }
 
@@ -84,7 +83,7 @@ int persistent_value_registry_dispatch_load(const char *name, size_t len, settin
             return static_cast<int>(readLen);
         }
 
-        sRegistry[i].load(sRegistry[i].target, buf, static_cast<size_t>(readLen));
+        e->load(e->target, buf, static_cast<size_t>(readLen));
         return 0;
     }
 
@@ -92,34 +91,36 @@ int persistent_value_registry_dispatch_load(const char *name, size_t len, settin
 }
 
 void persistent_value_registry_mark_dirty(const char *key) {
-    ssize_t i = findRegistryIndex(key);
-    if (i >= 0) {
-        sRegistry[i].dirty = true;
+    PersistentValueRegistryEntry *e = findRegistryEntry(key);
+    if (e != nullptr) {
+        e->dirty = true;
     }
 }
 
 void persistent_value_registry_save_all() {
-    for (size_t i = 0; i < sRegistryCount; i++) {
-        if (!sRegistry[i].dirty) {
+    PersistentValueRegistryEntry *e;
+    SYS_SLIST_FOR_EACH_CONTAINER(&sRegistry, e, node) {
+        if (!e->dirty) {
             continue;
         }
-        sRegistry[i].dirty = false;
-        sRegistry[i].save(sRegistry[i].target);
+        e->dirty = false;
+        e->save(e->target);
     }
 }
 
 void persistent_value_registry_reset() {
-    sRegistryCount = 0;
+    // Caller-owned nodes; just drop them all from the list (their storage is untouched).
+    sys_slist_init(&sRegistry);
 }
 
 size_t persistent_value_registry_count() {
-    return sRegistryCount;
+    return sys_slist_len(&sRegistry);
 }
 
 #else  // !CONFIG_APP_PERSIST_BT_CONFIG
 
-int persistent_value_registry_register(const char *, void *, PersistentValueLoadFn,
-                                       PersistentValueSaveFn) {
+int persistent_value_registry_register(PersistentValueRegistryEntry *, const char *, void *,
+                                       PersistentValueLoadFn, PersistentValueSaveFn) {
     return -ENOSYS;
 }
 
