@@ -10,14 +10,20 @@ by an incremental build — `DTC_OVERLAY_FILE`/`CONF_FILE` are cached in
 `fw/build/<image>/CMakeCache.txt`, which permanently gates auto-discovery. `--pristine` is the fix;
 see fw/CLAUDE.md, "Per-image Kconfig/devicetree overlays (sysbuild)".
 
+**Always capture the entire build output to a temp file** (the `tee` below) — a sysbuild run links 4
+images and prints 4 separate memory tables, so anything you need later (the appcore table, an error
+further up) can be pulled from the file with Read/Grep instead of re-running the whole build.
+
 ```bash
 west build \
   --build-dir fw/build \
   fw \
   --board rgb_sunglasses_proto0/nrf5340/cpuapp \
   --sysbuild \
-  -- -DBOARD_ROOT="$(pwd)/fw"
+  -- -DBOARD_ROOT="$(pwd)/fw" 2>&1 | tee "$SCRATCHPAD_OR_TMP/build-proto0.log" | tail -30
 ```
+
+(`$SCRATCHPAD_OR_TMP` = your session scratchpad dir, or `/tmp` outside a Claude session.)
 
 ## Steps
 
