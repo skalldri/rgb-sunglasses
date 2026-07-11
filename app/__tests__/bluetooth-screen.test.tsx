@@ -80,6 +80,79 @@ describe('BluetoothScreen', () => {
     expect(setIsScanning).toHaveBeenCalledWith(true);
   });
 
+  it('scans in LowLatency mode (not the LowPower default that misses late advertisers)', async () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      isScanning: false,
+      setIsScanning: jest.fn(),
+    } as any);
+    let focusCallback: (() => void | (() => void)) | null = null;
+    jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+      focusCallback = cb;
+      return undefined as any;
+    });
+    jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+    const startScanMock = BleHook.bleManager.startDeviceScan as jest.Mock;
+    startScanMock.mockImplementation(() => undefined);
+    (BleHook.bleManager.connectedDevices as jest.Mock).mockResolvedValue([]);
+
+    render(<BluetoothScreen />);
+    await act(async () => {
+      focusCallback?.();
+    });
+
+    await waitFor(() => expect(startScanMock).toHaveBeenCalled());
+    // 2nd arg is the ScanOptions; LowLatency = 2 (ScanMode.LowLatency).
+    expect(startScanMock.mock.calls[0][1]).toEqual({ scanMode: 2 });
+  });
+
+  it('prunes a device that stops advertising after the TTL, keeps one that keeps advertising', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+        isScanning: true,
+        setIsScanning: jest.fn(),
+      } as any);
+      let focusCallback: (() => void | (() => void)) | null = null;
+      jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+        focusCallback = cb;
+        return undefined as any;
+      });
+      jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+      let scanCb: ((error: unknown, device: unknown) => void) | null = null;
+      (BleHook.bleManager.startDeviceScan as jest.Mock).mockImplementation((_f, _o, cb) => {
+        scanCb = cb;
+        // Both devices seen at scan start (t=0).
+        cb(null, { localName: 'RGB Sunglasses Stays', id: 'stays' });
+        cb(null, { localName: 'RGB Sunglasses Goes', id: 'goes' });
+      });
+      (BleHook.bleManager.connectedDevices as jest.Mock).mockResolvedValue([]);
+
+      const { queryByText } = render(<BluetoothScreen />);
+      await act(async () => {
+        focusCallback?.();
+      });
+
+      // Both present initially.
+      expect(queryByText('RGB Sunglasses Stays|stays')).toBeTruthy();
+      expect(queryByText('RGB Sunglasses Goes|goes')).toBeTruthy();
+
+      // Keep only 'stays' advertising, in two bursts, while time advances past the TTL.
+      // 'goes' is never re-advertised, so its lastSeen stays at t=0.
+      for (let i = 0; i < 3; i++) {
+        await act(async () => {
+          scanCb?.(null, { localName: 'RGB Sunglasses Stays', id: 'stays' });
+          jest.advanceTimersByTime(4000); // 3 x 4s = 12s total (> 10s TTL); prune fires each 2s
+        });
+      }
+
+      // 'goes' aged out; 'stays' kept because it was re-seen within the window.
+      expect(queryByText('RGB Sunglasses Goes|goes')).toBeNull();
+      expect(queryByText('RGB Sunglasses Stays|stays')).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('stops scanning on focus cleanup', async () => {
     const setIsScanning = jest.fn();
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({

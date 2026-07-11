@@ -1,6 +1,7 @@
 #include <bluetooth/bt_state_observer.h>
 #include <bluetooth/services/nsms.h>
 #include <errno.h>
+#include <string.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -828,3 +829,31 @@ SHELL_CMD_REGISTER(bt_state, NULL,
                    "Snapshot BLE link health (state, security, ATT MTU) - use first when "
                    "debugging a connection that looks stuck",
                    cmd_bt_state);
+
+// TEST AID: toggle BLE advertising at runtime, e.g. to exercise the app's scan
+// freshness (a device disappearing from / appearing in "Nearby devices"). This
+// deliberately does NOT persist anything - it just calls the runtime adv start/stop
+// API, so the board ALWAYS boots back into advertising via the normal state-machine
+// path. It bypasses the BT state machine and is only meaningful in the ADVERTISING
+// (disconnected) state; do not use it to fiddle with a live connection.
+static int cmd_bt_adv(const struct shell *sh, size_t argc, char **argv) {
+    if (argc < 2 || (strcmp(argv[1], "on") != 0 && strcmp(argv[1], "off") != 0)) {
+        shell_print(sh, "usage: bt_adv <on|off>  (test aid; not persisted)");
+        return -EINVAL;
+    }
+    bool on = strcmp(argv[1], "on") == 0;
+    int err = on ? bt_start_advertising() : bt_stop_advertising();
+    // -EALREADY: already in the requested advertising state - fine for a test toggle.
+    if (err && err != -EALREADY) {
+        shell_error(sh, "bt_adv %s failed: %d", argv[1], err);
+        return err;
+    }
+    shell_print(sh, "Advertising %s%s (runtime only - not persisted)",
+                on ? "ENABLED" : "DISABLED", err == -EALREADY ? " [already]" : "");
+    return 0;
+}
+
+SHELL_CMD_REGISTER(bt_adv, NULL,
+                   "TEST AID: bt_adv <on|off> - toggle advertising at runtime (NOT persisted; "
+                   "board always boots advertising). Use to exercise app scan freshness.",
+                   cmd_bt_adv);

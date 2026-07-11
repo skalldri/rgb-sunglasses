@@ -15,7 +15,7 @@ import { bleManager, requestPermissions } from "@/hooks/ble-manager";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { APP_SELF_UPDATE_SUPPORTED, getCurrentAppVersion } from "@/services/app-update";
 import { Link, useFocusEffect } from "expo-router";
-import { LogLevel } from "react-native-ble-plx";
+import { LogLevel, ScanMode } from "react-native-ble-plx";
 
 // Set log level once at module load
 if (__DEV__) bleManager.setLogLevel(LogLevel.Verbose);
@@ -24,6 +24,14 @@ type BleDevice = {
     name: string;
     mac: string;
 };
+
+// Drop a device from "Nearby devices" once we haven't seen an advertisement from it
+// for this long. Must be comfortably longer than the board's advertising interval so a
+// still-present device is never flicker-removed, but short enough that a device that
+// goes away (powers off, or connects to another phone and stops advertising) disappears
+// promptly instead of lingering as "available" forever.
+const DEVICE_TTL_MS = 10_000;
+const PRUNE_INTERVAL_MS = 2_000;
 
 export default function BluetoothScreen() {
 
@@ -57,6 +65,24 @@ export default function BluetoothScreen() {
     // results). null when no retry is scheduled.
     const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Per-device last-seen timestamps (mac -> epoch ms). Kept in a ref, NOT state, so the
+    // high-frequency scan callback (fires on every advertisement) doesn't re-render the
+    // list on each packet - only add/remove of a device changes `devices`. The prune
+    // timer reads this to age out devices that have stopped advertising.
+    const lastSeenRef = useRef<Record<string, number>>({});
+    // Interval handle for the stale-device pruner; cleared on blur alongside the scan.
+    const pruneTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // Remove devices we haven't seen advertise within DEVICE_TTL_MS. Returns the same
+    // array reference when nothing changed so React skips the re-render.
+    const pruneStaleDevices = useCallback(() => {
+        const now = Date.now();
+        setDevices(prev => {
+            const fresh = prev.filter(d => now - (lastSeenRef.current[d.mac] ?? 0) <= DEVICE_TTL_MS);
+            return fresh.length === prev.length ? prev : fresh;
+        });
+    }, []);
+
     /**
      *
      * @param mac De-duplicate devices
@@ -69,6 +95,7 @@ export default function BluetoothScreen() {
         console.log('Starting Bluetooth scan...');
         setIsScanning(true);
         setDevices([]);
+        lastSeenRef.current = {};
 
         // Defensive: dispose of any scan orphaned by a previous invocation that
         // resolved its permission check after the screen had already lost focus
@@ -96,7 +123,12 @@ export default function BluetoothScreen() {
 
             // startDeviceScan returns void (not a Promise) and delivers per-scan
             // errors to the callback below — not to the surrounding try/catch.
-            bleManager.startDeviceScan(null, null, (error, device) => {
+            // scanMode LowLatency (highest duty cycle): react-native-ble-plx defaults to
+            // LowPower, whose low duty cycle misses/badly delays advertisements from a
+            // device that starts advertising AFTER the scan began (the board coming up, or
+            // dropping a connection to another phone). LowLatency is Android's recommended
+            // mode for a foreground scanning screen.
+            bleManager.startDeviceScan(null, { scanMode: ScanMode.LowLatency }, (error, device) => {
                 // This invocation's scan was superseded (screen blurred/refocused)
                 // while the scan was live. Stop it and stop processing callbacks so
                 // we don't append devices into - or clear - a newer scan's results.
@@ -132,11 +164,14 @@ export default function BluetoothScreen() {
 
                 if (device) {
                     if (device.localName?.includes("RGB Sunglasses")) {
-                        console.log(`Found device: ${device.name ?? 'Unnamed'} (${device.id})`);
+                        // Refresh freshness on every advertisement (ref, not state - no
+                        // re-render); the list only changes when a device is newly added.
+                        lastSeenRef.current[device.id] = Date.now();
 
                         setDevices((prevDevices) => {
 
                             if (!isDuplicateDevice(prevDevices, device.id)) {
+                                console.log(`Found device: ${device.name ?? 'Unnamed'} (${device.id})`);
                                 return [...prevDevices, { name: device.localName ?? 'Unnamed', mac: device.id }];
                             }
 
@@ -154,6 +189,13 @@ export default function BluetoothScreen() {
 
                 if (device.localName?.includes("RGB Sunglasses") || device.name?.includes("RGB Sunglasses")) {
                     console.log(`Already connected to device: is an RGB Sunglasses!`);
+
+                    // Seed freshness so this OS-connected board gets a normal TTL window
+                    // (the scan callback won't refresh it - it isn't advertising while
+                    // connected). Re-seeded on each scan start; it also shows on the
+                    // Controls screen once connected, so pruning it here after the TTL is
+                    // acceptable rather than a regression.
+                    lastSeenRef.current[device.id] = Date.now();
 
                     setDevices((prevDevices) => {
 
@@ -194,6 +236,9 @@ export default function BluetoothScreen() {
             const gen = ++scanGenRef.current;
             scanRetriedRef.current = false;
             startBluetoothScan(gen);
+            // Age out devices that stop advertising while the screen stays focused (the
+            // scan-restart that used to be the only list-clear happens only on focus/blur).
+            pruneTimerRef.current = setInterval(pruneStaleDevices, PRUNE_INTERVAL_MS);
 
             return () => {
                 // Invalidate this session's in-flight work (a pending permission
@@ -205,6 +250,10 @@ export default function BluetoothScreen() {
                 if (retryTimerRef.current) {
                     clearTimeout(retryTimerRef.current);
                     retryTimerRef.current = null;
+                }
+                if (pruneTimerRef.current) {
+                    clearInterval(pruneTimerRef.current);
+                    pruneTimerRef.current = null;
                 }
                 stopBluetoothScan();
             };
