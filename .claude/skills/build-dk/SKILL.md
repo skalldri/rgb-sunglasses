@@ -6,14 +6,20 @@ allowed-tools: Bash, Read
 
 Build the DK firmware. Build dir: `fw/build-dk`. This is a SEPARATE directory from the proto0 build (`fw/build`) — never mix the two, as switching board types in the same dir triggers a full pristine rebuild.
 
+**Always capture the entire build output to a temp file** (the `tee` below) — a sysbuild run links 4
+images and prints 4 separate memory tables, so anything you need later (the appcore table, an error
+further up) can be pulled from the file with Read/Grep instead of re-running the whole build.
+
 ```bash
 west build \
   --build-dir fw/build-dk \
   fw \
   --board rgb_sunglasses_dk/nrf5340/cpuapp \
   --sysbuild \
-  -- -DBOARD_ROOT="$(pwd)/fw"
+  -- -DBOARD_ROOT="$(pwd)/fw" 2>&1 | tee "$SCRATCHPAD_OR_TMP/build-dk.log" | tail -30
 ```
+
+(`$SCRATCHPAD_OR_TMP` = your session scratchpad dir, or `/tmp` outside a Claude session.)
 
 ## Steps
 
