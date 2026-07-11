@@ -13,9 +13,12 @@
  * attribute tables are filled in at runtime from preallocated pools and
  * registered with bt_gatt_service_register() (CONFIG_BT_GATT_DYNAMIC_DB).
  *
- * These services carry no bulk-metadata characteristic; the companion app
- * automatically falls back to per-characteristic CUD/CPF descriptor reads
- * for services without one (see app/CLAUDE.md).
+ * These services also carry a bulk-metadata characteristic (issue #90
+ * follow-up), built at runtime by extension_metadata_blob.h and byte-for-byte
+ * compatible with the compile-time equivalent built-in services get (see
+ * bt_service_cpp.h's MetadataBlobBuilder) — so the companion app's existing
+ * fast-discovery path (app/CLAUDE.md) picks these services up automatically,
+ * with no fallback to per-characteristic CUD/CPF descriptor reads needed.
  *
  * @return 0 on success, negative errno on failure (slot out of range, not
  *         loaded, already registered, or bt_gatt_service_register error).

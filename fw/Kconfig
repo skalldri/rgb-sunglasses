@@ -120,8 +120,9 @@ config APP_PERSIST_BT_CONFIG
 	help
 	  Backs every BT-settable config characteristic (core_config, animation
 	  parameters/strings/colors, glim selection/loop mode, last-active
-	  animation) with Zephyr's settings subsystem so values survive a power
-	  cycle. See src/settings/ and src/bluetooth/persistent_characteristic.h.
+	  animation, extension animation parameters) with Zephyr's settings
+	  subsystem so values survive a power cycle. See src/settings/ and
+	  src/bluetooth/persistent_characteristic.h.
 	  Disabled on rgb_sunglasses_dk (see its board .conf): that board's
 	  internal-flash image slot has no spare room for this, and per
 	  fw/CLAUDE.md it's legacy / doesn't get new features.
@@ -146,6 +147,10 @@ config APP_BT_METADATA_CHARACTERISTIC
 	  of two descriptor reads per characteristic during discovery (issue
 	  #41 follow-up). Costs real flash: the blob duplicates every
 	  characteristic's CUD description string as packed binary data.
+	  Also covers extension animation services (src/extensions/extension_bt.cpp,
+	  issue #90 follow-up) — built at runtime there instead of at compile
+	  time, so it costs RAM (a few hundred bytes per extension slot) rather
+	  than flash and is not part of the flash-budget reasoning below.
 	  Disabled on rgb_sunglasses_dk (see its board .conf): that board's
 	  internal-flash image slot has no spare room for this, and per
 	  fw/CLAUDE.md it's legacy / doesn't get new features.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sys/types.h>
+
 #include <cstddef>
 
 /**
@@ -33,5 +35,22 @@ void request_save();
  * @param key Same stable key passed to persistent_value_registry_register().
  */
 void save_value(const char *key, const void *data, size_t len);
+
+/**
+ * @brief Immediately, synchronously reads one persisted value's raw bytes, if present.
+ *
+ * Unlike persistent_value_registry's dispatch_load path (which only fires during the
+ * one boot-time settings_load() replay, for keys already registered before that replay
+ * runs), this needs no prior registration - a direct settings_load_one() by exact key.
+ * For callers whose key isn't known until after settings_load() has already completed
+ * (e.g. extension_host, which only learns an extension's identity from its manifest at
+ * FAT-discovery time, on the pattern-controller thread, well after bluetooth_init()'s
+ * settings_load() has run).
+ *
+ * @param key Same stable key passed to persistent_value_registry_register()/save_value().
+ * @return Number of bytes actually read (<= bufLen) on success, 0 if @p key was never
+ *         saved, or a negative errno on a storage error.
+ */
+ssize_t load_value(const char *key, void *buf, size_t bufLen);
 
 }  // namespace persistent_value_store

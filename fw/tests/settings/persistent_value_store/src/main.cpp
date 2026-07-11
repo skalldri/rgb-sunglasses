@@ -122,3 +122,29 @@ ZTEST(persistent_value_store_tests, test_string_value_round_trip) {
 
     zassert_str_equal(after.value, "hello", "Expected reloaded string to match what was saved");
 }
+
+ZTEST(persistent_value_store_tests, test_load_value_reads_saved_value) {
+    reset_test_state();
+
+    const char *key = "test/load_value_direct";
+    uint32_t saved = 5678;
+    persistent_value_store::save_value(key, &saved, sizeof(saved));
+
+    uint32_t loaded = 0;
+    ssize_t len = persistent_value_store::load_value(key, &loaded, sizeof(loaded));
+
+    zassert_equal(len, static_cast<ssize_t>(sizeof(loaded)),
+                  "Expected load_value to read back sizeof(uint32_t) bytes, got %zd", len);
+    zassert_equal(loaded, 5678, "Expected loaded value to match what was saved");
+}
+
+ZTEST(persistent_value_store_tests, test_load_value_returns_zero_when_never_saved) {
+    reset_test_state();
+
+    uint32_t loaded = 0xDEADBEEF;
+    ssize_t len =
+        persistent_value_store::load_value("test/never_saved_key", &loaded, sizeof(loaded));
+
+    zassert_equal(len, 0, "Expected load_value to return 0 for a key that was never saved, got %zd",
+                  len);
+}
