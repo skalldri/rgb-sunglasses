@@ -175,15 +175,23 @@ For any app change that doesn't need the physical phone, run the `/validate-app`
 
 After `adb shell am force-stop` + relaunch, the in-app self-update check runs on mount and can immediately push the **App Update** modal (`app-update-modal`) on top of the bluetooth tab if a newer release is found on GitHub. This leaves the navigation stack as `__root > (tabs) > app-update-modal > (tabs) > bluetooth`, which blocks tapping anything underneath. Dismiss it with `adb shell input keyevent KEYCODE_BACK` before trying to interact with the Bluetooth or Controls screens. The BLE connection (if triggered before the modal appeared) is still live — the button will show "Disconnect" once the modal is cleared.
 
-### BLE Pairing — Ask the User
+### BLE Pairing — prefer the `/re-pair` skill
 
-First-time pairing requires accepting Android system prompts that are too timing-sensitive for autonomous handling:
+**Preferred: `scripts/re-pair.sh` / the `/re-pair` skill** automates forget + re-pair
+hands-off. It arms a serial watcher on the board's shell UART, taps CONNECT, and a local
+autoresponder types the board-displayed passkey into Android's dialog fast enough to beat
+the reason-19 timeout — no human in the loop. Requires the `board` + `app` locks and any
+MCP serial connection closed first (see the skill). Use it for the OnePlus stale-GATT
+split-brain (`/debug-ble`) and any re-pair.
+
+**Manual fallback** (if `/re-pair` can't drive the phone, e.g. Settings-UI drift on the
+forget step). First-time pairing accepts Android system prompts that are timing-sensitive:
 
 1. After tapping CONNECT in the app, Android shows a **"Pairing request"** notification in the status bar shade.
-2. The user must swipe down → tap **"Pair & connect"** → tap **"Pair"** on the confirmation dialog.
+2. Swipe down → tap **"Pair & connect"** → tap **"Pair"** on the confirmation dialog, then enter the 6-digit code the board prints on serial (`Passkey for … : NNNNNN`).
 3. All of this must happen before Android times out waiting for user input and drops the connection (`BT_HCI_ERR_REMOTE_USER_TERM_CONN`, disconnect reason 19).
 
-**Rule:** If a device has never been paired, ask the user to watch for and accept the Android pairing prompts themselves. Once paired, subsequent connections complete automatically without any prompts.
+If a device has never been paired and `/re-pair` isn't being used, ask the user to watch for and accept the Android pairing prompts themselves. Once paired, subsequent connections complete automatically without any prompts.
 
 ### ADB Wireless Pairing State Lives on the Phone, Not the Container
 

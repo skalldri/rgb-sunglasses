@@ -41,9 +41,11 @@ firmware, use the `bt_conn_info` fallback in `references/stale-gatt-cache.md` (P
 Recovery is phone-stack-dependent (issue #115; `references/stale-gatt-cache.md`):
 - **Stock Android (Pixel-class):** auto-recovers via Service Changed + DB hash. Nothing
   to do.
-- **OxygenOS-class (OnePlus 9 Pro):** does NOT honor it. Only fix: phone Settings →
-  Bluetooth → forget device → re-pair. No app-side connect option rescues it (verified
-  in issue #115); don't burn time toggling `refreshGatt`/`requestMTU` orderings.
+- **OxygenOS-class (OnePlus 9 Pro):** does NOT honor it. Only fix: forget device +
+  re-pair — **automated via `/re-pair` (`scripts/re-pair.sh`)**, which forgets the bond
+  and re-pairs hands-off (a local autoresponder types the board's passkey, winning
+  Android's dialog timeout). No app-side connect option rescues it (verified in issue
+  #115); don't burn time toggling `refreshGatt`/`requestMTU` orderings.
 
 Scope check: stale-cache on non-compliant stacks is a FULL discovery/MTU hang or
 timeout — isolated swallowed `read()` errors inside an otherwise successful discovery

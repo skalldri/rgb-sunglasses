@@ -74,7 +74,7 @@ resetting the *board* (not the phone) if a stale GATT link is suspected. Only
 ask the user to power-cycle the phone themselves if those don't resolve it —
 never do it unilaterally via `adb reboot`.
 
-### BLE pairing requires the passkey shown by the board — always ask the user
+### BLE pairing — use the `/re-pair` skill; otherwise ask the user for the passkey
 
 The firmware requires `BT_SECURITY_L4` (LE Secure Connections + bonding). On a
 fresh pairing (board recently unpaired, or its bond info was cleared), the
@@ -92,12 +92,18 @@ system dialog (not part of the companion app's own UI, so `mcp__execbro__android
 won't necessarily surface it as an app screen — check for it explicitly) expecting
 that exact 6-digit code typed in and submitted.
 
-**When this happens, stop and ask the user for the passkey / to complete pairing
-themselves rather than trying to read the serial log and enter it via ADB unprompted.**
-Even though reading the passkey off the shell and typing it via `adb shell input
-text`/`mcp__execbro__android_input_text` is technically possible, this is BLE
-pairing state on the one shared physical phone — get the user's go-ahead before
-acting on it, the same spirit as the phone-reboot rule above.
+**The sanctioned way to (re-)pair is `scripts/re-pair.sh` / the `/re-pair` skill**
+(user-commissioned 2026-07-11): it forgets the stale bond and re-pairs hands-off, with
+a local autoresponder that reads the passkey off the UART and types it into Android's
+dialog fast enough to beat the pairing timeout — the exact read-and-enter flow this rule
+used to forbid, now packaged as an auditable script that self-gates on the board + app
+locks. Use it (see `/debug-ble` for when the OnePlus stale-GATT split-brain needs it).
+
+**Outside that script, still stop and ask the user before entering a passkey via ADB.**
+Ad-hoc `adb shell input text`/`mcp__execbro__android_input_text` of a passkey you scraped
+by hand remains off-limits without the user's go-ahead — this is BLE pairing state on the
+one shared physical phone, same spirit as the phone-reboot rule above. The difference is
+that `/re-pair` *is* that go-ahead, standardized.
 
 ## Hardware locking
 

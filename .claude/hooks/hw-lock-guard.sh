@@ -31,6 +31,9 @@ EXECBRO_ALLOWLIST = {
     "list_ios_simulators", "get_license_status", "activate_license",
     "send_feedback",
 }
+# Commands that touch BOTH the board (serial) and the phone (adb) — require both
+# locks. re-pair.sh drives the shell UART and the phone in one run.
+BASH_BOTH_PATTERNS = [r"re-pair\.sh"]
 BASH_BOARD_PATTERNS = [
     r"jlink-flash\.sh", r"provision-device\.sh", r"JLinkExe",
     r"nrfutil\s+device", r"\bmcumgr\b", r"west\s+flash",
@@ -49,11 +52,14 @@ elif tool_name.startswith("mcp__execbro__"):
         resource = "app"
 elif tool_name == "Bash":
     command = tool_input.get("command") or ""
-    if any(re.search(p, command) for p in BASH_BOARD_PATTERNS):
+    if any(re.search(p, command) for p in BASH_BOTH_PATTERNS):
+        resource = "board,app"
+    elif any(re.search(p, command) for p in BASH_BOARD_PATTERNS):
         resource = "board"
     elif any(re.search(p, command) for p in BASH_APP_PATTERNS):
         resource = "app"
 
+# resource may be a comma-separated list; every named lock must be held.
 print(cwd)
 print(resource)
 ' <<<"$PAYLOAD")"
@@ -105,9 +111,20 @@ if [ ! -x "$HW_LOCK" ]; then
     allow
 fi
 
-if "$HW_LOCK" check "$RESOURCE" >/dev/null 2>&1; then
-    allow_with_waiter_notice "$RESOURCE"
-fi
+# $RESOURCE may be a comma-separated set (e.g. "board,app"); every named lock
+# must be held, else deny naming the first missing one.
+IFS=',' read -ra RESOURCES <<<"$RESOURCE"
+HOLD_ARGS="${RESOURCES[*]}"   # space-joined for the `hold` hint (default IFS)
+for r in "${RESOURCES[@]}"; do
+    if ! "$HW_LOCK" check "$r" >/dev/null 2>&1; then
+        STATUS="$("$HW_LOCK" status "$r" 2>&1 || true)"
+        deny "Refusing: the '$r' hardware lock is not held by this session. Run Monitor(command: \"scripts/hw-lock.sh hold $HOLD_ARGS\", persistent: true) first (see the hw-lock skill). Current status: $STATUS"
+    fi
+done
 
-STATUS="$("$HW_LOCK" status "$RESOURCE" 2>&1 || true)"
-deny "Refusing: the '$RESOURCE' hardware lock is not held by this session. Run Monitor(command: \"scripts/hw-lock.sh hold $RESOURCE\", persistent: true) first (see the hw-lock skill). Current status: $STATUS"
+# All required locks held. Preserve the single-resource waiter-notice behavior;
+# for a multi-resource set just allow (the notice covers one resource at a time).
+if [ "${#RESOURCES[@]}" -eq 1 ]; then
+    allow_with_waiter_notice "${RESOURCES[0]}"
+fi
+allow
