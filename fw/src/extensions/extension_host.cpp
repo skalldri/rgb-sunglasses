@@ -407,13 +407,10 @@ void register_slot_persistence(size_t slotIndex) {
         return;
     }
     Slot &slot = sSlots[slotIndex];
-    /* Fill the caller-owned registry record (issue #114 — the registry links it by
-     * pointer, and the slot outlives the registration) and register it. */
-    slot.persistEntry.key = slot.settingsKey;
-    slot.persistEntry.target = &slot;
-    slot.persistEntry.load = ext_params_do_load;
-    slot.persistEntry.save = ext_params_do_save;
-    int ret = persistent_value_registry_register(&slot.persistEntry);
+    /* The registry fills the caller-owned record and links it by pointer (issue #114);
+     * the slot outlives the registration. */
+    int ret = persistent_value_registry_register(&slot.persistEntry, slot.settingsKey, &slot,
+                                                 ext_params_do_load, ext_params_do_save);
     if (ret == 0) {
         slot.persistRegistered = true;
     } else {

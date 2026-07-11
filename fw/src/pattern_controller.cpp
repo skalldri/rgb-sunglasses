@@ -128,11 +128,10 @@ struct LastActiveAnimationRegistrar {
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
         // Failures are logged inside persistent_value_registry_register() itself.
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            sLastActiveAnimationEntry.key = kLastActiveAnimationKey;
-            sLastActiveAnimationEntry.target = nullptr;
-            sLastActiveAnimationEntry.load = lastActiveAnimationDoLoad;
-            sLastActiveAnimationEntry.save = lastActiveAnimationDoSave;
-            persistent_value_registry_register(&sLastActiveAnimationEntry);
+            persistent_value_registry_register(&sLastActiveAnimationEntry,
+                                               kLastActiveAnimationKey, nullptr,
+                                               lastActiveAnimationDoLoad,
+                                               lastActiveAnimationDoSave);
         }
     }
 };

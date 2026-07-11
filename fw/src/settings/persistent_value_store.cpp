@@ -95,6 +95,11 @@ ssize_t load_value(const char* key, void* buf, size_t bufLen) {
     return len;
 }
 
+void cancel_pending_save() {
+    struct k_work_sync sync;
+    k_work_cancel_delayable_sync(&sSaveWork, &sync);
+}
+
 }  // namespace persistent_value_store
 
 #else  // !CONFIG_APP_PERSIST_BT_CONFIG
@@ -104,6 +109,8 @@ namespace persistent_value_store {
 void request_save() {}
 
 void save_value(const char*, const void*, size_t) {}
+
+void cancel_pending_save() {}
 
 ssize_t load_value(const char*, void*, size_t) {
     return -ENOSYS;

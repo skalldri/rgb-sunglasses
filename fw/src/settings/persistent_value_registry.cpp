@@ -32,17 +32,33 @@ PersistentValueRegistryEntry *findRegistryEntry(const char *key) {
 }
 }  // namespace
 
-int persistent_value_registry_register(PersistentValueRegistryEntry *entry) {
-    if (!entry || !entry->key || !entry->load || !entry->save) {
+int persistent_value_registry_register(PersistentValueRegistryEntry *entry, const char *key,
+                                       void *target, PersistentValueLoadFn load,
+                                       PersistentValueSaveFn save) {
+    if (!entry || !key || !load || !save) {
         LOG_ERR("Refusing to register persisted value with a null entry/key/load/save");
         return -EINVAL;
     }
 
-    if (findRegistryEntry(entry->key) != nullptr) {
-        LOG_ERR("Persisted value '%s' is already registered", entry->key);
-        return -EEXIST;
+    // One walk checks both hazards: a duplicate key, and this exact record already being
+    // linked (sys_slist_append on a linked node self-loops or truncates the list, hanging
+    // every later traversal - refuse rather than corrupt).
+    PersistentValueRegistryEntry *e;
+    SYS_SLIST_FOR_EACH_CONTAINER(&sRegistry, e, node) {
+        if (e == entry) {
+            LOG_ERR("Entry for '%s' is already linked into the registry (as '%s')", key, e->key);
+            return -EALREADY;
+        }
+        if (strcmp(e->key, key) == 0) {
+            LOG_ERR("Persisted value '%s' is already registered", key);
+            return -EEXIST;
+        }
     }
 
+    entry->key = key;
+    entry->target = target;
+    entry->load = load;
+    entry->save = save;
     entry->dirty = false;
     sys_slist_append(&sRegistry, &entry->node);
     return 0;
@@ -98,17 +114,13 @@ void persistent_value_registry_reset() {
 }
 
 size_t persistent_value_registry_count() {
-    size_t n = 0;
-    PersistentValueRegistryEntry *e;
-    SYS_SLIST_FOR_EACH_CONTAINER(&sRegistry, e, node) {
-        n++;
-    }
-    return n;
+    return sys_slist_len(&sRegistry);
 }
 
 #else  // !CONFIG_APP_PERSIST_BT_CONFIG
 
-int persistent_value_registry_register(PersistentValueRegistryEntry *) {
+int persistent_value_registry_register(PersistentValueRegistryEntry *, const char *, void *,
+                                       PersistentValueLoadFn, PersistentValueSaveFn) {
     return -ENOSYS;
 }
 

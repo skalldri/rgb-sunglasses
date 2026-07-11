@@ -46,16 +46,14 @@ void string_save(void *target) {
     persistent_value_store::save_value(entry->key, entry->value, strlen(entry->value) + 1);
 }
 
-// Fill a Fake struct's caller-owned entry and register it (registry links it by pointer,
-// so the Fake struct must outlive the registration - here it's a test-local).
+// Register a Fake struct's caller-owned entry (the registry fills it and links it by
+// pointer, so the Fake struct must outlive the registration - here it's a test-local).
 void registerFake(FakeUint32Entry &e) {
-    e.reg = {e.key, &e, uint32_load, uint32_save, false, {}};
-    persistent_value_registry_register(&e.reg);
+    persistent_value_registry_register(&e.reg, e.key, &e, uint32_load, uint32_save);
 }
 
 void registerFake(FakeStringEntry &e) {
-    e.reg = {e.key, &e, string_load, string_save, false, {}};
-    persistent_value_registry_register(&e.reg);
+    persistent_value_registry_register(&e.reg, e.key, &e, string_load, string_save);
 }
 
 void reset_test_state() {
@@ -68,9 +66,20 @@ void *settings_test_setup(void) {
     return nullptr;
 }
 
+// Runs after every test, pass or fail. The Fake entries are test-frame locals linked into
+// the global registry, and a zassert failure longjmps out of the test with them still
+// linked and a debounced save possibly still pending - which would later walk (and call
+// save function pointers read from) the dead stack frames. Cancel the save synchronously
+// and unlink everything before the frames die.
+void store_test_after(void *fixture) {
+    ARG_UNUSED(fixture);
+    persistent_value_store::cancel_pending_save();
+    persistent_value_registry_reset();
+}
+
 }  // namespace
 
-ZTEST_SUITE(persistent_value_store_tests, NULL, settings_test_setup, NULL, NULL, NULL);
+ZTEST_SUITE(persistent_value_store_tests, NULL, settings_test_setup, NULL, store_test_after, NULL);
 
 ZTEST(persistent_value_store_tests, test_save_and_reload_round_trip) {
     reset_test_state();

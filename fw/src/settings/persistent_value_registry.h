@@ -28,11 +28,10 @@ using PersistentValueSaveFn = void (*)(void *target);
 /**
  * @brief One persisted value's registration record, owned by the caller.
  *
- * The caller fills @c key / @c target / @c load / @c save on a long-lived instance (static
- * duration, or a member of a static/singleton object) and passes its address to
- * persistent_value_registry_register(). @c dirty and @c node are registry-internal; the
- * caller does not touch them (register() zeroes @c dirty). The instance must outlive its
- * registration - it is linked into the registry by pointer, never copied.
+ * The caller only provides long-lived storage (static duration, or a member of a
+ * static/singleton object) and passes its address to persistent_value_registry_register(),
+ * which fills every field itself - the caller never touches them. The instance must
+ * outlive its registration - it is linked into the registry by pointer, never copied.
  */
 struct PersistentValueRegistryEntry {
     const char *key;
@@ -44,16 +43,21 @@ struct PersistentValueRegistryEntry {
 };
 
 /**
- * @brief Registers one persisted value.
+ * @brief Registers one persisted value, filling @p entry itself.
  *
- * @param entry Caller-owned, long-lived record with @c key (stable, WITHOUT the settings
- *              subtree prefix - e.g. "core/brightness", not "appcfg/core/brightness"),
- *              @c target, @c load, and @c save filled in. Linked by pointer, so it must
- *              outlive its registration.
+ * @param entry Caller-owned, long-lived record; every field is written by this call.
+ *              Linked by pointer, so it must outlive its registration.
+ * @param key   Stable settings key WITHOUT the subtree prefix - e.g. "core/brightness",
+ *              not "appcfg/core/brightness". Stored by pointer; must outlive @p entry's
+ *              registration.
  * @return 0 on success, -EINVAL on a null @p entry / key / load / save, -EEXIST on a
- *         duplicate key. (There is no capacity limit, so no -ENOMEM.)
+ *         duplicate key, -EALREADY if @p entry is already linked into the registry
+ *         (re-registering a live entry - even under a new key - would corrupt the
+ *         intrusive list, so it is refused). (There is no capacity limit, so no -ENOMEM.)
  */
-int persistent_value_registry_register(PersistentValueRegistryEntry *entry);
+int persistent_value_registry_register(PersistentValueRegistryEntry *entry, const char *key,
+                                       void *target, PersistentValueLoadFn load,
+                                       PersistentValueSaveFn save);
 
 /**
  * @brief Dispatches a settings_load() callback to the matching registered entry.

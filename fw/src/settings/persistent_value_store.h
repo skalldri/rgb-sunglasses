@@ -53,4 +53,14 @@ void save_value(const char *key, const void *data, size_t len);
  */
 ssize_t load_value(const char *key, void *buf, size_t bufLen);
 
+/**
+ * @brief Test hook: synchronously cancels any pending debounced save.
+ *
+ * Waits for an already-running save sweep to finish before returning. Test suites whose
+ * registry entries live in test-local (stack) storage must call this in their per-test
+ * teardown: a zassert failure longjmps out of the test with those entries still linked,
+ * and a still-pending save firing afterwards would traverse the dead stack frames.
+ */
+void cancel_pending_save();
+
 }  // namespace persistent_value_store

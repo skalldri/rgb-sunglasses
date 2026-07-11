@@ -39,11 +39,7 @@ class BtGattPersistentCharacteristic
         // Failures (duplicate key) are logged inside persistent_value_registry_register()
         // itself, which already has the key for context - no need to duplicate that here.
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            mPersistEntry.key = Key.value;
-            mPersistEntry.target = this;
-            mPersistEntry.load = &doLoad;
-            mPersistEntry.save = &doSave;
-            persistent_value_registry_register(&mPersistEntry);
+            persistent_value_registry_register(&mPersistEntry, Key.value, this, &doLoad, &doSave);
         }
     }
 

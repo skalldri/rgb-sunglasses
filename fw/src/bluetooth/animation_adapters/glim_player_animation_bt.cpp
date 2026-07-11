@@ -247,12 +247,10 @@ struct GlimPersistenceRegistrar {
         // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
         // Failures are logged inside persistent_value_registry_register() itself.
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            sGlimSelectionEntry = {kGlimSelectionKey, nullptr, glimSelectionDoLoad,
-                                   glimSelectionDoSave, false, {}};
-            persistent_value_registry_register(&sGlimSelectionEntry);
-            sGlimLoopModeEntry = {kGlimLoopModeKey, nullptr, glimLoopModeDoLoad,
-                                  glimLoopModeDoSave, false, {}};
-            persistent_value_registry_register(&sGlimLoopModeEntry);
+            persistent_value_registry_register(&sGlimSelectionEntry, kGlimSelectionKey, nullptr,
+                                               glimSelectionDoLoad, glimSelectionDoSave);
+            persistent_value_registry_register(&sGlimLoopModeEntry, kGlimLoopModeKey, nullptr,
+                                               glimLoopModeDoLoad, glimLoopModeDoSave);
         }
     }
 };

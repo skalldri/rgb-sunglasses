@@ -55,11 +55,8 @@ class ChargeEnableCharacteristic
 
     ChargeEnableCharacteristic() {
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            mPersistEntry.key = kChargeEnableKey;
-            mPersistEntry.target = this;
-            mPersistEntry.load = &doLoad;
-            mPersistEntry.save = &doSave;
-            persistent_value_registry_register(&mPersistEntry);
+            persistent_value_registry_register(&mPersistEntry, kChargeEnableKey, this, &doLoad,
+                                               &doSave);
         }
     }
 
