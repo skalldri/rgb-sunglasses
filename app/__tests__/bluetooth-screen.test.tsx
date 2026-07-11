@@ -105,6 +105,44 @@ describe('BluetoothScreen', () => {
     expect(startScanMock.mock.calls[0][1]).toEqual({ scanMode: 2 });
   });
 
+  it('periodically restarts the scan to defeat Android scan-report de-dup', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+        isScanning: true,
+        setIsScanning: jest.fn(),
+      } as any);
+      let focusCallback: (() => void | (() => void)) | null = null;
+      jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+        focusCallback = cb;
+        return undefined as any;
+      });
+      jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+      const startScanMock = BleHook.bleManager.startDeviceScan as jest.Mock;
+      startScanMock.mockImplementation(() => undefined);
+      const stopScanMock = BleHook.bleManager.stopDeviceScan as jest.Mock;
+      (BleHook.bleManager.connectedDevices as jest.Mock).mockResolvedValue([]);
+
+      render(<BluetoothScreen />);
+      await act(async () => {
+        focusCallback?.();
+      });
+
+      const startsAfterInitial = startScanMock.mock.calls.length; // initial scan (1)
+      const stopsAfterInitial = stopScanMock.mock.calls.length;
+
+      // One rescan interval later, the scan is stop+restarted (no focus change).
+      act(() => {
+        jest.advanceTimersByTime(11000); // > RESCAN_INTERVAL_MS (10s)
+      });
+
+      expect(startScanMock.mock.calls.length).toBeGreaterThan(startsAfterInitial);
+      expect(stopScanMock.mock.calls.length).toBeGreaterThan(stopsAfterInitial);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('prunes a device that stops advertising after the TTL, keeps one that keeps advertising', async () => {
     jest.useFakeTimers();
     try {
@@ -118,12 +156,12 @@ describe('BluetoothScreen', () => {
         return undefined as any;
       });
       jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+      // Capture the scan callback WITHOUT auto-reporting, so the test fully controls which
+      // device is "re-advertised" (the periodic rescan re-registers the callback, so an
+      // auto-reporting mock would refresh every device and nothing would ever prune).
       let scanCb: ((error: unknown, device: unknown) => void) | null = null;
       (BleHook.bleManager.startDeviceScan as jest.Mock).mockImplementation((_f, _o, cb) => {
         scanCb = cb;
-        // Both devices seen at scan start (t=0).
-        cb(null, { localName: 'RGB Sunglasses Stays', id: 'stays' });
-        cb(null, { localName: 'RGB Sunglasses Goes', id: 'goes' });
       });
       (BleHook.bleManager.connectedDevices as jest.Mock).mockResolvedValue([]);
 
@@ -132,20 +170,24 @@ describe('BluetoothScreen', () => {
         focusCallback?.();
       });
 
-      // Both present initially.
+      // Both discovered at t=0.
+      act(() => {
+        scanCb?.(null, { localName: 'RGB Sunglasses Stays', id: 'stays' });
+        scanCb?.(null, { localName: 'RGB Sunglasses Goes', id: 'goes' });
+      });
       expect(queryByText('RGB Sunglasses Stays|stays')).toBeTruthy();
       expect(queryByText('RGB Sunglasses Goes|goes')).toBeTruthy();
 
-      // Keep only 'stays' advertising, in two bursts, while time advances past the TTL.
-      // 'goes' is never re-advertised, so its lastSeen stays at t=0.
-      for (let i = 0; i < 3; i++) {
-        await act(async () => {
+      // Advance well past DEVICE_TTL_MS (25s), re-advertising ONLY 'stays' each step so its
+      // lastSeen stays fresh; 'goes' is never re-reported and its lastSeen stays at t=0.
+      for (let i = 0; i < 6; i++) {
+        act(() => {
           scanCb?.(null, { localName: 'RGB Sunglasses Stays', id: 'stays' });
-          jest.advanceTimersByTime(4000); // 3 x 4s = 12s total (> 10s TTL); prune fires each 2s
+          jest.advanceTimersByTime(6000); // 6 x 6s = 36s (> 25s TTL); prune fires each 2s
         });
       }
 
-      // 'goes' aged out; 'stays' kept because it was re-seen within the window.
+      // 'goes' aged out; 'stays' kept because it kept advertising.
       expect(queryByText('RGB Sunglasses Goes|goes')).toBeNull();
       expect(queryByText('RGB Sunglasses Stays|stays')).toBeTruthy();
     } finally {

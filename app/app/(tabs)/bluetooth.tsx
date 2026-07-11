@@ -25,12 +25,18 @@ type BleDevice = {
     mac: string;
 };
 
-// Drop a device from "Nearby devices" once we haven't seen an advertisement from it
-// for this long. Must be comfortably longer than the board's advertising interval so a
-// still-present device is never flicker-removed, but short enough that a device that
-// goes away (powers off, or connects to another phone and stops advertising) disappears
-// promptly instead of lingering as "available" forever.
-const DEVICE_TTL_MS = 10_000;
+// Android DE-DUPLICATES BLE scan reports: a device advertising continuously (the board
+// does every ~100ms) is delivered to the scan callback ONCE, then suppressed and only
+// re-reported sporadically (observed ~90-160s apart on a Pixel) - far longer than any
+// advertising interval, and `allowDuplicates` is iOS-only in react-native-ble-plx. So we
+// periodically RESTART the scan (RESCAN_INTERVAL_MS): a fresh startDeviceScan resets
+// Android's per-scan "already reported" filter, re-reporting every currently-advertising
+// device and refreshing its last-seen time. The prune TTL is kept comfortably longer than
+// the restart interval so a present device (re-seen each restart) is never dropped, while
+// one that stopped advertising (powered off, or connected elsewhere) ages out instead of
+// lingering as "available" forever.
+const RESCAN_INTERVAL_MS = 10_000;
+const DEVICE_TTL_MS = 25_000;
 const PRUNE_INTERVAL_MS = 2_000;
 
 export default function BluetoothScreen() {
@@ -72,6 +78,8 @@ export default function BluetoothScreen() {
     const lastSeenRef = useRef<Record<string, number>>({});
     // Interval handle for the stale-device pruner; cleared on blur alongside the scan.
     const pruneTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    // Interval handle for the periodic scan restart that defeats Android's report de-dup.
+    const rescanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // Remove devices we haven't seen advertise within DEVICE_TTL_MS. Returns the same
     // array reference when nothing changed so React skips the re-render.
@@ -91,43 +99,15 @@ export default function BluetoothScreen() {
         return allDevices.findIndex((d) => d.mac === newMac) >= 0;
     }
 
-    async function startBluetoothScan(gen: number) {
-        console.log('Starting Bluetooth scan...');
-        setIsScanning(true);
-        setDevices([]);
-        lastSeenRef.current = {};
-
-        // Defensive: dispose of any scan orphaned by a previous invocation that
-        // resolved its permission check after the screen had already lost focus
-        // (see scanGenRef above) - stopDeviceScan is a safe no-op if nothing
-        // is currently scanning.
-        bleManager.stopDeviceScan();
-
-        try {
-            const permissionsGranted = await requestPermissions();
-            if (!permissionsGranted) {
-                console.log('Bluetooth permissions denied');
-                setIsScanning(false);
-                return;
-            }
-
-            // The screen may have lost focus (and possibly regained it) while the
-            // permission check above was in flight - the focus effect's cleanup
-            // already ran and bumped scanGenRef, and could not stop a scan that
-            // hadn't started yet. Bail out here instead of starting an orphaned
-            // scan; if the screen refocused, a newer invocation now owns the
-            // current generation and will start its own scan.
-            if (scanGenRef.current !== gen) {
-                return;
-            }
-
+    // Register the native scan callback (no permission check, no list clear). Called for
+    // the initial scan AND by the periodic rescan below, which stop+starts the scan to
+    // reset Android's report de-dup so present devices are re-reported (refreshing their
+    // lastSeen). scanMode LowLatency (highest duty cycle): react-native-ble-plx defaults to
+    // LowPower, whose low duty cycle misses/delays a device that starts advertising AFTER
+    // the scan began. LowLatency is Android's recommended mode for a foreground scan screen.
+    function registerScanCallback(gen: number) {
             // startDeviceScan returns void (not a Promise) and delivers per-scan
             // errors to the callback below — not to the surrounding try/catch.
-            // scanMode LowLatency (highest duty cycle): react-native-ble-plx defaults to
-            // LowPower, whose low duty cycle misses/badly delays advertisements from a
-            // device that starts advertising AFTER the scan began (the board coming up, or
-            // dropping a connection to another phone). LowLatency is Android's recommended
-            // mode for a foreground scanning screen.
             bleManager.startDeviceScan(null, { scanMode: ScanMode.LowLatency }, (error, device) => {
                 // This invocation's scan was superseded (screen blurred/refocused)
                 // while the scan was live. Stop it and stop processing callbacks so
@@ -180,6 +160,35 @@ export default function BluetoothScreen() {
                     }
                 }
             });
+    }
+
+    async function startBluetoothScan(gen: number) {
+        console.log('Starting Bluetooth scan...');
+        setIsScanning(true);
+        setDevices([]);
+        lastSeenRef.current = {};
+
+        // Defensive: dispose of any scan orphaned by a previous invocation that resolved
+        // its permission check after the screen had already lost focus (see scanGenRef) -
+        // stopDeviceScan is a safe no-op if nothing is currently scanning.
+        bleManager.stopDeviceScan();
+
+        try {
+            const permissionsGranted = await requestPermissions();
+            if (!permissionsGranted) {
+                console.log('Bluetooth permissions denied');
+                setIsScanning(false);
+                return;
+            }
+
+            // The screen may have lost focus (and possibly regained it) while the
+            // permission check above was in flight - bail out here instead of starting an
+            // orphaned scan; if it refocused, a newer invocation now owns the generation.
+            if (scanGenRef.current !== gen) {
+                return;
+            }
+
+            registerScanCallback(gen);
 
             // Check if any devices are already paired with the OS with the "Core Config Service" UUID
             const connectedDevices = await bleManager.connectedDevices(["12345678-1234-5678-0001-56789abc0000"]);
@@ -239,6 +248,18 @@ export default function BluetoothScreen() {
             // Age out devices that stop advertising while the screen stays focused (the
             // scan-restart that used to be the only list-clear happens only on focus/blur).
             pruneTimerRef.current = setInterval(pruneStaleDevices, PRUNE_INTERVAL_MS);
+            // Periodically restart the scan to defeat Android's report de-dup: a fresh
+            // startDeviceScan re-reports every currently-advertising device (refreshing its
+            // lastSeen) so a still-present board isn't pruned during Android's long gaps
+            // between duplicate reports. Does NOT clear the list -> no flicker. Guarded on
+            // the generation so it goes quiet the moment the screen is superseded.
+            rescanTimerRef.current = setInterval(() => {
+                if (scanGenRef.current !== gen) {
+                    return;
+                }
+                bleManager.stopDeviceScan();
+                registerScanCallback(gen);
+            }, RESCAN_INTERVAL_MS);
 
             return () => {
                 // Invalidate this session's in-flight work (a pending permission
@@ -254,6 +275,10 @@ export default function BluetoothScreen() {
                 if (pruneTimerRef.current) {
                     clearInterval(pruneTimerRef.current);
                     pruneTimerRef.current = null;
+                }
+                if (rescanTimerRef.current) {
+                    clearInterval(rescanTimerRef.current);
+                    rescanTimerRef.current = null;
                 }
                 stopBluetoothScan();
             };
