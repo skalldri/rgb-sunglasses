@@ -31,6 +31,12 @@ export function useCharacteristicEditor() {
     // Ref mirror so notification effect can read pendingValues without it being a dep
     const pendingValuesRef = useRef<Record<string, string>>({});
     pendingValuesRef.current = pendingValues;
+    // Last-seen encoded value per characteristic, so the notification-sync effect below only
+    // reacts to characteristics whose stored value actually changed. Without this, the effect
+    // re-runs on EVERY notification (e.g. the battery service's ~1 Hz VBUS telemetry) and
+    // "pending differs from stored" is indistinguishable from "user is mid-edit" — clobbering
+    // every in-progress text edit within a second.
+    const lastSyncedValuesRef = useRef<Record<string, string>>({});
     // Track which device we've initialized for to avoid re-initializing on every update
     const [initializedDeviceId, setInitializedDeviceId] = useState<string | null>(null);
     // Track write status for each characteristic (success/error/notification/null)
@@ -43,6 +49,7 @@ export function useCharacteristicEditor() {
         if (!selectedDevice) {
             setInitializedDeviceId(null);
             setPendingValues({});
+            lastSyncedValuesRef.current = {};
             return;
         }
 
@@ -96,6 +103,10 @@ export function useCharacteristicEditor() {
 
         Object.entries(selectedDevice.characteristics).forEach(([charUuid, charInfo]) => {
             if (!charInfo.value) return;
+            // Only characteristics whose stored value actually changed since the last run may
+            // touch pendingValues. Any other characteristic's notification re-runs this effect
+            // too, and for those, a pending/stored mismatch just means the user is mid-edit.
+            if (lastSyncedValuesRef.current[charUuid] === charInfo.value) return;
             try {
                 if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S) {
                     const decoded = decodeUtf8FromBase64(charInfo.value);
@@ -107,7 +118,10 @@ export function useCharacteristicEditor() {
                     const decoded = formatFloat32(decodeFloat32FromBase64(charInfo.value));
                     if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
                 }
-            } catch (e) { /* ignore decode errors */ }
+                // Record only after a successful decode — a value recorded on a decode
+                // failure would be skipped as already-synced forever after.
+                lastSyncedValuesRef.current[charUuid] = charInfo.value;
+            } catch (e) { /* ignore decode errors; leave unrecorded so a later value retries */ }
         });
 
         if (Object.keys(updates).length > 0) {
