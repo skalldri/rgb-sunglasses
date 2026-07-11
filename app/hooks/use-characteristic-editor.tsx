@@ -107,7 +107,6 @@ export function useCharacteristicEditor() {
             // touch pendingValues. Any other characteristic's notification re-runs this effect
             // too, and for those, a pending/stored mismatch just means the user is mid-edit.
             if (lastSyncedValuesRef.current[charUuid] === charInfo.value) return;
-            lastSyncedValuesRef.current[charUuid] = charInfo.value;
             try {
                 if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S) {
                     const decoded = decodeUtf8FromBase64(charInfo.value);
@@ -119,7 +118,10 @@ export function useCharacteristicEditor() {
                     const decoded = formatFloat32(decodeFloat32FromBase64(charInfo.value));
                     if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
                 }
-            } catch (e) { /* ignore decode errors */ }
+                // Record only after a successful decode — a value recorded on a decode
+                // failure would be skipped as already-synced forever after.
+                lastSyncedValuesRef.current[charUuid] = charInfo.value;
+            } catch (e) { /* ignore decode errors; leave unrecorded so a later value retries */ }
         });
 
         if (Object.keys(updates).length > 0) {

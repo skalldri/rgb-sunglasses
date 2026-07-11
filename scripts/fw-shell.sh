@@ -26,8 +26,9 @@ done
 port=""
 for d in /sys/class/tty/ttyACM*; do
   [ -e "$d" ] || continue
-  ifdir=$(readlink -f "$d/device")        # .../<bus>-<port>:1.<iface>
-  usbdev=$(readlink -f "$ifdir/..")
+  # Guarded: a stale sysfs entry must skip this candidate, not abort the scan (set -e)
+  ifdir=$(readlink -f "$d/device" 2>/dev/null) || continue   # .../<bus>-<port>:1.<iface>
+  usbdev=$(readlink -f "$ifdir/.." 2>/dev/null) || continue
   vid=$(cat "$usbdev/idVendor" 2>/dev/null || echo "")
   pid=$(cat "$usbdev/idProduct" 2>/dev/null || echo "")
   ifnum=$(cat "$ifdir/bInterfaceNumber" 2>/dev/null || echo "")
