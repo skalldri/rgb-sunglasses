@@ -314,36 +314,53 @@ class RePair:
         return self.name in self.a.dumpsys_bonded()
 
     # ---- forget (SAFE, device-name-verified) ----
+    # Unpair/forget action label differs by OEM: AOSP/Pixel says "Forget", OxygenOS says
+    # "Unpair". Match either (anchored where we tap so it never hits an unrelated control).
+    _UNPAIR_RE = r"\b(forget|unpair)\b"
+
     def _details_page_for(self, name):
-        """True only if the current screen is the details page of EXACTLY `name`."""
+        """True ONLY if the current screen is the details page of EXACTLY `name`. This is
+        the safety gate before tapping Unpair - it must never pass on the wrong device."""
+        # Primary (AOSP/Pixel): the header element carries the device name.
         for n in self.ui.nodes:
             if n.rid.endswith("bt_header_device_name"):
                 return n.text.strip() == name
-        # Fallback: a details page shows both Forget and Disconnect AND the exact name.
-        has_forget = self.ui.has(r"forget")
-        has_disc = self.ui.has(r"disconnect")
+        # Cross-OEM: the details page shows the EXACT device name (a "Device name" field on
+        # OxygenOS) AND offers an unpair/forget action. A device's details page only ever
+        # shows its own name, so name-match + unpair-action = we're on THIS device's page.
         has_name = any(n.text.strip() == name for n in self.ui.nodes)
-        return has_forget and has_disc and has_name
+        return has_name and self.ui.has(self._UNPAIR_RE)
 
     def _is_some_details_page(self):
-        return self.ui.has(r"forget") and self.ui.has(r"disconnect")
+        # A device details page (either OEM) offers an unpair/forget action; the device
+        # LIST does not. Used to back out of a deep-linked details page to reach the list.
+        return self.ui.has(self._UNPAIR_RE)
+
+    # The per-device settings gear is identified by rid/desc so we tap IT, never the
+    # row body (which on OxygenOS toggles connect). Pixel: rid=settings_button, desc
+    # "<name>. Configure device detail."; OxygenOS: rid=deviceDetails, desc "Device Settings".
+    _GEAR_RE = re.compile(r"settings_button|deviceDetails|configure device detail|device settings", re.I)
 
     def _find_device_gear(self, name):
-        """Return the (x,y) of the per-device settings gear for EXACTLY `name`, or None.
-        Primary (Pixel/stock): the gear's content-desc is '<name>. Configure device
-        detail.' Fallback: a row whose title text == name, take a clickable node on the
-        same row to its right (the gear)."""
+        """Return the (x,y) of the per-device settings gear for EXACTLY `name`, or None."""
+        # Fast path (Pixel): the gear's own desc carries the device name - unambiguous.
         for n in self.ui.nodes:
             if n.clickable and n.b and n.desc.startswith(name + ".") \
                     and "configure device detail" in n.desc.lower():
                 return (n.cx, n.cy)
+        # General: find the target's row by its exact title text, then the gear IN THAT ROW
+        # (matched by rid/desc, so we never grab the row's connect target). The gear sits at
+        # the row's right edge, so take the rightmost matching node.
         title = next((n for n in self.ui.nodes if n.text.strip() == name and n.b), None)
-        if title:
-            y1, y2 = title.b[1], title.b[3]
-            row = [n for n in self.ui.nodes if n.clickable and n.b
-                   and (y1 - 10) <= n.cy <= (y2 + 10) and n.cx > title.cx]
-            if row:
-                return (min(row, key=lambda n: n.cx).cx, min(row, key=lambda n: n.cx).cy)
+        if not title:
+            return None
+        y1, y2 = title.b[1], title.b[3]
+        gears = [n for n in self.ui.nodes
+                 if n.clickable and n.b and (y1 - 10) <= n.cy <= (y2 + 10)
+                 and self._GEAR_RE.search(n.rid + " " + n.desc)]
+        if gears:
+            g = max(gears, key=lambda n: n.cx)
+            return (g.cx, g.cy)
         return None
 
     def _scroll_down(self):
@@ -427,13 +444,13 @@ class RePair:
             self.a.key(4)
             return self._manual_forget()
 
-        log(f"forget: on '{self.name}' details page (verified) — tapping Forget.")
-        if not self.ui.tap(r"^forget$"):
-            warn("no 'Forget' button on the details page — manual fallback.")
+        log(f"forget: on '{self.name}' details page (verified) — tapping Forget/Unpair.")
+        if not self.ui.tap(r"^forget$|^unpair$"):
+            warn("no Forget/Unpair action on the details page — manual fallback.")
             return self._manual_forget()
         time.sleep(0.8)
         self.ui.dump()
-        self.ui.tap(r"^forget( device)?$|^ok$")  # confirmation dialog, if any
+        self.ui.tap(r"^forget( device)?$|^unpair$|^ok$")  # confirmation dialog, if any
         time.sleep(1.2)
         if self.is_bonded():
             warn("bond still present after automated forget — manual fallback.")
