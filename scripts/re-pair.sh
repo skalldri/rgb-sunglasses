@@ -37,7 +37,7 @@ ADB_SERIAL=""
 FORGET_MODE="auto"        # auto | none | only | manual
 ATTEMPTS=3
 USE_KEYEVENTS=0
-CONNECT_TIMEOUT=15        # seconds; matches the app's connectToDevice timeout
+CONNECT_TIMEOUT=60        # seconds; matches the app's connectToDevice timeout
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -64,9 +64,11 @@ die()  { echo "[re-pair] ERROR: $*" >&2; exit 1; }
 # ---- cleanup ---------------------------------------------------------------
 READER_PID=""
 CAP=""
+XML="$(mktemp "${TMPDIR:-/tmp}/re-pair.ui.XXXXXX")"   # uiautomator dump target
 cleanup() {
   if [ -n "$READER_PID" ]; then kill "$READER_PID" 2>/dev/null || true; fi
   if [ -n "$CAP" ]; then rm -f "$CAP" 2>/dev/null || true; fi
+  rm -f "$XML" 2>/dev/null || true
   "${ADB[@]}" shell cmd statusbar collapse >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -113,9 +115,8 @@ preflight() {
 }
 
 # ===========================================================================
-# ADB / uiautomator helpers
+# ADB / uiautomator helpers  ($XML is the dump target, created at startup)
 # ===========================================================================
-XML=""
 ui_dump() {                     # refresh $XML from the current screen
   "${ADB[@]}" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || return 1
   "${ADB[@]}" exec-out cat /sdcard/ui.xml > "$XML" 2>/dev/null
@@ -123,8 +124,10 @@ ui_dump() {                     # refresh $XML from the current screen
 }
 
 # ui_center <regex> [ymin_frac] [ymax_frac] -> echoes "x y" of a matching node's
-# center (text or content-desc, case-insensitive), optionally within a vertical
-# band (fraction of screen height). Returns 1 if none.
+# center, optionally within a vertical band (fraction of screen height). The regex
+# is matched against the text and content-desc attributes SEPARATELY (not a joined
+# string), so an anchored pattern like '^Connect$' hits the button whose text is
+# exactly "Connect" and not the "Connect over Bluetooth" header. Returns 1 if none.
 ui_center() {
   python3 - "$XML" "$1" "${2:-0}" "${3:-1}" "$SCREEN_H" <<'PY'
 import sys, re, xml.etree.ElementTree as ET
@@ -135,8 +138,7 @@ except Exception:
     sys.exit(1)
 rx = re.compile(pat, re.I)
 for n in root.iter('node'):
-    t = (n.get('text','') or '') + ' ' + (n.get('content-desc','') or '')
-    if not rx.search(t):
+    if not any(rx.search(n.get(a,'') or '') for a in ('text', 'content-desc')):
         continue
     m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', n.get('bounds',''))
     if not m:
@@ -258,55 +260,49 @@ relaunch_app() {
   sleep 1
   "${ADB[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
   sleep 4
-  # Dismiss the auto-open App-Update modal ONLY if present (blind BACK would background the app).
-  if ui_dump && ui_has 'update available|app-update|Download Update'; then
+}
+
+# The auto-open App-Update modal (route 'app-update-modal') is identified by its
+# "Current: v…/Latest: v…" body — text that the persistent "App update available:"
+# banner on the Bluetooth tab does NOT contain. Only BACK when the real modal is up:
+# a blind BACK on the banner would back out of the app entirely.
+dismiss_update_modal_if_present() {
+  if ui_has 'Current: v|Latest: v'; then
     log "dismissing app-update modal."
     "${ADB[@]}" shell input keyevent KEYCODE_BACK
     sleep 1
+    return 0
   fi
+  return 1
 }
 
-tap_connect() {                 # wait for the board row, tap the Connect AppButton
+# Wait for the board row and tap the Connect AppButton. Dismisses the update modal
+# each iteration in case the (async) GitHub check pops it after launch.
+tap_connect() {
   local waited=0
-  while [ "$waited" -lt 20 ]; do
-    ui_dump && ui_has "$DEVICE_NAME" && break
-    sleep 2; waited=$((waited+2))
+  while [ "$waited" -lt 25 ]; do
+    if ! ui_dump; then sleep 1; waited=$((waited+1)); continue; fi
+    if dismiss_update_modal_if_present; then waited=$((waited+1)); continue; fi
+    if ui_has "$DEVICE_NAME"; then
+      # The 'Connect' AppButton's text/desc is exactly "Connect"; anchor to avoid the
+      # "Connect over Bluetooth" header and the bottom-tab item (also excluded by band).
+      ui_tap '^Connect$' 0 0.88 && { log "tapped Connect."; return 0; }
+    fi
+    sleep 1.5; waited=$((waited+2))
   done
-  ui_has "$DEVICE_NAME" || { warn "board '$DEVICE_NAME' not listed (advertising?)"; return 1; }
-  # 'Connect' AppButton, excluding the bottom tab bar (bottom ~12%).
-  ui_tap '^Connect$|Connect' 0 0.88
+  warn "board '$DEVICE_NAME' not listed / Connect not tappable within 25s (advertising?)."
+  return 1
 }
 
-# answer_passkey <off> -> autoresponder loop. 0 on 'Pairing completed'.
-answer_passkey() {
-  local off="$1" deadline=$(( SECONDS + CONNECT_TIMEOUT )) pk="" entered=0 expanded=0
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    [ -z "$pk" ] && pk="$(passkey_after "$off")"
+# Tap the confirm button of an Android pairing dialog — "Pair"/"OK" on the initial
+# "Bluetooth pairing request", or "Save"/"Done"/"OK" on the PIN-entry dialog that
+# follows. Anchored so it never hits "Cancel" or the dialog title. Returns 0 if tapped.
+tap_pair_button() { ui_tap '^pair$|^ok$|^save$|^done$|^confirm$' 0 1; }
 
-    # Terminal UART signals
-    [ -n "$(scan_after "$off" 'Pairing completed')" ] && { log "pairing completed."; return 0; }
-    if [ -n "$(scan_after "$off" 'Pairing failed\|Pairing cancelled\|Disconnected (reason 19)')" ]; then
-      warn "pairing failed/cancelled (UART)."; return 1
-    fi
-
-    ui_dump || { sleep 0.5; continue; }
-
-    # Heads-up 'Pairing request' notification form -> open the full dialog.
-    if ui_has 'pairing request' && ! ui_has 'class="android.widget.EditText"'; then
-      ui_tap 'pair & connect|pairing request' || true
-      sleep 0.5; continue
-    fi
-    # If nothing visible after a beat, pull the shade once as a backstop.
-    if [ "$expanded" -eq 0 ] && ! ui_has 'pairing request|android.widget.EditText'; then
-      "${ADB[@]}" shell cmd statusbar expand-notifications >/dev/null 2>&1 || true
-      expanded=1; sleep 0.5; continue
-    fi
-
-    # Full dialog with a PIN field + known passkey -> enter it. The EditText usually has
-    # no text/content-desc, so locate it by class and tap its bounds center directly.
-    if [ "$entered" -eq 0 ] && [ -n "$pk" ] && ui_has 'class="android.widget.EditText"'; then
-      local xy i d
-      xy="$(python3 - "$XML" <<'PY'
+# Echo the center "x y" of the pairing dialog's PIN EditText (usually has no
+# text/content-desc, so it's found by class), or nothing.
+editext_center() {
+  python3 - "$XML" <<'PY'
 import sys,re,xml.etree.ElementTree as ET
 root=ET.parse(sys.argv[1]).getroot()
 for n in root.iter('node'):
@@ -315,19 +311,70 @@ for n in root.iter('node'):
         if m:
             x1,y1,x2,y2=map(int,m.groups()); print((x1+x2)//2,(y1+y2)//2); break
 PY
-)"
-      # shellcheck disable=SC2086
-      [ -n "$xy" ] && "${ADB[@]}" shell input tap $xy
-      sleep 0.3
-      if [ "$USE_KEYEVENTS" -eq 1 ]; then
-        for (( i=0; i<${#pk}; i++ )); do d="${pk:$i:1}"; "${ADB[@]}" shell input keyevent "KEYCODE_$d"; done
-      else
-        "${ADB[@]}" shell input text "$pk"
-      fi
-      entered=1; log "typed passkey $pk."
-      sleep 0.3
-      # Confirm.
-      ui_tap '^pair$|^ok$|pair' 0 1 || "${ADB[@]}" shell input keyevent KEYCODE_ENTER
+}
+
+# Enter the scraped passkey into the focused PIN field and submit it. Only ever
+# called when an EditText is present AND $pk is known, so the field is never
+# submitted blank. Focuses the field, clears any residue, types, then submits via
+# the IME action (ENTER = the keyboard checkmark) and any dialog Save/OK button —
+# both AFTER the digits are in, so a stray confirm can't submit an empty field.
+enter_passkey() {
+  local pk="$1" xy i d
+  xy="$(editext_center)"; [ -n "$xy" ] || return 1
+  # shellcheck disable=SC2086
+  "${ADB[@]}" shell input tap $xy       # focus the field
+  sleep 0.3
+  # Clear any residual digits (jump to end, backspace 6x) so a retry can't append.
+  "${ADB[@]}" shell input keyevent 123 67 67 67 67 67 67 >/dev/null 2>&1 || true  # MOVE_END, DEL x6
+  if [ "$USE_KEYEVENTS" -eq 1 ]; then
+    for (( i=0; i<${#pk}; i++ )); do d="${pk:$i:1}"; "${ADB[@]}" shell input keyevent "KEYCODE_$d"; done
+  else
+    "${ADB[@]}" shell input text "$pk"
+  fi
+  log "typed passkey $pk into PIN field."
+  sleep 0.3
+  "${ADB[@]}" shell input keyevent 66 >/dev/null 2>&1 || true   # ENTER (IME checkmark)
+  sleep 0.3
+  ui_dump && tap_pair_button >/dev/null 2>&1 || true            # Save/OK button, if the dialog has one
+  return 0
+}
+
+# answer_pairing <off> -> autoresponder loop. 0 on 'Pairing completed'.
+# Strict two-stage state machine so the PIN is NEVER submitted blank:
+#   - EditText present  -> PIN-entry stage: wait for the board's passkey, then type+submit.
+#   - else Pair/OK button present -> confirm stage: tap it to advance to the PIN dialog.
+# On this OnePlus the sequence is confirm ("Bluetooth pairing request" / Pair) THEN a
+# PIN-entry dialog (board displays a random passkey, phone types it).
+answer_pairing() {
+  local off="$1" deadline=$(( SECONDS + CONNECT_TIMEOUT )) pk=""
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    [ -z "$pk" ] && pk="$(passkey_after "$off")"
+
+    # Terminal UART signals.
+    [ -n "$(scan_after "$off" 'Pairing completed')" ] && { log "pairing completed."; return 0; }
+    if [ -n "$(scan_after "$off" 'Pairing failed\|Pairing cancelled\|Disconnected (reason 19)')" ]; then
+      warn "pairing failed/cancelled (UART)."; return 1
+    fi
+
+    ui_dump || { sleep 0.5; continue; }
+
+    if ui_has 'android.widget.EditText'; then
+      # PIN-entry dialog. Do NOTHING until the board has printed the passkey — never
+      # tap a confirm/Save button on an empty field.
+      if [ -z "$pk" ]; then sleep 0.4; continue; fi
+      enter_passkey "$pk"
+      sleep 1.0   # let the submit settle; the UART checks above confirm/deny next iter
+      continue
+    fi
+
+    # No PIN field: the confirm ("Bluetooth pairing request" / Pair) dialog, or the
+    # heads-up notification form. tap_pair_button hits an anchored Pair/OK only.
+    if tap_pair_button; then
+      log "tapped Pair (confirm)."; sleep 0.8; continue
+    fi
+    if ui_has 'pairing request'; then           # heads-up notification -> open it
+      ui_tap 'pair & connect' || "${ADB[@]}" shell cmd statusbar expand-notifications >/dev/null 2>&1 || true
+      sleep 0.5; continue
     fi
     sleep 0.4
   done
@@ -339,7 +386,7 @@ pair_once() {                   # one full connect+answer attempt
   relaunch_app
   local off; off="$(cap_off)"
   tap_connect || return 1
-  answer_passkey "$off"
+  answer_pairing "$off"
 }
 
 # ===========================================================================

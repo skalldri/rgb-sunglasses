@@ -134,7 +134,10 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 try {
                     // Barebones: link only. No refreshGatt, no inline requestMTU (both
                     // reasons above); MTU is negotiated as its own step below.
-                    deviceConnection = await bleManager.connectToDevice(macAddress, { timeout: 15000 });
+                    // 60s (not 15s): a first-time pair has to wait for the user (or the
+                    // /re-pair autoresponder) to accept Android's pairing dialog before
+                    // the encrypted link comes up and this resolves — 15s raced that.
+                    deviceConnection = await bleManager.connectToDevice(macAddress, { timeout: 60000 });
                     break;
                 } catch (error) {
                     console.log(`connectToDevice attempt ${attempt}/${kConnectAttempts} failed for ${macAddress}:`, error);
