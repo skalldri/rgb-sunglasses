@@ -19,7 +19,11 @@ import { ConnectionPriority } from "react-native-ble-plx";
 
 interface UseBleConnectionResult {
     isConnecting: boolean;
-    connect: () => Promise<void>;
+    // Resolves true only once the device is fully connected, discovered, and
+    // selected; false if the attempt failed (the error is logged and the
+    // half-open link cleaned up internally). Callers must gate navigation on the
+    // result rather than assuming a resolved promise means "connected".
+    connect: () => Promise<boolean>;
     disconnect: () => Promise<void>;
 }
 
@@ -40,24 +44,129 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     const isMountedRef = useRef(true);
     useEffect(() => () => { isMountedRef.current = false; }, []);
 
-    async function connect(): Promise<void> {
+    // Re-entrancy guard AND result-sharing, checked synchronously (unlike
+    // isConnecting state, which is async - a second onPress delivered before the
+    // first render commit sees isConnecting still false and disabled={isConnecting}
+    // hasn't taken effect yet). A same-tick second connect() call reaching
+    // bleManager.connectToDevice() for the same macAddress makes
+    // react-native-ble-plx's native module dispose the FIRST call's pending
+    // subscription (DisposableMap.replaceSubscription always disposes whatever was
+    // already stored under that device's key) - rejecting the first promise with
+    // BleErrorCode.OperationCancelled ("Operation was cancelled") while the second
+    // call's establishConnection() is what actually completes on the real
+    // BluetoothGatt. That produces exactly the split-brain symptom observed on
+    // hardware: the firmware reports a live, fast-interval connection while the
+    // app's connect() throws.
+    //
+    // Holding the in-flight PROMISE (not just a boolean) means a duplicate call
+    // returns the real attempt's eventual result instead of resolving immediately:
+    // the caller navigates on genuine success, and a double-tap doesn't push the
+    // device-state screen off a no-op early return before anything is connected.
+    const connectPromiseRef = useRef<Promise<boolean> | null>(null);
+
+    function connect(): Promise<boolean> {
+        // Synchronous dedup: the ref is assigned below before runConnect() yields
+        // at its first await, so a second same-tick call sees it and shares the
+        // same promise rather than starting a colliding connectToDevice().
+        if (connectPromiseRef.current) {
+            return connectPromiseRef.current;
+        }
+        const attempt = runConnect();
+        connectPromiseRef.current = attempt;
+        // Clear once settled so a later reconnect starts a fresh attempt. runConnect
+        // resolves true/false and never rejects, so this never leaves a rejection
+        // unhandled.
+        attempt.finally(() => { connectPromiseRef.current = null; });
+        return attempt;
+    }
+
+    async function runConnect(): Promise<boolean> {
         setIsConnecting(true);
         try {
-            // Android persists a handle-based GATT attribute cache per bonded device. Any firmware
-            // change that adds/removes services or characteristics shifts attribute handles for
-            // everything declared after the change, so a stale cache makes Android read descriptors
-            // by the wrong handle (GATT_INVALID_HANDLE) until it's refreshed.
+            // A scan running concurrently with connectToDevice() can make the
+            // connect operation itself get cancelled by the OS/library even
+            // though the native link actually completes - leaving the app
+            // thinking the connection failed while the board thinks it's
+            // connected (and has stopped advertising, so no reconnect/rescan
+            // can reach it either). stopDeviceScan is a safe no-op if nothing
+            // is currently scanning (see CLAUDE.md's "Scan must stop before
+            // connecting").
+            bleManager.stopDeviceScan();
+
+            // Connect in DISTINCT, SEQUENTIAL steps - establish the link, negotiate
+            // MTU, then discover - rather than folding refreshGatt + requestMTU into
+            // the single connectToDevice() promise chain (issue #90). Two things this
+            // buys us, learned from a multi-day hardware investigation (native adb
+            // logcat BLE traces + a firmware `bt_state` shell command that prints the
+            // negotiated ATT MTU):
             //
-            // requestMTU: without this, the connection stays at the default ATT_MTU (23 bytes, ~20
-            // bytes usable). bt_gatt_notify() can't fragment a value across multiple PDUs the way
-            // long writes/reads can, so any notified value over ~20 bytes (e.g. the dropdown-list
-            // characteristics) silently fails firmware-side ("No ATT channel for MTU ...", a warning
-            // only - no error surfaces to the app). 247 matches the common BLE 4.2+ default data
-            // length and comfortably covers every current notifiable characteristic's payload.
-            const deviceConnection = await bleManager.connectToDevice(macAddress, {
-                refreshGatt: "OnConnected",
-                requestMTU: 247,
-            });
+            // 1. requestMTU is its own awaited step (not inline in connectToDevice), so
+            //    a slow/failed MTU exchange can't blow the whole connect timeout, and a
+            //    failure here is non-fatal (reads/writes fragment at any MTU; only large
+            //    notify payloads need the 247 bump - e.g. the dropdown-list
+            //    characteristics, which silently fail firmware-side at the 23-byte
+            //    default because bt_gatt_notify() can't fragment across ATT PDUs).
+            //
+            // 2. NO refreshGatt. It calls Android's BluetoothGatt.refresh(), which wipes
+            //    the on-device GATT cache and forces a full re-discovery on EVERY
+            //    connect - pure overhead when the cache is valid (the normal case: the
+            //    firmware GATT layout is stable between reflashes). It was originally
+            //    added to survive a firmware GATT-layout change on a bonded phone, but
+            //    hardware testing proved it does NOT actually help that case: on this
+            //    OnePlus/OxygenOS stack a bonded device with a STALE cache hangs
+            //    discovery no matter what (refreshGatt on or off, MTU before or after) -
+            //    `bt_state` shows the board CONNECTED + encrypted (L4) but stuck at
+            //    ATT MTU 23, and the app's discovery times out. Android does NOT honor
+            //    the firmware's Service Changed / DB-hash to recover (verified: added a
+            //    characteristic, reflashed without re-pairing -> hang). The ONLY reliable
+            //    recovery from a stale bonded cache is forget+re-pair on the phone (see
+            //    the Known-Issues entry in app/CLAUDE.md). So refreshGatt bought nothing
+            //    for the stale case and taxed every healthy connect - dropped.
+            //
+            // retry: the first connectToDevice() to a just-rebooted bonded board can
+            // still fail at the controller level (HCI 0x3E, reason=62 in dumpsys) with
+            // the OS retrying underneath; a second attempt attaches cleanly. Each
+            // failed attempt's half-open BluetoothGatt is force-closed before retrying
+            // so the next connectGatt doesn't queue behind a zombie client.
+            let deviceConnection = null;
+            const kConnectAttempts = 2;
+            for (let attempt = 1; attempt <= kConnectAttempts; attempt++) {
+                try {
+                    // Barebones: link only. No refreshGatt, no inline requestMTU (both
+                    // reasons above); MTU is negotiated as its own step below.
+                    deviceConnection = await bleManager.connectToDevice(macAddress, { timeout: 15000 });
+                    break;
+                } catch (error) {
+                    console.log(`connectToDevice attempt ${attempt}/${kConnectAttempts} failed for ${macAddress}:`, error);
+                    if (attempt === kConnectAttempts) {
+                        throw error;
+                    }
+                    // Close the failed attempt's half-open native GATT client before
+                    // retrying - a timed-out connectToDevice() does not reliably close
+                    // the BluetoothGatt it opened, and a still-registered zombie client
+                    // blocks the next connectGatt for the same device.
+                    try {
+                        await bleManager.cancelDeviceConnection(macAddress);
+                    } catch {
+                        // Expected when ble-plx never got far enough to consider the
+                        // device connected - nothing to cancel is fine.
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+            if (!deviceConnection) {
+                // Unreachable (the loop either breaks with a connection or throws), but
+                // keeps TypeScript's null-narrowing happy for everything below.
+                throw new Error(`connectToDevice(${macAddress}) returned no connection`);
+            }
+
+            // MTU exchange as its own step (see the sequencing block above). Non-fatal:
+            // reads/writes fragment at any MTU, only large notify payloads need the bump.
+            try {
+                await deviceConnection.requestMTU(247);
+            } catch (error) {
+                console.log(`Could not negotiate MTU for ${macAddress}:`, error);
+            }
 
             // Discovery below does ~170+ sequential GATT reads (one per characteristic/descriptor -
             // can't be parallelized, Android only allows one outstanding GATT op per connection).
@@ -104,8 +213,6 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                     const serviceChars = serviceCharsList[i];
                     const characteristicInfos: Record<string, CharacteristicInfo> = {};
                     const charUuids: string[] = [];
-
-                    console.log(`START processing Service UUID: ${getServiceName(service.uuid)}`);
 
                     // The bulk metadata characteristic (issue #41 follow-up) is an app-only
                     // discovery optimization - never shown in the UI, same treatment as
@@ -354,6 +461,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             });
 
             console.log('Pairing complete');
+            return true;
         } catch (error) {
             console.error(`Connection failed for ${macAddress}:`, error);
             // Discovery can fail partway through, after the native BLE link is already
@@ -365,6 +473,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             } catch (disconnectError) {
                 console.log(`Error cancelling connection for ${macAddress}:`, disconnectError);
             }
+            return false;
         } finally {
             setDiscoveryProgress(null);
             if (isMountedRef.current) setIsConnecting(false);

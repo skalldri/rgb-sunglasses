@@ -59,6 +59,7 @@ function makeDeviceConnection(services: ReturnType<typeof makeService>[]) {
             services.find(s => s.uuid === serviceUuid)?._chars ?? []
         ),
         requestConnectionPriority: jest.fn(async () => undefined),
+        requestMTU: jest.fn(async () => undefined),
     };
 }
 
@@ -68,6 +69,14 @@ describe('useBleConnection', () => {
     let ctx: ReturnType<typeof makeMockBluetooth>;
 
     beforeEach(() => {
+        // bleManager is a module-level singleton (jest.setup.ts's
+        // react-native-ble-plx mock) shared across every test in this file -
+        // restoreAllMocks() (afterEach, below) only reverts jest.spyOn
+        // overrides, it does not clear a jest.fn()'s accumulated .mock.calls,
+        // so without this a later test's toHaveBeenCalledTimes() would count
+        // calls left over from earlier tests too (same fix as
+        // bluetooth-screen.test.tsx).
+        jest.clearAllMocks();
         jest.spyOn(console, 'log').mockImplementation(() => {});
         jest.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -91,10 +100,62 @@ describe('useBleConnection', () => {
 
         await act(async () => { await result.current.connect(); });
 
+        // Barebones connect - link only. refreshGatt is intentionally NOT passed
+        // (it makes Android auto-start discovery that races and hangs the MTU
+        // exchange, see connect()'s sequencing comment), and requestMTU runs as its
+        // own step afterwards rather than inline.
         expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledWith('AA:BB:CC', {
-            refreshGatt: 'OnConnected',
-            requestMTU: 247,
+            timeout: 15000,
         });
+        // MTU is negotiated as a separate post-connect step.
+        expect(deviceConn.requestMTU).toHaveBeenCalledWith(247);
+    });
+
+    it('connect() retries connectToDevice once when the first attempt fails', async () => {
+        const deviceConn = makeDeviceConnection([]);
+        // First attempt: the hardware-observed hang-then-cancel (native link comes
+        // up and encrypts fine via the stored bond, but the app's connectToDevice
+        // promise never resolves and rejects "Operation was cancelled"). The retry
+        // must attach to that already-established link.
+        (BleHook.bleManager.connectToDevice as jest.Mock)
+            .mockRejectedValueOnce(new Error('Operation was cancelled'))
+            .mockResolvedValueOnce(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(2);
+        // Both attempts are barebones (link only) - the differentiators are gone.
+        expect((BleHook.bleManager.connectToDevice as jest.Mock).mock.calls[0][1])
+            .toEqual({ timeout: 15000 });
+        expect((BleHook.bleManager.connectToDevice as jest.Mock).mock.calls[1][1])
+            .toEqual({ timeout: 15000 });
+        // The failed attempt's half-open native GATT client was force-closed
+        // BETWEEN the attempts (else the retry queues behind it and hangs too).
+        expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledTimes(1);
+        expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledWith('AA:BB:CC');
+        // MTU is requested as a separate step after the successful attempt.
+        expect(deviceConn.requestMTU).toHaveBeenCalledWith(247);
+        // The retry's connection is used for the rest of the flow - discovery ran.
+        expect(deviceConn.discoverAllServicesAndCharacteristics).toHaveBeenCalled();
+    });
+
+    it('connect() gives up and cleans up after both connect attempts fail', async () => {
+        (BleHook.bleManager.connectToDevice as jest.Mock)
+            .mockRejectedValue(new Error('Operation was cancelled'));
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(2);
+        // Failure path: cancelDeviceConnection runs both between the attempts and
+        // in the final catch, so the possibly-orphaned native link is dropped and
+        // the board goes back to advertising.
+        expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledTimes(2);
+        expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledWith('AA:BB:CC');
+        expect(result.current.isConnecting).toBe(false);
     });
 
     it('connect() requests a high connection priority before discovery', async () => {

@@ -390,6 +390,11 @@ Then copy both into `/NAND:/glim/` on the board and reset. If the NAND disk on a
 kernel version          # print Zephyr/NCS version
 kernel threads          # list all threads and their stack usage
 bt connect              # (if shell BT commands are enabled)
+bt_state                 # SNAPSHOT of BLE link health: state (advertising/connected),
+                         # peer addr, security level, negotiated ATT MTU, conn params.
+                         # ALWAYS RUN THIS FIRST when debugging a BLE connection that
+                         # looks stuck (see the "Debugging a stuck BLE connection" note
+                         # below) - it distinguishes the split-brain in one command.
 bt_conn_info             # print the *actual* current LE connection interval/latency/timeout
                          # (see bluetooth.cpp's le_param_updated callback for the issue #41
                          # connection-interval investigation this was added for)
@@ -400,6 +405,29 @@ mcuboot_update commit   # flash validated package to internal MCUboot region and
 mcuboot_update request_reboot  # set gpregret2=BOOT_MODE_REQ and reboot (MCUboot skips fprotect)
 fatfs reformat          # nuke and recreate the NAND FAT filesystem (all files erased)
 ```
+
+**Debugging a stuck BLE connection ("split-brain") — run `bt_state` FIRST.** The
+classic symptom is the board's status LED solid (not breathing) while the companion
+app reports a connection failure/timeout: the board thinks it's connected, the app
+doesn't. `bt_state` (`src/bluetooth.cpp`, added issue #90) prints the whole picture
+in one shot — state, peer address, **security level**, and the **negotiated ATT
+MTU** — so you don't have to reconstruct it from a two-sided native `adb logcat`
+BLE trace. The decisive tells:
+- `Security level: L1 (UNENCRYPTED)` on a connection that's been up more than a
+  second → LE Secure Connections pairing stalled (often a passkey dialog waiting on
+  the phone — see the root `CLAUDE.md` pairing note).
+- `ATT MTU: 23 (DEFAULT - MTU exchange did not complete)` on a `CONNECTED` + `L4`
+  link → **this is the split-brain**: the phone's GATT stack is wedged (it never
+  completed the ATT MTU exchange, so its discovery is hung too). The usual root
+  cause is a **stale bonded GATT cache** after a firmware reflash that changed the
+  GATT layout. Whether the phone auto-recovers is **device-dependent** (hardware
+  proven, issue #90): a **Pixel 9 Pro (stock Android)** honors the firmware's
+  Service Changed indication and re-discovers on its own (no split-brain), but the
+  shared **OnePlus 9 Pro (OxygenOS)** does **not** — it hangs, and the only fix is
+  **forget the device on the phone and re-pair**. So this MTU-23 hang is expected on
+  the OnePlus after any GATT-changing reflash, and NOT expected on a Pixel.
+  Resetting the *board* (`kernel reboot warm`) clears the board's half of the
+  split-brain so it advertises again, but does not fix the phone's stale cache.
 
 **`storage` is a reserved macro in NCS** — `nrf/include/flash_map_pm.h` defines `#define storage settings_storage` (conditionally). The `UTIL_CAT` macro used inside `SHELL_CMD_REGISTER` double-expands its arguments, so `SHELL_CMD_REGISTER(storage, ...)` silently registers a command named `settings_storage` instead of `storage`. Use `fatfs` (or any other token not in `flash_map_pm.h`) for shell commands related to the FAT disk.
 

@@ -22,6 +22,13 @@ jest.mock('@/components/bluetooth-device-list-item', () => {
 
 describe('BluetoothScreen', () => {
   beforeEach(() => {
+    // bleManager is a module-level singleton (see jest.setup.ts's
+    // react-native-ble-plx mock) shared across every test in this file -
+    // restoreAllMocks() (afterEach, below) only reverts jest.spyOn overrides,
+    // it does not clear a jest.fn()'s accumulated .mock.calls, so without this
+    // a later test's toHaveBeenCalledTimes() assertion would count calls left
+    // over from earlier tests too.
+    jest.clearAllMocks();
     jest.spyOn(console, 'log').mockImplementation(() => {});
   });
 
@@ -100,13 +107,16 @@ describe('BluetoothScreen', () => {
       cleanup?.();
     });
 
+    // 2 calls: startBluetoothScan's own defensive stopDeviceScan() (disposes
+    // any scan orphaned by a prior focus-effect race, see bluetooth.tsx) plus
+    // the one from this cleanup itself.
     await waitFor(() => {
-      expect(BleHook.bleManager.stopDeviceScan).toHaveBeenCalledTimes(1);
+      expect(BleHook.bleManager.stopDeviceScan).toHaveBeenCalledTimes(2);
     });
     expect(setIsScanning).toHaveBeenCalledWith(false);
   });
 
-  it('continues scan flow even when permission request resolves false', async () => {
+  it('stops the scan flow gracefully when permission request resolves false', async () => {
     const setIsScanning = jest.fn();
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       isScanning: false,
@@ -128,8 +138,11 @@ describe('BluetoothScreen', () => {
       focusCallback?.();
     });
 
+    // Permission denial hits startBluetoothScan's early return - it must never
+    // reach the real bleManager.startDeviceScan() call, just stop cleanly.
     await waitFor(() => {
-      expect(BleHook.bleManager.startDeviceScan).toHaveBeenCalled();
+      expect(setIsScanning).toHaveBeenCalledWith(false);
     });
+    expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
   });
 });

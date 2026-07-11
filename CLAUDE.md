@@ -55,6 +55,50 @@ re-download, and the part ended up in a broken state. The correct move at step z
 was: "I don't have the TPS25750 host-interface TRM — please provide it before I write
 anything to this chip."
 
+### NEVER reboot the shared Android phone on your own
+
+**Never run `adb reboot` (or any full OS-level reboot) against the shared test
+phone without asking the user first.** Rebooting the dev board is fine and
+routine (it re-enumerates over USB automatically); rebooting the phone is not
+— it comes back up locked, and unlocking a phone's screen is not something
+`adb`/`execbro` can do (no ADB command enters a PIN/pattern/biometric), so a
+self-triggered phone reboot strands the session until the user physically
+walks over and unlocks it by hand.
+
+If BLE/ADB connectivity to the phone seems stuck (e.g. Android's BLE scan
+returns `SCAN_FAILED_APPLICATION_REGISTRATION_FAILED` / error code 6 from a
+stale scan-client registration), prefer lighter, reversible recovery steps
+first — `adb shell svc bluetooth disable` then `enable` to reset just the
+Bluetooth stack, re-navigating the app's screen to restart a scan, or
+resetting the *board* (not the phone) if a stale GATT link is suspected. Only
+ask the user to power-cycle the phone themselves if those don't resolve it —
+never do it unilaterally via `adb reboot`.
+
+### BLE pairing requires the passkey shown by the board — always ask the user
+
+The firmware requires `BT_SECURITY_L4` (LE Secure Connections + bonding). On a
+fresh pairing (board recently unpaired, or its bond info was cleared), the
+serial console prints something like:
+
+```
+[00:23:51.161,041] <inf> bluetooth: Passkey for D0:49:7C:17:7B:E1 (public): 123456
+[00:23:51.161,560] <inf> bluetooth: Peer needs to enter a pin code to pair
+```
+
+This is the firmware's own `passkey_display` auth callback (`fw/src/bluetooth.cpp`,
+IO capability = Display-only, no `passkey_entry`/`passkey_confirm`/`pairing_confirm`
+registered) — the phone's Android BLE stack shows a native "Enter pairing code"
+system dialog (not part of the companion app's own UI, so `mcp__execbro__android_screenshot`
+won't necessarily surface it as an app screen — check for it explicitly) expecting
+that exact 6-digit code typed in and submitted.
+
+**When this happens, stop and ask the user for the passkey / to complete pairing
+themselves rather than trying to read the serial log and enter it via ADB unprompted.**
+Even though reading the passkey off the shell and typing it via `adb shell input
+text`/`mcp__execbro__android_input_text` is technically possible, this is BLE
+pairing state on the one shared physical phone — get the user's go-ahead before
+acting on it, the same spirit as the phone-reboot rule above.
+
 ## Hardware locking
 
 Multiple agents, each in its own worktree, share one physical dev board

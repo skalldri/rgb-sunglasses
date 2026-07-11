@@ -15,7 +15,50 @@ const bleManagerOptions: BleManagerOptions = {
     },
 };
 
+// Re-running this module constructs a fresh BleManager, whose native side
+// registers a brand-new BLE client. If the previous module instance's client
+// (plus any scanner registration it held) isn't destroyed first, it stays alive
+// in the app process; after a few of these Android starts refusing new scanner
+// clients for this app with SCAN_FAILED_APPLICATION_REGISTRATION_FAILED
+// (surfaced as ble-plx "Cannot start scanning operation ... (code 6)"), and only
+// restarting the phone's Bluetooth stack clears it (hardware-observed, issue #90
+// follow-up).
+//
+// This hook only covers the SAME-JS-RUNTIME reload: Fast Refresh (and other
+// in-place module re-evaluations) keep the Hermes runtime alive, so globalThis -
+// and the destroy hook we stash on it below - survive into the re-run, letting
+// the new module instance tear down its predecessor's native client before
+// creating its own. It does NOT cover a full reload (RN dev-menu "Reload",
+// execbro reload_app, a fresh app start): those spin up a NEW Hermes runtime, so
+// globalThis is empty and __blePlxDestroyPreviousClient reads undefined - there's
+// no in-process handle to the old client to call destroy() on from here. A full
+// reload that leaves the previous native client alive still needs the Bluetooth-
+// stack reset above; recovering that case automatically would require native-side
+// teardown on runtime disposal, which this JS-only hook can't reach.
+declare global {
+    // eslint-disable-next-line no-var
+    var __blePlxDestroyPreviousClient: (() => void) | undefined;
+}
+if (globalThis.__blePlxDestroyPreviousClient) {
+    try {
+        globalThis.__blePlxDestroyPreviousClient();
+        console.log('Destroyed previous JS context\'s BleManager native client');
+    } catch (error) {
+        console.log('Failed to destroy previous BleManager native client:', error);
+    }
+}
+
 export const bleManager = new BleManager(bleManagerOptions);
+
+globalThis.__blePlxDestroyPreviousClient = () => {
+    // destroy() is async and returns a Promise; the try/catch at the call site
+    // above only catches a synchronous throw, so route the rejection through a
+    // .catch() here - otherwise a failed teardown surfaces as an unhandled
+    // promise rejection (a red LogBox in dev) in the new context.
+    Promise.resolve(bleManager.destroy()).catch(error =>
+        console.log('Error while destroying previous BleManager native client:', error)
+    );
+};
 
 const requestAndroid31Permissions = async () => {
     const bluetoothScanPermission = await PermissionsAndroid.request(

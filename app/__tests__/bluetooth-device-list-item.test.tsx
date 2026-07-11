@@ -44,7 +44,7 @@ describe('BluetoothDeviceListItem', () => {
     selectedMac = null as string | null,
     isConnecting = false,
     discoveryProgress = null as { current: number; total: number } | null,
-    connect = jest.fn(async () => {}),
+    connect = jest.fn(async () => true),
     disconnect = jest.fn(async () => {}),
   } = {}) {
     (BluetoothContext.useBluetooth as jest.Mock).mockReturnValue({
@@ -77,7 +77,7 @@ describe('BluetoothDeviceListItem', () => {
     expect(getByRole('button', { name: 'Connect' }).props.accessibilityState?.disabled).toBe(true);
   });
 
-  it('pressing Connect calls connect() then navigates', async () => {
+  it('pressing Connect calls connect() then navigates on success', async () => {
     const { connect } = setupMocks({ selectedMac: null });
     const { getByText } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
 
@@ -87,6 +87,18 @@ describe('BluetoothDeviceListItem', () => {
       expect(connect).toHaveBeenCalledTimes(1);
       expect(mockRouter.navigate).toHaveBeenCalledWith('/(tabs)/device-state');
     });
+  });
+
+  it('pressing Connect does NOT navigate when connect() fails', async () => {
+    const { connect } = setupMocks({ selectedMac: null, connect: jest.fn(async () => false) });
+    const { getByText } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
+
+    fireEvent.press(getByText('Connect'));
+
+    await waitFor(() => {
+      expect(connect).toHaveBeenCalledTimes(1);
+    });
+    expect(mockRouter.navigate).not.toHaveBeenCalled();
   });
 
   it('pressing Disconnect calls disconnect() without navigating', async () => {
