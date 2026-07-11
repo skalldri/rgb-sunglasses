@@ -57,13 +57,31 @@ Flags:
 | `--timeout-connect S` | per-attempt dialog deadline (default 15s, matches the app) |
 | `--serial <s>` / `--device-name "<n>"` | adb target / advertised name overrides |
 
-## Fragile point — the forget step
+## Implementation
 
-Forgetting a bond has no non-root ADB API, so the script drives Android Bluetooth
-Settings via `uiautomator`. That UI is OEM-brittle; on failure the script **falls back to
-asking you to tap Forget** and polls `dumpsys bluetooth_manager` until the bond actually
-disappears (verify by state, not keypress). If the automated forget is flaky on this
-phone, just run with `--manual-forget`.
+`scripts/re-pair.sh` is a thin wrapper around **`scripts/re-pair.py`** (moved to Python so
+the safe, device-specific forget could be written and tested properly). Verified end-to-end
+on both a OnePlus 9 Pro (OxygenOS — persistent on-screen pairing dialog) and a Pixel 9 Pro
+(stock Android — the pairing prompt is a transient heads-up notification the responder pulls
+from the notification shade). The passkey autoresponder handles both dialog forms.
+
+## The forget step is SAFE by construction
+
+Forgetting a bond has no non-root ADB API, so the script drives Android Bluetooth Settings
+via `uiautomator`. Because a phone can have dozens of bonds (and several boards share the
+"RGB Sunglasses Proto0" prefix), the forget is strictly device-specific:
+
+- Matches the target by its **EXACT full name** (`--device-name`, default
+  `RGB Sunglasses Proto0 8996`) — never a prefix/substring.
+- Expands the full device list ("See all" on stock Android) and scrolls to find **that
+  device's own gear** (identified by the device name), never "the first gear".
+- **Taps Forget ONLY after verifying the opened details page's header shows that exact
+  name** — otherwise it backs out and falls back to a manual prompt. This gate is what
+  guarantees it never forgets the wrong device (a car, earbuds, another board).
+
+On any failure it **falls back to asking you to tap Forget** and polls `dumpsys
+bluetooth_manager` until the bond actually disappears (verify by state, not keypress).
+`--manual-forget` skips straight to that; `--no-forget` skips it entirely.
 
 ## Success
 
