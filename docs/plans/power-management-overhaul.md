@@ -115,6 +115,18 @@ Tick: battery-presence edges (absent→force EN_CHG off; present→re-apply user
 - No new CPF formats needed (uint32/uint8/bool all supported); units stay in CUD names per convention.
 - **Tests**: update `battery-card.test.tsx`, `device-state-index.test.tsx`; new battery-page test mirroring `device-state-detail.test.tsx`.
 
+## Status (2026-07-12)
+
+| PR | Branch | State |
+|---|---|---|
+| A — diagnostics | `feat/power-mgmt-pr-a-diagnostics` | **PR #141 open**; shell-verified on hardware |
+| B — charger policy | `feat/power-mgmt-pr-b-charger-policy` | **PR #142 open** (stacked); battery-present path smoke-tested on hardware |
+| D — configurable ICHG | `feat/power-mgmt-pr-d-charge-current` | pushed; all machine gates green; awaiting on-device+app verification before PR |
+| E — SOC/LED/debug service/app | `feat/power-mgmt-pr-e-battery-ux` | pushed; all machine gates green (63/63 fw, 234/234 jest, tsc/lint clean); awaiting verification |
+| C — PD-aware input power | `feat/power-mgmt-pr-c-input-power` (tip of stack) | firmware implemented + emulator-tested; **bundle rebuild still open** (sink caps are 5V/3A-only; customization guide now in `fw/docs/datasheets/TPS25750/`) |
+
+Capture tooling: `fw/scripts/observe-power.py` (periodic read-only `power bq limits` / `power pd contract` / `power policy` sampler; hold the board lock, close MCP serial first).
+
 ## PR breakdown (dependency order)
 
 0. **Plan doc** — commit this file to `docs/plans/power-management-overhaul.md` (can ride with PR A).

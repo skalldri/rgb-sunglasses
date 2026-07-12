@@ -249,6 +249,17 @@ config APP_CHARGE_CURRENT_MAX_MA
 	  protects the pack and wiring from a typo in the app. 2000mA matches
 	  the chip's own 2S POR default.
 
+config APP_INPUT_CURRENT_LIMIT_MAX_MA
+	int "Maximum input current limit (IINDPM) in mA"
+	default 3000
+	range 100 3300
+	depends on APP_CHARGER_POLICY
+	help
+	  Upper clamp on the IINDPM value the charger policy derives from the
+	  negotiated PD contract / Type-C advertisement — bounds board input
+	  wiring regardless of what a source offers. Legacy/unknown sources
+	  are left on the BQ25792's own BC1.2-derived limit (unmanaged).
+
 config APP_VINDPM_MV
 	int "BQ25792 input voltage limit (VINDPM) in mV"
 	default 4600

@@ -200,3 +200,107 @@ ZTEST(charger_policy, test_ichg_managed_when_target_set) {
     zassert_ok(bq25792_get_limits(bq_dev, &limits));
     zassert_equal(limits.ichg_ma, 500, "unmanaged ICHG must not be reconciled");
 }
+
+/* ---- PR C: PD-aware input power management ---- */
+
+/* Build a fixed-supply PDO (voltage 50mV units bits 19:10, current 10mA
+ * units bits 9:0 — TRM Tables 2-22/2-23) and stage it plus a POWER_STATUS
+ * word into the emulator's host registers. */
+static void stage_contract(uint32_t mv, uint32_t ma) {
+    uint8_t ps[2] = {(uint8_t)(BIT(0) | BIT(1) | (0x3 << 2)), 0x00}; /* PD contract */
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x3F, ps, sizeof(ps)));
+
+    uint32_t pdo = ((mv / 50) << 10) | (ma / 10);
+    uint8_t payload[4] = {(uint8_t)pdo, (uint8_t)(pdo >> 8), (uint8_t)(pdo >> 16),
+                          (uint8_t)(pdo >> 24)};
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x34, payload, sizeof(payload)));
+}
+
+static void stage_typec_tier(uint8_t tier) {
+    uint8_t ps[2] = {(uint8_t)(BIT(0) | BIT(1) | (tier << 2)), 0x00};
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x3F, ps, sizeof(ps)));
+}
+
+ZTEST(charger_policy, test_pd_contract_programs_input_limits) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    stage_contract(9000, 1650); /* 9V / 1.65A */
+
+    charger_policy_boot_init(true, 900);
+
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.iindpm_ma, 1650, "IINDPM must follow the contract current");
+    zassert_equal(limits.vindpm_mv, 8100, "VINDPM must be 90%% of 9V (100mV LSB)");
+    zassert_equal(limits.vac_ovp, 0x0, "VAC_OVP must be programmed to 26V headroom");
+}
+
+ZTEST(charger_policy, test_contract_change_reapplies_within_one_tick) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    stage_typec_tier(0x0); /* boot on a default-USB source: unmanaged */
+    charger_policy_boot_init(true, 0);
+
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.iindpm_ma, 3000, "POR IINDPM untouched on a default source");
+    zassert_equal(limits.vindpm_mv, 4600);
+
+    /* Re-plug lands a 5V/3A contract. */
+    stage_contract(5000, 3000);
+    tick();
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.iindpm_ma, 3000);
+    zassert_equal(limits.vindpm_mv, 4600, "5V contract keeps the Kconfig VINDPM floor");
+
+    struct charger_policy_snapshot snap;
+    charger_policy_get_snapshot(&snap);
+    zassert_equal(snap.iindpm_ma, 3000, "5V/3A contract is now managed");
+    zassert_equal(snap.pd_available_mv, 5000);
+}
+
+ZTEST(charger_policy, test_typec_tier_and_clamp) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    stage_typec_tier(0x1); /* 1.5A advertisement */
+    charger_policy_boot_init(true, 0);
+
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.iindpm_ma, 1500);
+
+    /* An absurd 20V/5A contract clamps to the Kconfig input ceiling. */
+    stage_contract(20000, 5000);
+    tick();
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.iindpm_ma, 3000, "IINDPM clamped to APP_INPUT_CURRENT_LIMIT_MAX_MA");
+    zassert_equal(limits.vindpm_mv, 18000, "VINDPM = 90%% of 20V");
+}
+
+ZTEST(charger_policy, test_auto_indet_rewrite_reconciled_under_contract) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    stage_contract(5000, 3000);
+    charger_policy_boot_init(true, 0);
+
+    /* BQ auto-INDET (re-plug) rewrites IINDPM to its SDP 500mA derivation
+     * behind our back; contract unchanged. */
+    uint8_t sdp[2] = {0x00, 50}; /* 500mA, big-endian */
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x06, sdp, sizeof(sdp)));
+
+    tick_through_reconcile();
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.iindpm_ma, 3000, "reconcile must restore the contract-derived IINDPM");
+}
+
+ZTEST(charger_policy, test_legacy_source_iindpm_left_alone) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    stage_typec_tier(0x0); /* Type-C default: BC1.2's value is the law */
+    charger_policy_boot_init(true, 0);
+
+    /* BC1.2 derives 500mA; the policy must not "fix" it. */
+    uint8_t sdp[2] = {0x00, 50};
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x06, sdp, sizeof(sdp)));
+
+    tick_through_reconcile();
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.iindpm_ma, 500, "unmanaged IINDPM must not be reconciled");
+}

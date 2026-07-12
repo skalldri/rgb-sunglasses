@@ -16,3 +16,7 @@ config APP_VINDPM_MV
 config APP_CHARGE_CURRENT_MAX_MA
 	int "Maximum allowed fast-charge current in mA (test-local redeclaration)"
 	default 2000
+
+config APP_INPUT_CURRENT_LIMIT_MAX_MA
+	int "Maximum input current limit in mA (test-local redeclaration)"
+	default 3000
