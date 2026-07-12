@@ -209,6 +209,22 @@ config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	  CONFIG_BT_SETTINGS_DELAYED_STORE_MS, which only governs Bluetooth's
 	  own bonding/CCC storage.
 
+config APP_TPS25750_CONFIG_9V
+	bool "Use the 9V-capable TPS25750 config bundle"
+	default n
+	depends on TPS25750_INTERNAL_PATCH && !TPS25750_COMPRESSED_PATCH
+	help
+	  Selects misc/tps25750/tps25750-config-9v.c instead of the stock
+	  5V-only bundle: identical ACT configuration except the sink
+	  capabilities advertise a 9V PDO alongside 5V, letting the TPS25750
+	  negotiate a 9V PD contract on capable chargers (the charger policy
+	  then derives IINDPM/VINDPM from the contract; VAC_OVP headroom is
+	  already programmed to 26V). Same byte size and symbol as the stock
+	  bundle, so TPS25750_PATCH_HEADER_FILE is unchanged. NOTE: the
+	  TPS25750 only accepts a patch in PTCH mode — after flashing, fully
+	  power-cycle the board (USB AND battery removed) so the PD controller
+	  reboots and downloads the new bundle.
+
 config APP_CHARGER_POLICY
 	bool "Charger policy engine (single owner of BQ25792 config writes)"
 	default n
