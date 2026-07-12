@@ -208,6 +208,11 @@ jobs:
   ios-testflight:
     name: Build and Upload to TestFlight
     needs: [test, version]
+    # Gated on a repo variable (set TESTFLIGHT_PUBLISH_ENABLED=true to
+    # publish; anything else skips the job) so iOS publishing can be paused
+    # without editing the workflow — same pattern as the Google Play
+    # pipeline's PLAY_PUBLISH_ENABLED (PR #132).
+    if: vars.TESTFLIGHT_PUBLISH_ENABLED == 'true'
     runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: read
