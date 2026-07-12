@@ -12,6 +12,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.autom8ed.rgbsunglassesapp",
       "buildNumber": "1",
+      "appleTeamId": "M7V44J4YAW",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

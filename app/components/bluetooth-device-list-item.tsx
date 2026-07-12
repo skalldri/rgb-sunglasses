@@ -5,7 +5,7 @@ import { useBluetooth } from "@/context/bluetooth-context";
 import { useBleConnection } from "@/hooks/use-ble-connection";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { useRouter } from "expo-router";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
 import { ThemedText } from "./themed-text";
 
 interface Props {
@@ -26,7 +26,10 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
             <View style={styles.container}>
                 <View style={styles.info}>
                     <ThemedText type="defaultSemiBold" numberOfLines={1}>{deviceName}</ThemedText>
-                    <ThemedText type="caption">{macAddress}</ThemedText>
+                    {/* On iOS `device.id` is CoreBluetooth's opaque per-phone UUID (the real
+                        MAC is never exposed there), which means nothing to a user — only
+                        Android has a real MAC worth showing. */}
+                    {Platform.OS !== "ios" && <ThemedText type="caption">{macAddress}</ThemedText>}
                 </View>
                 <View style={styles.buttonContainer}>
                     <AppButton
