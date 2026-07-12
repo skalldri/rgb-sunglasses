@@ -106,6 +106,39 @@ export function batteryPresent(powerFlags: number | null, vbatMv: number | null)
   return true;
 }
 
+/**
+ * Human-readable decode of the Power Flags bitmask, in bit order. Bits mirror
+ * fw/src/bluetooth/power_debug_service.h.
+ */
+export function powerFlagLabels(flags: number): string[] {
+  const names: readonly (readonly [number, string])[] = [
+    [0x01, 'Battery Present'],
+    [0x02, 'USB Power Present'],
+    [0x04, 'Input Current Limited'],
+    [0x08, 'Input Voltage Limited'],
+    [0x10, 'Min-System-Voltage Regulation'],
+    [0x20, 'Watchdog Expired'],
+    [0x40, 'Charging Gated (No Battery)'],
+  ];
+  const labels = names.filter(([bit]) => (flags & bit) !== 0).map(([, name]) => name);
+  return labels.length > 0 ? labels : ['None'];
+}
+
+// Mirrors enum tps25750_power_source (fw tps25750.h) as surfaced by the
+// Power Debug service's "PD Source Type" characteristic.
+const PD_SOURCE_LABELS: Record<number, string> = {
+  0: 'Disconnected',
+  1: 'USB Default (500 mA)',
+  2: 'Type-C 1.5 A',
+  3: 'Type-C 3.0 A',
+  4: 'PD Contract',
+  5: 'Unknown Contract',
+};
+
+export function pdSourceLabel(source: number): string {
+  return PD_SOURCE_LABELS[source] ?? `Unknown (${source})`;
+}
+
 export type ChargeDirection = 'charging' | 'discharging' | 'idle' | 'done';
 
 /**

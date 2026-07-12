@@ -112,6 +112,29 @@ describe('batteryPresent', () => {
   });
 });
 
+describe('powerFlagLabels / pdSourceLabel', () => {
+  const { powerFlagLabels, pdSourceLabel } = jest.requireActual('@/services/battery');
+
+  it('decodes set bits into readable labels in bit order', () => {
+    expect(powerFlagLabels(0x03)).toEqual(['Battery Present', 'USB Power Present']);
+    expect(powerFlagLabels(0x44)).toEqual([
+      'Input Current Limited',
+      'Charging Gated (No Battery)',
+    ]);
+  });
+
+  it('reports None for an empty bitmask', () => {
+    expect(powerFlagLabels(0)).toEqual(['None']);
+  });
+
+  it('labels PD source types, with a fallback for unknown values', () => {
+    expect(pdSourceLabel(0)).toBe('Disconnected');
+    expect(pdSourceLabel(3)).toBe('Type-C 3.0 A');
+    expect(pdSourceLabel(4)).toBe('PD Contract');
+    expect(pdSourceLabel(9)).toBe('Unknown (9)');
+  });
+});
+
 describe('formatters', () => {
   it('formats volts from millivolts', () => {
     expect(formatVolts(7914)).toBe('7.91 V');

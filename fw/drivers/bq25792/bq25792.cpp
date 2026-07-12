@@ -560,6 +560,24 @@ int bq25792_watchdog_feed(const struct device* dev) {
     return set_field<BQ25792_CHARGER_CONTROL_1_WD_RST>(reg, 1);
 }
 
+int bq25792_hiz_enable(const struct device* dev, bool enable) {
+    if (!dev) {
+        return -ENODEV;
+    }
+    const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
+
+    // REG0F EN_HIZ (bit 2): 1 = input high-impedance — the charger stops
+    // drawing from VBUS and the system runs from battery; USB data is
+    // unaffected (D+/D- don't route through the charger). POR 0; the part
+    // AUTO-CLEARS this bit when an adapter is plugged in at VBUS (datasheet
+    // SLUSDG1C Table 9-25, p.66) — so a replug always restores input power.
+    LOG_INF("Setting EN_HIZ to %u", enable ? 1 : 0);
+
+    XactGuard guard(dev);
+    return set_field_verified<BQ25792_CHARGER_CONTROL_0, BQ25792_CHARGER_CONTROL_0_EN_HIZ>(
+        cfg, enable ? 1 : 0);
+}
+
 int bq25792_set_vac_ovp(const struct device* dev, uint8_t vac_ovp) {
     if (!dev) {
         return -ENODEV;

@@ -270,6 +270,21 @@ int bq25792_watchdog_disable(const struct device* dev);
 int bq25792_watchdog_feed(const struct device* dev);
 
 /**
+ * @brief Enter/leave input high-impedance (HIZ) mode (EN_HIZ, REG0F bit 2).
+ *
+ * With HIZ enabled the charger stops drawing from VBUS entirely and the
+ * system runs from the battery — while the USB *data* connection stays up
+ * (D+/D- don't route through the charger). Useful for draining the pack on
+ * the bench with serial monitoring live. The part auto-clears EN_HIZ when an
+ * adapter is (re)plugged at VBUS (datasheet SLUSDG1C Table 9-25), so a
+ * physical replug always restores input power. Read-back verified.
+ *
+ * WARNING: enabling HIZ with no battery present removes the system's only
+ * power source — callers must check battery presence first.
+ */
+int bq25792_hiz_enable(const struct device* dev, bool enable);
+
+/**
  * @brief Program the VAC over-voltage protection threshold (REG10 VAC_OVP_1:0).
  *
  * Raw field encoding per datasheet SLUSDG1C Table 9-26: 0h=26V, 1h=18V,

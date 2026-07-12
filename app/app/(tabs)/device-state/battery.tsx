@@ -14,7 +14,8 @@ import {
     getCharacteristicName,
     UUID_BATTERY_CHARGE_CURRENT, UUID_BATTERY_CHARGE_ENABLE, UUID_BATTERY_CHARGE_STATUS,
     UUID_BATTERY_CURRENT, UUID_BATTERY_PERCENT, UUID_BATTERY_SERVICE, UUID_BATTERY_VBUS_CURRENT,
-    UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VOLTAGE, UUID_POWER_DEBUG_SERVICE, UUID_POWER_FLAGS,
+    UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VOLTAGE, UUID_PD_SOURCE_TYPE, UUID_POWER_DEBUG_SERVICE,
+    UUID_POWER_FLAGS,
 } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
@@ -22,7 +23,7 @@ import { useCharacteristicEditor } from "@/hooks/use-characteristic-editor";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import {
     batteryPresent, batteryWatts, chargeDirection, chargeStatusLabel, formatVolts, formatWatts,
-    systemWatts,
+    pdSourceLabel, powerFlagLabels, systemWatts,
     voltageToPercent, type ChargeDirection,
 } from "@/services/battery";
 import { decodeSint32FromBase64, decodeUint8FromBase64 } from "@/services/ble-value-codec";
@@ -221,7 +222,23 @@ export default function BatteryDetailScreen() {
                                         labelColor={labelColorFor(charUuid)}
                                     >
                                         <WriteErrorIndicator charInfo={charInfo} />
-                                        {renderCharacteristicInput(UUID_POWER_DEBUG_SERVICE, charUuid, charInfo)}
+                                        {/* Power Flags and PD Source Type get human-readable
+                                            decodes; everything else renders generically. */}
+                                        {charUuid === UUID_POWER_FLAGS ? (
+                                            <View style={styles.flagList}>
+                                                {powerFlagLabels(decodeUint8OrNull(charInfo.value) ?? 0).map((flag) => (
+                                                    <ThemedText key={flag} type="defaultSemiBold" style={styles.flagItem}>
+                                                        {flag}
+                                                    </ThemedText>
+                                                ))}
+                                            </View>
+                                        ) : charUuid === UUID_PD_SOURCE_TYPE ? (
+                                            <ThemedText type="defaultSemiBold">
+                                                {pdSourceLabel(decodeUint8OrNull(charInfo.value) ?? -1)}
+                                            </ThemedText>
+                                        ) : (
+                                            renderCharacteristicInput(UUID_POWER_DEBUG_SERVICE, charUuid, charInfo)
+                                        )}
                                     </ListRow>
                                 </React.Fragment>
                             ))}
@@ -236,6 +253,13 @@ export default function BatteryDetailScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
+    },
+    flagList: {
+        alignItems: 'flex-end',
+        gap: 2,
+    },
+    flagItem: {
+        textAlign: 'right',
     },
     header: {
         paddingHorizontal: Spacing.lg,

@@ -436,6 +436,37 @@ static int cmd_power_policy(const struct shell *shell, size_t argc, char **argv,
 }
 #endif
 
+static int cmd_power_bq_hiz(const struct shell *shell, size_t argc, char **argv, void *data) {
+    bool enable = (int)data != 0;
+
+    if (enable) {
+        // HIZ removes VBUS as a power source — with no battery, that's the
+        // system's ONLY source, and the board dies until a physical replug
+        // (EN_HIZ auto-clears on adapter plug-in, Table 9-25).
+        struct bq25792_status st;
+        int ret = bq25792_get_status(bq, &st);
+        if (ret != 0) {
+            shell_error(shell, "status read failed (%d); refusing HIZ", ret);
+            return ret;
+        }
+        if (!st.vbat_present) {
+            shell_error(shell, "no battery present — HIZ would kill the system; refusing");
+            return -EPERM;
+        }
+    }
+
+    int ret = bq25792_hiz_enable(bq, enable);
+    if (ret != 0) {
+        shell_error(shell, "EN_HIZ write failed: %d", ret);
+        return ret;
+    }
+    shell_print(shell, "HIZ %s%s", enable ? "enabled" : "disabled",
+                enable ? " — input disconnected, running from battery. A USB replug or"
+                         " 'power bq hiz disable' restores input power."
+                       : "");
+    return 0;
+}
+
 static int cmd_power_bq_status(const struct shell *shell, size_t argc, char **argv, void *data) {
     int32_t vbat_mv  = 0;
     int32_t ibat_ma  = 0;
@@ -679,6 +710,12 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_freq, cmd_power_bq_freq_change,
 SHELL_SUBCMD_DICT_SET_CREATE(sub_charge_enable, cmd_power_bq_charge_enable,
                              (disable, 0, "disable charging"), (enable, 1, "enable charging"));
 
+SHELL_SUBCMD_DICT_SET_CREATE(sub_hiz, cmd_power_bq_hiz,
+                             (disable, 0, "reconnect USB input power"),
+                             (enable, 1,
+                              "disconnect USB input power (run from battery; USB data stays up; "
+                              "refused with no battery)"));
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_charge,
                                SHELL_CMD(dump, NULL, "Dump BQ25792 Charging Parameters to console",
                                          cmd_power_bq_dump_charge_params),
@@ -699,6 +736,10 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
     SHELL_CMD(pfm, &sub_pfm, "Enable/Disable BQ25792 Pulse Frequency Modulation (PFM)", NULL),
     SHELL_CMD(freq, &sub_freq, "Change BQ25792 PWM Frequency", NULL),
     SHELL_CMD(charge, &sub_charge, "Change BQ25792 Charge Parameters", NULL),
+    SHELL_CMD(hiz, &sub_hiz,
+              "Input high-impedance mode: stop drawing USB power while keeping USB data alive "
+              "(auto-clears on replug)",
+              NULL),
 #if defined(CONFIG_APP_CHARGER_POLICY)
     SHELL_CMD_ARG(ichg, NULL, "Set fast-charge current target in mA (routed through the policy)",
                   cmd_power_bq_ichg, 2, 0),
