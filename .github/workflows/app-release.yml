@@ -4,18 +4,31 @@ name: App Release
 # workflow already owns the v* tag namespace, so the app uses an app-v* prefix
 # to avoid both release workflows firing on the same tag.
 #
-# A tag push produces BOTH release artifacts in parallel:
+# A tag push produces ALL release artifacts in parallel:
 #   - release:        signed Android APK attached to a GitHub Release
 #   - ios-testflight: signed iOS build uploaded to TestFlight
-# The two jobs are independent (both need only `test` + `version`) so a
-# failure on one platform never blocks the other. The shared `version` job is
-# the single source of truth for the release version and the derived build
-# number — the same value serves as the Android versionCode and the iOS
-# buildNumber, so the two platforms can never disagree for a given tag.
+#   - play:           signed Android AAB uploaded to Google Play (gated on the
+#                     PLAY_PUBLISH_ENABLED repo variable — inert until the
+#                     one-time Play Console bootstrap is done, see
+#                     app/docs/play-publishing.md)
+# The jobs are independent (each needs only `test` + `version`) so a failure
+# on one channel never blocks the others. The shared `version` job is the
+# single source of truth for the release version and the derived build
+# number — the same value serves as the Android versionCode (GitHub APK and
+# Play AAB) and the iOS buildNumber, so the channels can never disagree for a
+# given tag. Both Android jobs build through the shared composite action
+# .github/actions/build-signed-android so the APK and the AAB cannot silently
+# drift apart in how they are built.
 #
-# `workflow_dispatch` exists for iOS-only manual builds (first TestFlight
-# upload, pipeline validation) without cutting a release — it skips the
-# Android job entirely.
+# `workflow_dispatch` exists for manual single-channel builds without cutting
+# a release — `target` picks the channel:
+#   - testflight: iOS-only build (first TestFlight upload, pipeline validation)
+#   - play:       Google Play dry-run, always uploaded as a DRAFT so a test
+#                 can never replace a live Play release
+# Both stores permanently consume build numbers (TestFlight: each
+# (version, buildNumber) pair; Play: every versionCode, drafts included), so
+# manual builds MUST use the 1-9999 build_number range — the `version` job
+# enforces the partition against tag-derived numbers (always >= 10000).
 #
 # SECURITY — the ios-testflight job runs on the self-hosted Mac runner. Same
 # argument as app-ios-ci.yml: this workflow triggers only on tag `push` and
@@ -28,11 +41,19 @@ on:
       - "app-v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
+      target:
+        description: "Which channel to build (manual builds are single-channel so one store's dry-run never burns the other store's build numbers)"
+        type: choice
+        options:
+          - testflight
+          - play
+        default: testflight
+        required: true
       version:
-        description: "Version (X.Y.Z) for a manual TestFlight-only build"
+        description: "Version (X.Y.Z) for the manual build (for play dry-runs use 0.9x.y by convention)"
         required: true
       build_number:
-        description: "iOS build number, 1-9999 (enforced; tag builds derive >=10000, and each (version, build number) pair can only ever be uploaded to TestFlight once)"
+        description: "Build number, 1-9999 (enforced; tag builds derive >=10000, and both stores permanently consume each build number)"
         required: true
 
 defaults:
@@ -107,6 +128,15 @@ jobs:
             # in the manual range and could collide with a prior manual build.
             [ "$MAJOR" -ge 1 ] \
               || { echo "::error::app-v0.x.y tags are not supported (tag-derived build numbers must be >= 10000)"; exit 1; }
+            # The formula is only monotonic while MINOR and PATCH stay below
+            # 100 (1.0.100 would collide with 1.1.0). Both stores permanently
+            # consume build numbers, so a collision is unrecoverable — and a
+            # GitHub APK shipped with a colliding versionCode would block
+            # Play from ever offering the colliding successor as an update.
+            if [ "$MINOR" -ge 100 ] || [ "$PATCH" -ge 100 ]; then
+              echo "::error::minor/patch must be < 100 for the build-number scheme (got $VERSION)"
+              exit 1
+            fi
             BUILD_NUMBER=$((MAJOR * 10000 + MINOR * 100 + PATCH))
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -124,52 +154,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Build signed release APK
+        uses: ./.github/actions/build-signed-android
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: app/package-lock.json
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "17"
-
-      - uses: gradle/actions/setup-gradle@v4
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Set version in app.json
-        run: |
-          jq --arg v "${{ needs.version.outputs.version }}" \
-             --argjson vc ${{ needs.version.outputs.build_number }} \
-             '.expo.version = $v | .expo.android.versionCode = $vc' \
-             app.json > app.json.tmp && mv app.json.tmp app.json
-
-      - name: Generate Android native project
-        run: npx expo prebuild --platform android --clean
-
-      - name: Configure Android SDK path
-        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
-
-      - name: Make gradlew executable
-        run: chmod +x android/gradlew
-
-      - name: Decode release keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
-
-      - name: Build release APK
-        run: |
-          cd android && ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=${{ github.workspace }}/app/android/app/release.keystore \
-            -Pandroid.injected.signing.store.password=${{ secrets.STORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
-
-      - name: Remove keystore
-        if: always()
-        run: rm -f android/app/release.keystore
+          version: ${{ needs.version.outputs.version }}
+          version-code: ${{ needs.version.outputs.build_number }}
+          gradle-task: assembleRelease
+          keystore-base64: ${{ secrets.KEYSTORE_BASE64 }}
+          store-password: ${{ secrets.STORE_PASSWORD }}
+          key-alias: ${{ secrets.KEY_ALIAS }}
+          key-password: ${{ secrets.KEY_PASSWORD }}
 
       - name: Rename APK
         run: |
@@ -210,9 +204,14 @@ jobs:
     needs: [test, version]
     # Gated on a repo variable (set TESTFLIGHT_PUBLISH_ENABLED=true to
     # publish; anything else skips the job) so iOS publishing can be paused
-    # without editing the workflow — same pattern as the Google Play
-    # pipeline's PLAY_PUBLISH_ENABLED (PR #132).
-    if: vars.TESTFLIGHT_PUBLISH_ENABLED == 'true'
+    # without editing the workflow — same pattern as the play job's
+    # PLAY_PUBLISH_ENABLED. Manual dispatches additionally build a single
+    # channel: only occupy the shared Mac runner (and consume a TestFlight
+    # (version, buildNumber) pair) when the dispatch actually targets
+    # TestFlight.
+    if: |
+      vars.TESTFLIGHT_PUBLISH_ENABLED == 'true' &&
+      (github.event_name == 'push' || inputs.target == 'testflight')
     runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: read
@@ -362,3 +361,79 @@ jobs:
           rm -f "$RUNNER_TEMP/asc_api_key.p8" "$RUNNER_TEMP/exportOptions.plist"
           rm -rf "$RUNNER_TEMP/RGBSunglasses.xcarchive" "$RUNNER_TEMP/DerivedData"
           rm -rf ios-export
+
+  # Publishes an AAB to Google Play. The Play build is a distinct variant of
+  # the Android app (self-update flow disabled, no REQUEST_INSTALL_PACKAGES —
+  # Play policy forbids self-updating outside Play), so it needs its own
+  # build. Deliberately a separate job for failure isolation: a Play API
+  # error never blocks the GitHub release or TestFlight, and vice versa.
+  #
+  # Gated on repo variables so the workflow is inert until the one-time Play
+  # Console bootstrap is done — see app/docs/play-publishing.md.
+  play:
+    name: Publish to Google Play
+    needs: [test, version]
+    if: |
+      vars.PLAY_PUBLISH_ENABLED == 'true' &&
+      (github.event_name == 'push' || inputs.target == 'play')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build signed release AAB (Play variant)
+        uses: ./.github/actions/build-signed-android
+        with:
+          version: ${{ needs.version.outputs.version }}
+          version-code: ${{ needs.version.outputs.build_number }}
+          gradle-task: bundleRelease
+          play-variant: "true"
+          keystore-base64: ${{ secrets.KEYSTORE_BASE64 }}
+          store-password: ${{ secrets.STORE_PASSWORD }}
+          key-alias: ${{ secrets.KEY_ALIAS }}
+          key-password: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Write Play release notes (what's new)
+        run: |
+          mkdir -p whatsnew
+          NOTES=""
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # actions/checkout can flatten annotated tags to lightweight ones —
+            # re-fetch the real tag object so its message is available.
+            git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}" || true
+            # Only an annotated tag (a "tag" object) carries a release
+            # message. %(contents) on a lightweight tag prints the pointed-to
+            # COMMIT's message — never publish that (commit messages carry
+            # trailers not meant for the Play listing).
+            if [ "$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}" 2>/dev/null)" = "tag" ]; then
+              NOTES=$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}")
+            fi
+          fi
+          if [ -z "$NOTES" ]; then
+            NOTES="Bug fixes and improvements. Full notes: https://github.com/${{ github.repository }}/releases"
+          fi
+          # Play hard limit: 500 CHARACTERS. Truncate by codepoint — a byte
+          # truncation (head -c) can split a multi-byte UTF-8 sequence and
+          # make the Play API reject the file as invalid UTF-8.
+          printf '%s' "$NOTES" \
+            | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().decode("utf-8", "replace")[:500].encode("utf-8"))' \
+            > whatsnew/whatsnew-en-US
+
+      - name: Upload to Google Play
+        # r0adkll/upload-google-play v1.1.5, pinned by SHA (handles a
+        # signing-adjacent secret). Input paths are workspace-root-relative —
+        # the job's working-directory default does not apply to `uses:` steps.
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.autom8ed.rgbsunglassesapp
+          releaseFiles: app/android/app/build/outputs/bundle/release/app-release.aab
+          releaseName: ${{ needs.version.outputs.version }}
+          track: ${{ vars.PLAY_TRACK || 'internal' }}
+          # Fail-safe default is DRAFT: a never-published app rejects
+          # 'completed' releases outright, and dry-runs must never replace the
+          # live release. Going live automatically requires explicitly setting
+          # the PLAY_RELEASE_STATUS repo variable to 'completed'.
+          status: ${{ github.event_name == 'workflow_dispatch' && 'draft' || vars.PLAY_RELEASE_STATUS || 'draft' }}
+          whatsNewDirectory: app/whatsnew
