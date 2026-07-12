@@ -122,6 +122,65 @@ message if reached via deep link. On iOS the app is updated through the App Stor
 There is currently **no iOS dev-variant** (the Android `.dev` side-by-side install from
 `plugins/withDevVariant.js` is Android-only); the iOS dev build uses the production bundle id.
 
+### Physical-iPhone dev builds + BLE (verified 2026-07-11, iPhone 15 / iOS 26.5, Xcode 26.2)
+
+**Deploying a local dev build to a physical iPhone** (`npx expo run:ios --device <UDID>`):
+
+- Pass the **traditional hardware UDID** from `xcrun xctrace list devices` (`00008120-…`), NOT the
+  CoreDevice UUID that `xcrun devicectl list devices` prints — Expo CLI doesn't match the latter.
+  (Expo also warns `Unexpected devicectl JSON version` on Xcode 26; device matching by UDID still works.)
+- Expo refuses to build with "No code signing certificates are available" and will NOT mint one.
+  First-time bootstrap: sign into Xcode → Settings → Accounts, make sure `ios.appleTeamId` is in
+  `app.json` (prebuild bakes it into the project as `DEVELOPMENT_TEAM` — without it xcodebuild fails
+  with "requires a development team"), then run
+  `xcodebuild -workspace ios/RGBSunglasses.xcworkspace -scheme RGBSunglasses -configuration Debug
+  -destination 'id=<UDID>' -allowProvisioningUpdates build` once — that creates the Apple Development
+  cert + device-registered profile, after which `expo run:ios --device` works normally.
+- Expo's auto-launch after install can silently no-op on physical devices; launch explicitly with
+  `xcrun devicectl device process launch --device <UDID> com.autom8ed.rgbsunglassesapp`.
+- **Local Network permission**: the app can't reach Metro (LAN IP in the app's `ip.txt`) until the
+  user accepts iOS's local-network prompt on first launch — the symptom is "app launches, Metro never
+  receives a bundle request". Phone and Mac must share the Wi-Fi network.
+- execbro works against a physical iPhone at the **JS level only** (Metro CDP: `scan_metro`,
+  `get_logs`, `execute_in_app`); screenshots/tap drivers are simulator-only.
+- The board's serial shell from macOS: `/dev/cu.usbmodem*` at 115200 (interface 0 of 2fe3:0001 =
+  lower-numbered node). `scripts/fw-shell.sh` is Linux-only (sysfs), and `scripts/hw-lock.sh` needs
+  bash ≥ 4 so it does not run on macOS stock bash — when the board is physically attached to the Mac,
+  devcontainer agents can't reach it anyway.
+
+**iOS BLE behavior differences (all hardware-verified):**
+
+- **First-time pairing is lazy and races discovery**: iOS does NOT pair during `connectToDevice()`.
+  The app's discovery loop runs to completion on the unencrypted link with every read failing
+  `attErrorCode: 5` ("Authentication is insufficient", `errorCode: 402`) — services render as bare
+  UUIDs — and only afterwards does CoreBluetooth surface the passkey pairing dialog. After the user
+  enters the board's passkey (bonded from then on), a **disconnect + reconnect** is needed for a
+  clean, fully-named discovery pass; security elevates instantly on the bonded reconnect. Nothing is
+  wrong firmware-side when this happens (`bt_state` shows L1 during the race, L4 after re-pair).
+- **ATT MTU on iOS is 293** (iPhone 15/iOS 26) — iOS negotiates on its own; `requestMTU(247)` is a
+  no-op there. Comfortable headroom over Android's 247; zero `bt_att: No ATT channel for MTU`
+  warnings in a multi-hour session with all 35 monitors streaming.
+- **Discovery is slower on iOS** (~30-55 s vs ~6 s on Android) even with the bulk-metadata path
+  working (it does work, verified) — iOS has no `requestConnectionPriority` equivalent and the
+  firmware's `bt_conn_le_param_update()` still yields a 15 ms interval, so the gap is likely
+  iOS-side GATT scheduling. Unoptimized as of 2026-07; measure before assuming regressions.
+- **First-launch scan fails with `BleError: BluetoothLE is in unknown state`**: the Bluetooth tab
+  starts scanning while CoreBluetooth is still initializing / the Bluetooth permission prompt is up.
+  It recovers on the next tab focus; a state-aware scan start (wait for PoweredOn) would fix it
+  properly.
+- **`device.id` is NOT a MAC on iOS**: CoreBluetooth never exposes BLE MAC addresses; ble-plx's
+  `device.id` there is an opaque per-phone peripheral UUID (can change if the bond is forgotten).
+  Everything keyed off "macAddress" in the app still works (it's just an opaque key), but don't
+  *display* it on iOS (`bluetooth-device-list-item.tsx` hides the caption there) and don't write
+  iOS logic that expects `AA:BB:CC:DD:EE:FF` format.
+- **Numeric parameter inputs commit on `onEndEditing` on iOS** (`characteristic-uint32.tsx`,
+  `characteristic-float32.tsx`): iOS's number-pad/decimal-pad keyboards have **no return key**, so
+  `onSubmitEditing` is unreachable there — dismissing the keyboard (tap outside the field) is the
+  commit signal on iOS, skipping no-op edits so a casual tap-in/tap-out doesn't fire a BLE write.
+  Android is unchanged (✓ key submits via `onSubmitEditing`, tap-away cancels). Decided against an
+  `InputAccessoryView` "Done" bar (rejected in review: extra chrome) and against
+  `numbers-and-punctuation` keyboard (full keyboard for a number field).
+
 ### Android Permissions
 
 Android 12+ (API 31+) requires `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `ACCESS_FINE_LOCATION`. Permission handling in [hooks/ble-manager.ts](hooks/ble-manager.ts) `requestPermissions()`.
