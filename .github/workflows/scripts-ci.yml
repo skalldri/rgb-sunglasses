@@ -12,7 +12,7 @@ on:
       - '.github/workflows/scripts-ci.yml'
 
 jobs:
-  python-tests:
+  scripts-tests:
     # Pure-Python unit tests for host tooling under scripts/ (e.g. re-pair.py's
     # device-forget selectors, validated against sanitized uiautomator-dump fixtures).
     # Deliberately a standalone, devcontainer-free job so a scripts-only change does
