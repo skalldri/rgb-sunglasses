@@ -85,6 +85,27 @@ export function chargeStatusLabel(chgStat: number): string {
   return CHARGE_STATUS_LABELS[chgStat] ?? `Unknown (${chgStat})`;
 }
 
+// "Power Flags" bitmask from the firmware's Power Debug service (must match
+// fw/src/bluetooth/power_debug_service.h).
+export const POWER_FLAG_VBAT_PRESENT = 0x01;
+export const POWER_FLAG_VBUS_PRESENT = 0x02;
+export const POWER_FLAG_CHARGE_GATED = 0x40;
+
+/**
+ * Whether a battery pack is physically connected.
+ *
+ * Prefers the firmware's authoritative VBAT_PRESENT flag (Power Debug
+ * service); older firmware without that service falls back to the same
+ * heuristic the firmware's status LED uses (a healthy 2S pack never reads
+ * below 6 V — see fw/src/power.cpp). Unknown inputs report true so the UI
+ * doesn't cry "No Battery" on missing data.
+ */
+export function batteryPresent(powerFlags: number | null, vbatMv: number | null): boolean {
+  if (powerFlags != null) return (powerFlags & POWER_FLAG_VBAT_PRESENT) !== 0;
+  if (vbatMv != null) return vbatMv >= 6000;
+  return true;
+}
+
 export type ChargeDirection = 'charging' | 'discharging' | 'idle' | 'done';
 
 /**

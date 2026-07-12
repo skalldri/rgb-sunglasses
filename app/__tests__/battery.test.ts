@@ -92,6 +92,26 @@ describe('chargeDirection', () => {
   });
 });
 
+describe('batteryPresent', () => {
+  const { batteryPresent, POWER_FLAG_VBAT_PRESENT, POWER_FLAG_VBUS_PRESENT } =
+    jest.requireActual('@/services/battery');
+
+  it('trusts the firmware VBAT_PRESENT flag when Power Flags are available', () => {
+    expect(batteryPresent(POWER_FLAG_VBAT_PRESENT | POWER_FLAG_VBUS_PRESENT, 100)).toBe(true);
+    // Flag says absent even though a residual BAT-pin voltage reads high.
+    expect(batteryPresent(POWER_FLAG_VBUS_PRESENT, 7900)).toBe(false);
+  });
+
+  it('falls back to the 6V threshold without Power Flags (older firmware)', () => {
+    expect(batteryPresent(null, 7910)).toBe(true);
+    expect(batteryPresent(null, 1200)).toBe(false);
+  });
+
+  it('assumes present when nothing is known (no false alarms)', () => {
+    expect(batteryPresent(null, null)).toBe(true);
+  });
+});
+
 describe('formatters', () => {
   it('formats volts from millivolts', () => {
     expect(formatVolts(7914)).toBe('7.91 V');

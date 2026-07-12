@@ -47,6 +47,9 @@ export const UUID_BATTERY_PERCENT        = "12345678-1234-5678-0005-56789abc0007
 // the charger status thread — see fw/src/bluetooth/power_debug_service.cpp. Folded into
 // the app's battery detail page (rendered generically) rather than a Settings row.
 export const UUID_POWER_DEBUG_SERVICE    = "12345678-1234-5678-0006-56789abc0000";
+// Power Debug characteristics (positional UUIDs, firmware declaration order —
+// fw/src/bluetooth/power_debug_service.cpp): 0000=Input Limit, 0001=Power Flags.
+export const UUID_POWER_FLAGS            = "12345678-1234-5678-0006-56789abc0001";
 
 // Fixed characteristic UUID, identical across every animation service, exposing that
 // animation's human-readable name. Must match kAnimationNameCharacteristicUuid in
