@@ -44,6 +44,17 @@ BQ25792 §9.3.6 (PDF p.34): with **charge enabled and no battery**, the charger 
 
 **Experiment B — reboot-loop confirmation (optional, scope traces for the record).** No battery, charge toggle off → boot, confirm `VBAT_PRESENT=0` → enable charging while scoping SYS + VBAT: expect BAT ramp/BATOVP cycling, SYS following (§9.3.6 case 2). The fix doesn't depend on this; skip unless the traces are wanted.
 
+## Experiment A — first hardware data (2026-07-12, PR A image, bench charger, no faceplate, battery ~full)
+
+From `power bq limits` / `power pd contract` on the freshly-flashed PR A image:
+
+- **`ICHG=500 mA` confirmed on silicon** — the TPS25750 bundle programs the BQ25792 charge current to the ACT questionnaire's 0.5A. This is symptom 3's cap (input budget permitting).
+- **`WATCHDOG=disabled`** — the TPS bundle itself disables the BQ I2C watchdog. Removes the config-revert hazard from the picture and simplifies PR B (the policy's watchdog-disable becomes a reconcile-verified invariant, not a fight).
+- **`VAC_OVP=26V`** — the datasheet's self-inconsistent REG10 reset value resolves to the field-table POR (00b = 26V) on real silicon; no OVP obstacle to >5V contracts.
+- **`VINDPM=4600 mV`, `IINDPM=3000 mA`** — also bundle-programmed (not the 3600/BC1.2 PORs).
+- **The bundle advertises exactly ONE sink PDO: fixed 5V/3A** (`TX_SINK_CAPS`), and with a PD charger it lands an explicit **5V @ 3A (15W)** contract (`ACTIVE_CONTRACT_PDO=0x1d11912c`). Confirms: >5V contracts are impossible without an ACT bundle rebuild — required for the variable-voltage plan in PR C.
+- Battery was ~full during this capture (VBAT 8.35V, taper, IBAT≈0) — the 20mA/200mA reproduction against a weak (500mA host) source is still to be captured with a drained pack + faceplate.
+
 ## Implementation plan
 
 ### Architecture: single write owner — new `fw/src/power/charger_policy.{h,cpp}`
