@@ -12,4 +12,9 @@ Scan to download the APK:
 ![Download QR code](https://github.com/skalldri/rgb-sunglasses/releases/download/app-v<version>/rgb-sunglasses-<version>-qr.png)
 
 [Direct download: rgb-sunglasses-<version>.apk](https://github.com/skalldri/rgb-sunglasses/releases/download/app-v<version>/rgb-sunglasses-<version>.apk)
+
+## 🍎 Install on iOS
+
+Available via TestFlight — internal testers receive this build automatically
+once Apple finishes processing it. Not a tester yet? Ask for an invite.
 ```

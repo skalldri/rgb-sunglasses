@@ -91,6 +91,28 @@ calls (`requestConnectionPriority`, `refreshGatt`, `requestMTU`) are already no-
 iOS, and `requestPermissions()` returns `true` on iOS (BLE permission strings come from the
 `react-native-ble-plx` Expo plugin config in `app.json`, which also sets `UIBackgroundModes`).
 
+**TestFlight releases**: the `ios-testflight` job in `.github/workflows/app-release.yml` builds a
+signed Release archive and uploads it to TestFlight. It runs on the same self-hosted Mac runner,
+triggered by `app-vX.Y.Z` tags (in parallel with the Android release job — neither gates the other)
+or by `workflow_dispatch` with explicit `version` + `build_number` inputs (iOS-only; the Android
+job is skipped — used for the first upload and pipeline validation). Signing is **cloud signing**:
+automatic signing + `xcodebuild -allowProvisioningUpdates` authenticated by an App Store Connect
+API key (secrets `ASC_API_KEY_P8` base64 / `ASC_KEY_ID` / `ASC_ISSUER_ID`; the non-sensitive Team
+ID is the repo *variable* `APPLE_TEAM_ID`) — no distribution .p12 or keychain setup on the runner.
+Upload is a second `xcodebuild -exportArchive` with `destination: upload` in the exportOptions
+plist (`altool` is deprecated). `ios.buildNumber` is injected at build time by a shared `version`
+job (single source of truth — the same value is the Android versionCode): tag builds use
+`MAJOR*10000 + MINOR*100 + PATCH` (≥ 10000; the job rejects 0.x.y tags), manual dispatch builds
+must be 1–9999 (enforced, so the ranges can't collide). **TestFlight permanently consumes each
+(version, buildNumber) pair** — never re-push an
+app tag whose TestFlight upload succeeded; bump patch instead (see the release skill). Export
+compliance is pre-answered by `ios.infoPlist.ITSAppUsesNonExemptEncryption: false` in `app.json`
+(the app uses only standard OS encryption), so builds go straight to internal testers after Apple's
+~5–30 min processing. `app-ios-ci.yml` (unsigned simulator build) is unchanged and remains the
+per-push check. Optionally, `ios.appleTeamId` can be added to `app.json` for local
+`expo run:ios --device` convenience — CI doesn't need it (the workflow passes `DEVELOPMENT_TEAM`
+explicitly).
+
 The in-app self-update flow is **disabled on iOS entirely** (it side-loads an APK, which only Android
 can do). The `APP_SELF_UPDATE_SUPPORTED` flag in `services/app-update.ts` (`Platform.OS === 'android'`)
 gates every entry point: no launch-time check or "update available" banner, the footer shows a plain
