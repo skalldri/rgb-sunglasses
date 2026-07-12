@@ -1,0 +1,33 @@
+name: 'scripts-ci'
+on:
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/scripts-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/scripts-ci.yml'
+
+jobs:
+  python-tests:
+    # Pure-Python unit tests for host tooling under scripts/ (e.g. re-pair.py's
+    # device-forget selectors, validated against sanitized uiautomator-dump fixtures).
+    # Deliberately a standalone, devcontainer-free job so a scripts-only change does
+    # not trigger the heavy firmware builds in build.yaml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pytest
+
+      - name: Run scripts/ tests
+        run: pytest scripts/tests/ -v
