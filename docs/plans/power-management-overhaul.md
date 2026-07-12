@@ -54,6 +54,7 @@ From `power bq limits` / `power pd contract` on the freshly-flashed PR A image:
 - **`VINDPM=4600 mV`, `IINDPM=3000 mA`** — also bundle-programmed (not the 3600/BC1.2 PORs).
 - **The bundle advertises exactly ONE sink PDO: fixed 5V/3A** (`TX_SINK_CAPS`), and with a PD charger it lands an explicit **5V @ 3A (15W)** contract (`ACTIVE_CONTRACT_PDO=0x1d11912c`). Confirms: >5V contracts are impossible without an ACT bundle rebuild — required for the variable-voltage plan in PR C.
 - Battery was ~full during this capture (VBAT 8.35V, taper, IBAT≈0) — the 20mA/200mA reproduction against a weak (500mA host) source is still to be captured with a drained pack + faceplate.
+- **Steady-state drift check (29 samples over 10 min, same session):** the TPS bundle performed **zero** BQ register writes while idle — ICHG/IINDPM/VINDPM/watchdog all byte-identical across every sample, WD_STAT never set. Bundle writes are plug/PD-event-only, so the charger policy's reconcile-on-mismatch (PR B) converges after each event instead of fighting a periodic writer. (Charge completed during the run: CHG_STAT 4→7, VSYS settled ~9.03V.)
 
 ## Implementation plan
 

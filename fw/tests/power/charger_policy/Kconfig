@@ -1,0 +1,14 @@
+source "Kconfig.zephyr"
+
+rsource "../../../drivers/Kconfig"
+
+# Test-local redeclaration of the fw/Kconfig symbols charger_policy.cpp
+# consumes (same pattern as tests/imu/pipeline — the standalone test app
+# does not source fw/Kconfig).
+config APP_CHARGER_POLICY
+	bool "Charger policy engine (test-local redeclaration)"
+	default y
+
+config APP_VINDPM_MV
+	int "BQ25792 input voltage limit (VINDPM) in mV (test-local redeclaration)"
+	default 4600
