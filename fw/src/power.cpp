@@ -9,6 +9,7 @@
 #endif
 
 #if defined(CONFIG_BQ25792)
+#include <battery_soc.h>
 #include <zephyr/drivers/bq25792/bq25792.h>
 #include <status_led/status_led.h>
 #endif
@@ -16,6 +17,11 @@
 #if defined(CONFIG_APP_BATTERY_MONITOR)
 // BT-free API only (see battery_service.h) - power.cpp stays free of BT headers.
 #include <bluetooth/battery_service.h>
+#endif
+
+#if defined(CONFIG_APP_POWER_DEBUG_SERVICE)
+// BT-free API only (see power_debug_service.h) - same rule as above.
+#include <bluetooth/power_debug_service.h>
 #endif
 
 #if defined(CONFIG_APP_CHARGER_POLICY)
@@ -112,6 +118,49 @@ enum class Bq25792ChargeStatus : uint8_t {
     ChargeTerminationDone = 7,
 };
 
+#if defined(CONFIG_STATUS_LED)
+/**
+ * @brief Status LED color while CHARGING, by estimated state of charge
+ * (battery_soc_percent, rest-voltage estimate — see battery_soc.h's caveat).
+ * Four bands so the color visibly walks Red → Orange → Yellow → Green as the
+ * pack fills (power plan task 5).
+ *
+ * @param percent Estimated state of charge [0, 100].
+ * @return Red <25%, Orange <50%, Yellow <75%, else Green.
+ */
+static StatusColor charging_soc_color(uint8_t percent) {
+    if (percent < 25) {
+        return StatusColor::Red;
+    }
+    if (percent < 50) {
+        return StatusColor::Orange;
+    }
+    if (percent < 75) {
+        return StatusColor::Yellow;
+    }
+    return StatusColor::Green;
+}
+
+/**
+ * @brief Status LED color while running on battery (NotCharging), by the same
+ * percent helper. Three bands, preserving the pre-SOC-refactor color scheme
+ * (formerly hardcoded as >=7700 mV Green / >=7350 mV Orange / else Red —
+ * roughly the 50%/25% boundaries on the battery_soc.h curve).
+ *
+ * @param percent Estimated state of charge [0, 100].
+ * @return Green >=50%, Orange >=25%, else Red.
+ */
+static StatusColor discharging_soc_color(uint8_t percent) {
+    if (percent >= 50) {
+        return StatusColor::Green;
+    }
+    if (percent >= 25) {
+        return StatusColor::Orange;
+    }
+    return StatusColor::Red;
+}
+#endif /* CONFIG_STATUS_LED */
+
 static void charger_status_thread_func(void *, void *, void *);
 
 // Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
@@ -149,6 +198,11 @@ static void charger_status_thread_func(void *, void *, void *) {
     charger_policy_boot_init(boot_charge_enable, boot_charge_current_ma);
 #endif /* CONFIG_APP_CHARGER_POLICY */
 
+#if defined(CONFIG_APP_POWER_DEBUG_SERVICE)
+    /* Tick counter for the Power Debug update cadence (every 4th tick). */
+    uint32_t power_debug_tick = 0;
+#endif
+
     while (true) {
         /* Read VBAT first — the charger may report TrickleCharge even with no
          * battery present, so we must gate on voltage before trusting CHG_STAT. */
@@ -179,6 +233,42 @@ static void charger_status_thread_func(void *, void *, void *) {
         }
 #endif
 
+#if defined(CONFIG_APP_POWER_DEBUG_SERVICE)
+        /* Power Debug telemetry at the reconcile cadence (every 4th 500 ms
+         * tick, ~2 s): each update costs one extra bq25792_get_limits (five
+         * bridged I2Cm reads) plus one tps25750_get_pd_power_info (cheap TPS
+         * host-register reads, not bridged) — deliberately not every tick.
+         * Only publish a complete, successfully-read sample. */
+        if (chg_ok && (power_debug_tick++ % 4) == 0) {
+            struct bq25792_limits limits;
+            struct tps25750_pd_power_info pd_info;
+            if (bq25792_get_limits(bq, &limits) == 0 &&
+                tps25750_get_pd_power_info(pd, &pd_info) == 0) {
+                /* APP_POWER_DEBUG_SERVICE depends (transitively) on
+                 * APP_CHARGER_POLICY, so the snapshot is always available. */
+                struct charger_policy_snapshot snap;
+                charger_policy_get_snapshot(&snap);
+
+                struct power_debug_info dbg = {
+                    .input_limit_ma = limits.iindpm_ma,
+                    .power_flags    = (uint8_t)(
+                        (bq_status.vbat_present ? POWER_DEBUG_FLAG_VBAT_PRESENT : 0) |
+                        (bq_status.vbus_present ? POWER_DEBUG_FLAG_VBUS_PRESENT : 0) |
+                        (bq_status.iindpm_active ? POWER_DEBUG_FLAG_IINDPM_ACTIVE : 0) |
+                        (bq_status.vindpm_active ? POWER_DEBUG_FLAG_VINDPM_ACTIVE : 0) |
+                        (bq_status.vsysmin_regulation ? POWER_DEBUG_FLAG_VSYSMIN_REG : 0) |
+                        (bq_status.wd_expired ? POWER_DEBUG_FLAG_WD_EXPIRED : 0) |
+                        (snap.charge_gated ? POWER_DEBUG_FLAG_CHARGE_GATED : 0)),
+                    .pd_source_type  = (uint8_t)pd_info.source,
+                    .pd_available_mv = pd_info.available_mv,
+                    .pd_available_ma = pd_info.available_ma,
+                    .ico_result_ma   = limits.ico_ilim_ma,
+                };
+                power_debug_service_update(&dbg);
+            }
+        }
+#endif /* CONFIG_APP_POWER_DEBUG_SERVICE */
+
         if (chg_ok) {
 #if defined(CONFIG_STATUS_LED)
             StatusIndication       indication;
@@ -192,16 +282,27 @@ static void charger_status_thread_func(void *, void *, void *) {
                 indication = StatusIndication::Blinking;
                 color      = StatusColor::Red;
             } else {
+                /* Estimated state of charge drives the LED color in both the
+                 * charging and on-battery branches (power plan task 5). Only
+                 * meaningful when the VBAT read succeeded. */
+                uint8_t soc_percent = vbat_ok ? battery_soc_percent(vbat_mv) : 0;
+
                 switch (status) {
                     case Bq25792ChargeStatus::TrickleCharge:
                         [[fallthrough]];
                     case Bq25792ChargeStatus::PreCharge:
                         indication = StatusIndication::Breathing;
+                        if (vbat_ok) {
+                            color = charging_soc_color(soc_percent);
+                        }
                         break;
                     case Bq25792ChargeStatus::FastChargeCC:
                         [[fallthrough]];
                     case Bq25792ChargeStatus::TaperChargeCV:
                         indication = StatusIndication::FastBreathing;
+                        if (vbat_ok) {
+                            color = charging_soc_color(soc_percent);
+                        }
                         break;
                     case Bq25792ChargeStatus::TopOffTimerActive:
                         [[fallthrough]];
@@ -209,20 +310,9 @@ static void charger_status_thread_func(void *, void *, void *) {
                         indication = StatusIndication::Solid;
                         break;
                     default: { /* NotCharging, Reserved — running on battery */
-                        /* 2S LiPo: cutoff 7000 mV (0%), full 8400 mV (100%).
-                         * Thresholds: >=7700 mV = >=50% green, >=7350 mV = >=25% orange,
-                         * >=7000 mV = >=0% red. */
                         if (vbat_ok) {
-                            if (vbat_mv >= 7700) {
-                                indication = StatusIndication::Solid;
-                                color      = StatusColor::Green;
-                            } else if (vbat_mv >= 7350) {
-                                indication = StatusIndication::Solid;
-                                color      = StatusColor::Orange;
-                            } else {
-                                indication = StatusIndication::Solid;
-                                color      = StatusColor::Red;
-                            }
+                            indication = StatusIndication::Solid;
+                            color      = discharging_soc_color(soc_percent);
                         } else {
                             indication = StatusIndication::Off;
                         }

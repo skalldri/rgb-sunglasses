@@ -9,7 +9,7 @@ import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { Section } from "@/components/ui/section";
-import { getServiceName, UUID_BATTERY_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE } from "@/constants/bluetooth";
+import { getServiceName, UUID_BATTERY_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useThemeColors } from "@/hooks/use-theme-color";
@@ -64,6 +64,9 @@ export default function DeviceStateMenuScreen() {
             // Battery gets its own dedicated card (BatteryCard) instead of a generic
             // settings row, same special-treatment pattern as the mcuboot services.
             service.uuid !== UUID_BATTERY_SERVICE &&
+            // Power Debug is folded into the battery detail page (device-state/battery.tsx)
+            // rather than getting its own generic Settings row.
+            service.uuid !== UUID_POWER_DEBUG_SERVICE &&
             selectedDevice?.serviceDisplayNames?.[service.uuid] == null
     );
     const hasBatteryService = visibleServices.some(service => service.uuid === UUID_BATTERY_SERVICE);

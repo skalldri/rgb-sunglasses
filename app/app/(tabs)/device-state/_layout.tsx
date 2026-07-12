@@ -17,6 +17,7 @@ export default function DeviceStateLayout() {
         contentStyle: { backgroundColor: palette.background },
       }}>
       <Stack.Screen name="index" />
+      <Stack.Screen name="battery" />
       <Stack.Screen name="[serviceUuid]" />
     </Stack>
   );

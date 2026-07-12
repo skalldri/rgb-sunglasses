@@ -15,12 +15,15 @@ export function useMcuMgrClient(device: Device | null) {
             return;
         }
 
+        // TypeScript doesn't carry the null-narrowing from the guard above into
+        // the nested async closure, so capture the narrowed reference once.
+        const connectedDevice = device;
         let mcuClient: McuMgrClient | null = null;
         let mounted = true;
 
         async function init() {
             try {
-                mcuClient = new McuMgrClient(device);
+                mcuClient = new McuMgrClient(connectedDevice);
                 await mcuClient.initialize();
                 
                 if (mounted) {

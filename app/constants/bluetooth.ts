@@ -11,6 +11,7 @@ export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0003-56789abc0000": "Bootloader Info",
     "12345678-1234-5678-0004-56789abc0000": "MCUboot Updater",
     "12345678-1234-5678-0005-56789abc0000": "Battery",
+    "12345678-1234-5678-0006-56789abc0000": "Power Debug",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
@@ -38,6 +39,14 @@ export const UUID_BATTERY_VBUS_VOLTAGE   = "12345678-1234-5678-0005-56789abc0002
 export const UUID_BATTERY_VBUS_CURRENT   = "12345678-1234-5678-0005-56789abc0003"; // int32, mA
 export const UUID_BATTERY_CHARGE_STATUS  = "12345678-1234-5678-0005-56789abc0004"; // uint8, raw BQ25792 CHG_STAT
 export const UUID_BATTERY_CHARGE_ENABLE  = "12345678-1234-5678-0005-56789abc0005"; // boolean, read/write
+export const UUID_BATTERY_CHARGE_CURRENT = "12345678-1234-5678-0005-56789abc0006"; // uint32, mA, read/write (ICHG target)
+export const UUID_BATTERY_PERCENT        = "12345678-1234-5678-0005-56789abc0007"; // uint8, 0-100 (fw rest-voltage estimate)
+
+// Power Debug service (service ID 6, power plan PR E). Proto0 only. Read+notify debug
+// telemetry (IINDPM readback, power-flags bitmask, PD source/budget, ICO result) fed by
+// the charger status thread — see fw/src/bluetooth/power_debug_service.cpp. Folded into
+// the app's battery detail page (rendered generically) rather than a Settings row.
+export const UUID_POWER_DEBUG_SERVICE    = "12345678-1234-5678-0006-56789abc0000";
 
 // Fixed characteristic UUID, identical across every animation service, exposing that
 // animation's human-readable name. Must match kAnimationNameCharacteristicUuid in

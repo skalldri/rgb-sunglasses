@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import DeviceStateMenuScreen from '@/app/(tabs)/device-state/index';
-import { UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE } from '@/constants/bluetooth';
+import { UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import { encodeBooleanToBase64, encodeUtf8ToBase64 } from '@/services/ble-value-codec';
 import { SMP_SERVICE_UUID } from '@/services/mcumgr';
@@ -191,6 +191,38 @@ describe('DeviceStateMenuScreen', () => {
     expect(queryByText('MCUboot Updater')).toBeNull();
     expect(getByText('Settings')).toBeTruthy();
     // core-config-service is still in Settings (unknown UUID renders as the UUID string itself)
+    expect(getByText('core-config-service')).toBeTruthy();
+  });
+
+  it('excludes the Power Debug service from the Settings section (folded into the battery page)', () => {
+    const selectedDevice = {
+      name: 'RGB Sunglasses',
+      mac: 'AA:BB:CC',
+      device: {},
+      services: [
+        { uuid: UUID_POWER_DEBUG_SERVICE },
+        { uuid: 'core-config-service' },
+      ],
+      characteristicsByService: {
+        [UUID_POWER_DEBUG_SERVICE]: {},
+        'core-config-service': {},
+      },
+      characteristics: {},
+      serviceCharacteristics: {
+        [UUID_POWER_DEBUG_SERVICE]: [],
+        'core-config-service': [],
+      },
+      serviceDisplayNames: {},
+    };
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getByText, queryByText } = render(<DeviceStateMenuScreen />);
+    expect(queryByText('Power Debug')).toBeNull();
+    expect(getByText('Settings')).toBeTruthy();
     expect(getByText('core-config-service')).toBeTruthy();
   });
 });

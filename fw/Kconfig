@@ -275,6 +275,20 @@ config APP_BATTERY_MONITOR
 	  rgb_sunglasses_dk (legacy, no new features, flash budget — see
 	  fw/CLAUDE.md).
 
+config APP_POWER_DEBUG_SERVICE
+	bool "Power Debug BLE service"
+	default n
+	depends on APP_BATTERY_MONITOR
+	help
+	  Read+notify debug telemetry for the power subsystem (power plan PR
+	  E): input current limit readback (IINDPM), a power-state flag
+	  bitmask (battery/VBUS presence, DPM regulation, watchdog expiry,
+	  charge gating), the negotiated PD source type/budget, and the ICO
+	  result. Fed by the charger status thread in src/power.cpp at the
+	  reconcile cadence (~2s). Enabled on rgb_sunglasses_proto0 via its
+	  board .conf; left off on rgb_sunglasses_dk (legacy, no new
+	  features — see fw/CLAUDE.md).
+
 config APP_USB_PRODUCT_STRING
 	string "USB device product string"
 	default "RGB Sunglasses"

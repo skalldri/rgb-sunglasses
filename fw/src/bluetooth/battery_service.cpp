@@ -1,5 +1,6 @@
 #include "battery_service.h"
 
+#include <battery_soc.h>
 #include <battery_util.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <power/charger_policy.h>
@@ -14,7 +15,7 @@ LOG_MODULE_REGISTER(battery_service, LOG_LEVEL_INF);
 
 /* Service id 5 — ids 1-4 are taken by CoreConfig, AudioConfig, mcuboot_info and
  * mcuboot_updater. Characteristic UUIDs are auto-assigned in declaration order
- * (suffixes ...0000 through ...0005); the companion app's constants in
+ * (suffixes ...0000 through ...0007); the companion app's constants in
  * app/constants/bluetooth.ts must match that order. */
 constexpr bt_uuid_128 kBatteryServiceUuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 5, 0x56789abc0000));
@@ -180,9 +181,14 @@ ChargeEnableCharacteristic chargingEnabled;
 /* Position 6 — APPEND-ONLY: UUIDs are positional (suffix ...0006); the app's
  * constants must match. */
 ChargeCurrentCharacteristic chargeCurrentMa;
+/* Position 7 (suffix ...0007) — estimated state of charge from the rest-voltage
+ * curve in battery_soc.h (see its accuracy caveat). Derived in
+ * battery_service_update() so power.cpp keeps feeding raw telemetry only. */
+BtGattAutoReadNotifyCharacteristic<"Battery Percent", uint8_t, 0> batteryPercent;
 
 BtGattServer batteryServer(batteryPrimaryService, batteryVoltageMv, batteryCurrentMa, vbusVoltageMv,
-                           vbusCurrentMa, chargeStatus, chargingEnabled, chargeCurrentMa);
+                           vbusCurrentMa, chargeStatus, chargingEnabled, chargeCurrentMa,
+                           batteryPercent);
 BT_GATT_SERVER_REGISTER(batteryServerStatic, batteryServer);
 
 bool battery_service_get_charge_enable(void) { return chargingEnabled.value(); }
@@ -199,4 +205,7 @@ void battery_service_update(int32_t vbat_mv, int32_t ibat_ma, int32_t vbus_mv, i
     vbusVoltageMv    = battery_quantize(vbus_mv, 10);
     vbusCurrentMa    = battery_quantize(ibus_ma, 10);
     chargeStatus     = chg_stat;
+    /* Derived from the quantized voltage so a ±few-mV ADC jitter sitting on a
+     * curve-segment boundary can't flip the percent (and notify) every tick. */
+    batteryPercent   = battery_soc_percent(battery_quantize(vbat_mv, 10));
 }

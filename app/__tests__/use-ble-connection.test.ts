@@ -355,7 +355,7 @@ describe('useBleConnection', () => {
     it('disconnect listener cleans up monitors and calls setSelectedDevice(null)', async () => {
         const monitorRemove = jest.fn();
         const char = makeCharacteristic('char-notify', { notifiable: true });
-        char.monitor.mockReturnValue({ remove: monitorRemove });
+        char.monitor.mockReturnValue({ remove: monitorRemove, _cb: null });
         const service = makeService('svc-1', [char]);
         const deviceConn = makeDeviceConnection([service]);
         (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
@@ -401,7 +401,9 @@ describe('useBleConnection', () => {
                 (BluetoothContext.useBluetooth as jest.Mock).mockReturnValue({ ...ctx, selectedDevice: sel });
                 return useBleConnection('AA:BB:CC', 'Test Device');
             },
-            { initialProps: { sel: null } }
+            // `as any` so the rerender below can pass a device object — TS infers the
+            // props type from this initial value, not the hook param's annotation.
+            { initialProps: { sel: null as any } }
         );
 
         await act(async () => { await result.current.connect(); });

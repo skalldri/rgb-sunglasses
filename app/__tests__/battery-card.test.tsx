@@ -1,17 +1,14 @@
 import React from 'react';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { render } from '@testing-library/react-native';
 
 import { BatteryCard } from '@/components/battery-card';
 import {
-  UUID_BATTERY_CHARGE_ENABLE,
   UUID_BATTERY_CHARGE_STATUS,
-  UUID_BATTERY_CURRENT,
-  UUID_BATTERY_VBUS_CURRENT,
-  UUID_BATTERY_VBUS_VOLTAGE,
+  UUID_BATTERY_PERCENT,
   UUID_BATTERY_VOLTAGE,
 } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
-import { encodeBooleanToBase64, encodeUint32ToBase64 } from '@/services/ble-value-codec';
+import { encodeUint32ToBase64 } from '@/services/ble-value-codec';
 
 // encodeUint32ToBase64(v >>> 0) yields the two's-complement little-endian bytes the
 // firmware's int32 characteristics put on the wire — reused here as an sint32 encoder.
@@ -33,39 +30,19 @@ function charInfo(value: string, cpfFormat: number) {
   };
 }
 
-function buildDevice(fixture: {
-  vbatMv: number;
-  ibatMa: number;
-  vbusMv: number;
-  ibusMa: number;
-  chgStat: number;
-  chargeEnabled: boolean;
-}) {
+function buildDevice(characteristics: Record<string, unknown>) {
   return {
     name: 'RGB Sunglasses',
     mac: 'AA:BB:CC',
     device: {},
     services: [],
     characteristicsByService: {},
-    characteristics: {
-      [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(fixture.vbatMv), 0x10),
-      [UUID_BATTERY_CURRENT]: charInfo(sint32Value(fixture.ibatMa), 0x10),
-      [UUID_BATTERY_VBUS_VOLTAGE]: charInfo(sint32Value(fixture.vbusMv), 0x10),
-      [UUID_BATTERY_VBUS_CURRENT]: charInfo(sint32Value(fixture.ibusMa), 0x10),
-      [UUID_BATTERY_CHARGE_STATUS]: charInfo(uint8Value(fixture.chgStat), 0x04),
-      [UUID_BATTERY_CHARGE_ENABLE]: {
-        characteristic: { isWritableWithResponse: true, isWritableWithoutResponse: false },
-        value: encodeBooleanToBase64(fixture.chargeEnabled),
-        name: 'Charging Enabled',
-        cpfFormat: 0x01,
-        isUpdateInProgress: false,
-      },
-    },
+    characteristics,
     serviceCharacteristics: {},
   };
 }
 
-describe('BatteryCard', () => {
+describe('BatteryCard (slim tile)', () => {
   beforeEach(() => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
   });
@@ -74,91 +51,70 @@ describe('BatteryCard', () => {
     jest.restoreAllMocks();
   });
 
-  it('renders discharge telemetry: percentage, voltage, current, direction and power', () => {
+  it('prefers the firmware Battery Percent characteristic and shows the charge-status badge', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice: buildDevice({
-        vbatMv: 7910, // 70% on the 2S curve
-        ibatMa: -350,
-        vbusMv: 0,
-        ibusMa: 0,
-        chgStat: 0, // Not Charging
-        chargeEnabled: true,
+        // Firmware says 68%; the voltage (7910 mV = 70% on the app curve) must NOT win.
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(68), 0x04),
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(7910), 0x10),
+        [UUID_BATTERY_CHARGE_STATUS]: charInfo(uint8Value(3), 0x04), // Fast Charge (CC)
       }),
-      writeToCharacteristic: jest.fn(async () => true),
     } as any);
 
-    const { getByText, getAllByText } = render(<BatteryCard />);
+    const { getByText, queryByText } = render(<BatteryCard />);
 
-    expect(getByText('70% • 7.91 V')).toBeTruthy();
-    expect(getByText('-350 mA')).toBeTruthy();
-    expect(getByText('Discharging')).toBeTruthy();
-    expect(getByText('Not Charging')).toBeTruthy();
-    // Battery discharge power and system power are both 7.91 V × 0.35 A ≈ 2.77 W here
-    expect(getAllByText('2.77 W').length).toBe(2);
-    expect(getByText('Charging Enabled')).toBeTruthy();
+    expect(getByText('68%')).toBeTruthy();
+    expect(queryByText('70%')).toBeNull();
+    expect(getByText('Fast Charge (CC)')).toBeTruthy();
   });
 
-  it('renders charge telemetry with a Charging badge and USB-derived system power', () => {
+  it('falls back to the app-side voltage curve on firmware without Battery Percent', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice: buildDevice({
-        vbatMv: 8000,
-        ibatMa: 500,
-        vbusMv: 5000,
-        ibusMa: 1000,
-        chgStat: 3, // Fast Charge (CC)
-        chargeEnabled: true,
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(7910), 0x10), // 70% on the 2S curve
+        [UUID_BATTERY_CHARGE_STATUS]: charInfo(uint8Value(0), 0x04), // Not Charging
       }),
-      writeToCharacteristic: jest.fn(async () => true),
     } as any);
 
     const { getByText } = render(<BatteryCard />);
 
-    expect(getByText('500 mA')).toBeTruthy();
-    expect(getByText('Charging')).toBeTruthy();
-    expect(getByText('Fast Charge (CC)')).toBeTruthy();
-    // System = 5 V × 1 A − 8 V × 0.5 A = 1.00 W
-    expect(getByText('1.00 W')).toBeTruthy();
-    // Power into the battery: 8 V × 0.5 A
-    expect(getByText('4.00 W')).toBeTruthy();
+    expect(getByText('70%')).toBeTruthy();
+    expect(getByText('Not Charging')).toBeTruthy();
   });
 
-  it('writes the charging toggle through writeToCharacteristic', async () => {
-    const writeToCharacteristic = jest.fn(async () => true);
+  it('is a compact tile: no telemetry rows, only percent + status', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice: buildDevice({
-        vbatMv: 7910,
-        ibatMa: -350,
-        vbusMv: 0,
-        ibusMa: 0,
-        chgStat: 0,
-        chargeEnabled: true,
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(50), 0x04),
+        [UUID_BATTERY_CHARGE_STATUS]: charInfo(uint8Value(0), 0x04),
       }),
-      writeToCharacteristic,
     } as any);
 
-    const { getByRole } = render(<BatteryCard />);
-    fireEvent(getByRole('switch'), 'valueChange', false);
+    const { queryByText, getByText } = render(<BatteryCard />);
 
-    await waitFor(() => {
-      expect(writeToCharacteristic).toHaveBeenCalledWith(
-        UUID_BATTERY_CHARGE_ENABLE,
-        encodeBooleanToBase64(false)
-      );
-    });
+    expect(getByText('Battery')).toBeTruthy();
+    expect(getByText('50%')).toBeTruthy();
+    // The old full-card rows moved to the battery detail page.
+    expect(queryByText('System Power')).toBeNull();
+    expect(queryByText('Battery Power')).toBeNull();
+    expect(queryByText('Charging Enabled')).toBeNull();
   });
 
-  it('renders nothing without the battery voltage characteristic', () => {
+  it('is tappable and navigates to the battery detail page', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
-      selectedDevice: {
-        name: 'RGB Sunglasses',
-        mac: 'AA:BB:CC',
-        device: {},
-        services: [],
-        characteristicsByService: {},
-        characteristics: {},
-        serviceCharacteristics: {},
-      },
-      writeToCharacteristic: jest.fn(async () => true),
+      selectedDevice: buildDevice({
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(50), 0x04),
+      }),
+    } as any);
+
+    const { getByLabelText } = render(<BatteryCard />);
+    // Wrapped in <Link href="/(tabs)/device-state/battery" asChild><Pressable>.
+    expect(getByLabelText('Battery details')).toBeTruthy();
+  });
+
+  it('renders nothing without a percent characteristic or a voltage to derive one', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({}),
     } as any);
 
     const { toJSON } = render(<BatteryCard />);

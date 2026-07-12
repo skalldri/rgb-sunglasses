@@ -316,14 +316,16 @@ describe('McuMgrClient upload behavior', () => {
 
     expect(sendRequestSpy).toHaveBeenCalledTimes(2);
 
-    const firstPayload = sendRequestSpy.mock.calls[0][3];
+    // The spy is created on an `any`-typed internal, so the recorded call args
+    // come back as `unknown` under newer TS — cast for the assertions below.
+    const firstPayload = sendRequestSpy.mock.calls[0][3] as any;
     expect(firstPayload.off).toBe(0);
     expect(firstPayload.len).toBe(24);
     expect(firstPayload.image).toBe(2);
     expect(firstPayload.sha).toBeInstanceOf(Uint8Array);
     expect((firstPayload.sha as Uint8Array).length).toBe(32);
 
-    const secondPayload = sendRequestSpy.mock.calls[1][3];
+    const secondPayload = sendRequestSpy.mock.calls[1][3] as any;
     expect(secondPayload.off).toBe(16);
     expect(secondPayload.len).toBeUndefined();
     expect(secondPayload.image).toBeUndefined();
@@ -571,14 +573,21 @@ describe('McuMgrClient command wrappers', () => {
   });
 });
 
+// Named type for the SMP notification callback the mocks capture. Deliberately NOT
+// `typeof monitorCallback` on the mock param: at that expression position the variable
+// is still narrowed to its `null` initializer, so newer TypeScript resolves the typeof
+// query to `null`, every assignment then keeps the variable narrowed to `null`, and the
+// later `monitorCallback?.(...)` calls fail with "Type 'never' has no call signatures".
+type SmpMonitorCallback = (error: unknown, char: { value?: string } | null) => void;
+
 describe('McuMgrClient initialize behavior', () => {
   it('discovers SMP characteristic, starts monitor, and negotiates MTU', async () => {
     const monitorSubscription = { remove: jest.fn() };
-    let monitorCallback: ((error: unknown, char: { value?: string } | null) => void) | null = null;
+    let monitorCallback: SmpMonitorCallback | null = null;
 
     const characteristic = {
       uuid: SMP_CHARACTERISTIC_UUID,
-      monitor: jest.fn((cb: typeof monitorCallback) => {
+      monitor: jest.fn((cb: SmpMonitorCallback) => {
         monitorCallback = cb;
         return monitorSubscription;
       }),
@@ -604,16 +613,18 @@ describe('McuMgrClient initialize behavior', () => {
 
     const responsePacket = buildSmpPacket({ images: [] });
     expect(monitorCallback).not.toBeNull();
-    monitorCallback?.(null, { value: uint8ArrayToBase64(responsePacket) });
+    // Cast: TS never sees closure assignments from the outer scope, so the variable
+    // stays narrowed to its `null` initializer here (guarded by the expect above).
+    (monitorCallback as unknown as SmpMonitorCallback)(null, { value: uint8ArrayToBase64(responsePacket) });
   });
 
   it('monitor callback ignores disconnect errors and destroyed state', async () => {
     const monitorSubscription = { remove: jest.fn() };
-    let monitorCallback: ((error: unknown, char: { value?: string } | null) => void) | null = null;
+    let monitorCallback: SmpMonitorCallback | null = null;
 
     const characteristic = {
       uuid: SMP_CHARACTERISTIC_UUID,
-      monitor: jest.fn((cb: typeof monitorCallback) => {
+      monitor: jest.fn((cb: SmpMonitorCallback) => {
         monitorCallback = cb;
         return monitorSubscription;
       }),
@@ -633,9 +644,10 @@ describe('McuMgrClient initialize behavior', () => {
     await client.initialize();
     expect(monitorCallback).not.toBeNull();
 
-    monitorCallback?.({ message: 'device disconnect' }, null);
+    // Casts: same closure-assignment narrowing limitation as the test above.
+    (monitorCallback as unknown as SmpMonitorCallback)({ message: 'device disconnect' }, null);
     client.destroy();
-    monitorCallback?.(null, { value: uint8ArrayToBase64(buildSmpPacket({})) });
+    (monitorCallback as unknown as SmpMonitorCallback)(null, { value: uint8ArrayToBase64(buildSmpPacket({})) });
 
     expect(monitorSubscription.remove).toHaveBeenCalled();
   });
@@ -643,11 +655,11 @@ describe('McuMgrClient initialize behavior', () => {
   it('monitor callback rejects pending request for non-disconnect errors', async () => {
     jest.useFakeTimers();
     const monitorSubscription = { remove: jest.fn() };
-    let monitorCallback: ((error: unknown, char: { value?: string } | null) => void) | null = null;
+    let monitorCallback: SmpMonitorCallback | null = null;
 
     const characteristic = {
       uuid: SMP_CHARACTERISTIC_UUID,
-      monitor: jest.fn((cb: typeof monitorCallback) => {
+      monitor: jest.fn((cb: SmpMonitorCallback) => {
         monitorCallback = cb;
         return monitorSubscription;
       }),
@@ -678,7 +690,8 @@ describe('McuMgrClient initialize behavior', () => {
     // See the comment in the "cleans up pending responses when destroyed" test above - the
     // responseRejecter isn't set until requestChain's queued microtask runs.
     await Promise.resolve();
-    monitorCallback?.({ message: 'SMP failed' }, null);
+    // Cast: same closure-assignment narrowing limitation as the tests above.
+    (monitorCallback as unknown as SmpMonitorCallback)({ message: 'SMP failed' }, null);
     await assertion;
   });
 
