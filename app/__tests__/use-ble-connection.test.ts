@@ -105,7 +105,7 @@ describe('useBleConnection', () => {
         // exchange, see connect()'s sequencing comment), and requestMTU runs as its
         // own step afterwards rather than inline.
         expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledWith('AA:BB:CC', {
-            timeout: 15000,
+            timeout: 60000,
         });
         // MTU is negotiated as a separate post-connect step.
         expect(deviceConn.requestMTU).toHaveBeenCalledWith(247);
@@ -128,9 +128,9 @@ describe('useBleConnection', () => {
         expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(2);
         // Both attempts are barebones (link only) - the differentiators are gone.
         expect((BleHook.bleManager.connectToDevice as jest.Mock).mock.calls[0][1])
-            .toEqual({ timeout: 15000 });
+            .toEqual({ timeout: 60000 });
         expect((BleHook.bleManager.connectToDevice as jest.Mock).mock.calls[1][1])
-            .toEqual({ timeout: 15000 });
+            .toEqual({ timeout: 60000 });
         // The failed attempt's half-open native GATT client was force-closed
         // BETWEEN the attempts (else the retry queues behind it and hangs too).
         expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledTimes(1);
