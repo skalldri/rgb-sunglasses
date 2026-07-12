@@ -35,6 +35,7 @@
 #include <zephyr/logging/log.h>
 
 #include <array>
+#include <cstdlib>
 
 LOG_MODULE_REGISTER(power);
 
@@ -140,9 +141,12 @@ static void charger_status_thread_func(void *, void *, void *) {
 #else
     bool boot_charge_enable = true;
 #endif
-    /* ICHG target 0 = unmanaged — the configurable charge current lands in
-     * PR D of docs/plans/power-management-overhaul.md. */
-    charger_policy_boot_init(boot_charge_enable, 0);
+#if defined(CONFIG_APP_BATTERY_MONITOR)
+    uint32_t boot_charge_current_ma = battery_service_get_charge_current_ma();
+#else
+    uint32_t boot_charge_current_ma = CONFIG_APP_CHARGE_CURRENT_MA;
+#endif
+    charger_policy_boot_init(boot_charge_enable, boot_charge_current_ma);
 #endif /* CONFIG_APP_CHARGER_POLICY */
 
     while (true) {
@@ -306,6 +310,27 @@ static int cmd_power_bq_charge_enable(const struct shell *shell, size_t argc, ch
 }
 
 #if defined(CONFIG_APP_CHARGER_POLICY)
+static int cmd_power_bq_ichg(const struct shell *shell, size_t argc, char **argv, void *data) {
+    char *end = nullptr;
+    unsigned long ma = strtoul(argv[1], &end, 10);
+    if (end == argv[1] || *end != '\0') {
+        shell_error(shell, "usage: power bq ichg <mA>");
+        return -EINVAL;
+    }
+    // Known accepted gap (same as `power bq charge enable`): bypasses the BLE
+    // "Charge Current (mA)" characteristic, so a connected app shows a stale
+    // value until it re-reads. Debug-only; the app path is the source of truth.
+    int ret = charger_policy_set_charge_current_ma((uint32_t)ma);
+    if (ret != 0) {
+        shell_error(shell, "ICHG set failed: %d", ret);
+        return ret;
+    }
+    struct charger_policy_snapshot snap;
+    charger_policy_get_snapshot(&snap);
+    shell_print(shell, "ICHG target now %u mA (0=unmanaged)", snap.charge_current_ma);
+    return 0;
+}
+
 static int cmd_power_policy(const struct shell *shell, size_t argc, char **argv, void *data) {
     struct charger_policy_snapshot snap;
     charger_policy_get_snapshot(&snap);
@@ -581,7 +606,12 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
     SHELL_CMD(adc, &sub_adc, "Enable/Disable BQ25792 ADC", NULL),
     SHELL_CMD(pfm, &sub_pfm, "Enable/Disable BQ25792 Pulse Frequency Modulation (PFM)", NULL),
     SHELL_CMD(freq, &sub_freq, "Change BQ25792 PWM Frequency", NULL),
-    SHELL_CMD(charge, &sub_charge, "Change BQ25792 Charge Parameters", NULL), SHELL_SUBCMD_SET_END);
+    SHELL_CMD(charge, &sub_charge, "Change BQ25792 Charge Parameters", NULL),
+#if defined(CONFIG_APP_CHARGER_POLICY)
+    SHELL_CMD_ARG(ichg, NULL, "Set fast-charge current target in mA (routed through the policy)",
+                  cmd_power_bq_ichg, 2, 0),
+#endif
+    SHELL_SUBCMD_SET_END);
 // Subcommands for "power"
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_power, SHELL_CMD(pd, &sub_power_pd, "TPS25750 PD Controller Commands", NULL),

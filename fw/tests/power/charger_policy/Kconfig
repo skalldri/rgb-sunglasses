@@ -12,3 +12,7 @@ config APP_CHARGER_POLICY
 config APP_VINDPM_MV
 	int "BQ25792 input voltage limit (VINDPM) in mV (test-local redeclaration)"
 	default 4600
+
+config APP_CHARGE_CURRENT_MAX_MA
+	int "Maximum allowed fast-charge current in mA (test-local redeclaration)"
+	default 2000

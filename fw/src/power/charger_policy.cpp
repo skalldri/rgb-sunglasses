@@ -128,6 +128,15 @@ int charger_policy_set_user_charge_enable(bool enabled) {
 }
 
 int charger_policy_set_charge_current_ma(uint32_t ma) {
+    /* Backstop clamp to the build's pack/wiring ceiling — the BLE layer
+     * rejects out-of-range writes before calling here, but the shell path
+     * (and any future caller) goes through this too. */
+    if (ma > CONFIG_APP_CHARGE_CURRENT_MAX_MA) {
+        LOG_WRN("ICHG %umA clamped to CONFIG_APP_CHARGE_CURRENT_MAX_MA (%umA)", ma,
+                CONFIG_APP_CHARGE_CURRENT_MAX_MA);
+        ma = CONFIG_APP_CHARGE_CURRENT_MAX_MA;
+    }
+
     k_mutex_lock(&s_lock, K_FOREVER);
     s_charge_current_ma = ma;
 

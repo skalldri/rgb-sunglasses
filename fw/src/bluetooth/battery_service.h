@@ -25,6 +25,13 @@
 bool battery_service_get_charge_enable(void);
 
 /**
+ * @brief Returns the persisted "Charge Current (mA)" target (defaults to
+ * CONFIG_APP_CHARGE_CURRENT_MA). Same boot-ordering contract as
+ * battery_service_get_charge_enable().
+ */
+uint32_t battery_service_get_charge_current_ma(void);
+
+/**
  * @brief Publishes one battery telemetry sample to the BLE characteristics.
  *
  * Values are quantized (10 mV / 10 mA) before assignment so ADC jitter does

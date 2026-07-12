@@ -38,34 +38,55 @@ extern "C" int charger_policy_set_user_charge_enable(bool enabled) {
     return fake_set_charge_enable_result;
 }
 
+static int fake_set_charge_current_result;
+static int fake_set_charge_current_calls;
+static uint32_t fake_last_charge_current;
+
+extern "C" int charger_policy_set_charge_current_ma(uint32_t ma) {
+    fake_set_charge_current_calls++;
+    fake_last_charge_current = ma;
+    return fake_set_charge_current_result;
+}
+
 /* ---- Helpers ---- */
 
-/* Locates the writable 128-bit-UUID value attribute in the battery service —
- * only the "Charging Enabled" characteristic accepts writes (the CCC attrs are
- * 16-bit UUIDs), so this uniquely identifies it. */
-static const struct bt_gatt_attr *find_charge_enable_attr(void) {
-    const struct bt_gatt_attr *found = NULL;
+/* Locates the Nth writable 128-bit-UUID value attribute in the battery
+ * service, in declaration order (the CCC attrs are 16-bit UUIDs). Index 0 =
+ * "Charging Enabled" (position 5), index 1 = "Charge Current (mA)"
+ * (position 6) — writable characteristics appear in the same order as the
+ * BtGattServer declaration. */
+static const struct bt_gatt_attr *find_writable_attr(size_t index) {
+    size_t seen = 0;
 
     STRUCT_SECTION_FOREACH(bt_gatt_service_static, svc) {
         for (size_t i = 0; i < svc->attr_count; i++) {
             const struct bt_gatt_attr *attr = &svc->attrs[i];
             if (attr->write != NULL && attr->uuid != NULL &&
                 attr->uuid->type == BT_UUID_TYPE_128) {
-                zassert_is_null(found, "expected exactly one writable value attribute");
-                found = attr;
+                if (seen == index) {
+                    return attr;
+                }
+                seen++;
             }
         }
     }
 
-    return found;
+    return NULL;
 }
 
 static ssize_t write_charge_enable(bool enabled) {
-    const struct bt_gatt_attr *attr = find_charge_enable_attr();
+    const struct bt_gatt_attr *attr = find_writable_attr(0);
     zassert_not_null(attr, "Charging Enabled value attribute not found");
 
     uint8_t value = enabled ? 1 : 0;
     return attr->write(NULL, attr, &value, sizeof(value), 0 /* offset */, 0 /* flags */);
+}
+
+static ssize_t write_charge_current(uint32_t ma) {
+    const struct bt_gatt_attr *attr = find_writable_attr(1);
+    zassert_not_null(attr, "Charge Current value attribute not found");
+
+    return attr->write(NULL, attr, &ma, sizeof(ma), 0 /* offset */, 0 /* flags */);
 }
 
 /* settings_read_cb feeding a persisted bool into the registry's load dispatch,
@@ -85,13 +106,50 @@ static void load_persisted_charge_enable(bool value) {
 static void reset_fakes(void *) {
     fake_set_charge_enable_result = 0;
     fake_set_charge_enable_calls = 0;
+    fake_set_charge_current_result = 0;
+    fake_set_charge_current_calls = 0;
 }
 
 ZTEST_SUITE(battery_service_tests, NULL, NULL, reset_fakes, NULL, NULL);
 
 ZTEST(battery_service_tests, test_charge_enable_registered_for_persistence) {
-    /* The ChargeEnableCharacteristic constructor self-registers its settings key. */
-    zassert_equal(persistent_value_registry_count(), 1);
+    /* Both persisted characteristics self-register their settings keys. */
+    zassert_equal(persistent_value_registry_count(), 2);
+}
+
+ZTEST(battery_service_tests, test_charge_current_in_range_applies_and_persists) {
+    ssize_t ret = write_charge_current(1200);
+
+    zassert_equal(ret, 4, "successful write must return the payload length, got %zd", ret);
+    zassert_equal(fake_set_charge_current_calls, 1);
+    zassert_equal(fake_last_charge_current, 1200);
+    zassert_equal(battery_service_get_charge_current_ma(), 1200);
+}
+
+ZTEST(battery_service_tests, test_charge_current_out_of_range_rejected) {
+    uint32_t before = battery_service_get_charge_current_ma();
+
+    /* Above CONFIG_APP_CHARGE_CURRENT_MAX_MA (2000): rejected, never applied. */
+    ssize_t ret = write_charge_current(3000);
+    zassert_equal(ret, BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED));
+    zassert_equal(fake_set_charge_current_calls, 0, "out-of-range must not reach the policy");
+    zassert_equal(battery_service_get_charge_current_ma(), before, "storage must roll back");
+
+    /* Below the 50mA ICHG floor: same. */
+    ret = write_charge_current(10);
+    zassert_equal(ret, BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED));
+    zassert_equal(fake_set_charge_current_calls, 0);
+}
+
+ZTEST(battery_service_tests, test_charge_current_policy_failure_rejects_and_rolls_back) {
+    uint32_t before = battery_service_get_charge_current_ma();
+
+    fake_set_charge_current_result = -EIO;
+    ssize_t ret = write_charge_current(1000);
+
+    zassert_equal(ret, BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED));
+    zassert_equal(fake_set_charge_current_calls, 1, "the policy write must have been attempted");
+    zassert_equal(battery_service_get_charge_current_ma(), before, "storage must roll back");
 }
 
 /* The boot-time EN_CHG apply moved into charger_policy_boot_init() (which has
