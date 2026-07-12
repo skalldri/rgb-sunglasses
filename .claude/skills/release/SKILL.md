@@ -140,7 +140,9 @@ git tag mcuboot-v<version>  <commit> && git push origin mcuboot-v<version>
 - The app release runs **four** jobs: `test` and `version` (a fast ubuntu job
   that derives the shared version/build number and validates the collision
   guard), then `release` (Android, ubuntu) and `ios-testflight` (self-hosted
-  Mac) in parallel — neither release job gates the other. The iOS job may sit
+  Mac) in parallel — neither release job gates the other. `ios-testflight`
+  shows as *skipped* when the `TESTFLIGHT_PUBLISH_ENABLED` repo variable isn't
+  `true` — the intentional pause switch, not a failure. The iOS job may sit
   queued behind an in-flight `app-ios-ci.yml` run
   (single Mac runner; the merge to `main` that preceded the tag typically
   triggers one). After the iOS job goes green, Apple keeps "Processing" the
