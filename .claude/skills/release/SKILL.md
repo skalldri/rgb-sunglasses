@@ -37,8 +37,9 @@ rejects any re-upload of an already-used (version, buildNumber) pair — even if
 the build was expired or deleted. So once the "Upload to TestFlight" step of a
 tag's run has **succeeded**, that tag can never be re-released: fix forward and
 bump the patch version. Delete-and-re-push is only safe when the iOS job failed
-*before* its upload step (manual `workflow_dispatch` builds use build numbers
-1–9999, which can't collide with the tag formula since releases are ≥ 1.0.0).
+*before* its upload step. The workflow's `version` job enforces the collision
+guard: manual `workflow_dispatch` builds must use 1–9999 and tags must be
+≥ 1.0.0 (tag-derived numbers are always ≥ 10000), so the two ranges can't meet.
 
 Follow this process exactly. Do not push any tag until the user has approved the
 version and the release notes.
@@ -136,9 +137,11 @@ git tag mcuboot-v<version>  <commit> && git push origin mcuboot-v<version>
   job. The firmware job runs its two pristine NCS builds sequentially (DK first,
   then proto0), so a proto0-only build failure surfaces only after the DK build
   finishes, ~5 min in.
-- The app release runs **three** jobs: `test`, then `release` (Android, ubuntu)
-  and `ios-testflight` (self-hosted Mac) in parallel — neither release job gates
-  the other. The iOS job may sit queued behind an in-flight `app-ios-ci.yml` run
+- The app release runs **four** jobs: `test` and `version` (a fast ubuntu job
+  that derives the shared version/build number and validates the collision
+  guard), then `release` (Android, ubuntu) and `ios-testflight` (self-hosted
+  Mac) in parallel — neither release job gates the other. The iOS job may sit
+  queued behind an in-flight `app-ios-ci.yml` run
   (single Mac runner; the merge to `main` that preceded the tag typically
   triggers one). After the iOS job goes green, Apple keeps "Processing" the
   build for ~5–30 min before it reaches internal testers.

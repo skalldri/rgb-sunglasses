@@ -7,8 +7,11 @@ name: App Release
 # A tag push produces BOTH release artifacts in parallel:
 #   - release:        signed Android APK attached to a GitHub Release
 #   - ios-testflight: signed iOS build uploaded to TestFlight
-# The two jobs are independent (both need only `test`) so a failure on one
-# platform never blocks the other.
+# The two jobs are independent (both need only `test` + `version`) so a
+# failure on one platform never blocks the other. The shared `version` job is
+# the single source of truth for the release version and the derived build
+# number — the same value serves as the Android versionCode and the iOS
+# buildNumber, so the two platforms can never disagree for a given tag.
 #
 # `workflow_dispatch` exists for iOS-only manual builds (first TestFlight
 # upload, pipeline validation) without cutting a release — it skips the
@@ -29,7 +32,7 @@ on:
         description: "Version (X.Y.Z) for a manual TestFlight-only build"
         required: true
       build_number:
-        description: "iOS build number — use 1-9999 for manual builds; tag builds derive >=10000 and each (version, build number) pair can only ever be uploaded to TestFlight once"
+        description: "iOS build number, 1-9999 (enforced; tag builds derive >=10000, and each (version, build number) pair can only ever be uploaded to TestFlight once)"
         required: true
 
 defaults:
@@ -55,9 +58,63 @@ jobs:
       - name: Run tests
         run: npm test -- --ci
 
+  # Single source of truth for the version string and the derived build
+  # number (Android versionCode == iOS buildNumber). Runs on ubuntu so bad
+  # inputs fail fast without ever occupying the shared Mac runner.
+  #
+  # Build-number partition: tag builds use MAJOR*10000 + MINOR*100 + PATCH
+  # (monotonic, derivable from the tag, always >= 10000 because MAJOR >= 1 is
+  # enforced below); manual dispatch builds are restricted to 1-9999 so the
+  # two ranges can never collide. TestFlight permanently consumes each
+  # (version, buildNumber) pair — even for deleted builds — so a collision
+  # would make the later upload fail forever. Both sides of the partition are
+  # enforced here, not just documented.
+  version:
+    name: Resolve version and build number
+    runs-on: ubuntu-latest
+    # No checkout — this job only parses strings, so run from the workspace
+    # root instead of the (nonexistent without checkout) app/ directory.
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      build_number: ${{ steps.resolve.outputs.build_number }}
+    steps:
+      - name: Resolve from tag or dispatch inputs
+        id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+            BUILD_NUMBER="$INPUT_BUILD_NUMBER"
+            echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              || { echo "::error::version must be X.Y.Z, got '$VERSION'"; exit 1; }
+            # 1-9999, no leading zeros: keeps manual builds out of the
+            # tag-derived range (>= 10000) and rejects values Apple refuses
+            # (0, leading-zero strings).
+            echo "$BUILD_NUMBER" | grep -Eq '^[1-9][0-9]{0,3}$' \
+              || { echo "::error::build_number must be 1-9999 (no leading zeros) for manual builds, got '$BUILD_NUMBER'"; exit 1; }
+          else
+            # Strip the app-v prefix (e.g. app-v1.2.3 -> 1.2.3)
+            VERSION="${GITHUB_REF_NAME#app-v}"
+            MAJOR=$(echo "$VERSION" | cut -d. -f1)
+            MINOR=$(echo "$VERSION" | cut -d. -f2)
+            PATCH=$(echo "$VERSION" | cut -d. -f3)
+            # The partition above assumes MAJOR >= 1; a 0.x.y tag would land
+            # in the manual range and could collide with a prior manual build.
+            [ "$MAJOR" -ge 1 ] \
+              || { echo "::error::app-v0.x.y tags are not supported (tag-derived build numbers must be >= 10000)"; exit 1; }
+            BUILD_NUMBER=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+
   release:
     name: Build and Publish Android APK
-    needs: test
+    needs: [test, version]
     # Manual dispatches are for iOS-only TestFlight builds — don't create a
     # GitHub Release for them.
     if: github.event_name == 'push'
@@ -83,23 +140,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Extract version from tag
-        id: version
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          # Strip the app-v prefix (e.g. app-v1.2.3 -> 1.2.3)
-          VERSION="${TAG#app-v}"
-          MAJOR=$(echo "$VERSION" | cut -d. -f1)
-          MINOR=$(echo "$VERSION" | cut -d. -f2)
-          PATCH=$(echo "$VERSION" | cut -d. -f3)
-          VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
-
       - name: Set version in app.json
         run: |
-          jq --arg v "${{ steps.version.outputs.version }}" \
-             --argjson vc ${{ steps.version.outputs.version_code }} \
+          jq --arg v "${{ needs.version.outputs.version }}" \
+             --argjson vc ${{ needs.version.outputs.build_number }} \
              '.expo.version = $v | .expo.android.versionCode = $vc' \
              app.json > app.json.tmp && mv app.json.tmp app.json
 
@@ -130,7 +174,7 @@ jobs:
       - name: Rename APK
         run: |
           mv android/app/build/outputs/apk/release/app-release.apk \
-             android/app/build/outputs/apk/release/rgb-sunglasses-${{ steps.version.outputs.version }}.apk
+             android/app/build/outputs/apk/release/rgb-sunglasses-${{ needs.version.outputs.version }}.apk
 
       - name: Generate APK download QR code
         run: |
@@ -139,9 +183,9 @@ jobs:
           sudo rm -rf /var/lib/apt/lists/*
           # The asset isn't uploaded yet, but a release asset's download URL is
           # deterministic from the repo + tag + filename, so we can encode it now.
-          APK_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ steps.version.outputs.version }}.apk"
+          APK_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ needs.version.outputs.version }}.apk"
           qrencode -s 8 -m 2 \
-            -o android/app/build/outputs/apk/release/rgb-sunglasses-${{ steps.version.outputs.version }}-qr.png \
+            -o android/app/build/outputs/apk/release/rgb-sunglasses-${{ needs.version.outputs.version }}-qr.png \
             "$APK_URL"
 
       - name: Create GitHub Release
@@ -157,13 +201,13 @@ jobs:
 
             Scan to download the APK:
 
-            ![Download QR code](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ steps.version.outputs.version }}-qr.png)
+            ![Download QR code](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ needs.version.outputs.version }}-qr.png)
 
-            [Direct download: rgb-sunglasses-${{ steps.version.outputs.version }}.apk](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ steps.version.outputs.version }}.apk)
+            [Direct download: rgb-sunglasses-${{ needs.version.outputs.version }}.apk](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/rgb-sunglasses-${{ needs.version.outputs.version }}.apk)
 
   ios-testflight:
     name: Build and Upload to TestFlight
-    needs: test
+    needs: [test, version]
     runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: read
@@ -201,39 +245,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Resolve version and build number
-        id: version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_BUILD_NUMBER: ${{ inputs.build_number }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            VERSION="$INPUT_VERSION"
-            BUILD_NUMBER="$INPUT_BUILD_NUMBER"
-            echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
-              || { echo "::error::version must be X.Y.Z, got '$VERSION'"; exit 1; }
-            echo "$BUILD_NUMBER" | grep -Eq '^[0-9]+$' \
-              || { echo "::error::build_number must be an integer, got '$BUILD_NUMBER'"; exit 1; }
-          else
-            VERSION="${GITHUB_REF_NAME#app-v}"
-            MAJOR=$(echo "$VERSION" | cut -d. -f1)
-            MINOR=$(echo "$VERSION" | cut -d. -f2)
-            PATCH=$(echo "$VERSION" | cut -d. -f3)
-            # Same formula as the Android versionCode: monotonic and derivable
-            # from the tag. TestFlight permanently consumes each
-            # (version, buildNumber) pair, so re-pushing a tag whose upload
-            # already succeeded will fail — bump the patch version instead.
-            BUILD_NUMBER=$((MAJOR * 10000 + MINOR * 100 + PATCH))
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
-
       - name: Set version in app.json
         run: |
           # ios.buildNumber is a string in the Expo schema (unlike the numeric
           # android.versionCode), hence --arg for both.
-          jq --arg v "${{ steps.version.outputs.version }}" \
-             --arg bn "${{ steps.version.outputs.build_number }}" \
+          jq --arg v "${{ needs.version.outputs.version }}" \
+             --arg bn "${{ needs.version.outputs.build_number }}" \
              '.expo.version = $v | .expo.ios.buildNumber = $bn' \
              app.json > app.json.tmp && mv app.json.tmp app.json
 
@@ -273,6 +290,9 @@ jobs:
           </plist>
           EOF
 
+      # -derivedDataPath keeps intermediates out of the default
+      # ~/Library/Developer/Xcode/DerivedData, which nothing would ever clean
+      # on this persistent runner — the cleanup step removes this one.
       - name: Archive (Release, cloud signing)
         run: |
           set -o pipefail
@@ -282,6 +302,7 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/RGBSunglasses.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/asc_api_key.p8" \
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
@@ -291,32 +312,32 @@ jobs:
 
       # Export the .ipa to disk first (destination=export) so we always have a
       # debuggable artifact, and so a broken archive fails here rather than
-      # mid-upload.
+      # mid-upload. -exportPath is relative to the app/ working directory, so
+      # the .ipa lands where upload-artifact expects it.
       - name: Export .ipa
         run: |
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/RGBSunglasses.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
-            -exportPath "$RUNNER_TEMP/export" \
+            -exportPath ios-export \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/asc_api_key.p8" \
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
-          # Stage the .ipa inside the workspace so upload-artifact (which
-          # resolves paths repo-relative) can pick it up.
-          mkdir -p ios-export
-          cp "$RUNNER_TEMP"/export/*.ipa ios-export/
 
       - name: Upload .ipa artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rgb-sunglasses-ios-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_number }}
+          name: rgb-sunglasses-ios-${{ needs.version.outputs.version }}-${{ needs.version.outputs.build_number }}
           path: app/ios-export/*.ipa
           retention-days: 14
 
       # A second exportArchive of the same archive with destination=upload
       # sends the build straight to App Store Connect / TestFlight. This is
-      # the supported first-party CLI upload path (altool is deprecated).
+      # the supported first-party CLI upload path (altool is deprecated). The
+      # re-export costs ~1-2 min on top of the archive; the tradeoff buys the
+      # retained .ipa artifact above and export failures surfacing before any
+      # upload starts.
       - name: Upload to TestFlight
         run: |
           plutil -replace destination -string upload "$RUNNER_TEMP/exportOptions.plist"
@@ -334,5 +355,5 @@ jobs:
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/asc_api_key.p8" "$RUNNER_TEMP/exportOptions.plist"
-          rm -rf "$RUNNER_TEMP/RGBSunglasses.xcarchive" "$RUNNER_TEMP/export"
-          rm -rf ios-export ios/build
+          rm -rf "$RUNNER_TEMP/RGBSunglasses.xcarchive" "$RUNNER_TEMP/DerivedData"
+          rm -rf ios-export

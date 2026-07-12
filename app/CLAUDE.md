@@ -100,9 +100,11 @@ automatic signing + `xcodebuild -allowProvisioningUpdates` authenticated by an A
 API key (secrets `ASC_API_KEY_P8` base64 / `ASC_KEY_ID` / `ASC_ISSUER_ID`; the non-sensitive Team
 ID is the repo *variable* `APPLE_TEAM_ID`) — no distribution .p12 or keychain setup on the runner.
 Upload is a second `xcodebuild -exportArchive` with `destination: upload` in the exportOptions
-plist (`altool` is deprecated). `ios.buildNumber` is injected at build time: tag builds use the
-Android versionCode formula (`MAJOR*10000 + MINOR*100 + PATCH`, so ≥ 10000), manual dispatch builds
-use 1–9999. **TestFlight permanently consumes each (version, buildNumber) pair** — never re-push an
+plist (`altool` is deprecated). `ios.buildNumber` is injected at build time by a shared `version`
+job (single source of truth — the same value is the Android versionCode): tag builds use
+`MAJOR*10000 + MINOR*100 + PATCH` (≥ 10000; the job rejects 0.x.y tags), manual dispatch builds
+must be 1–9999 (enforced, so the ranges can't collide). **TestFlight permanently consumes each
+(version, buildNumber) pair** — never re-push an
 app tag whose TestFlight upload succeeded; bump patch instead (see the release skill). Export
 compliance is pre-answered by `ios.infoPlist.ITSAppUsesNonExemptEncryption: false` in `app.json`
 (the app uses only standard OS encryption), so builds go straight to internal testers after Apple's
