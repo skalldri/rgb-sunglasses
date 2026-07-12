@@ -47,6 +47,23 @@ int emul_tps25750_get_bq_reg(const struct emul *target, uint8_t reg, uint8_t *ou
 int emul_tps25750_set_bq_reg(const struct emul *target, uint8_t reg, const uint8_t *in,
                              size_t count);
 
+/* Seed the emulated BQ25792 register file with the datasheet power-on-reset
+ * values for the registers the drivers touch (ICHG=2A, VINDPM=3600mV,
+ * IINDPM=3000mA, REG0F=0xA2 incl. EN_CHG=1, REG10=0x05 incl. WATCHDOG=40s) —
+ * so read-modify-write driver behavior is exercised against realistic
+ * contents instead of zeros. Other registers are zeroed.
+ */
+void emul_tps25750_bq_por_defaults(const struct emul *target);
+
+/* Seed a PD-status host register (TX_SINK_CAPS 0x33, ACTIVE_CONTRACT_PDO
+ * 0x34, ACTIVE_CONTRACT_RDO 0x35, POWER_STATUS 0x3F, PD_STATUS 0x40) with a
+ * raw payload (no byte-count prefix — the emulator prepends it on read).
+ * Shorter payloads zero-fill the remainder. -EINVAL for other registers or
+ * oversized payloads.
+ */
+int emul_tps25750_set_host_reg(const struct emul *target, uint8_t reg, const uint8_t *payload,
+                               size_t len);
+
 /* How long CMD1 stays busy (reads back the pending 4CC) after a command is
  * written, before the task executes and CMD1 clears to NUL. Default 0
  * (executes on the first status poll). A nonzero delay forces callers into

@@ -72,6 +72,16 @@ struct emul_tps25750_data {
 
     uint8_t armed_i2cm_status; /* one-shot nonzero DATA1 status byte */
 
+    /* PD-status host registers (TX_SINK_CAPS, ACTIVE_CONTRACT_PDO/RDO,
+     * POWER_STATUS, PD_STATUS), stored as raw payloads (no byte-count
+     * prefix); reg_read prepends the count. Seeded by tests via
+     * emul_tps25750_set_host_reg(). */
+    uint8_t tx_sink_caps[TPS25750_REG_TX_SINK_CAPS_SIZE];
+    uint8_t active_contract_pdo[TPS25750_REG_ACTIVE_CONTRACT_PDO_SIZE];
+    uint8_t active_contract_rdo[TPS25750_REG_ACTIVE_CONTRACT_RDO_SIZE];
+    uint8_t power_status[TPS25750_REG_POWER_STATUS_SIZE];
+    uint8_t pd_status[TPS25750_REG_PD_STATUS_SIZE];
+
     /* Patch download state + stats (preserved across emul_tps25750_reset). */
     bool patch_receiving;
     struct emul_tps25750_patch_stats patch_stats;
@@ -203,8 +213,39 @@ static void poll_cmd1(struct emul_tps25750_data *data) {
 
 /* ---- host-interface register reads/writes ---- */
 
+/* Map a PD-status register address to its payload store, or NULL. */
+static uint8_t *host_reg_store(struct emul_tps25750_data *data, uint8_t reg, uint8_t *len) {
+    switch (reg) {
+        case TPS25750_REG_TX_SINK_CAPS_ADDR:
+            *len = TPS25750_REG_TX_SINK_CAPS_SIZE;
+            return data->tx_sink_caps;
+        case TPS25750_REG_ACTIVE_CONTRACT_PDO_ADDR:
+            *len = TPS25750_REG_ACTIVE_CONTRACT_PDO_SIZE;
+            return data->active_contract_pdo;
+        case TPS25750_REG_ACTIVE_CONTRACT_RDO_ADDR:
+            *len = TPS25750_REG_ACTIVE_CONTRACT_RDO_SIZE;
+            return data->active_contract_rdo;
+        case TPS25750_REG_POWER_STATUS_ADDR:
+            *len = TPS25750_REG_POWER_STATUS_SIZE;
+            return data->power_status;
+        case TPS25750_REG_PD_STATUS_ADDR:
+            *len = TPS25750_REG_PD_STATUS_SIZE;
+            return data->pd_status;
+        default:
+            return NULL;
+    }
+}
+
 static int reg_read(struct emul_tps25750_data *data, uint8_t reg, uint8_t *buf, size_t len) {
     memset(buf, 0, len);
+
+    uint8_t store_len = 0;
+    const uint8_t *store = host_reg_store(data, reg, &store_len);
+    if (store != NULL) {
+        buf[0] = store_len;
+        memcpy(&buf[1], store, MIN(len - 1, (size_t)store_len));
+        return 0;
+    }
 
     switch (reg) {
         case TPS25750_REG_MODE_ADDR:
@@ -325,7 +366,51 @@ void emul_tps25750_reset(const struct emul *target) {
     memset(data->cmd1, 0, sizeof(data->cmd1));
     memset(data->data1, 0, sizeof(data->data1));
     memset(data->bq_regs, 0, sizeof(data->bq_regs));
+    memset(data->tx_sink_caps, 0, sizeof(data->tx_sink_caps));
+    memset(data->active_contract_pdo, 0, sizeof(data->active_contract_pdo));
+    memset(data->active_contract_rdo, 0, sizeof(data->active_contract_rdo));
+    memset(data->power_status, 0, sizeof(data->power_status));
+    memset(data->pd_status, 0, sizeof(data->pd_status));
     /* mode + patch_stats intentionally preserved (boot-time artifacts). */
+}
+
+int emul_tps25750_set_host_reg(const struct emul *target, uint8_t reg, const uint8_t *payload,
+                               size_t len) {
+    struct emul_tps25750_data *data = target->data;
+
+    uint8_t store_len = 0;
+    uint8_t *store = host_reg_store(data, reg, &store_len);
+    if (store == NULL || len > store_len) {
+        return -EINVAL;
+    }
+    memset(store, 0, store_len);
+    memcpy(store, payload, len);
+    return 0;
+}
+
+void emul_tps25750_bq_por_defaults(const struct emul *target) {
+    struct emul_tps25750_data *data = target->data;
+
+    memset(data->bq_regs, 0, sizeof(data->bq_regs));
+
+    /* BQ25792 power-on-reset values for the registers the drivers touch,
+     * per datasheet SLUSDG1C section 9.5.1 (multi-byte values stored
+     * big-endian, matching the wire format):
+     * - REG03/04 ICHG      = 200 (2A for 1s/2s PROG strap; Table 9-16)
+     * - REG05    VINDPM    = 0x24 (3600mV; Table 9-17)
+     * - REG06/07 IINDPM    = 0x12C (3000mA; Table 9-18)
+     * - REG0F    Control_0 = 0xA2 (EN_AUTO_IBATDIS|EN_CHG|EN_TERM; Table 9-25)
+     * - REG10    Control_1 = 0x05 (WATCHDOG=101b 40s, VAC_OVP=00b; Table 9-26
+     *   field PORs — note the register-level reset annotation disagrees with
+     *   the field table in the datasheet; hardware readback pending)
+     */
+    data->bq_regs[0x03] = 0x00;
+    data->bq_regs[0x04] = 0xC8; /* 200 LSBs of 10mA = 2A */
+    data->bq_regs[0x05] = 0x24;
+    data->bq_regs[0x06] = 0x01;
+    data->bq_regs[0x07] = 0x2C;
+    data->bq_regs[0x0F] = 0xA2;
+    data->bq_regs[0x10] = 0x05;
 }
 
 int emul_tps25750_get_bq_reg(const struct emul *target, uint8_t reg, uint8_t *out, size_t count) {

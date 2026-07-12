@@ -288,8 +288,119 @@ static int cmd_power_bq_status(const struct shell *shell, size_t argc, char **ar
     return 0;
 }
 
+static int cmd_power_bq_limits(const struct shell *shell, size_t argc, char **argv, void *data) {
+    // Read-only diagnostic: the whole picture for the "charging too slow"
+    // class of symptom — which DPM limit is engaged, what the limit registers
+    // actually contain (and thus who programmed them), and whether the I2C
+    // watchdog has been expiring behind our back.
+    struct bq25792_limits limits;
+    int ret = bq25792_get_limits(bq, &limits);
+    if (ret) {
+        shell_error(shell, "bq25792_get_limits failed: %d", ret);
+        return ret;
+    }
+
+    struct bq25792_status st;
+    ret = bq25792_get_status(bq, &st);
+    if (ret) {
+        shell_error(shell, "bq25792_get_status failed: %d", ret);
+        return ret;
+    }
+
+    /* REG10 field encodings, datasheet SLUSDG1C Table 9-26 */
+    static const char *const kWatchdog[] = {"disabled", "0.5s", "1s",  "2s",
+                                            "20s",      "40s",  "80s", "160s"};
+    static const char *const kVacOvp[] = {"26V", "18V", "12V", "7V"};
+
+    shell_print(shell, "ICHG=%u mA  IINDPM=%u mA  VINDPM=%u mV  ICO_ILIM=%u mA", limits.ichg_ma,
+                limits.iindpm_ma, limits.vindpm_mv, limits.ico_ilim_ma);
+    shell_print(shell, "WATCHDOG=%s  VAC_OVP=%s", kWatchdog[limits.watchdog & 0x7],
+                kVacOvp[limits.vac_ovp & 0x3]);
+    shell_print(shell, "IINDPM_STAT=%u VINDPM_STAT=%u WD_STAT=%u POORSRC=%u PG=%u VBUS_PRESENT=%u",
+                st.iindpm_active ? 1 : 0, st.vindpm_active ? 1 : 0, st.wd_expired ? 1 : 0,
+                st.poor_source ? 1 : 0, st.power_good ? 1 : 0, st.vbus_present ? 1 : 0);
+    shell_print(shell, "CHG_STAT=%u  VBUS_STAT=%u (%s)  BC1.2_DONE=%u", st.chg_stat, st.vbus_stat,
+                bq25792_vbus_stat_str(st.vbus_stat), st.bc12_done ? 1 : 0);
+    shell_print(shell, "ICO_STAT=%u TREG=%u DPDM_ONGOING=%u VBAT_PRESENT=%u VSYSMIN_REG=%u",
+                st.ico_stat, st.thermal_regulation ? 1 : 0, st.dpdm_ongoing ? 1 : 0,
+                st.vbat_present ? 1 : 0, st.vsysmin_regulation ? 1 : 0);
+
+    int32_t vsys_mv = 0;
+    ret = bq25792_get_vsys_mv(bq, &vsys_mv);
+    if (ret) {
+        shell_warn(shell, "VSYS read failed: %d (ADC enabled?)", ret);
+    } else {
+        shell_print(shell, "VSYS=%d mV", vsys_mv);
+    }
+
+    // Legacy getters always return 0 for non-null args and swallow I2C errors
+    // (fw/CLAUDE.md power-subsystem caveat) — a failed read shows as 0/stale.
+    int32_t vbat_mv = 0, ibat_ma = 0, vbus_mv = 0, ibus_ma = 0;
+    bq25792_get_vbat_mv(bq, &vbat_mv);
+    bq25792_get_ibat_ma(bq, &ibat_ma);
+    bq25792_get_vbus_mv(bq, &vbus_mv);
+    bq25792_get_ibus_ma(bq, &ibus_ma);
+    shell_print(shell, "VBAT=%d mV IBAT=%d mA VBUS=%d mV IBUS=%d mA", vbat_mv, ibat_ma, vbus_mv,
+                ibus_ma);
+
+    return 0;
+}
+
 static int cmd_power_pd_dump(const struct shell *shell, size_t argc, char **argv, void *data) {
     tps25750_dump(pd);
+    return 0;
+}
+
+static int cmd_power_pd_contract(const struct shell *shell, size_t argc, char **argv, void *data) {
+    // Read-only diagnostic: what input power budget did the TPS25750 actually
+    // negotiate, and what could it negotiate (advertised sink caps)?
+    struct tps25750_pd_power_info info;
+    int ret = tps25750_get_pd_power_info(pd, &info);
+    if (ret) {
+        shell_error(shell, "tps25750_get_pd_power_info failed: %d", ret);
+        return ret;
+    }
+
+    static const char *const kSource[] = {
+        "none",       "Type-C default (500mA)",  "Type-C 1.5A",
+        "Type-C 3.0A", "explicit PD contract",   "unknown/undecoded contract",
+    };
+    shell_print(shell, "connected=%u sinking=%u source=%s", info.connected ? 1 : 0,
+                info.sinking ? 1 : 0, kSource[info.source]);
+    shell_print(shell, "available: %u mV @ %u mA (%u mW)", info.available_mv, info.available_ma,
+                (uint32_t)(((uint64_t)info.available_mv * info.available_ma) / 1000));
+    shell_print(shell, "raw: POWER_STATUS=0x%04x PDO=0x%08x RDO=0x%08x", info.raw_power_status,
+                info.raw_pdo, info.raw_rdo);
+
+    uint32_t pd_status = 0;
+    ret = tps25750_read_pd_status(pd, &pd_status);
+    if (ret == 0) {
+        /* CCPullUp bits 3:2 (TRM Table 2-35): 0 none / 1 default / 2 1.5A / 3 3.0A */
+        static const char *const kCcPullUp[] = {"none", "default", "1.5A", "3.0A"};
+        shell_print(shell, "PD_STATUS=0x%08x (role=%s, CCPullUp=%s)", pd_status,
+                    (pd_status & BIT(6)) ? "source" : "sink", kCcPullUp[(pd_status >> 2) & 0x3]);
+    } else {
+        shell_warn(shell, "PD_STATUS read failed: %d", ret);
+    }
+
+    uint32_t sink_pdos[7] = {0};
+    uint8_t num_pdos = 0;
+    ret = tps25750_read_tx_sink_caps(pd, sink_pdos, ARRAY_SIZE(sink_pdos), &num_pdos);
+    if (ret == 0) {
+        shell_print(shell, "advertised sink caps: %u PDO(s)", num_pdos);
+        for (uint8_t i = 0; i < MIN(num_pdos, (uint8_t)ARRAY_SIZE(sink_pdos)); i++) {
+            uint32_t pdo = sink_pdos[i];
+            if ((pdo >> 30) == 0x0) {
+                shell_print(shell, "  [%u] fixed: %u mV @ %u mA (raw 0x%08x)", i,
+                            ((pdo >> 10) & 0x3FF) * 50, (pdo & 0x3FF) * 10, pdo);
+            } else {
+                shell_print(shell, "  [%u] non-fixed PDO (raw 0x%08x)", i, pdo);
+            }
+        }
+    } else {
+        shell_warn(shell, "TX_SINK_CAPS read failed: %d", ret);
+    }
+
     return 0;
 }
 
@@ -375,6 +486,9 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_patch, cmd_power_pd_patch, (low_region, 1, "low
 // Subcommands for "power pd"
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_power_pd, SHELL_CMD(dump, NULL, "Dump TPS25750 Registers to console", cmd_power_pd_dump),
+    SHELL_CMD(contract, NULL,
+              "Print negotiated PD contract / Type-C budget + advertised sink caps (read-only)",
+              cmd_power_pd_contract),
     SHELL_CMD(clear_dbfg, NULL, "Clear TPS25750 dead battery flag",
               cmd_power_pd_clear_dead_battery),
     SHELL_CMD(patch, &sub_patch, "Download TPS25750 firmware patch", NULL), SHELL_SUBCMD_SET_END);
@@ -407,6 +521,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_power_bq, SHELL_CMD(dump, NULL, "Dump BQ25792 Registers to console", cmd_power_bq_dump),
     SHELL_CMD(status, NULL, "Print battery/VBUS voltage, current, charge status and EN_CHG",
               cmd_power_bq_status),
+    SHELL_CMD(limits, NULL,
+              "Print ICHG/IINDPM/VINDPM/ICO/watchdog readbacks + DPM status flags (read-only)",
+              cmd_power_bq_limits),
     SHELL_CMD(temp_override, &sub_temp_override, "Override BQ25792 battery temperature monitoring",
               NULL),
     SHELL_CMD(adc, &sub_adc, "Enable/Disable BQ25792 ADC", NULL),

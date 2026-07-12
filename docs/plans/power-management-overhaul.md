@@ -32,9 +32,11 @@ BQ25792 §9.3.6 (PDF p.34): with **charge enabled and no battery**, the charger 
 - **BQ I2C watchdog** (REG10[2:0], POR **40s**, p.68) is never fed/disabled by us. On expiry, watchdog-scoped registers revert to POR (ICHG→2A, EN_CHG→enabled). TPS-bundle writes incidentally reset the timer, so real on-board state over time is unknown until measured (`WD_STAT` REG1B[5]).
 - TRM p.60: TPS event-driven charger writes and host `I2Cw` writes **share one queue**; TI mandates read-back verification of host writes.
 
-### Latent bug found during design review (verified in source)
+### Latent bugs found during design review / PR A implementation (all fixed in PR A)
 
-`fw/include/zephyr/drivers/InternalDeviceRegister.hpp` — `read()` byte-swaps 16/32-bit registers from the BQ's big-endian wire format, but `flush()` (line ~211, literal `// TODO: probably also need endian-swapping logic here`) writes host-order raw. Dormant because every existing write is 8-bit; **ICHG (REG03) and IINDPM (REG06) are 16-bit** — writing them today would program byte-swapped garbage. Fixing `flush()` symmetry is task zero.
+- `fw/include/zephyr/drivers/InternalDeviceRegister.hpp` — `read()` byte-swaps 16/32-bit registers from the BQ's big-endian wire format, but `flush()` (literal `// TODO: probably also need endian-swapping logic here`) wrote host-order raw. Dormant because every existing write was 8-bit; **ICHG (REG03) and IINDPM (REG06) are 16-bit** — writing them through the unfixed path would have programmed byte-swapped garbage. Covered by a 16-bit round-trip regression test against the (wire-order) emulator register file.
+- `fw/drivers/bq25792/bq25792_priv.h` — `BC1_2_DONE_STAT` was declared at REG1C bit 1 (aliasing VBUS_STAT's LSB); datasheet Table 9-37 puts it at bit 0.
+- `fw/drivers/bq25792/bq25792_priv.h` — `WATCHDOG` was declared 2 bits wide; Table 9-26 says WATCHDOG_2:0 = bits 2:0 (3 bits). A "disable" (write 0) through the 2-bit field would have left bit 2 set — **watchdog still armed at the 20s setting**, silently reverting charger config. Caught by the new emulator tests.
 
 ## Hardware experiments (designed first, per user request — run before behavior fixes)
 
