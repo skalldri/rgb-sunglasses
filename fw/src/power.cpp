@@ -144,17 +144,19 @@ static StatusColor charging_soc_color(uint8_t percent) {
 /**
  * @brief Status LED color while running on battery (NotCharging), by the same
  * percent helper. Three bands, preserving the pre-SOC-refactor color scheme
- * (formerly hardcoded as >=7700 mV Green / >=7350 mV Orange / else Red —
- * roughly the 50%/25% boundaries on the battery_soc.h curve).
+ * EXACTLY: the legacy thresholds >=7700 mV Green / >=7350 mV Orange / else
+ * Red map to ~55% and ~10% on the battery_soc.h curve (7710 mV = 55%,
+ * 7370 mV = 10%) — NOT 50%/25%, which would show Red in the 7350-7489 mV
+ * band where every prior firmware showed Orange.
  *
  * @param percent Estimated state of charge [0, 100].
- * @return Green >=50%, Orange >=25%, else Red.
+ * @return Green >=55%, Orange >=10%, else Red.
  */
 static StatusColor discharging_soc_color(uint8_t percent) {
-    if (percent >= 50) {
+    if (percent >= 55) {
         return StatusColor::Green;
     }
-    if (percent >= 25) {
+    if (percent >= 10) {
         return StatusColor::Orange;
     }
     return StatusColor::Red;
