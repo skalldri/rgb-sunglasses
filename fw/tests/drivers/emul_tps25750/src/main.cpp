@@ -274,6 +274,22 @@ ZTEST(emul_tps25750, test_pd_power_info_disconnected) {
     zassert_equal(info.available_ma, 0);
 }
 
+ZTEST(emul_tps25750, test_pd_power_info_sourcing_reports_no_budget) {
+    /* Connected but SOURCING (SourceSink=0, e.g. OTG): TypeCCurrent reflects
+     * our own Rp advertisement, not an input offer — no budget must be
+     * reported no matter what the tier bits say. */
+    uint8_t ps[2] = {(uint8_t)(BIT(0) | (0x2 << 2)), 0x00}; /* connected, 3.0A Rp, source */
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x3F, ps, sizeof(ps)));
+
+    struct tps25750_pd_power_info info;
+    zassert_ok(tps25750_get_pd_power_info(tps_dev, &info));
+    zassert_true(info.connected);
+    zassert_false(info.sinking);
+    zassert_equal(info.source, TPS25750_PWR_NONE);
+    zassert_equal(info.available_ma, 0);
+    zassert_equal(info.available_mv, 0);
+}
+
 ZTEST(emul_tps25750, test_pd_power_info_typec_tiers) {
     /* TypeCCurrent bits 3:2 of POWER_STATUS (TRM Table 2-33), plus
      * PowerConnection (bit 0) and SourceSink=sink (bit 1). */

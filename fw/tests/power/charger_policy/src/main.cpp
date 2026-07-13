@@ -200,3 +200,93 @@ ZTEST(charger_policy, test_ichg_managed_when_target_set) {
     zassert_ok(bq25792_get_limits(bq_dev, &limits));
     zassert_equal(limits.ichg_ma, 500, "unmanaged ICHG must not be reconciled");
 }
+
+/* ---- review-fix regressions: apply-then-commit + quantized targets ---- */
+
+ZTEST(charger_policy, test_rejected_enable_write_does_not_linger) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    charger_policy_boot_init(false, 0);
+    zassert_false(en_chg());
+
+    /* The bridged EN_CHG write fails: the setter must report the error AND
+     * roll the stored intent back — a later battery edge must not silently
+     * apply the rejected value. */
+    emul_tps25750_arm_cmd_wedge(tps_emul);
+    zassert_not_equal(charger_policy_set_user_charge_enable(true), 0);
+    emul_tps25750_reset(tps_emul);
+    emul_tps25750_bq_por_defaults(tps_emul);
+    uint8_t clear_en = 0x82; /* EN_CHG off, siblings intact */
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x0F, &clear_en, 1));
+
+    /* Battery removal + reinsertion edges re-apply the stored intent. */
+    emul_tps25750_bq_set_vbat_present(tps_emul, false);
+    tick();
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    tick();
+    zassert_false(en_chg(), "rejected intent must not be applied on a later edge");
+
+    struct charger_policy_snapshot snap;
+    charger_policy_get_snapshot(&snap);
+    zassert_false(snap.user_charge_enable);
+}
+
+ZTEST(charger_policy, test_rejected_charge_current_does_not_become_target) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    charger_policy_boot_init(true, 900);
+
+    emul_tps25750_arm_cmd_wedge(tps_emul);
+    zassert_not_equal(charger_policy_set_charge_current_ma(2000), 0);
+    emul_tps25750_reset(tps_emul);
+    emul_tps25750_bq_por_defaults(tps_emul);
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+
+    /* Reconcile must converge on the previous 900, not the rejected 2000. */
+    tick_through_reconcile();
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.ichg_ma, 900, "rejected value must not be reconciled in");
+}
+
+ZTEST(charger_policy, test_unaligned_target_quantized_no_divergence_loop) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    charger_policy_boot_init(true, 0);
+
+    /* 55mA is not a 10mA multiple: the policy stores the quantized 50 so the
+     * readback always matches and reconcile never rewrites forever. */
+    zassert_ok(charger_policy_set_charge_current_ma(55));
+    struct charger_policy_snapshot snap;
+    charger_policy_get_snapshot(&snap);
+    zassert_equal(snap.charge_current_ma, 50, "target must be stored quantized");
+
+    tick_through_reconcile();
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.ichg_ma, 50);
+
+    /* Second reconcile pass: register unchanged (no divergence rewrites).
+     * Detect a rewrite via the emulator's last-4CC: seed a marker command
+     * by reading (I2Cr) then reconcile — if reconcile wrote, last_4cc would
+     * be I2Cw. */
+    tick_through_reconcile();
+    char four_cc[5];
+    emul_tps25750_last_4cc(tps_emul, four_cc);
+    zassert_mem_equal(four_cc, "I2Cr", 4, "steady-state reconcile must not rewrite (saw %s)",
+                      four_cc);
+}
+
+ZTEST(charger_policy, test_boot_clamps_persisted_overlimit_current) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+
+    /* A stale persisted 5000mA (from a build with a higher ceiling) must be
+     * clamped to CONFIG_APP_CHARGE_CURRENT_MAX_MA (2000 in this suite) at
+     * boot, not programmed verbatim. */
+    charger_policy_boot_init(true, 5000);
+
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.ichg_ma, 2000, "boot must clamp to the build ceiling");
+
+    struct charger_policy_snapshot snap;
+    charger_policy_get_snapshot(&snap);
+    zassert_equal(snap.charge_current_ma, 2000);
+}
