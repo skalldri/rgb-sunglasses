@@ -9,6 +9,7 @@
 #ifndef DRIVERS_EMUL_TPS25750_EMUL_TPS25750_H_
 #define DRIVERS_EMUL_TPS25750_EMUL_TPS25750_H_
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <zephyr/drivers/emul.h>
@@ -63,6 +64,17 @@ void emul_tps25750_bq_por_defaults(const struct emul *target);
  */
 int emul_tps25750_set_host_reg(const struct emul *target, uint8_t reg, const uint8_t *payload,
                                size_t len);
+
+/* Simulate a BQ25792 I2C-watchdog expiry: if the emulated WATCHDOG field
+ * (REG10 bits 2:0) is nonzero, revert the modeled watchdog-scoped registers
+ * to POR (ICHG -> 2A, REG0F -> 0xA2 incl. EN_CHG=1), latch WD_STAT (REG1B
+ * bit 5), and return true. Returns false (no-op) when the watchdog is
+ * disabled — the charger-policy gating regression.
+ */
+bool emul_tps25750_bq_expire_watchdog(const struct emul *target);
+
+/* Set/clear VBAT_PRESENT_STAT (REG1D bit 0) — battery insertion/removal. */
+void emul_tps25750_bq_set_vbat_present(const struct emul *target, bool present);
 
 /* How long CMD1 stays busy (reads back the pending 4CC) after a command is
  * written, before the task executes and CMD1 clears to NUL. Default 0

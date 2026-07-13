@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /**
@@ -12,16 +13,16 @@
  */
 
 /**
- * @brief Applies boot-time charger state once the BQ25792 is ready.
+ * @brief Returns the persisted "Charging Enabled" user intent.
  *
- * Enables IBAT discharge-current sensing and pushes the persisted
- * "Charging Enabled" value (restored from settings before BT came up;
- * defaults to ON) into the charger's EN_CHG bit. Call from the charger
- * status thread after bq25792_adc_enable(), before the first sample —
- * settings_load() ran in bluetooth_init() at SYS_INIT(APPLICATION, 1),
- * which always precedes K_THREAD_DEFINE thread scheduling.
+ * Restored from settings before BT came up (defaults to ON). The charger
+ * status thread feeds this into charger_policy_boot_init(), which owns the
+ * actual EN_CHG hardware write (gated on battery presence) — this service no
+ * longer touches EN_CHG at boot itself. Valid once settings_load() has run
+ * (bluetooth_init() at SYS_INIT(APPLICATION, 1), which always precedes
+ * K_THREAD_DEFINE thread scheduling).
  */
-void battery_service_apply_boot_state(void);
+bool battery_service_get_charge_enable(void);
 
 /**
  * @brief Publishes one battery telemetry sample to the BLE characteristics.

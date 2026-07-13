@@ -18,6 +18,10 @@
 #include <bluetooth/battery_service.h>
 #endif
 
+#if defined(CONFIG_APP_CHARGER_POLICY)
+#include <power/charger_policy.h>
+#endif
+
 #if defined(CONFIG_FLASH)
 #include <zephyr/drivers/flash.h>
 #endif
@@ -125,12 +129,21 @@ static void charger_status_thread_func(void *, void *, void *) {
     bq25792_adc_enable(bq, true);
     bq25792_temp_override(bq, true);
 
-#if defined(CONFIG_APP_BATTERY_MONITOR)
-    /* Enable IBAT sensing and apply the persisted charging-enable setting.
-     * Safe to do here: settings_load() ran in bluetooth_init() at
+#if defined(CONFIG_APP_CHARGER_POLICY)
+    /* Boot the charger policy (watchdog disable, VINDPM, battery-presence
+     * gated EN_CHG, IBAT sensing). The persisted charging-enable intent comes
+     * from the BLE service when built; otherwise default ON. Safe to read
+     * here: settings_load() ran in bluetooth_init() at
      * SYS_INIT(APPLICATION, 1), before any K_THREAD_DEFINE thread runs. */
-    battery_service_apply_boot_state();
+#if defined(CONFIG_APP_BATTERY_MONITOR)
+    bool boot_charge_enable = battery_service_get_charge_enable();
+#else
+    bool boot_charge_enable = true;
 #endif
+    /* ICHG target 0 = unmanaged — the configurable charge current lands in
+     * PR D of docs/plans/power-management-overhaul.md. */
+    charger_policy_boot_init(boot_charge_enable, 0);
+#endif /* CONFIG_APP_CHARGER_POLICY */
 
     while (true) {
         /* Read VBAT first — the charger may report TrickleCharge even with no
@@ -138,8 +151,17 @@ static void charger_status_thread_func(void *, void *, void *) {
         int32_t vbat_mv = 0;
         bool vbat_ok    = (bq25792_get_vbat_mv(bq, &vbat_mv) == 0);
 
-        uint8_t chg_stat = 0;
-        bool chg_ok      = (bq25792_get_charge_status(bq, &chg_stat) == 0);
+        /* One burst read covers CHG_STAT plus the presence/DPM flags the
+         * policy consumes. */
+        struct bq25792_status bq_status = {};
+        bool chg_ok      = (bq25792_get_status(bq, &bq_status) == 0);
+        uint8_t chg_stat = bq_status.chg_stat;
+
+#if defined(CONFIG_APP_CHARGER_POLICY)
+        if (chg_ok) {
+            charger_policy_tick(&bq_status);
+        }
+#endif
 
 #if defined(CONFIG_APP_BATTERY_MONITOR)
         /* Publish battery telemetry to the BLE characteristics. Only publish a
@@ -263,9 +285,39 @@ static int cmd_power_bq_charge_enable(const struct shell *shell, size_t argc, ch
     // Known accepted gap: this bypasses the BLE "Charging Enabled" characteristic
     // (battery_service.cpp), so a connected app shows a stale toggle until it
     // re-reads. Debug-only command; the app path is the source of truth.
+#if defined(CONFIG_APP_CHARGER_POLICY)
+    // Routed through the policy — a raw bq25792_set_charge_enable() here would
+    // be silently reverted by the policy's reconcile within ~2s, and would
+    // bypass the no-battery gate.
+    int ret = charger_policy_set_user_charge_enable((bool)selection);
+    if (ret != 0) {
+        shell_error(shell, "charge enable failed: %d", ret);
+        return ret;
+    }
+    struct charger_policy_snapshot snap;
+    charger_policy_get_snapshot(&snap);
+    if (snap.charge_gated) {
+        shell_warn(shell, "accepted, but gated: no battery present");
+    }
+#else
     bq25792_set_charge_enable(bq, (bool)selection);
+#endif
     return 0;
 }
+
+#if defined(CONFIG_APP_CHARGER_POLICY)
+static int cmd_power_policy(const struct shell *shell, size_t argc, char **argv, void *data) {
+    struct charger_policy_snapshot snap;
+    charger_policy_get_snapshot(&snap);
+    shell_print(shell,
+                "user_enable=%u effective_enable=%u gated=%u vbat_present=%u vbus_present=%u",
+                snap.user_charge_enable ? 1 : 0, snap.effective_charge_enable ? 1 : 0,
+                snap.charge_gated ? 1 : 0, snap.vbat_present ? 1 : 0, snap.vbus_present ? 1 : 0);
+    shell_print(shell, "ichg_target=%u mA (0=unmanaged)  vindpm_target=%u mV  wd_redisables=%u",
+                snap.charge_current_ma, snap.vindpm_mv, snap.wd_redisable_count);
+    return 0;
+}
+#endif
 
 static int cmd_power_bq_status(const struct shell *shell, size_t argc, char **argv, void *data) {
     int32_t vbat_mv  = 0;
@@ -534,6 +586,10 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_power, SHELL_CMD(pd, &sub_power_pd, "TPS25750 PD Controller Commands", NULL),
     SHELL_CMD(bq, &sub_power_bq, "BQ25792 Battery Charger Commands", NULL),
+#if defined(CONFIG_APP_CHARGER_POLICY)
+    SHELL_CMD(policy, NULL, "Print charger policy state (gating, targets, reconcile stats)",
+              cmd_power_policy),
+#endif
     SHELL_CMD(boost, NULL, "Increase NRF5340 VDD to 3.3v", cmd_power_sys_boost),
     SHELL_CMD(vreghvout, NULL, "Print current VREGHVOUT register value", cmd_power_sys_vreghvout),
     SHELL_SUBCMD_SET_END);

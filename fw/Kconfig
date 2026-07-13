@@ -209,10 +209,37 @@ config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	  CONFIG_BT_SETTINGS_DELAYED_STORE_MS, which only governs Bluetooth's
 	  own bonding/CCC storage.
 
+config APP_CHARGER_POLICY
+	bool "Charger policy engine (single owner of BQ25792 config writes)"
+	default n
+	depends on BQ25792 && TPS25750
+	help
+	  Central policy for the BQ25792 charger: disables the part's I2C
+	  watchdog (whose expiry reverts EN_CHG/ICHG to POR defaults), gates
+	  charge enable on battery presence (charging with no battery cycles
+	  SYS to BATOVP per datasheet section 9.3.6 and brown-outs the system
+	  — the proto0 no-battery reboot loop), programs VINDPM, and
+	  reconciles the managed registers against external writers (the
+	  TPS25750 config bundle shares the I2Cm port). Deliberately NOT
+	  dependent on BT — gating must work on BLE-less builds. See
+	  docs/plans/power-management-overhaul.md.
+
+config APP_VINDPM_MV
+	int "BQ25792 input voltage limit (VINDPM) in mV"
+	default 4600
+	range 3600 22000
+	depends on APP_CHARGER_POLICY
+	help
+	  Absolute VINDPM threshold programmed at boot and enforced by the
+	  charger policy's reconcile loop. 4600mV suits 5V-class sources
+	  (above the 3600mV POR floor that lets a sagging source drag VBUS
+	  down to unusable levels). PR C of the power plan derives this from
+	  the negotiated PD contract voltage instead when a contract exists.
+
 config APP_BATTERY_MONITOR
 	bool "Battery monitoring BLE service"
 	default n
-	depends on BQ25792 && BT
+	depends on BQ25792 && BT && APP_CHARGER_POLICY
 	help
 	  Exposes battery telemetry read from the BQ25792 charger's internal ADC
 	  (battery voltage/current, VBUS voltage/current, charge status) as a

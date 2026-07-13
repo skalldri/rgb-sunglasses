@@ -434,6 +434,37 @@ int emul_tps25750_set_bq_reg(const struct emul *target, uint8_t reg, const uint8
     return 0;
 }
 
+bool emul_tps25750_bq_expire_watchdog(const struct emul *target) {
+    struct emul_tps25750_data *data = target->data;
+
+    /* WATCHDOG_2:0 = REG10 bits 2:0; 0 = disabled (SLUSDG1C Table 9-26). A
+     * disabled watchdog never expires — that no-op IS the regression this
+     * models (the policy's disable must actually stick). */
+    if ((data->bq_regs[0x10] & 0x7) == 0) {
+        return false;
+    }
+
+    /* Expiry reverts the watchdog-scoped registers this emulator models to
+     * their POR values (Tables 9-16/9-25: ICHG -> 2A, REG0F -> 0xA2 incl.
+     * EN_CHG=1) and latches WD_STAT (REG1B bit 5, Table 9-36). */
+    data->bq_regs[0x03] = 0x00;
+    data->bq_regs[0x04] = 0xC8;
+    data->bq_regs[0x0F] = 0xA2;
+    data->bq_regs[0x1B] |= BIT(5);
+    return true;
+}
+
+void emul_tps25750_bq_set_vbat_present(const struct emul *target, bool present) {
+    struct emul_tps25750_data *data = target->data;
+
+    /* VBAT_PRESENT_STAT = REG1D bit 0 (SLUSDG1C Table 9-38). */
+    if (present) {
+        data->bq_regs[0x1D] |= BIT(0);
+    } else {
+        data->bq_regs[0x1D] &= (uint8_t)~BIT(0);
+    }
+}
+
 void emul_tps25750_set_cmd_delay_ms(const struct emul *target, uint32_t ms) {
     struct emul_tps25750_data *data = target->data;
 

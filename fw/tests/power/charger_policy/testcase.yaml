@@ -1,0 +1,6 @@
+tests:
+  power.charger_policy:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

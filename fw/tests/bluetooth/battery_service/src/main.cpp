@@ -23,28 +23,19 @@
 /* Device object for the placeholder bq25792 devicetree node. */
 DEVICE_DT_DEFINE(DT_NODELABEL(bq25792), NULL, NULL, NULL, NULL, POST_KERNEL, 99, NULL);
 
-/* ---- Recording fakes for the driver calls battery_service.cpp makes ---- */
+/* ---- Recording fakes for the calls battery_service.cpp makes ----
+ * The BLE toggle now routes through the charger policy (the single owner of
+ * BQ config writes), so the recording fake stands in for
+ * charger_policy_set_user_charge_enable rather than the raw driver setter. */
 
 static int fake_set_charge_enable_result;
 static int fake_set_charge_enable_calls;
 static bool fake_last_charge_enable;
 
-static int fake_ibat_sense_result;
-static int fake_ibat_sense_calls;
-static bool fake_last_ibat_sense;
-
-extern "C" int bq25792_set_charge_enable(const struct device *dev, bool enabled) {
-    zassert_not_null(dev);
+extern "C" int charger_policy_set_user_charge_enable(bool enabled) {
     fake_set_charge_enable_calls++;
     fake_last_charge_enable = enabled;
     return fake_set_charge_enable_result;
-}
-
-extern "C" int bq25792_ibat_sense_enable(const struct device *dev, bool enable) {
-    zassert_not_null(dev);
-    fake_ibat_sense_calls++;
-    fake_last_ibat_sense = enable;
-    return fake_ibat_sense_result;
 }
 
 /* ---- Helpers ---- */
@@ -94,8 +85,6 @@ static void load_persisted_charge_enable(bool value) {
 static void reset_fakes(void *) {
     fake_set_charge_enable_result = 0;
     fake_set_charge_enable_calls = 0;
-    fake_ibat_sense_result = 0;
-    fake_ibat_sense_calls = 0;
 }
 
 ZTEST_SUITE(battery_service_tests, NULL, NULL, reset_fakes, NULL, NULL);
@@ -105,24 +94,18 @@ ZTEST(battery_service_tests, test_charge_enable_registered_for_persistence) {
     zassert_equal(persistent_value_registry_count(), 1);
 }
 
-ZTEST(battery_service_tests, test_boot_state_applies_persisted_off) {
+/* The boot-time EN_CHG apply moved into charger_policy_boot_init() (which has
+ * its own emulator-backed suite, fw/tests/power/charger_policy) — this service
+ * only exposes the persisted intent for the charger thread to feed it. */
+ZTEST(battery_service_tests, test_get_charge_enable_reflects_persisted_value) {
     load_persisted_charge_enable(false);
+    zassert_false(battery_service_get_charge_enable());
 
-    battery_service_apply_boot_state();
-
-    zassert_equal(fake_ibat_sense_calls, 1);
-    zassert_true(fake_last_ibat_sense, "IBAT sensing must be enabled at boot");
-    zassert_equal(fake_set_charge_enable_calls, 1);
-    zassert_false(fake_last_charge_enable, "persisted OFF must be pushed to the charger");
-}
-
-ZTEST(battery_service_tests, test_boot_state_applies_persisted_on) {
     load_persisted_charge_enable(true);
+    zassert_true(battery_service_get_charge_enable());
 
-    battery_service_apply_boot_state();
-
-    zassert_equal(fake_set_charge_enable_calls, 1);
-    zassert_true(fake_last_charge_enable);
+    /* Reading the intent must not generate charger traffic. */
+    zassert_equal(fake_set_charge_enable_calls, 0);
 }
 
 ZTEST(battery_service_tests, test_remote_write_applies_to_charger) {
@@ -134,10 +117,9 @@ ZTEST(battery_service_tests, test_remote_write_applies_to_charger) {
     zassert_equal(fake_set_charge_enable_calls, 1);
     zassert_false(fake_last_charge_enable);
 
-    /* The characteristic's stored value follows the write: boot-apply now sends false. */
+    /* The characteristic's stored value follows the write. */
     battery_service_update(7910, -350, 0, 0, 0); /* unrelated telemetry doesn't disturb it */
-    battery_service_apply_boot_state();
-    zassert_false(fake_last_charge_enable);
+    zassert_false(battery_service_get_charge_enable());
 }
 
 ZTEST(battery_service_tests, test_failed_charger_write_rejects_and_rolls_back) {
@@ -150,11 +132,9 @@ ZTEST(battery_service_tests, test_failed_charger_write_rejects_and_rolls_back) {
                   "an I2C failure must reject the ATT write, got %zd", ret);
     zassert_equal(fake_set_charge_enable_calls, 1, "the charger write must have been attempted");
 
-    /* Storage must have rolled back to the previous value (true): a subsequent
-     * boot-apply pushes true, not the rejected false. */
-    fake_set_charge_enable_result = 0;
-    battery_service_apply_boot_state();
-    zassert_true(fake_last_charge_enable, "storage must roll back after a rejected write");
+    /* Storage must have rolled back to the previous value (true). */
+    zassert_true(battery_service_get_charge_enable(),
+                 "storage must roll back after a rejected write");
 }
 
 ZTEST(battery_service_tests, test_update_publishes_without_charger_traffic) {
@@ -164,5 +144,4 @@ ZTEST(battery_service_tests, test_update_publishes_without_charger_traffic) {
     battery_service_update(8400, 500, 5100, 1500, 7); /* changed values */
 
     zassert_equal(fake_set_charge_enable_calls, 0);
-    zassert_equal(fake_ibat_sense_calls, 0);
 }
