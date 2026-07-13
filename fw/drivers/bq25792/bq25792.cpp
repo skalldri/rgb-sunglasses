@@ -270,7 +270,13 @@ int bq25792_get_charge_enable(const struct device* dev, bool* enabled) {
     }
     const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
     BQ25792_CHARGER_CONTROL_0 reg(cfg);
-    *enabled = reg.get<BQ25792_CHARGER_CONTROL_0_EN_CHG>(0, true /* read from hw */) != 0;
+    // Explicit read so bus errors propagate — a failed bridged read must not
+    // decode as "EN_CHG=0" (callers reconcile against this value).
+    int ret = reg.read();
+    if (ret) {
+        return ret;
+    }
+    *enabled = reg.get<BQ25792_CHARGER_CONTROL_0_EN_CHG>(0, false) != 0;
     return 0;
 }
 
