@@ -131,8 +131,11 @@ class ChargeCurrentCharacteristic
         /* 50mA is the BQ25792 ICHG floor (SLUSDG1C Table 9-16); the ceiling is
          * the build's pack/wiring limit. Rejecting (rather than clamping)
          * keeps the app UI honest about what was actually programmed. */
-        if (ma < 50 || ma > CONFIG_APP_CHARGE_CURRENT_MAX_MA) {
-            LOG_ERR("charge current %u mA outside [50, %u]; rejecting", ma,
+        if (ma < 50 || ma > CONFIG_APP_CHARGE_CURRENT_MAX_MA || (ma % 10) != 0) {
+            /* Also reject non-10mA multiples (the ICHG LSB, SLUSDG1C Table
+             * 9-16): the policy would quantize them down, and the app's
+             * stored value would then disagree with what was programmed. */
+            LOG_ERR("charge current %u mA invalid (range [50, %u], 10mA steps); rejecting", ma,
                     CONFIG_APP_CHARGE_CURRENT_MAX_MA);
             return -EINVAL;
         }

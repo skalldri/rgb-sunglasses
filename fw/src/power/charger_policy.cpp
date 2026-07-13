@@ -95,6 +95,14 @@ void charger_policy_boot_init(bool user_charge_enable, uint32_t charge_current_m
     k_mutex_lock(&s_lock, K_FOREVER);
 
     s_user_charge_enable = user_charge_enable;
+    /* Same ceiling as the runtime setter: a persisted value written under an
+     * older build's higher CONFIG_APP_CHARGE_CURRENT_MAX_MA must not bypass
+     * this build's pack/wiring limit at boot. */
+    if (charge_current_ma > CONFIG_APP_CHARGE_CURRENT_MAX_MA) {
+        LOG_WRN("persisted ICHG %umA exceeds max %umA — clamping", charge_current_ma,
+                CONFIG_APP_CHARGE_CURRENT_MAX_MA);
+        charge_current_ma = CONFIG_APP_CHARGE_CURRENT_MAX_MA;
+    }
     s_charge_current_ma = quantize_ichg_ma(charge_current_ma);
     s_vindpm_mv = quantize_vindpm_mv(s_vindpm_mv);
 

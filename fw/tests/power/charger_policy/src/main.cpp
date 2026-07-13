@@ -273,3 +273,20 @@ ZTEST(charger_policy, test_unaligned_target_quantized_no_divergence_loop) {
     zassert_mem_equal(four_cc, "I2Cr", 4, "steady-state reconcile must not rewrite (saw %s)",
                       four_cc);
 }
+
+ZTEST(charger_policy, test_boot_clamps_persisted_overlimit_current) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+
+    /* A stale persisted 5000mA (from a build with a higher ceiling) must be
+     * clamped to CONFIG_APP_CHARGE_CURRENT_MAX_MA (2000 in this suite) at
+     * boot, not programmed verbatim. */
+    charger_policy_boot_init(true, 5000);
+
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.ichg_ma, 2000, "boot must clamp to the build ceiling");
+
+    struct charger_policy_snapshot snap;
+    charger_policy_get_snapshot(&snap);
+    zassert_equal(snap.charge_current_ma, 2000);
+}

@@ -139,6 +139,12 @@ ZTEST(battery_service_tests, test_charge_current_out_of_range_rejected) {
     ret = write_charge_current(10);
     zassert_equal(ret, BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED));
     zassert_equal(fake_set_charge_current_calls, 0);
+
+    /* Not a 10mA multiple (ICHG LSB): rejected so the app's stored value can
+     * never disagree with the quantized value the policy would program. */
+    ret = write_charge_current(905);
+    zassert_equal(ret, BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED));
+    zassert_equal(fake_set_charge_current_calls, 0);
 }
 
 ZTEST(battery_service_tests, test_charge_current_policy_failure_rejects_and_rolls_back) {
