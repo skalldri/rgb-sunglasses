@@ -95,6 +95,14 @@ void charger_policy_boot_init(bool user_charge_enable, uint32_t charge_current_m
     k_mutex_lock(&s_lock, K_FOREVER);
 
     s_user_charge_enable = user_charge_enable;
+    /* Same ceiling as the runtime setter: a persisted value written under an
+     * older build's higher CONFIG_APP_CHARGE_CURRENT_MAX_MA must not bypass
+     * this build's pack/wiring limit at boot. */
+    if (charge_current_ma > CONFIG_APP_CHARGE_CURRENT_MAX_MA) {
+        LOG_WRN("persisted ICHG %umA exceeds max %umA — clamping", charge_current_ma,
+                CONFIG_APP_CHARGE_CURRENT_MAX_MA);
+        charge_current_ma = CONFIG_APP_CHARGE_CURRENT_MAX_MA;
+    }
     s_charge_current_ma = quantize_ichg_ma(charge_current_ma);
     s_vindpm_mv = quantize_vindpm_mv(s_vindpm_mv);
 
@@ -150,6 +158,14 @@ int charger_policy_set_user_charge_enable(bool enabled) {
 }
 
 int charger_policy_set_charge_current_ma(uint32_t ma) {
+    /* Backstop clamp to the build's pack/wiring ceiling — the BLE layer
+     * rejects out-of-range writes before calling here, but the shell path
+     * (and any future caller) goes through this too. */
+    if (ma > CONFIG_APP_CHARGE_CURRENT_MAX_MA) {
+        LOG_WRN("ICHG %umA clamped to CONFIG_APP_CHARGE_CURRENT_MAX_MA (%umA)", ma,
+                CONFIG_APP_CHARGE_CURRENT_MAX_MA);
+        ma = CONFIG_APP_CHARGE_CURRENT_MAX_MA;
+    }
     ma = quantize_ichg_ma(ma);
 
     k_mutex_lock(&s_lock, K_FOREVER);

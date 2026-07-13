@@ -100,6 +100,79 @@ class ChargeEnableCharacteristic
     }
 };
 
+/* Settings key for the charge-current setting. Explicit stable literal — never
+ * derive from declaration order. */
+static constexpr const char kChargeCurrentKey[] = "battery/charge_current_ma";
+
+/**
+ * @brief "Charge Current (mA)": persisted fast-charge current target (ICHG),
+ * applied through the charger policy on write. Same shape as
+ * ChargeEnableCharacteristic above: onWriteChecked rejects with an ATT error
+ * (out-of-range request, or the bridged I2C write failed) and storage rolls
+ * back, so the app's optimistic update reverts deterministically.
+ */
+class ChargeCurrentCharacteristic
+    : public BtGattAutoCharacteristicExt<ChargeCurrentCharacteristic, "Charge Current (mA)",
+                                         true /* Notify */, false /* ReadOnly */, uint32_t,
+                                         CONFIG_APP_CHARGE_CURRENT_MA> {
+   public:
+    using Base = BtGattAutoCharacteristicExt<ChargeCurrentCharacteristic, "Charge Current (mA)",
+                                             true, false, uint32_t, CONFIG_APP_CHARGE_CURRENT_MA>;
+    using Base::operator=;
+
+    ChargeCurrentCharacteristic() {
+        if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_register(&mPersistEntry, kChargeCurrentKey, this, &doLoad,
+                                               &doSave);
+        }
+    }
+
+    int onWriteChecked(const uint32_t &ma) {
+        /* 50mA is the BQ25792 ICHG floor (SLUSDG1C Table 9-16); the ceiling is
+         * the build's pack/wiring limit. Rejecting (rather than clamping)
+         * keeps the app UI honest about what was actually programmed. */
+        if (ma < 50 || ma > CONFIG_APP_CHARGE_CURRENT_MAX_MA || (ma % 10) != 0) {
+            /* Also reject non-10mA multiples (the ICHG LSB, SLUSDG1C Table
+             * 9-16): the policy would quantize them down, and the app's
+             * stored value would then disagree with what was programmed. */
+            LOG_ERR("charge current %u mA invalid (range [50, %u], 10mA steps); rejecting", ma,
+                    CONFIG_APP_CHARGE_CURRENT_MAX_MA);
+            return -EINVAL;
+        }
+
+        int ret = charger_policy_set_charge_current_ma(ma);
+        if (ret != 0) {
+            LOG_ERR("ICHG write failed (%d); rejecting BLE write", ret);
+            return ret;
+        }
+
+        if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+            persistent_value_registry_mark_dirty(kChargeCurrentKey);
+            persistent_value_store::request_save();
+        }
+        return 0;
+    }
+
+   private:
+    PersistentValueRegistryEntry mPersistEntry{};
+
+    static void doLoad(void *target, const void *data, size_t len) {
+        auto *self = static_cast<ChargeCurrentCharacteristic *>(target);
+        if (len != sizeof(uint32_t)) {
+            return;
+        }
+        uint32_t loaded;
+        memcpy(&loaded, data, sizeof(loaded));
+        *self = loaded;
+    }
+
+    static void doSave(void *target) {
+        auto *self = static_cast<ChargeCurrentCharacteristic *>(target);
+        uint32_t current = self->value();
+        persistent_value_store::save_value(kChargeCurrentKey, &current, sizeof(current));
+    }
+};
+
 BtGattPrimaryService<kBatteryServiceUuid> batteryPrimaryService;
 BtGattAutoReadNotifyCharacteristic<"Battery Voltage (mV)", int32_t, 0> batteryVoltageMv;
 BtGattAutoReadNotifyCharacteristic<"Battery Current (mA)", int32_t, 0> batteryCurrentMa;
@@ -107,12 +180,17 @@ BtGattAutoReadNotifyCharacteristic<"VBUS Voltage (mV)", int32_t, 0> vbusVoltageM
 BtGattAutoReadNotifyCharacteristic<"VBUS Current (mA)", int32_t, 0> vbusCurrentMa;
 BtGattAutoReadNotifyCharacteristic<"Charge Status", uint8_t, 0> chargeStatus;
 ChargeEnableCharacteristic chargingEnabled;
+/* Position 6 — APPEND-ONLY: UUIDs are positional (suffix ...0006); the app's
+ * constants must match. */
+ChargeCurrentCharacteristic chargeCurrentMa;
 
 BtGattServer batteryServer(batteryPrimaryService, batteryVoltageMv, batteryCurrentMa, vbusVoltageMv,
-                           vbusCurrentMa, chargeStatus, chargingEnabled);
+                           vbusCurrentMa, chargeStatus, chargingEnabled, chargeCurrentMa);
 BT_GATT_SERVER_REGISTER(batteryServerStatic, batteryServer);
 
 bool battery_service_get_charge_enable(void) { return chargingEnabled.value(); }
+
+uint32_t battery_service_get_charge_current_ma(void) { return chargeCurrentMa.value(); }
 
 void battery_service_update(int32_t vbat_mv, int32_t ibat_ma, int32_t vbus_mv, int32_t ibus_ma,
                             uint8_t chg_stat) {
