@@ -23,6 +23,16 @@ on:
       - '.github/workflows/app-ios-ci.yml'
   workflow_dispatch:
 
+# One self-hosted Mac Mini serves every branch, so bursty pushes (e.g. a
+# stacked-PR chain updating several branches at once) queue up behind each
+# other, and a superseded run dies mid-job with a confusing "failure"
+# verdict ("The operation was canceled."). Scope concurrency per-ref so a
+# new push to a branch cleanly cancels only ITS OWN in-flight/queued run,
+# frees the runner sooner, and reports "cancelled" instead of "failure".
+concurrency:
+  group: ios-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     working-directory: app
