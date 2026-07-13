@@ -11,7 +11,7 @@ files need editing** for any release track.
 | Track | Tag convention | CI workflow | Artifact |
 |---|---|---|---|
 | Firmware | `fw-vX.Y.Z` | `release.yaml` | `dfu_application_proto0.zip`, `dfu_application_dk.zip` |
-| App | `app-vX.Y.Z` | `app-release.yml` | `rgb-sunglasses-<version>.apk` + iOS build on TestFlight |
+| App | `app-vX.Y.Z` | `app-release.yml` | `rgb-sunglasses-<version>.apk` + iOS build on TestFlight + Google Play AAB (track from the `PLAY_TRACK` repo variable, default `internal`) |
 | MCUboot bootloader | `mcuboot-vX.Y.Z` | `mcuboot-release.yaml` | `mcuboot-<version>-proto0.bin` |
 
 > **Malformed-tag hazard — always tag a full three-part `X.Y.Z`.** `release.yaml`
@@ -40,6 +40,12 @@ bump the patch version. Delete-and-re-push is only safe when the iOS job failed
 *before* its upload step. The workflow's `version` job enforces the collision
 guard: manual `workflow_dispatch` builds must use 1–9999 and tags must be
 ≥ 1.0.0 (tag-derived numbers are always ≥ 10000), so the two ranges can't meet.
+
+**Google Play versionCodes are consumed the same way** (every uploaded code is
+burned forever, drafts included) — the same tag-derived number is the Android
+versionCode, so the identical fix-forward rule applies once the `play` job's
+upload step has succeeded. The `version` job additionally enforces MINOR/PATCH
+< 100, since the formula collides past that (`1.0.100` = `1.1.0`).
 
 Follow this process exactly. Do not push any tag until the user has approved the
 version and the release notes.
@@ -102,6 +108,13 @@ structure used for v1.0.0:
 generates (the curated notes overwrite the CI body, so the QR must be included) —
 use the exact markdown template in `references/app-notes-download.md`.
 
+**App releases additionally need a ≤500-character Google Play "what's new" summary.**
+It ships as the **annotated tag message** (see step 6) — the Play upload runs during
+CI, before the curated GitHub notes are attached, so the tag message is the only
+channel that reaches Play (500 chars is Play's hard limit; CI truncates). A
+lightweight (unannotated) app tag falls back to a generic "Bug fixes and
+improvements" line. Draft this summary alongside the notes and show both to the user.
+
 Show the drafted notes to the user for review.
 
 ---
@@ -120,9 +133,12 @@ For each component (firmware first if releasing both):
 
 ```bash
 git tag fw-v<version>       <commit> && git push origin fw-v<version>
-git tag app-v<version>      <commit> && git push origin app-v<version>
+git tag -a app-v<version>   <commit> -m "<play whats-new summary>" && git push origin app-v<version>
 git tag mcuboot-v<version>  <commit> && git push origin mcuboot-v<version>
 ```
+
+The app tag is **annotated** (`-a -m`): its message becomes the Google Play
+"what's new" text (step 4). Firmware/MCUboot tags stay lightweight.
 
 ---
 
@@ -137,12 +153,16 @@ git tag mcuboot-v<version>  <commit> && git push origin mcuboot-v<version>
   job. The firmware job runs its two pristine NCS builds sequentially (DK first,
   then proto0), so a proto0-only build failure surfaces only after the DK build
   finishes, ~5 min in.
-- The app release runs **four** jobs: `test` and `version` (a fast ubuntu job
+- The app release runs **five** jobs: `test` and `version` (a fast ubuntu job
   that derives the shared version/build number and validates the collision
-  guard), then `release` (Android, ubuntu) and `ios-testflight` (self-hosted
-  Mac) in parallel — neither release job gates the other. `ios-testflight`
-  shows as *skipped* when the `TESTFLIGHT_PUBLISH_ENABLED` repo variable isn't
-  `true` — the intentional pause switch, not a failure. The iOS job may sit
+  guards), then `release` (Android APK, ubuntu), `ios-testflight` (self-hosted
+  Mac), and `play` (Google Play AAB, ubuntu) in parallel — no publish job gates
+  another. `ios-testflight` shows as *skipped* when the
+  `TESTFLIGHT_PUBLISH_ENABLED` repo variable isn't `true` (the intentional
+  pause switch), and `play` when `PLAY_PUBLISH_ENABLED` isn't `true` —
+  expected before the Play Console bootstrap (see
+  `app/docs/play-publishing.md`). Neither skip is a failure. The iOS job may
+  sit
   queued behind an in-flight `app-ios-ci.yml` run
   (single Mac runner; the merge to `main` that preceded the tag typically
   triggers one). After the iOS job goes green, Apple keeps "Processing" the
@@ -150,8 +170,11 @@ git tag mcuboot-v<version>  <commit> && git push origin mcuboot-v<version>
 - If a run fails, read its logs (`gh run view <id> --log-failed`), report to the
   user, and **do not** edit release notes. Delete and re-push the tag after a fix:
   `git push --delete origin <tag> && git tag -d <tag>`
-  **Exception:** if the app tag's TestFlight upload already succeeded, do NOT
-  re-push that tag — see the iOS build-number rule above; bump patch instead.
+  **Exception:** if the app tag's TestFlight upload OR Play upload already
+  succeeded, do NOT re-push that tag — both stores permanently consume build
+  numbers (see the rules above); bump patch instead. A failed `play` or
+  `ios-testflight` job that died *before* its upload step burns nothing and can
+  be re-run alone: `gh run rerun <run-id> --job <job-id>`.
 - On success, verify assets: `gh release view <tag> --json assets`
 - Replace the CI-generated body with curated notes and set the title:
 
@@ -171,5 +194,9 @@ artifacts, and note:
   new firmware tag.
 - The iOS build reaches TestFlight internal testers automatically once Apple-side
   processing completes (~5–30 min after the `ios-testflight` job finishes).
+- For app releases with Play publishing enabled: the AAB landed on the Play track
+  named by `PLAY_TRACK` with status from `PLAY_RELEASE_STATUS` (default `draft`,
+  which needs manual publishing in the Play Console). Curated GitHub notes do
+  **not** propagate to Play — Play shows the annotated tag message.
 - The MCUboot release asset `mcuboot-<version>-proto0.bin` is now available for
   manual selection in the app's "Bootloader Update" section.

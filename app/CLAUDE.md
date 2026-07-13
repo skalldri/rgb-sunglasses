@@ -116,10 +116,18 @@ per-push check. Optionally, `ios.appleTeamId` can be added to `app.json` for loc
 explicitly).
 
 The in-app self-update flow is **disabled on iOS entirely** (it side-loads an APK, which only Android
-can do). The `APP_SELF_UPDATE_SUPPORTED` flag in `services/app-update.ts` (`Platform.OS === 'android'`)
-gates every entry point: no launch-time check or "update available" banner, the footer shows a plain
-version label instead of a "Check for updates" link, and the update modal renders a "not available"
-message if reached via deep link. On iOS the app is updated through the App Store / TestFlight.
+can do) **and in Google Play builds** (Play policy forbids self-updating outside Play). The
+`APP_SELF_UPDATE_SUPPORTED` flag in `services/app-update.ts` (Android + non-null Expo config +
+`extra.distribution !== 'play'`; fails closed when the config is unavailable) gates every entry
+point: no launch-time check or "update available" banner, the footer shows a plain version label
+instead of a "Check for updates" link, and the update modal renders a "not available" message if
+reached via deep link. On iOS the app is updated through the App Store / TestFlight; Play builds
+are updated by Play itself. The Play variant is produced by the `play` job in
+`.github/workflows/app-release.yml` via the shared `build-signed-android` composite action, which
+stamps `extra.distribution = "play"` into `app.json` and strips `REQUEST_INSTALL_PACKAGES` — see
+[docs/play-publishing.md](docs/play-publishing.md) for the full pipeline, signing-lineage rules
+(the CI keystore is the Play app signing key — never rotate it casually), and the one-time Play
+Console bootstrap.
 
 There is currently **no iOS dev-variant** (the Android `.dev` side-by-side install from
 `plugins/withDevVariant.js` is Android-only); the iOS dev build uses the production bundle id.
