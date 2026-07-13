@@ -17,6 +17,7 @@
 #endif
 
 #include <string.h>
+#include <zephyr/sys/byteorder.h>
 
 #define DT_DRV_COMPAT ti_tps25750
 
@@ -303,6 +304,215 @@ int tps25750_read_boot_status(const struct device *dev, tps25750_boot_status_t *
 
     return i2c_burst_read_dt(&cfg->i2c, TPS25750_REG_BOOT_STATUS_ADDR, (uint8_t *)status,
                              sizeof(*status));
+}
+
+/**
+ * @brief Read a host-interface register's payload, stripping the leading
+ * byte-count byte.
+ *
+ * Every unique-address register read returns [byte_count][payload...] (host
+ * interface TRM SLVUC05A — same framing the tps25750_mode_t/boot_status
+ * structs model with their byte_count field). If the device reports fewer
+ * valid bytes than requested, the remainder of @p payload is zero-filled.
+ */
+static int tps25750_read_reg_payload(const struct device *dev, uint8_t reg, uint8_t len,
+                                     uint8_t *payload) {
+    if (!dev || !payload) {
+        LOG_ERR("NULL pointer");
+        return -ENODEV;
+    }
+
+    /* Largest payload read through here is TX_SINK_CAPS (29 bytes). */
+    uint8_t buf[1 + TPS25750_REG_TX_SINK_CAPS_SIZE];
+    if (len > sizeof(buf) - 1) {
+        return -EINVAL;
+    }
+
+    const struct tps25750_dev_config *cfg = dev->config;
+
+    if (!device_is_ready(cfg->i2c.bus)) {
+        LOG_ERR("bus not ready");
+        return -ENODEV;
+    }
+
+    int ret = i2c_burst_read_dt(&cfg->i2c, reg, buf, 1 + len);
+    if (ret) {
+        return ret;
+    }
+
+    uint8_t valid = MIN(buf[0], len);
+    memcpy(payload, buf + 1, valid);
+    if (valid < len) {
+        memset(payload + valid, 0, len - valid);
+    }
+
+    return 0;
+}
+
+int tps25750_read_power_status(const struct device *dev, uint16_t *raw) {
+    if (!raw) {
+        return -EINVAL;
+    }
+    /* POWER_STATUS 0x3F, 2 bytes LE (TRM Table 2-32/2-33) */
+    uint8_t payload[TPS25750_REG_POWER_STATUS_SIZE];
+    int ret =
+        tps25750_read_reg_payload(dev, TPS25750_REG_POWER_STATUS_ADDR, sizeof(payload), payload);
+    if (ret) {
+        return ret;
+    }
+    *raw = sys_get_le16(payload);
+    return 0;
+}
+
+int tps25750_read_pd_status(const struct device *dev, uint32_t *raw) {
+    if (!raw) {
+        return -EINVAL;
+    }
+    /* PD_STATUS 0x40, 4 bytes LE (TRM Table 2-34/2-35) */
+    uint8_t payload[TPS25750_REG_PD_STATUS_SIZE];
+    int ret =
+        tps25750_read_reg_payload(dev, TPS25750_REG_PD_STATUS_ADDR, sizeof(payload), payload);
+    if (ret) {
+        return ret;
+    }
+    *raw = sys_get_le32(payload);
+    return 0;
+}
+
+int tps25750_read_active_contract_pdo(const struct device *dev, uint32_t *pdo) {
+    if (!pdo) {
+        return -EINVAL;
+    }
+    /* ACTIVE_CONTRACT_PDO 0x34, 6 bytes: bytes 1-4 = active PDO as LE32,
+     * bytes 5-6 = source properties (TRM Table 2-28/2-29). Cleared on
+     * disconnect / Hard Reset / PR_Swap. */
+    uint8_t payload[TPS25750_REG_ACTIVE_CONTRACT_PDO_SIZE];
+    int ret = tps25750_read_reg_payload(dev, TPS25750_REG_ACTIVE_CONTRACT_PDO_ADDR,
+                                        sizeof(payload), payload);
+    if (ret) {
+        return ret;
+    }
+    *pdo = sys_get_le32(payload);
+    return 0;
+}
+
+int tps25750_read_active_contract_rdo(const struct device *dev, uint32_t *rdo) {
+    if (!rdo) {
+        return -EINVAL;
+    }
+    /* ACTIVE_CONTRACT_RDO 0x35, 4 bytes LE (TRM Table 2-30/2-31) */
+    uint8_t payload[TPS25750_REG_ACTIVE_CONTRACT_RDO_SIZE];
+    int ret = tps25750_read_reg_payload(dev, TPS25750_REG_ACTIVE_CONTRACT_RDO_ADDR,
+                                        sizeof(payload), payload);
+    if (ret) {
+        return ret;
+    }
+    *rdo = sys_get_le32(payload);
+    return 0;
+}
+
+int tps25750_read_tx_sink_caps(const struct device *dev, uint32_t *pdos, size_t max_pdos,
+                               uint8_t *num_pdos) {
+    if (!pdos || !num_pdos) {
+        return -EINVAL;
+    }
+    /* TX_SINK_CAPS 0x33, 29 bytes: byte 1 = header (bits 2:0 numValidPDOs),
+     * bytes 2-5 = PDO#1 LE32, ... up to PDO#7 (TRM Table 2-24/2-25). */
+    uint8_t payload[TPS25750_REG_TX_SINK_CAPS_SIZE];
+    int ret =
+        tps25750_read_reg_payload(dev, TPS25750_REG_TX_SINK_CAPS_ADDR, sizeof(payload), payload);
+    if (ret) {
+        return ret;
+    }
+
+    *num_pdos = payload[0] & 0x7;
+    size_t n = MIN((size_t)*num_pdos, max_pdos);
+    n = MIN(n, (size_t)7);
+    for (size_t i = 0; i < n; i++) {
+        pdos[i] = sys_get_le32(&payload[1 + 4 * i]);
+    }
+    return 0;
+}
+
+int tps25750_get_pd_power_info(const struct device *dev, struct tps25750_pd_power_info *info) {
+    if (!info) {
+        return -EINVAL;
+    }
+
+    uint16_t ps;
+    int ret = tps25750_read_power_status(dev, &ps);
+    if (ret) {
+        return ret;
+    }
+
+    info->raw_power_status = ps;
+    info->raw_pdo = 0;
+    info->raw_rdo = 0;
+    /* POWER_STATUS bit 0 = PowerConnection, bit 1 = SourceSink (1b = the
+     * connection provides power, i.e. we sink) — TRM Table 2-33. */
+    info->connected = (ps & BIT(0)) != 0;
+    info->sinking = (ps & BIT(1)) != 0;
+
+    if (!info->connected || !info->sinking) {
+        /* No connection, or WE are the source (SourceSink=0b, e.g. powering
+         * an OTG peripheral): there is no input power budget to report. In
+         * source mode TypeCCurrent reflects our OWN Rp advertisement (TRM
+         * Table 2-33 — "If the port is connected as source, the field is
+         * updated upon initial connection only"), not anything a partner
+         * offers — decoding it here would fabricate a phantom input budget. */
+        info->source = TPS25750_PWR_NONE;
+        info->available_mv = 0;
+        info->available_ma = 0;
+        return 0;
+    }
+
+    /* TypeCCurrent bits 3:2 — 00b USB default / 01b 1.5A / 10b 3.0A /
+     * 11b explicit PD contract (TRM Table 2-33). */
+    switch ((ps >> 2) & 0x3) {
+        case 0x0:
+            info->source = TPS25750_PWR_TYPEC_DEFAULT;
+            info->available_mv = 5000;
+            info->available_ma = 500;
+            break;
+        case 0x1:
+            info->source = TPS25750_PWR_TYPEC_1A5;
+            info->available_mv = 5000;
+            info->available_ma = 1500;
+            break;
+        case 0x2:
+            info->source = TPS25750_PWR_TYPEC_3A0;
+            info->available_mv = 5000;
+            info->available_ma = 3000;
+            break;
+        case 0x3: {
+            uint32_t pdo;
+            ret = tps25750_read_active_contract_pdo(dev, &pdo);
+            if (ret) {
+                return ret;
+            }
+            info->raw_pdo = pdo;
+            /* RDO is informational only — don't fail the whole query on it. */
+            (void)tps25750_read_active_contract_rdo(dev, &info->raw_rdo);
+
+            /* Fixed-supply PDO (bits 31:30 == 00b): voltage = bits 19:10 in
+             * 50mV units, max current = bits 9:0 in 10mA units (TRM Tables
+             * 2-22/2-23, per USB PD spec fixed-supply PDO layout). Non-fixed
+             * PDOs (variable/battery/PPS) are not decoded — report UNKNOWN
+             * with a conservative USB-default budget. */
+            if ((pdo >> 30) == 0x0 && pdo != 0) {
+                info->source = TPS25750_PWR_PD_CONTRACT;
+                info->available_mv = ((pdo >> 10) & 0x3FF) * 50;
+                info->available_ma = (pdo & 0x3FF) * 10;
+            } else {
+                info->source = TPS25750_PWR_UNKNOWN;
+                info->available_mv = 5000;
+                info->available_ma = 500;
+            }
+            break;
+        }
+    }
+
+    return 0;
 }
 
 int tps25750_dump(const struct device *dev) {

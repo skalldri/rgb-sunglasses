@@ -337,7 +337,10 @@ static const char WD_RST_NAME[] = "WD_RST";
 using BQ25792_CHARGER_CONTROL_1_WD_RST = RegisterField<WD_RST_NAME, 3, 1>;
 
 static const char WATCHDOG_NAME[] = "WATCHDOG";
-using BQ25792_CHARGER_CONTROL_1_WATCHDOG = RegisterField<WATCHDOG_NAME, 0, 2>;
+// WATCHDOG_2:0 is a 3-bit field, bits 2:0 (datasheet SLUSDG1C Table 9-26) —
+// was previously declared 2 bits wide, which made a "disable" write leave
+// bit 2 set (i.e. the watchdog still armed at the 20s setting).
+using BQ25792_CHARGER_CONTROL_1_WATCHDOG = RegisterField<WATCHDOG_NAME, 0, 3>;
 
 using BQ25792_CHARGER_CONTROL_1 =
     BQ25792Register<CHARGER_CONTROL_1_NAME, BQ25792_REG_CHARGER_CONTROL_1_ADDR, 8,
@@ -666,7 +669,10 @@ static const char VBUS_STAT_NAME[] = "VBUS_STAT";
 using BQ25792_CHARGER_STATUS_1_VBUS_STAT = RegisterField<VBUS_STAT_NAME, 1, 4>;
 
 static const char BC1_2_DONE_STAT_NAME[] = "BC1_2_DONE_STAT";
-using BQ25792_CHARGER_STATUS_1_BC1_2_DONE_STAT = RegisterField<BC1_2_DONE_STAT_NAME, 1, 1>;
+// BC1.2_DONE_STAT is bit 0 (datasheet SLUSDG1C Table 9-37, REG1C); VBUS_STAT
+// occupies bits 4:1. This field was previously declared at bit 1, aliasing
+// VBUS_STAT's LSB.
+using BQ25792_CHARGER_STATUS_1_BC1_2_DONE_STAT = RegisterField<BC1_2_DONE_STAT_NAME, 0, 1>;
 
 using BQ25792_CHARGER_STATUS_1 =
     BQ25792Register<CHARGER_STATUS_1_NAME, BQ25792_REG_CHARGER_STATUS_1_ADDR, 8,

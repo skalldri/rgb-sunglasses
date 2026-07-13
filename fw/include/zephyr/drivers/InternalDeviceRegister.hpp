@@ -208,10 +208,26 @@ class I2CDeviceRegister : public DeviceRegister<name, registerWidth, U, Us...> {
             LOG_INF("%s: writing 0x%08x", this->getName(), this->storage_);
         }
 
-        // TODO: probably also need endian-swapping logic here
+        // Mirror read()'s endian conversion: multi-byte registers are MSB-first on
+        // the wire (e.g. BQ25792 REG03/REG04 = ICHG high/low byte), while storage_
+        // is host (little) endian. Build the wire image in a local buffer so
+        // storage_ itself stays host-order. Until this existed, every write was
+        // 8-bit so the asymmetry with read() never fired.
+        uint8_t wire[sizeof(this->storage_)];
+        const uint8_t *storage = reinterpret_cast<const uint8_t *>(&this->storage_);
+        if (this->regWidth_ == 16) {
+            wire[0] = storage[1];
+            wire[1] = storage[0];
+        } else if (this->regWidth_ == 32) {
+            wire[0] = storage[3];
+            wire[1] = storage[2];
+            wire[2] = storage[1];
+            wire[3] = storage[0];
+        } else {
+            wire[0] = storage[0];
+        }
 
-        int ret = i2c_burst_write_dt(i2c_, reg, reinterpret_cast<uint8_t *>(&this->storage_),
-                                     this->regWidth_ / 8);
+        int ret = i2c_burst_write_dt(i2c_, reg, wire, this->regWidth_ / 8);
 
         if (ret) {
             LOG_ERR("I2C Write failed: %d", ret);
@@ -221,6 +237,17 @@ class I2CDeviceRegister : public DeviceRegister<name, registerWidth, U, Us...> {
         dirty_ = false;
         return 0;
     }
+
+    /**
+     * @brief Drop any un-flushed local modification so the destructor will
+     * not attempt a write.
+     *
+     * A failed flush() leaves dirty_ set, and the destructor retries the
+     * write with its result discarded. Write-verify paths that have already
+     * reported the flush failure to their caller must call this so the
+     * destructor can't silently apply the change behind the caller's back.
+     */
+    void discard() { dirty_ = false; }
 
     /**
      * @brief Readback the contents of the device register to internal storage

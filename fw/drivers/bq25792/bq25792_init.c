@@ -15,6 +15,7 @@ static int bq25792_init(const struct device *dev) {
     const struct bq25792_dev_config *cfg = dev->config;
     struct bq25792_dev_data *data = dev->data;
     data->dev = dev;
+    k_mutex_init(&data->xact_mutex);
 
     if (cfg->int_gpio.port) {
         gpio_pin_configure_dt(&cfg->int_gpio, GPIO_INPUT);

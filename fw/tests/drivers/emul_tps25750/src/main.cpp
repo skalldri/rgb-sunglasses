@@ -109,6 +109,283 @@ ZTEST(emul_tps25750, test_bridge_write) {
     zassert_false(enabled);
 }
 
+/* ---- config setters: 16-bit endianness + write/read-back-verify ---- */
+
+/* Regression test for the InternalDeviceRegister::flush() endianness fix:
+ * ICHG (REG03) is a 16-bit register, and the emulator stores the register
+ * file in wire (big-endian) order — an unswapped flush() would land the
+ * bytes reversed and both the raw check and the driver read-back fail. */
+ZTEST(emul_tps25750, test_set_charge_current_16bit_round_trip) {
+    emul_tps25750_bq_por_defaults(tps_emul);
+
+    /* 1000mA -> ICHG field 100 (0x064): wire bytes must be {0x00, 0x64}. */
+    zassert_ok(bq25792_set_charge_current_ma(bq_dev, 1000));
+
+    uint8_t be[2] = {0xFF, 0xFF};
+    zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x03, be, sizeof(be)));
+    zassert_equal(be[0], 0x00, "REG03 MSB 0x%02X (byte-swapped write?)", be[0]);
+    zassert_equal(be[1], 0x64, "REG04 LSB 0x%02X (byte-swapped write?)", be[1]);
+
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.ichg_ma, 1000);
+}
+
+ZTEST(emul_tps25750, test_set_input_limits_and_readback) {
+    emul_tps25750_bq_por_defaults(tps_emul);
+
+    struct bq25792_limits limits;
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    /* POR defaults visible through the driver before any write. */
+    zassert_equal(limits.ichg_ma, 2000);
+    zassert_equal(limits.iindpm_ma, 3000);
+    zassert_equal(limits.vindpm_mv, 3600);
+    zassert_equal(limits.watchdog, 0x5); /* 40s */
+    zassert_equal(limits.vac_ovp, 0x0);  /* 26V per field-table POR */
+
+    zassert_ok(bq25792_set_input_current_limit_ma(bq_dev, 1500));
+    zassert_ok(bq25792_set_input_voltage_limit_mv(bq_dev, 4600));
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.iindpm_ma, 1500);
+    zassert_equal(limits.vindpm_mv, 4600);
+
+    /* Out-of-range requests clamp to the datasheet range instead of failing
+     * read-back verification. */
+    zassert_ok(bq25792_set_charge_current_ma(bq_dev, 99999));
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.ichg_ma, 5000);
+
+    zassert_ok(bq25792_set_input_voltage_limit_mv(bq_dev, 0));
+    zassert_ok(bq25792_get_limits(bq_dev, &limits));
+    zassert_equal(limits.vindpm_mv, 3600);
+}
+
+ZTEST(emul_tps25750, test_watchdog_disable_and_ico_enable) {
+    emul_tps25750_bq_por_defaults(tps_emul);
+
+    zassert_ok(bq25792_watchdog_disable(bq_dev));
+
+    uint8_t reg10 = 0xFF;
+    zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x10, &reg10, 1));
+    zassert_equal(reg10 & 0x7, 0, "WATCHDOG field not cleared (REG10 0x%02X)", reg10);
+    /* VAC_OVP (bits 5:4) must be untouched by the field-scoped RMW. */
+    zassert_equal((reg10 >> 4) & 0x3, 0x0);
+
+    /* Feed is a plain RMW of WD_RST — just prove it reaches the register. */
+    zassert_ok(bq25792_watchdog_feed(bq_dev));
+    zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x10, &reg10, 1));
+    zassert_equal(reg10 & BIT(3), BIT(3), "WD_RST not set (REG10 0x%02X)", reg10);
+
+    uint8_t reg0f = 0;
+    zassert_ok(bq25792_ico_enable(bq_dev, true));
+    zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x0F, &reg0f, 1));
+    zassert_equal(reg0f & BIT(4), BIT(4), "EN_ICO not set (REG0F 0x%02X)", reg0f);
+    /* EN_CHG (bit 5, POR 1) must survive the RMW. */
+    zassert_equal(reg0f & BIT(5), BIT(5), "EN_CHG clobbered (REG0F 0x%02X)", reg0f);
+
+    zassert_ok(bq25792_ico_enable(bq_dev, false));
+    zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x0F, &reg0f, 1));
+    zassert_equal(reg0f & BIT(4), 0);
+}
+
+/* A bridged-write failure surfaces from the setter instead of silently
+ * leaving the register unchanged (read-back-verify contract). */
+ZTEST(emul_tps25750, test_setter_propagates_bridge_failure) {
+    emul_tps25750_bq_por_defaults(tps_emul);
+
+    emul_tps25750_arm_cmd_wedge(tps_emul);
+    zassert_equal(bq25792_set_charge_current_ma(bq_dev, 900), -ETIMEDOUT);
+
+    /* Register unchanged at its POR value — checked via the backdoor, since
+     * the wedge behavior persists on the bridge until the suite resets. */
+    uint8_t be[2] = {0};
+    zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x03, be, sizeof(be)));
+    zassert_equal(be[0], 0x00);
+    zassert_equal(be[1], 0xC8); /* 2A */
+}
+
+/* ---- combined status decode (REG1B..REG1E burst) ---- */
+
+ZTEST(emul_tps25750, test_get_status_decode) {
+    /* IINDPM_STAT + WD_STAT + PG + VBUS_PRESENT; CHG_STAT=fast charge,
+     * VBUS_STAT=SDP, BC1.2 done; ICO in progress + VBAT present; VSYSMIN
+     * regulation active. Bit positions per SLUSDG1C Tables 9-36..9-39. */
+    uint8_t regs[4] = {
+        (uint8_t)(BIT(7) | BIT(5) | BIT(3) | BIT(0)), /* REG1B */
+        (uint8_t)((3 << 5) | (1 << 1) | BIT(0)),      /* REG1C */
+        (uint8_t)((1 << 6) | BIT(0)),                 /* REG1D */
+        (uint8_t)BIT(4),                              /* REG1E */
+    };
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x1B, regs, sizeof(regs)));
+
+    struct bq25792_status st;
+    zassert_ok(bq25792_get_status(bq_dev, &st));
+
+    zassert_true(st.iindpm_active);
+    zassert_false(st.vindpm_active);
+    zassert_true(st.wd_expired);
+    zassert_false(st.poor_source);
+    zassert_true(st.power_good);
+    zassert_true(st.vbus_present);
+
+    zassert_equal(st.chg_stat, 3); /* fast charge (CC) */
+    zassert_equal(st.vbus_stat, 1); /* USB SDP */
+    zassert_true(st.bc12_done);
+
+    zassert_equal(st.ico_stat, 1); /* optimization in progress */
+    zassert_false(st.thermal_regulation);
+    zassert_true(st.vbat_present);
+
+    zassert_true(st.vsysmin_regulation);
+    zassert_false(st.chg_timer_expired);
+}
+
+ZTEST(emul_tps25750, test_get_status_propagates_bridge_failure) {
+    struct bq25792_status st;
+
+    emul_tps25750_arm_cmd_wedge(tps_emul);
+    zassert_equal(bq25792_get_status(bq_dev, &st), -ETIMEDOUT);
+}
+
+ZTEST(emul_tps25750, test_get_vsys_mv) {
+    /* VSYS_ADC (0x3D), 16-bit big-endian on the wire, 1mV/LSB. */
+    uint8_t be[2] = {0x1F, 0x40}; /* 8000mV */
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x3D, be, sizeof(be)));
+
+    int32_t vsys = 0;
+    zassert_ok(bq25792_get_vsys_mv(bq_dev, &vsys));
+    zassert_equal(vsys, 8000);
+}
+
+/* ---- TPS25750 PD-status host registers ---- */
+
+/* Build a USB-PD fixed-supply PDO: voltage in 50mV units (bits 19:10),
+ * current in 10mA units (bits 9:0) — TRM Tables 2-22/2-23. */
+static constexpr uint32_t fixed_pdo(uint32_t mv, uint32_t ma) {
+    return ((mv / 50) << 10) | (ma / 10);
+}
+
+ZTEST(emul_tps25750, test_pd_power_info_disconnected) {
+    /* POWER_STATUS all zeros: PowerConnection=0. */
+    struct tps25750_pd_power_info info;
+    zassert_ok(tps25750_get_pd_power_info(tps_dev, &info));
+    zassert_false(info.connected);
+    zassert_equal(info.source, TPS25750_PWR_NONE);
+    zassert_equal(info.available_ma, 0);
+}
+
+ZTEST(emul_tps25750, test_pd_power_info_sourcing_reports_no_budget) {
+    /* Connected but SOURCING (SourceSink=0, e.g. OTG): TypeCCurrent reflects
+     * our own Rp advertisement, not an input offer — no budget must be
+     * reported no matter what the tier bits say. */
+    uint8_t ps[2] = {(uint8_t)(BIT(0) | (0x2 << 2)), 0x00}; /* connected, 3.0A Rp, source */
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x3F, ps, sizeof(ps)));
+
+    struct tps25750_pd_power_info info;
+    zassert_ok(tps25750_get_pd_power_info(tps_dev, &info));
+    zassert_true(info.connected);
+    zassert_false(info.sinking);
+    zassert_equal(info.source, TPS25750_PWR_NONE);
+    zassert_equal(info.available_ma, 0);
+    zassert_equal(info.available_mv, 0);
+}
+
+ZTEST(emul_tps25750, test_pd_power_info_typec_tiers) {
+    /* TypeCCurrent bits 3:2 of POWER_STATUS (TRM Table 2-33), plus
+     * PowerConnection (bit 0) and SourceSink=sink (bit 1). */
+    const struct {
+        uint8_t tier;
+        enum tps25750_power_source source;
+        uint32_t ma;
+    } cases[] = {
+        {0x0, TPS25750_PWR_TYPEC_DEFAULT, 500},
+        {0x1, TPS25750_PWR_TYPEC_1A5, 1500},
+        {0x2, TPS25750_PWR_TYPEC_3A0, 3000},
+    };
+
+    for (const auto &c : cases) {
+        uint8_t ps[2] = {(uint8_t)(BIT(0) | BIT(1) | (c.tier << 2)), 0x00};
+        zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x3F, ps, sizeof(ps)));
+
+        struct tps25750_pd_power_info info;
+        zassert_ok(tps25750_get_pd_power_info(tps_dev, &info));
+        zassert_true(info.connected);
+        zassert_true(info.sinking);
+        zassert_equal(info.source, c.source, "tier %u", c.tier);
+        zassert_equal(info.available_mv, 5000);
+        zassert_equal(info.available_ma, c.ma, "tier %u: %u mA", c.tier, info.available_ma);
+    }
+}
+
+ZTEST(emul_tps25750, test_pd_power_info_explicit_contract) {
+    /* TypeCCurrent=11b: explicit PD contract -> decode ACTIVE_CONTRACT_PDO.
+     * 9V/1.65A fixed PDO. */
+    uint8_t ps[2] = {(uint8_t)(BIT(0) | BIT(1) | (0x3 << 2)), 0x00};
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x3F, ps, sizeof(ps)));
+
+    uint32_t pdo = fixed_pdo(9000, 1650);
+    uint8_t pdo_payload[6] = {
+        (uint8_t)(pdo & 0xFF),         (uint8_t)((pdo >> 8) & 0xFF),
+        (uint8_t)((pdo >> 16) & 0xFF), (uint8_t)((pdo >> 24) & 0xFF),
+        0x00,                          0x00,
+    };
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x34, pdo_payload, sizeof(pdo_payload)));
+
+    struct tps25750_pd_power_info info;
+    zassert_ok(tps25750_get_pd_power_info(tps_dev, &info));
+    zassert_equal(info.source, TPS25750_PWR_PD_CONTRACT);
+    zassert_equal(info.available_mv, 9000);
+    zassert_equal(info.available_ma, 1650);
+    zassert_equal(info.raw_pdo, pdo);
+}
+
+ZTEST(emul_tps25750, test_pd_power_info_nonfixed_contract_falls_back) {
+    /* An augmented (PPS) PDO — bits 31:30 = 11b — must not be decoded as a
+     * fixed contract; conservative USB-default budget instead. */
+    uint8_t ps[2] = {(uint8_t)(BIT(0) | BIT(1) | (0x3 << 2)), 0x00};
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x3F, ps, sizeof(ps)));
+
+    uint32_t pps_pdo = (0x3u << 30) | fixed_pdo(9000, 3000);
+    uint8_t pdo_payload[4] = {
+        (uint8_t)(pps_pdo & 0xFF),
+        (uint8_t)((pps_pdo >> 8) & 0xFF),
+        (uint8_t)((pps_pdo >> 16) & 0xFF),
+        (uint8_t)((pps_pdo >> 24) & 0xFF),
+    };
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x34, pdo_payload, sizeof(pdo_payload)));
+
+    struct tps25750_pd_power_info info;
+    zassert_ok(tps25750_get_pd_power_info(tps_dev, &info));
+    zassert_equal(info.source, TPS25750_PWR_UNKNOWN);
+    zassert_equal(info.available_mv, 5000);
+    zassert_equal(info.available_ma, 500);
+}
+
+ZTEST(emul_tps25750, test_read_tx_sink_caps) {
+    /* Header byte: numValidPDOs=2 (bits 2:0), then two LE32 PDOs. */
+    uint32_t pdo1 = fixed_pdo(5000, 3000);
+    uint32_t pdo2 = fixed_pdo(9000, 1500);
+    uint8_t payload[9] = {
+        0x02,
+        (uint8_t)(pdo1 & 0xFF),
+        (uint8_t)((pdo1 >> 8) & 0xFF),
+        (uint8_t)((pdo1 >> 16) & 0xFF),
+        (uint8_t)((pdo1 >> 24) & 0xFF),
+        (uint8_t)(pdo2 & 0xFF),
+        (uint8_t)((pdo2 >> 8) & 0xFF),
+        (uint8_t)((pdo2 >> 16) & 0xFF),
+        (uint8_t)((pdo2 >> 24) & 0xFF),
+    };
+    zassert_ok(emul_tps25750_set_host_reg(tps_emul, 0x33, payload, sizeof(payload)));
+
+    uint32_t pdos[7] = {0};
+    uint8_t num = 0;
+    zassert_ok(tps25750_read_tx_sink_caps(tps_dev, pdos, ARRAY_SIZE(pdos), &num));
+    zassert_equal(num, 2);
+    zassert_equal(pdos[0], pdo1);
+    zassert_equal(pdos[1], pdo2);
+}
+
 /* ---- concurrency regression test for the task_mutex (commit 442f47f) ---- */
 
 #define HAMMER_ITERATIONS 100
