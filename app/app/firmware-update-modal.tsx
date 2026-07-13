@@ -980,7 +980,7 @@ export default function FirmwareUpdateModal() {
                 {!blFlashUnlocked && !blRebooting && !isActive && !isDone && (
                     <Card style={styles.cardSpacing}>
                         <ThemedText type="caption" style={{ textAlign: 'center' }}>
-                            Flash is protected. Tap "Prepare Device" to reboot into updater mode (unlocks flash).
+                            Flash is protected. Tap &quot;Prepare Device&quot; to reboot into updater mode (unlocks flash).
                         </ThemedText>
                         <AppButton
                             title="Prepare Device"

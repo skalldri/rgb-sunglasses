@@ -10,6 +10,7 @@
  * same entry point the ATT layer uses.
  */
 
+#include <battery_soc.h>
 #include <bluetooth/battery_service.h>
 #include <settings/persistent_value_registry.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -62,6 +63,29 @@ static const struct bt_gatt_attr *find_writable_attr(size_t index) {
         for (size_t i = 0; i < svc->attr_count; i++) {
             const struct bt_gatt_attr *attr = &svc->attrs[i];
             if (attr->write != NULL && attr->uuid != NULL &&
+                attr->uuid->type == BT_UUID_TYPE_128) {
+                if (seen == index) {
+                    return attr;
+                }
+                seen++;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/* Locates the Nth 128-bit-UUID value attribute (readable, declaration order).
+ * The chrc/CUD/CPF/CCC descriptor attributes all carry 16-bit UUIDs, so the
+ * 128-bit ones are exactly the characteristic value slots: index 0 = "Battery
+ * Voltage (mV)" (position 0) ... index 7 = "Battery Percent" (position 7). */
+static const struct bt_gatt_attr *find_value_attr(size_t index) {
+    size_t seen = 0;
+
+    STRUCT_SECTION_FOREACH(bt_gatt_service_static, svc) {
+        for (size_t i = 0; i < svc->attr_count; i++) {
+            const struct bt_gatt_attr *attr = &svc->attrs[i];
+            if (attr->read != NULL && attr->uuid != NULL &&
                 attr->uuid->type == BT_UUID_TYPE_128) {
                 if (seen == index) {
                     return attr;
@@ -199,6 +223,31 @@ ZTEST(battery_service_tests, test_failed_charger_write_rejects_and_rolls_back) {
     /* Storage must have rolled back to the previous value (true). */
     zassert_true(battery_service_get_charge_enable(),
                  "storage must roll back after a rejected write");
+}
+
+ZTEST(battery_service_tests, test_battery_percent_publishes_from_vbat) {
+    /* Position 7 = "Battery Percent", derived inside battery_service_update()
+     * from vbat_mv via the shared battery_soc.h curve. */
+    const struct bt_gatt_attr *attr = find_value_attr(7);
+    zassert_not_null(attr, "Battery Percent value attribute not found");
+
+    battery_service_update(7910, -350, 5000, 1000, 3);
+
+    uint8_t percent = 0xFF;
+    ssize_t ret = attr->read(NULL, attr, &percent, sizeof(percent), 0);
+    zassert_equal(ret, 1, "percent read must return 1 byte, got %zd", ret);
+    zassert_equal(percent, battery_soc_percent(7910),
+                  "published percent must match the shared curve");
+    zassert_equal(percent, 70, "7910 mV is 70%% on the 2S curve, got %u", percent);
+
+    /* Full pack publishes 100; a dead/absent pack publishes 0. */
+    battery_service_update(8400, 0, 5000, 0, 7);
+    zassert_equal(attr->read(NULL, attr, &percent, sizeof(percent), 0), 1);
+    zassert_equal(percent, 100);
+
+    battery_service_update(6200, -350, 0, 0, 0);
+    zassert_equal(attr->read(NULL, attr, &percent, sizeof(percent), 0), 1);
+    zassert_equal(percent, 0);
 }
 
 ZTEST(battery_service_tests, test_update_publishes_without_charger_traffic) {

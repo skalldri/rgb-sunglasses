@@ -36,7 +36,9 @@ uint32_t battery_service_get_charge_current_ma(void);
  *
  * Values are quantized (10 mV / 10 mA) before assignment so ADC jitter does
  * not notify subscribed clients on every 500 ms sample; the characteristics
- * themselves only notify on change.
+ * themselves only notify on change. The "Battery Percent" characteristic is
+ * derived here from @p vbat_mv via battery_soc_percent() (src/battery_soc.h)
+ * — callers only ever feed raw telemetry.
  *
  * @param vbat_mv  Battery voltage in millivolts.
  * @param ibat_ma  Battery current in milliamps (positive = charging).
