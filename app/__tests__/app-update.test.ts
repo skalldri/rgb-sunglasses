@@ -66,6 +66,46 @@ describe('getCurrentAppVersion', () => {
   });
 });
 
+describe('APP_SELF_UPDATE_SUPPORTED', () => {
+  // The flag is computed at module load, so each case needs a fresh module
+  // registry with Platform/Constants set up before app-update is evaluated.
+  function loadFlagWithConfig(os: string, expoConfig: unknown): boolean {
+    let flag = false;
+    jest.isolateModules(() => {
+      const { Platform: IsolatedPlatform } = require('react-native');
+      IsolatedPlatform.OS = os;
+      const IsolatedConstants = require('expo-constants').default;
+      IsolatedConstants.expoConfig = expoConfig;
+      flag = require('@/services/app-update').APP_SELF_UPDATE_SUPPORTED;
+    });
+    return flag;
+  }
+
+  function loadFlag(os: string, extra?: Record<string, unknown>): boolean {
+    return loadFlagWithConfig(os, { version: '1.0.0', ...(extra !== undefined ? { extra } : {}) });
+  }
+
+  it('is enabled on Android builds without a distribution flag (dev / GitHub APK)', () => {
+    expect(loadFlag('android')).toBe(true);
+  });
+
+  it('is disabled on Android Play builds (extra.distribution === "play")', () => {
+    expect(loadFlag('android', { distribution: 'play' })).toBe(false);
+  });
+
+  it('is enabled on Android for other distribution values', () => {
+    expect(loadFlag('android', { distribution: 'github' })).toBe(true);
+  });
+
+  it('is disabled on iOS regardless of distribution', () => {
+    expect(loadFlag('ios')).toBe(false);
+  });
+
+  it('fails closed (disabled) when the Expo config is unavailable', () => {
+    expect(loadFlagWithConfig('android', null)).toBe(false);
+  });
+});
+
 describe('checkForAppUpdate', () => {
   it('returns update info when a newer app release exists', async () => {
     setCurrentVersion('1.0.0');
