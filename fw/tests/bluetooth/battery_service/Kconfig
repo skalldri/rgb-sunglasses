@@ -22,3 +22,15 @@ config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	depends on SETTINGS
 	help
 	  Mirrors the symbol of the same name in fw/Kconfig.
+
+config APP_CHARGE_CURRENT_MA
+	int "Default fast-charge current (ICHG) in mA"
+	default 900
+	help
+	  Mirrors the symbol of the same name in fw/Kconfig.
+
+config APP_CHARGE_CURRENT_MAX_MA
+	int "Maximum allowed fast-charge current in mA"
+	default 2000
+	help
+	  Mirrors the symbol of the same name in fw/Kconfig.
