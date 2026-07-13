@@ -453,7 +453,13 @@ int tps25750_get_pd_power_info(const struct device *dev, struct tps25750_pd_powe
     info->connected = (ps & BIT(0)) != 0;
     info->sinking = (ps & BIT(1)) != 0;
 
-    if (!info->connected) {
+    if (!info->connected || !info->sinking) {
+        /* No connection, or WE are the source (SourceSink=0b, e.g. powering
+         * an OTG peripheral): there is no input power budget to report. In
+         * source mode TypeCCurrent reflects our OWN Rp advertisement (TRM
+         * Table 2-33 — "If the port is connected as source, the field is
+         * updated upon initial connection only"), not anything a partner
+         * offers — decoding it here would fabricate a phantom input budget. */
         info->source = TPS25750_PWR_NONE;
         info->available_mv = 0;
         info->available_ma = 0;
