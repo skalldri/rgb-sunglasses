@@ -209,6 +209,18 @@ config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	  CONFIG_BT_SETTINGS_DELAYED_STORE_MS, which only governs Bluetooth's
 	  own bonding/CCC storage.
 
+config APP_WAKE_BUTTON
+	bool "Enable the WAKE_N button input"
+	default y
+	help
+	  Configures the wake button (sw-wake alias, shared with the BQ25792
+	  /QON net) as a GPIO interrupt source. Disable on boards where the
+	  WAKE_N line is defective: on proto0 the line reads stuck-low and,
+	  with all 8 GPIOTE channels taken by other inputs, the wake pin falls
+	  back to the SENSE/PORT-event mechanism — a misbehaving line there
+	  produces an unbounded GPIOTE interrupt storm that starves every
+	  thread (observed on 9V PD input, 2026-07-13).
+
 config APP_TPS25750_CONFIG_9V
 	bool "Use the 9V-capable TPS25750 config bundle"
 	default n
