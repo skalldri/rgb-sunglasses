@@ -1,0 +1,131 @@
+name: Build signed Android app
+description: >
+  Shared build steps for the app's release channels: toolchain setup, npm ci,
+  version stamping into app.json, expo prebuild, and a signed gradle build.
+  Used by both the GitHub APK (assembleRelease) and Google Play AAB
+  (bundleRelease) jobs in app-release.yml so the two channels build
+  identically and cannot silently drift.
+
+inputs:
+  version:
+    description: "Semver X.Y.Z to stamp into app.json"
+    required: true
+  version-code:
+    description: >
+      Android versionCode to stamp into app.json. Comes from the workflow's
+      shared `version` job (the single source of truth — the same number is
+      the iOS buildNumber), which also enforces the collision guards.
+    required: true
+  gradle-task:
+    description: "assembleRelease (APK) or bundleRelease (AAB)"
+    required: true
+  play-variant:
+    description: >
+      "true" to build the Google Play variant: stamps
+      extra.distribution="play" into app.json (gates off the in-app APK
+      self-update flow at runtime) and strips REQUEST_INSTALL_PACKAGES
+      (restricted permission; Play review does not accept self-update as a
+      use case).
+    required: false
+    default: "false"
+  keystore-base64:
+    description: "Base64-encoded release keystore"
+    required: true
+  store-password:
+    description: "Keystore store password"
+    required: true
+  key-alias:
+    description: "Signing key alias"
+    required: true
+  key-password:
+    description: "Signing key password"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+        cache: "npm"
+        cache-dependency-path: app/package-lock.json
+
+    - uses: actions/setup-java@v4
+      with:
+        distribution: "temurin"
+        java-version: "17"
+
+    - uses: gradle/actions/setup-gradle@v4
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: app
+      run: npm ci
+
+    - name: Stamp version into app.json
+      shell: bash
+      working-directory: app
+      env:
+        VERSION: ${{ inputs.version }}
+        VERSION_CODE: ${{ inputs.version-code }}
+      run: |
+        # Defensive re-validation only; the real guards (X.Y.Z shape,
+        # MAJOR >= 1, MINOR/PATCH < 100, manual range 1-9999) live in the
+        # workflow's `version` job.
+        echo "$VERSION_CODE" | grep -Eq '^[1-9][0-9]*$' \
+          || { echo "::error::version-code must be a positive integer, got '$VERSION_CODE'"; exit 1; }
+        jq --arg v "$VERSION" \
+           --argjson vc "$VERSION_CODE" \
+           '.expo.version = $v | .expo.android.versionCode = $vc' \
+           app.json > app.json.tmp && mv app.json.tmp app.json
+
+    - name: Stamp Play-variant config into app.json
+      if: inputs.play-variant == 'true'
+      shell: bash
+      working-directory: app
+      run: |
+        jq '.expo.extra.distribution = "play"
+            | .expo.android.permissions -= ["android.permission.REQUEST_INSTALL_PACKAGES"]' \
+           app.json > app.json.tmp && mv app.json.tmp app.json
+
+    - name: Generate Android native project
+      shell: bash
+      working-directory: app
+      run: npx expo prebuild --platform android --clean
+
+    - name: Configure Android SDK path
+      shell: bash
+      working-directory: app
+      run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+    - name: Make gradlew executable
+      shell: bash
+      working-directory: app
+      run: chmod +x android/gradlew
+
+    - name: Decode release keystore
+      shell: bash
+      working-directory: app
+      env:
+        KEYSTORE_BASE64: ${{ inputs.keystore-base64 }}
+      run: printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/release.keystore
+
+    - name: Build signed ${{ inputs.gradle-task }}
+      shell: bash
+      working-directory: app/android
+      env:
+        STORE_PASSWORD: ${{ inputs.store-password }}
+        KEY_ALIAS: ${{ inputs.key-alias }}
+        KEY_PASSWORD: ${{ inputs.key-password }}
+      run: |
+        ./gradlew "${{ inputs.gradle-task }}" \
+          -Pandroid.injected.signing.store.file="${{ github.workspace }}/app/android/app/release.keystore" \
+          -Pandroid.injected.signing.store.password="$STORE_PASSWORD" \
+          -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+          -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+    - name: Remove keystore
+      if: always()
+      shell: bash
+      working-directory: app
+      run: rm -f android/app/release.keystore

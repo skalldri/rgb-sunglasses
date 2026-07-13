@@ -22,14 +22,29 @@ const APK_FILENAME = 'app-update.apk';
 
 /**
  * Whether the in-app self-update flow (download a release artifact from GitHub
- * and install it) is available on this platform.
+ * and install it) is available on this build.
  *
  * Only Android can side-load an APK from a GitHub release. iOS apps can only be
  * updated through the App Store / TestFlight, so the feature is disabled on iOS
  * entirely — no launch-time check, banner, or update modal. Callers gate every
  * entry point on this flag.
+ *
+ * Google Play builds are also excluded: Play policy forbids apps updating
+ * themselves outside Play's own mechanism (and the build drops
+ * REQUEST_INSTALL_PACKAGES). The Play variant is marked at build time by the
+ * release workflow stamping `extra.distribution = "play"` into app.json —
+ * dev and GitHub-APK builds carry no `extra.distribution` and keep the flow.
+ *
+ * Fails CLOSED when the Expo config is unavailable at runtime (possible, per
+ * getCurrentAppVersion's fallback below): a wrongly-disabled updater in a
+ * GitHub build merely degrades to manual downloads, but a wrongly-ENABLED
+ * updater in a Play build is a broken install flow and a Play policy
+ * violation.
  */
-export const APP_SELF_UPDATE_SUPPORTED = Platform.OS === 'android';
+export const APP_SELF_UPDATE_SUPPORTED =
+    Platform.OS === 'android' &&
+    Constants.expoConfig != null &&
+    Constants.expoConfig.extra?.distribution !== 'play';
 
 export interface AppUpdateInfo {
     /** Version of the available release, e.g. "1.2.3". */
