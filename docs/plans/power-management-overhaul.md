@@ -115,6 +115,24 @@ Tick: battery-presence edges (absent→force EN_CHG off; present→re-apply user
 - No new CPF formats needed (uint32/uint8/bool all supported); units stay in CUD names per convention.
 - **Tests**: update `battery-card.test.tsx`, `device-state-index.test.tsx`; new battery-page test mirroring `device-state-detail.test.tsx`.
 
+## Status (2026-07-12)
+
+| PR | Branch | State |
+|---|---|---|
+| A — diagnostics | `feat/power-mgmt-pr-a-diagnostics` | **PR #141 open**; shell-verified on hardware |
+| B — charger policy | `feat/power-mgmt-pr-b-charger-policy` | **PR #142 open** (stacked); battery-present path smoke-tested on hardware |
+| D — configurable ICHG | `feat/power-mgmt-pr-d-charge-current` | pushed; all machine gates green; awaiting on-device+app verification before PR |
+| E — SOC/LED/debug service/app | `feat/power-mgmt-pr-e-battery-ux` | pushed; all machine gates green (63/63 fw, 234/234 jest, tsc/lint clean); awaiting verification |
+| C — PD-aware input power | `feat/power-mgmt-pr-c-input-power` (tip of stack) | firmware implemented + emulator-tested; **bundle rebuild still open** (sink caps are 5V/3A-only; customization guide now in `fw/docs/datasheets/TPS25750/`) |
+
+Capture tooling: `fw/scripts/observe-power.py` (periodic read-only `power bq limits` / `power pd contract` / `power policy` sampler; hold the board lock, close MCP serial first).
+
+### Incident log — 9V bring-up lockups (2026-07-13)
+
+Two distinct lockups during 9V validation, both diagnosed over SWD (GDB + J-Link):
+1. **GPIOTE interrupt storm** pegging the CPU. WAKE_N (P0.02, shared with BQ25792 /QON) reads stuck-low — a **known proto0 hardware defect** — and with all 8 GPIOTE channels taken by other inputs, the wake pin's interrupt uses the SENSE/PORT-event fallback, which storms on a misbehaving line under 9V-supply noise. Mitigated: `CONFIG_APP_WAKE_BUTTON=n` on proto0 (wake input disabled entirely). Verified clean on 9V after the change.
+2. **Unexplained one-shot lockup**: charger_status_thread woke from k_msleep with its saved context (PC/SP/LR) all `0xdeadbeef` → CPU lockup state. The poison source was never identified (not a Zephyr kernel value; not in fw sources; a boundary watchpoint above the charger stack — whose upper RAM neighbor is the persistent_value_store workqueue stack — did NOT fire during normal persisted-value saves). Not reproduced since. **Open**: if it recurs, re-arm the watchpoint tripwire and check the persist-workqueue high-water; a stale BFAR pointed at twim_0_data.
+
 ## PR breakdown (dependency order)
 
 0. **Plan doc** — commit this file to `docs/plans/power-management-overhaul.md` (can ride with PR A).

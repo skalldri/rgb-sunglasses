@@ -2,13 +2,16 @@
 
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/drivers/tps25750/tps25750.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/util.h>
 
 LOG_MODULE_REGISTER(charger_policy, LOG_LEVEL_INF);
 
 static const struct device *bq = DEVICE_DT_GET(DT_NODELABEL(bq25792));
+static const struct device *pd = DEVICE_DT_GET(DT_NODELABEL(tps25750));
 
 /* All state below is guarded by s_lock: setters arrive on the BT RX thread
  * (BLE writes) and the shell thread, concurrent with the charger status
@@ -21,6 +24,8 @@ static bool s_vbat_present;
 static bool s_vbus_present;
 static uint32_t s_charge_current_ma; /* 0 = unmanaged (until PR D) */
 static uint32_t s_vindpm_mv = CONFIG_APP_VINDPM_MV;
+static uint32_t s_iindpm_ma;       /* 0 = unmanaged (legacy/BC1.2 sources) */
+static struct tps25750_pd_power_info s_pd_info;
 static uint32_t s_wd_redisable_count;
 static uint32_t s_tick_count;
 static bool s_wd_expired_prev;
@@ -61,6 +66,49 @@ static int apply_effective_charge_enable_locked(void) {
     return 0;
 }
 
+/* Derive IINDPM/VINDPM targets from the negotiated input budget. Caller holds
+ * s_lock. Returns true when a target changed (caller should re-apply).
+ *
+ * - Explicit PD contract / Type-C 1.5A/3A advertisement: the budget is known
+ *   digitally — IINDPM = min(contract mA, CONFIG_APP_INPUT_CURRENT_LIMIT_MAX_MA),
+ *   VINDPM = 90% of the contract voltage (rounded down to the 100mV LSB,
+ *   floored at the Kconfig fallback for 5V-class contracts) so a sagging
+ *   source folds back before collapsing.
+ * - Type-C default / unknown / disconnected: leave IINDPM unmanaged — the
+ *   BQ's own BC1.2 detection result is the lawful budget for legacy sources
+ *   (deliberately probing past it belongs to ICO, kept off per the plan).
+ */
+static bool derive_input_targets_locked(void) {
+    uint32_t iindpm_target = 0;
+    uint32_t vindpm_target = CONFIG_APP_VINDPM_MV;
+
+    switch (s_pd_info.source) {
+        case TPS25750_PWR_PD_CONTRACT:
+        case TPS25750_PWR_TYPEC_1A5:
+        case TPS25750_PWR_TYPEC_3A0:
+            iindpm_target =
+                (CLAMP(MIN(s_pd_info.available_ma, CONFIG_APP_INPUT_CURRENT_LIMIT_MAX_MA), 100,
+                       3300) /
+                 10) *
+                10; /* IINDPM LSB/range: SLUSDG1C Table 9-18 */
+            vindpm_target =
+                MAX((uint32_t)CONFIG_APP_VINDPM_MV,
+                    ((s_pd_info.available_mv * 9 / 10) / 100) * 100); /* 90%, 100mV LSB */
+            break;
+        default:
+            break;
+    }
+
+    bool changed = (iindpm_target != s_iindpm_ma) || (vindpm_target != s_vindpm_mv);
+    s_iindpm_ma = iindpm_target;
+    s_vindpm_mv = vindpm_target;
+    if (changed) {
+        LOG_INF("input budget: source=%d -> IINDPM=%umA (0=unmanaged) VINDPM=%umV",
+                (int)s_pd_info.source, s_iindpm_ma, s_vindpm_mv);
+    }
+    return changed;
+}
+
 /* Write the managed configuration to the part. Caller holds s_lock. */
 static void apply_config_locked(void) {
     /* Watchdog first: on expiry it reverts EN_CHG/ICHG to POR defaults
@@ -70,8 +118,21 @@ static void apply_config_locked(void) {
         LOG_ERR("watchdog disable failed");
     }
 
+    /* Deterministic input-OVP headroom for any contract voltage we would
+     * accept (0h = 26V; the datasheet's REG10 reset annotations are
+     * self-inconsistent, and hardware read back 26V — make it explicit). */
+    if (bq25792_set_vac_ovp(bq, 0x0) != 0) {
+        LOG_ERR("VAC_OVP apply failed");
+    }
+
     if (bq25792_set_input_voltage_limit_mv(bq, s_vindpm_mv) != 0) {
         LOG_ERR("VINDPM=%umV apply failed", s_vindpm_mv);
+    }
+
+    if (s_iindpm_ma != 0) {
+        if (bq25792_set_input_current_limit_ma(bq, s_iindpm_ma) != 0) {
+            LOG_ERR("IINDPM=%umA apply failed", s_iindpm_ma);
+        }
     }
 
     if (s_charge_current_ma != 0) {
@@ -105,6 +166,14 @@ void charger_policy_boot_init(bool user_charge_enable, uint32_t charge_current_m
     }
     s_charge_current_ma = quantize_ichg_ma(charge_current_ma);
     s_vindpm_mv = quantize_vindpm_mv(s_vindpm_mv);
+
+    /* Input budget first, so the initial apply already reflects any contract
+     * the TPS25750 landed before we booted (cheap host-register read). */
+    if (tps25750_get_pd_power_info(pd, &s_pd_info) != 0) {
+        LOG_WRN("PD power info unavailable at boot; using fallback input targets");
+        s_pd_info = {};
+    }
+    (void)derive_input_targets_locked();
 
     apply_config_locked();
 
@@ -218,10 +287,45 @@ void charger_policy_tick(const struct bq25792_status *status) {
     }
     s_wd_expired_prev = status->wd_expired;
 
+    /* Input-budget tracking: the PD info is a cheap (non-bridged) host read,
+     * so poll it every tick; a contract change re-derives and re-applies the
+     * input targets immediately (500ms worst-case reaction to a re-plug).
+     * Decode into a LOCAL struct and commit only on success — a mid-decode
+     * I2C failure must not leave s_pd_info a stale/fresh mix in snapshots. */
+    struct tps25750_pd_power_info pd_info;
+    if (tps25750_get_pd_power_info(pd, &pd_info) == 0) {
+        s_pd_info = pd_info;
+        uint32_t prev_iindpm = s_iindpm_ma;
+        if (derive_input_targets_locked()) {
+            s_config_gen++;
+            if (bq25792_set_input_voltage_limit_mv(bq, s_vindpm_mv) != 0) {
+                LOG_ERR("VINDPM=%umV apply failed", s_vindpm_mv);
+            }
+            if (s_iindpm_ma != 0) {
+                if (bq25792_set_input_current_limit_ma(bq, s_iindpm_ma) != 0) {
+                    LOG_ERR("IINDPM=%umA apply failed", s_iindpm_ma);
+                }
+            } else if (prev_iindpm != 0) {
+                /* Managed -> unmanaged transition (e.g. a PD Hard Reset that
+                 * drops the contract WITHOUT a VBUS drop): the old contract's
+                 * high limit would otherwise stay programmed with nothing
+                 * reconciling it — and the BQ's own auto-INDET rewrite only
+                 * runs on a physical replug. Program the 500mA USB-default
+                 * lawful floor once; a real replug's BC1.2 detection then
+                 * derives the proper legacy budget. */
+                LOG_WRN("input budget lost without replug — falling back to 500mA");
+                if (bq25792_set_input_current_limit_ma(bq, 500) != 0) {
+                    LOG_ERR("IINDPM fallback apply failed");
+                }
+            }
+        }
+    }
+
     bool do_reconcile = (++s_tick_count % kReconcileTickInterval) == 0;
     uint32_t gen = s_config_gen;
     uint32_t t_vindpm = s_vindpm_mv;
     uint32_t t_ichg = s_charge_current_ma;
+    uint32_t t_iindpm = s_iindpm_ma;
     bool t_en = s_effective_charge_enable;
 
     k_mutex_unlock(&s_lock);
@@ -259,6 +363,11 @@ void charger_policy_tick(const struct bq25792_status *status) {
                         t_vindpm);
                 (void)bq25792_set_input_voltage_limit_mv(bq, t_vindpm);
             }
+            if (t_iindpm != 0 && limits.iindpm_ma != t_iindpm) {
+                LOG_INF("IINDPM diverged (%umA != %umA) — reconciling", limits.iindpm_ma,
+                        t_iindpm);
+                (void)bq25792_set_input_current_limit_ma(bq, t_iindpm);
+            }
             if (t_ichg != 0 && limits.ichg_ma != t_ichg) {
                 LOG_INF("ICHG diverged (%umA != %umA) — reconciling", limits.ichg_ma, t_ichg);
                 (void)bq25792_set_charge_current_ma(bq, t_ichg);
@@ -287,6 +396,10 @@ void charger_policy_get_snapshot(struct charger_policy_snapshot *out) {
     out->charge_gated = s_user_charge_enable && !s_vbat_present;
     out->charge_current_ma = s_charge_current_ma;
     out->vindpm_mv = s_vindpm_mv;
+    out->iindpm_ma = s_iindpm_ma;
+    out->pd_source = (uint8_t)s_pd_info.source;
+    out->pd_available_mv = s_pd_info.available_mv;
+    out->pd_available_ma = s_pd_info.available_ma;
     out->wd_redisable_count = s_wd_redisable_count;
     k_mutex_unlock(&s_lock);
 }

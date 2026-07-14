@@ -47,7 +47,13 @@ target_sources(
 if(CONFIG_TPS25750_COMPRESSED_PATCH)
   target_sources(app PRIVATE misc/tps25750/tps25750-config-compressed.c)
 elseif(CONFIG_TPS25750_INTERNAL_PATCH)
-  target_sources(app PRIVATE misc/tps25750/tps25750-config.c)
+  if(CONFIG_APP_TPS25750_CONFIG_9V)
+    # 9V/5V sink-caps variant — same symbol/size as the stock bundle, see
+    # the APP_TPS25750_CONFIG_9V Kconfig help.
+    target_sources(app PRIVATE misc/tps25750/tps25750-config-9v.c)
+  else()
+    target_sources(app PRIVATE misc/tps25750/tps25750-config.c)
+  endif()
 endif()
 
 target_sources_ifdef(CONFIG_AUDIO app PRIVATE src/sound/sound.cpp)

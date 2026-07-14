@@ -209,6 +209,34 @@ config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	  CONFIG_BT_SETTINGS_DELAYED_STORE_MS, which only governs Bluetooth's
 	  own bonding/CCC storage.
 
+config APP_WAKE_BUTTON
+	bool "Enable the WAKE_N button input"
+	default y
+	help
+	  Configures the wake button (sw-wake alias, shared with the BQ25792
+	  /QON net) as a GPIO interrupt source. Disable on boards where the
+	  WAKE_N line is defective: on proto0 the line reads stuck-low and,
+	  with all 8 GPIOTE channels taken by other inputs, the wake pin falls
+	  back to the SENSE/PORT-event mechanism — a misbehaving line there
+	  produces an unbounded GPIOTE interrupt storm that starves every
+	  thread (observed on 9V PD input, 2026-07-13).
+
+config APP_TPS25750_CONFIG_9V
+	bool "Use the 9V-capable TPS25750 config bundle"
+	default n
+	depends on TPS25750_INTERNAL_PATCH && !TPS25750_COMPRESSED_PATCH
+	help
+	  Selects misc/tps25750/tps25750-config-9v.c instead of the stock
+	  5V-only bundle: identical ACT configuration except the sink
+	  capabilities advertise a 9V PDO alongside 5V, letting the TPS25750
+	  negotiate a 9V PD contract on capable chargers (the charger policy
+	  then derives IINDPM/VINDPM from the contract; VAC_OVP headroom is
+	  already programmed to 26V). Same byte size and symbol as the stock
+	  bundle, so TPS25750_PATCH_HEADER_FILE is unchanged. NOTE: the
+	  TPS25750 only accepts a patch in PTCH mode — after flashing, fully
+	  power-cycle the board (USB AND battery removed) so the PD controller
+	  reboots and downloads the new bundle.
+
 config APP_CHARGER_POLICY
 	bool "Charger policy engine (single owner of BQ25792 config writes)"
 	default n
@@ -248,6 +276,17 @@ config APP_CHARGE_CURRENT_MAX_MA
 	  Upper clamp for runtime (BLE/shell) charge-current requests —
 	  protects the pack and wiring from a typo in the app. 2000mA matches
 	  the chip's own 2S POR default.
+
+config APP_INPUT_CURRENT_LIMIT_MAX_MA
+	int "Maximum input current limit (IINDPM) in mA"
+	default 3000
+	range 100 3300
+	depends on APP_CHARGER_POLICY
+	help
+	  Upper clamp on the IINDPM value the charger policy derives from the
+	  negotiated PD contract / Type-C advertisement — bounds board input
+	  wiring regardless of what a source offers. Legacy/unknown sources
+	  are left on the BQ25792's own BC1.2-derived limit (unmanaged).
 
 config APP_VINDPM_MV
 	int "BQ25792 input voltage limit (VINDPM) in mV"

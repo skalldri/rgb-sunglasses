@@ -39,6 +39,10 @@ struct charger_policy_snapshot {
     bool charge_gated;            /* user wants charge ON but no battery */
     uint32_t charge_current_ma;   /* ICHG target; 0 = unmanaged */
     uint32_t vindpm_mv;           /* VINDPM target */
+    uint32_t iindpm_ma;           /* IINDPM target; 0 = unmanaged (legacy src) */
+    uint8_t pd_source;            /* enum tps25750_power_source */
+    uint32_t pd_available_mv;     /* negotiated input budget */
+    uint32_t pd_available_ma;
     uint32_t wd_redisable_count;  /* times the watchdog had to be re-disabled */
 };
 

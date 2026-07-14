@@ -4,11 +4,11 @@ import { Card } from "@/components/ui/card";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import {
-    UUID_BATTERY_CHARGE_STATUS, UUID_BATTERY_PERCENT, UUID_BATTERY_VOLTAGE,
+    UUID_BATTERY_CHARGE_STATUS, UUID_BATTERY_PERCENT, UUID_BATTERY_VOLTAGE, UUID_POWER_FLAGS,
 } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
-import { chargeStatusLabel, voltageToPercent } from "@/services/battery";
+import { batteryPresent, chargeStatusLabel, voltageToPercent } from "@/services/battery";
 import { decodeSint32FromBase64, decodeUint8FromBase64 } from "@/services/ble-value-codec";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { Link } from "expo-router";
@@ -58,6 +58,8 @@ export function BatteryCard({ style }: { style?: ViewStyle }) {
     const fwPercent = decodeUint8OrNull(chars?.[UUID_BATTERY_PERCENT]?.value);
     const vbatMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VOLTAGE]?.value);
     const chgStat = decodeUint8OrNull(chars?.[UUID_BATTERY_CHARGE_STATUS]?.value);
+    const powerFlags = decodeUint8OrNull(chars?.[UUID_POWER_FLAGS]?.value);
+    const hasBattery = batteryPresent(powerFlags, vbatMv);
 
     const percent = fwPercent ?? (vbatMv != null ? voltageToPercent(vbatMv) : null);
 
@@ -74,7 +76,9 @@ export function BatteryCard({ style }: { style?: ViewStyle }) {
                     <View style={styles.row}>
                         <ThemedText type="defaultSemiBold">Battery</ThemedText>
                         <View style={styles.rowRight}>
-                            {chgStat != null && (
+                            {!hasBattery ? (
+                                <Badge label="No Battery" tone="danger" />
+                            ) : chgStat != null && (
                                 <Badge label={chargeStatusLabel(chgStat)} tone={chargeStatusTone(chgStat)} />
                             )}
                             {/* Chevron affordance, matching MenuRow's tap-through hint. */}

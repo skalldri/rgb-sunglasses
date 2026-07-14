@@ -4,7 +4,7 @@ import { render } from '@testing-library/react-native';
 import { BatteryCard } from '@/components/battery-card';
 import {
   UUID_BATTERY_CHARGE_STATUS,
-  UUID_BATTERY_PERCENT,
+  UUID_BATTERY_PERCENT, UUID_POWER_FLAGS,
   UUID_BATTERY_VOLTAGE,
 } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
@@ -119,5 +119,21 @@ describe('BatteryCard (slim tile)', () => {
 
     const { toJSON } = render(<BatteryCard />);
     expect(toJSON()).toBeNull();
+  });
+
+  it('shows a red No Battery badge when the firmware flags the pack absent', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(0), 0x04),
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(1200), 0x10),
+        [UUID_BATTERY_CHARGE_STATUS]: charInfo(uint8Value(0), 0x04),
+        // Power Flags: VBUS present (bit1) but VBAT absent (bit0 clear).
+        [UUID_POWER_FLAGS]: charInfo(uint8Value(0x02), 0x04),
+      }),
+    } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>);
+
+    const { getByText, queryByText } = render(<BatteryCard />);
+    expect(getByText('No Battery')).toBeTruthy();
+    expect(queryByText('Not Charging')).toBeNull();
   });
 });

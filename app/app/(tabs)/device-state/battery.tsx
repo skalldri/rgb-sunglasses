@@ -14,14 +14,16 @@ import {
     getCharacteristicName,
     UUID_BATTERY_CHARGE_CURRENT, UUID_BATTERY_CHARGE_ENABLE, UUID_BATTERY_CHARGE_STATUS,
     UUID_BATTERY_CURRENT, UUID_BATTERY_PERCENT, UUID_BATTERY_SERVICE, UUID_BATTERY_VBUS_CURRENT,
-    UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VOLTAGE, UUID_POWER_DEBUG_SERVICE,
+    UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VOLTAGE, UUID_PD_SOURCE_TYPE, UUID_POWER_DEBUG_SERVICE,
+    UUID_POWER_FLAGS,
 } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useCharacteristicEditor } from "@/hooks/use-characteristic-editor";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import {
-    batteryWatts, chargeDirection, chargeStatusLabel, formatVolts, formatWatts, systemWatts,
+    batteryPresent, batteryWatts, chargeDirection, chargeStatusLabel, formatVolts, formatWatts,
+    pdSourceLabel, powerFlagLabels, systemWatts,
     voltageToPercent, type ChargeDirection,
 } from "@/services/battery";
 import { decodeSint32FromBase64, decodeUint8FromBase64 } from "@/services/ble-value-codec";
@@ -47,6 +49,8 @@ function decodeUint8OrNull(encoded: string | null | undefined): number | null {
         return null;
     }
 }
+
+const NO_BATTERY_BADGE = { label: "No Battery", tone: 'danger' as const };
 
 const DIRECTION_BADGE: Record<ChargeDirection, { label: string; tone: 'success' | 'neutral' | 'info' }> = {
     charging: { label: "Charging", tone: 'success' },
@@ -116,8 +120,12 @@ export default function BatteryDetailScreen() {
     // Prefer the firmware's own percent (Battery Percent characteristic, PR E);
     // fall back to the app-side curve for older firmware.
     const percent = fwPercent ?? voltageToPercent(vbatMv);
+    // Battery presence: firmware's VBAT_PRESENT flag (Power Debug service),
+    // with a voltage-threshold fallback for firmware without that service.
+    const powerFlags = decodeUint8OrNull(chars?.[UUID_POWER_FLAGS]?.value);
+    const hasBattery = batteryPresent(powerFlags, vbatMv);
     const direction = ibatMa != null && chgStat != null ? chargeDirection(ibatMa, chgStat) : null;
-    const badge = direction ? DIRECTION_BADGE[direction] : null;
+    const badge = !hasBattery ? NO_BATTERY_BADGE : direction ? DIRECTION_BADGE[direction] : null;
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>
@@ -214,7 +222,23 @@ export default function BatteryDetailScreen() {
                                         labelColor={labelColorFor(charUuid)}
                                     >
                                         <WriteErrorIndicator charInfo={charInfo} />
-                                        {renderCharacteristicInput(UUID_POWER_DEBUG_SERVICE, charUuid, charInfo)}
+                                        {/* Power Flags and PD Source Type get human-readable
+                                            decodes; everything else renders generically. */}
+                                        {charUuid === UUID_POWER_FLAGS ? (
+                                            <View style={styles.flagList}>
+                                                {powerFlagLabels(decodeUint8OrNull(charInfo.value) ?? 0).map((flag) => (
+                                                    <ThemedText key={flag} type="defaultSemiBold" style={styles.flagItem}>
+                                                        {flag}
+                                                    </ThemedText>
+                                                ))}
+                                            </View>
+                                        ) : charUuid === UUID_PD_SOURCE_TYPE ? (
+                                            <ThemedText type="defaultSemiBold">
+                                                {pdSourceLabel(decodeUint8OrNull(charInfo.value) ?? -1)}
+                                            </ThemedText>
+                                        ) : (
+                                            renderCharacteristicInput(UUID_POWER_DEBUG_SERVICE, charUuid, charInfo)
+                                        )}
                                     </ListRow>
                                 </React.Fragment>
                             ))}
@@ -229,6 +253,13 @@ export default function BatteryDetailScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
+    },
+    flagList: {
+        alignItems: 'flex-end',
+        gap: 2,
+    },
+    flagItem: {
+        textAlign: 'right',
     },
     header: {
         paddingHorizontal: Spacing.lg,
