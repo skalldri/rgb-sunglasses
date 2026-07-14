@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Platform } from 'react-native';
 
 import BluetoothDeviceListItem from '@/components/bluetooth-device-list-item';
 import * as BluetoothContext from '@/context/bluetooth-context';
@@ -111,6 +112,25 @@ describe('BluetoothDeviceListItem', () => {
       expect(disconnect).toHaveBeenCalledTimes(1);
       expect(mockRouter.navigate).not.toHaveBeenCalled();
     });
+  });
+
+  it('hides the mac/id caption on iOS (opaque CoreBluetooth UUID, not a MAC)', () => {
+    // jest-expo pins Platform.OS to "ios" by default
+    setupMocks();
+    const { queryByText } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
+    expect(queryByText('AA:BB:CC')).toBeNull();
+  });
+
+  it('shows the mac caption on Android', () => {
+    const originalOS = Object.getOwnPropertyDescriptor(Platform, 'OS')!;
+    Object.defineProperty(Platform, 'OS', { get: () => 'android', configurable: true });
+    try {
+      setupMocks();
+      const { getByText } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
+      expect(getByText('AA:BB:CC')).toBeTruthy();
+    } finally {
+      Object.defineProperty(Platform, 'OS', originalOS);
+    }
   });
 
   it('shows ActivityIndicator when isConnecting and discovery progress is not yet known', () => {
