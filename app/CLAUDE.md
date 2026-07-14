@@ -183,12 +183,19 @@ There is currently **no iOS dev-variant** (the Android `.dev` side-by-side insta
   Everything keyed off "macAddress" in the app still works (it's just an opaque key), but don't
   *display* it on iOS (`bluetooth-device-list-item.tsx` hides the caption there) and don't write
   iOS logic that expects `AA:BB:CC:DD:EE:FF` format.
-- **Numeric parameter inputs commit on `onEndEditing` on iOS** (`characteristic-uint32.tsx`,
-  `characteristic-float32.tsx`): iOS's number-pad/decimal-pad keyboards have **no return key**, so
-  `onSubmitEditing` is unreachable there — dismissing the keyboard (tap outside the field) is the
-  commit signal on iOS, skipping no-op edits so a casual tap-in/tap-out doesn't fire a BLE write.
-  Android is unchanged (✓ key submits via `onSubmitEditing`, tap-away cancels). Decided against an
-  `InputAccessoryView` "Done" bar (rejected in review: extra chrome) and against
+- **Text-based parameter inputs commit on `onEndEditing` on iOS** — all three (uint32, float32,
+  utf8) via the shared `characteristic-text-input-base.tsx`: iOS's number-pad/decimal-pad keyboards
+  have **no return key**, so `onSubmitEditing` is unreachable there — dismissing the keyboard (tap
+  outside the field) is the commit signal on iOS, uniformly across field types. Android is unchanged
+  (✓/Return submits via `onSubmitEditing`, tap-away cancels). Two subtleties baked into the base,
+  both regression-tested in `__tests__/characteristic-inputs.test.tsx`:
+  - The no-op-edit skip compares **display strings** (`decodeToDisplay(charInfo.value) ===
+    pendingValue`), never re-encoded bytes: float32 display is rounded to 7 significant digits
+    (`formatFloat32`), so re-encoding it can differ from the stored bytes by 1 ULP — a byte compare
+    turned a casual tap-in/tap-out into a BLE write that corrupted the stored value.
+  - A `submittedRef` suppresses the blur-after-submit double-fire when a return key IS available
+    (iOS text keyboard, hardware keyboards) — without it one commit sends two BLE writes.
+  Decided against an `InputAccessoryView` "Done" bar (rejected in review: extra chrome) and against
   `numbers-and-punctuation` keyboard (full keyboard for a number field).
 
 ### Android Permissions
