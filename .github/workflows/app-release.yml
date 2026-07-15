@@ -299,15 +299,17 @@ jobs:
           </plist>
           EOF
 
-      # Self-contained signing keychain: import the Apple Distribution cert +
-      # key into a throwaway keychain we create, unlock, and grant codesign
+      # Self-contained signing keychain: import the signing certs into a
+      # throwaway keychain we create, unlock, and grant codesign
       # non-interactive access to — all inside this job's own session. This
       # replaces relying on the runner's login keychain being unlocked in an
       # interactive GUI session, which broke after reboots / in headless
-      # (LaunchDaemon) runner sessions with `errSecInternalComponent`, and it
-      # makes the Apple Distribution identity reliably available so automatic
-      # signing stops falling back to the Development cert. Deleted in the
-      # always() cleanup step.
+      # (LaunchDaemon) runner sessions with `errSecInternalComponent`.
+      # The APPLE_DIST_CERT_P12 secret must contain BOTH the Apple Development
+      # and Apple Distribution identities (cert + private key): automatic
+      # signing archives with Development, then -exportArchive re-signs for
+      # app-store with Distribution — each needs an accessible key here.
+      # Deleted in the always() cleanup step.
       - name: Set up signing keychain
         env:
           APPLE_DIST_CERT_P12: ${{ secrets.APPLE_DIST_CERT_P12 }}
@@ -322,8 +324,8 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
 
-          # Import the Apple Distribution identity and let codesign use the key
-          # without a UI prompt (the fix for errSecInternalComponent).
+          # Import the signing identities (Development + Distribution) and let
+          # codesign use the keys without a UI prompt (fixes errSecInternalComponent).
           security import "$RUNNER_TEMP/dist_cert.p12" -k "$KEYCHAIN" \
             -P "$APPLE_DIST_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
@@ -356,15 +358,13 @@ jobs:
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
             archive
-        # The Expo-generated project sets only DEVELOPMENT_TEAM, so xcodebuild
-        # falls back to the iOS default CODE_SIGN_IDENTITY="Apple Development"
-        # and signs the app + embedded frameworks with the Development cert —
-        # whose key is not in our build keychain (only the Distribution cert
-        # is), producing errSecInternalComponent. Forcing "Apple Distribution"
-        # makes the archive use the imported, accessible Distribution identity;
-        # -allowProvisioningUpdates provisions the matching App Store profile.
+        # Automatic signing archives with the Development identity (its
+        # default) and -exportArchive later re-signs for app-store with the
+        # Distribution identity — so BOTH certs' private keys must be in the
+        # signing keychain set up above (see that step). Do NOT force
+        # CODE_SIGN_IDENTITY here: overriding it while automatic signing is
+        # active fails with "conflicting provisioning settings".
 
       # Export the .ipa to disk first (destination=export) so we always have a
       # debuggable artifact, and so a broken archive fails here rather than
