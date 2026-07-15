@@ -346,9 +346,7 @@ export default function BluetoothScreen() {
             )}
 
             <ExternalLink href={PRIVACY_POLICY_URL} style={styles.privacyLink}>
-                <ThemedText type="caption" style={styles.privacyLinkText}>
-                    Privacy Policy
-                </ThemedText>
+                <ThemedText type="link">Privacy Policy</ThemedText>
             </ExternalLink>
         </Screen>
     );
@@ -375,10 +373,5 @@ const styles = StyleSheet.create({
     privacyLink: {
         marginTop: Spacing.sm,
         alignSelf: 'center',
-    },
-    privacyLinkText: {
-        textAlign: 'center',
-        textDecorationLine: 'underline',
-        opacity: 0.7,
     },
 });
