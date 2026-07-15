@@ -111,7 +111,16 @@ because Keychain Access / Xcode won't export both into one file): automatic sign
 default — the Expo project sets only `DEVELOPMENT_TEAM`, no explicit `CODE_SIGN_IDENTITY`), then
 `-exportArchive` re-signs for app-store with the **Distribution** identity — so both private keys
 must be accessible. Do NOT try to force `CODE_SIGN_IDENTITY="Apple Distribution"` on the archive: it
-conflicts with automatic signing ("conflicting provisioning settings"). This replaced an earlier
+conflicts with automatic signing ("conflicting provisioning settings").
+**The export step uses MANUAL signing**, not `-allowProvisioningUpdates` cloud signing: the ASC API
+key cannot create a distribution provisioning profile ("Cloud signing permission error / No profiles
+were found"), so the App Store profile is supplied as the base64 `APPLE_DIST_PROVISIONING_PROFILE`
+secret, installed on the runner by the `Install App Store provisioning profile` step, and referenced
+by name in `exportOptions.plist` (`signingStyle: manual`, `signingCertificate: Apple Distribution`,
+`provisioningProfiles: { com.autom8ed.rgbsunglassesapp: <profile name> }`). The archive still uses
+automatic signing (a Development profile, which the ASC key CAN cloud-create); only the export is
+manual. When the distribution cert is rotated, regenerate this profile too.
+This replaced an earlier
 assumption of "cloud signing, no keychain setup" — that failed on the real runner: `codesign` hit
 `errSecInternalComponent` because the runner's non-interactive session couldn't reach the login
 keychain (and only the Distribution cert had been imported, so the Development-signed archive step

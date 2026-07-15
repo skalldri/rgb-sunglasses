@@ -233,6 +233,7 @@ jobs:
           APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
           APPLE_DEV_CERT_P12: ${{ secrets.APPLE_DEV_CERT_P12 }}
           APPLE_DEV_CERT_PASSWORD: ${{ secrets.APPLE_DEV_CERT_PASSWORD }}
+          APPLE_DIST_PROVISIONING_PROFILE: ${{ secrets.APPLE_DIST_PROVISIONING_PROFILE }}
         run: |
           MISSING=""
           [ -z "$ASC_API_KEY_P8" ] && MISSING="$MISSING ASC_API_KEY_P8(secret)"
@@ -243,6 +244,7 @@ jobs:
           [ -z "$APPLE_DIST_CERT_PASSWORD" ] && MISSING="$MISSING APPLE_DIST_CERT_PASSWORD(secret)"
           [ -z "$APPLE_DEV_CERT_P12" ] && MISSING="$MISSING APPLE_DEV_CERT_P12(secret)"
           [ -z "$APPLE_DEV_CERT_PASSWORD" ] && MISSING="$MISSING APPLE_DEV_CERT_PASSWORD(secret)"
+          [ -z "$APPLE_DIST_PROVISIONING_PROFILE" ] && MISSING="$MISSING APPLE_DIST_PROVISIONING_PROFILE(secret)"
           if [ -n "$MISSING" ]; then
             echo "::error::Missing Apple credentials:$MISSING — set secrets with 'gh secret set <name>' and the variable with 'gh variable set APPLE_TEAM_ID'."
             exit 1
@@ -270,13 +272,35 @@ jobs:
       - name: Generate iOS native project
         run: npx expo prebuild --platform ios --clean
 
-      # Automatic signing + -allowProvisioningUpdates, authenticated by an App
-      # Store Connect API key: Xcode creates/downloads the App Store
-      # provisioning profile. The ASC key manages *profiles* only — the actual
-      # Apple Distribution *signing certificate + key* is provided by the
-      # dedicated keychain set up below (the ASC key cannot sign on its own).
-      # Secrets are written only under $RUNNER_TEMP and removed in the
-      # always() cleanup step (the runner is self-hosted and persistent).
+      # Install the App Store provisioning profile explicitly (base64 secret)
+      # so the export step can sign MANUALLY against it. The ASC API key cannot
+      # create a distribution profile via cloud signing ("Cloud signing
+      # permission error" / "No profiles were found"), so we provide it here.
+      # Exposes PROFILE_NAME for the exportOptions plist written next.
+      - name: Install App Store provisioning profile
+        env:
+          APPLE_DIST_PROVISIONING_PROFILE: ${{ secrets.APPLE_DIST_PROVISIONING_PROFILE }}
+        run: |
+          PROFILE="$RUNNER_TEMP/appstore.mobileprovision"
+          echo "$APPLE_DIST_PROVISIONING_PROFILE" | base64 --decode > "$PROFILE"
+          # Decode the CMS-signed profile to a plist to read its UUID + Name.
+          security cms -D -i "$PROFILE" > "$RUNNER_TEMP/profile.plist"
+          UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")"
+          NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")"
+          echo "PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
+          # Install where both current and older Xcode look for profiles.
+          for DIR in "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                     "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$DIR"
+            cp "$PROFILE" "$DIR/$UUID.mobileprovision"
+          done
+          echo "Installed provisioning profile: $NAME ($UUID)"
+
+      # Writes the ASC API key (authenticates the TestFlight upload) and the
+      # exportOptions plist. Export uses MANUAL signing against the profile
+      # installed above + the Apple Distribution cert in the build keychain —
+      # not cloud signing. Secrets are written only under $RUNNER_TEMP and
+      # removed in the always() cleanup step (self-hosted, persistent runner).
       - name: Write App Store Connect API key and export options
         run: |
           echo "${{ secrets.ASC_API_KEY_P8 }}" | base64 --decode > "$RUNNER_TEMP/asc_api_key.p8"
@@ -292,7 +316,14 @@ jobs:
             <key>teamID</key>
             <string>$APPLE_TEAM_ID</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.autom8ed.rgbsunglassesapp</key>
+              <string>$PROFILE_NAME</string>
+            </dict>
             <!-- Defaults to YES, which would let Xcode rewrite the build
                  number we injected into app.json. -->
             <key>manageAppVersionAndBuildNumber</key>
@@ -387,7 +418,6 @@ jobs:
             -archivePath "$RUNNER_TEMP/RGBSunglasses.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
             -exportPath ios-export \
-            -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/asc_api_key.p8" \
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
@@ -411,7 +441,6 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/RGBSunglasses.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
-            -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/asc_api_key.p8" \
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
@@ -422,6 +451,7 @@ jobs:
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/asc_api_key.p8" "$RUNNER_TEMP/exportOptions.plist"
+          rm -f "$RUNNER_TEMP/appstore.mobileprovision" "$RUNNER_TEMP/profile.plist"
           rm -rf "$RUNNER_TEMP/RGBSunglasses.xcarchive" "$RUNNER_TEMP/DerivedData"
           rm -rf ios-export
           # Remove the throwaway signing keychain and restore the search list.
