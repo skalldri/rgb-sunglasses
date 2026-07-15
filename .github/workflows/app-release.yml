@@ -356,7 +356,15 @@ jobs:
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             archive
+        # The Expo-generated project sets only DEVELOPMENT_TEAM, so xcodebuild
+        # falls back to the iOS default CODE_SIGN_IDENTITY="Apple Development"
+        # and signs the app + embedded frameworks with the Development cert —
+        # whose key is not in our build keychain (only the Distribution cert
+        # is), producing errSecInternalComponent. Forcing "Apple Distribution"
+        # makes the archive use the imported, accessible Distribution identity;
+        # -allowProvisioningUpdates provisions the matching App Store profile.
 
       # Export the .ipa to disk first (destination=export) so we always have a
       # debuggable artifact, and so a broken archive fails here rather than
