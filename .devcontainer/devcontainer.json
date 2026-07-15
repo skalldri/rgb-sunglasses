@@ -18,11 +18,26 @@
         }
     },
     "containerEnv": {
-        "ACCEPT_JLINK_LICENSE": "1"
+        "ACCEPT_JLINK_LICENSE": "1",
+        // Point Claude Code's config root at the persisted volume mounted below (see "mounts").
+        // This consolidates ALL of Claude Code's state under one directory — credentials, session
+        // transcripts, settings, history, AND the top-level .claude.json config — so a single
+        // named volume survives container rebuilds. (Verified: setting CLAUDE_CONFIG_DIR relocates
+        // .claude.json into this dir, so no fragile symlink of that file is needed.)
+        "CLAUDE_CONFIG_DIR": "/root/.claude"
     },
     "runArgs": [
         "--privileged",
         "--network=host"
+    ],
+    // Persist Claude Code login + conversation history + config across container rebuilds.
+    // The container's /root is discarded on rebuild; this named Docker volume is not, so the
+    // CLI stays logged in and past sessions remain. Only the mount CONFIG lives here — the
+    // actual token/history/config data lives solely in the local `rgb-sunglasses-claude`
+    // Docker volume on your machine and is never committed. Empty on first rebuild (log in
+    // once); persists forever after. Paired with CLAUDE_CONFIG_DIR above.
+    "mounts": [
+        "source=rgb-sunglasses-claude,target=/root/.claude,type=volume"
     ],
     // Runs before the container starts. With Docker Desktop + "Clone in Container Volume",
     // this executes inside docker-desktop WSL2 (not on the Windows host), so we use a
