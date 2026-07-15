@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RGB Sunglasses</title>
+    <meta name="description" content="Open-source LED sunglasses controlled over Bluetooth — nRF5340 Zephyr firmware and a React Native companion app for Android and iOS.">
+    <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<nav class="nav">
+    <div class="nav-inner">
+        <a class="brand" href="/"><span class="brand-dot"></span>RGB Sunglasses</a>
+        <div class="nav-links">
+            <a href="https://github.com/skalldri/rgb-sunglasses" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://github.com/skalldri/rgb-sunglasses/releases" target="_blank" rel="noopener">Releases</a>
+            <a href="/privacy">Privacy</a>
+        </div>
+    </div>
+</nav>
+
+<header class="hero">
+    <h1>RGB Sunglasses</h1>
+    <p>Programmable LED sunglasses you control from your phone over Bluetooth — colors, animations, and firmware updates, all open source.</p>
+    <div class="btn-row">
+        <a class="btn btn-primary" href="https://github.com/skalldri/rgb-sunglasses" target="_blank" rel="noopener">View on GitHub</a>
+        <a class="btn btn-ghost" href="https://github.com/skalldri/rgb-sunglasses/releases" target="_blank" rel="noopener">Latest releases</a>
+    </div>
+</header>
+
+<main>
+    <div class="cards">
+        <div class="card">
+            <h3>Companion app</h3>
+            <p>A React Native (Expo) app for Android and iOS that connects to the sunglasses over Bluetooth Low Energy to set colors, tune animations, and adjust device settings.</p>
+        </div>
+        <div class="card">
+            <h3>nRF5340 firmware</h3>
+            <p>Zephyr RTOS firmware built on the Nordic Connect SDK, driving the LEDs and exposing controls and telemetry over a BLE GATT interface.</p>
+        </div>
+        <div class="card">
+            <h3>Over-the-air updates</h3>
+            <p>Firmware images are published as GitHub Releases and can be flashed to the sunglasses straight from the app — no cables required.</p>
+        </div>
+        <div class="card">
+            <h3>Open source</h3>
+            <p>Firmware and app live together in one monorepo on GitHub. Browse the code, file issues, or build it yourself in the provided dev container.</p>
+        </div>
+    </div>
+
+    <section class="section prose">
+        <h2>About the project</h2>
+        <p>
+            RGB Sunglasses is a hobby hardware project: a pair of sunglasses with addressable RGB
+            LEDs, driven by an <strong>nRF5340</strong> and controlled wirelessly from a phone. The
+            <a href="https://github.com/skalldri/rgb-sunglasses" target="_blank" rel="noopener">monorepo</a>
+            contains the Zephyr firmware, the React Native control app, and the tooling used to build
+            and release both.
+        </p>
+        <p>
+            The companion app talks to the hardware entirely over Bluetooth. It collects no personal
+            information — see the <a href="/privacy">Privacy Policy</a> for the details.
+        </p>
+    </section>
+</main>
+
+<footer>
+    <span>© 2026 RGB Sunglasses</span>
+    <span>
+        <a href="/privacy">Privacy Policy</a> ·
+        <a href="mailto:privacy@autom8ed.com">Contact</a> ·
+        <a href="https://github.com/skalldri/rgb-sunglasses" target="_blank" rel="noopener">GitHub</a>
+    </span>
+</footer>
+</body>
+</html>

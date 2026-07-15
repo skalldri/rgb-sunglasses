@@ -1,4 +1,5 @@
 import BluetoothDeviceListItem from "@/components/bluetooth-device-list-item";
+import { ExternalLink } from "@/components/external-link";
 import { ThemedText } from "@/components/themed-text";
 import { AppButton } from "@/components/ui/app-button";
 import { Card } from "@/components/ui/card";
@@ -6,6 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Hero } from "@/components/ui/hero";
 import { Screen } from "@/components/ui/screen";
 import { Spacing } from "@/constants/theme";
+import { PRIVACY_POLICY_URL } from "@/constants/urls";
 import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
@@ -342,6 +344,10 @@ export default function BluetoothScreen() {
                     {`App v${getCurrentAppVersion()}`}
                 </ThemedText>
             )}
+
+            <ExternalLink href={PRIVACY_POLICY_URL} style={styles.privacyLink}>
+                <ThemedText type="link">Privacy Policy</ThemedText>
+            </ExternalLink>
         </Screen>
     );
 }
@@ -363,5 +369,9 @@ const styles = StyleSheet.create({
     },
     versionLabel: {
         textAlign: 'center',
+    },
+    privacyLink: {
+        marginTop: Spacing.sm,
+        alignSelf: 'center',
     },
 });
