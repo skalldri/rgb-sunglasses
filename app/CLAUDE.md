@@ -97,10 +97,20 @@ signed Release archive and uploads it to TestFlight. The job is gated on the
 switch that avoids editing the workflow). It runs on the same self-hosted Mac runner,
 triggered by `app-vX.Y.Z` tags (in parallel with the Android release job — neither gates the other)
 or by `workflow_dispatch` with explicit `version` + `build_number` inputs (iOS-only; the Android
-job is skipped — used for the first upload and pipeline validation). Signing is **cloud signing**:
-automatic signing + `xcodebuild -allowProvisioningUpdates` authenticated by an App Store Connect
-API key (secrets `ASC_API_KEY_P8` base64 / `ASC_KEY_ID` / `ASC_ISSUER_ID`; the non-sensitive Team
-ID is the repo *variable* `APPLE_TEAM_ID`) — no distribution .p12 or keychain setup on the runner.
+job is skipped — used for the first upload and pipeline validation). Signing: automatic signing +
+`xcodebuild -allowProvisioningUpdates` authenticated by an App Store Connect API key (secrets
+`ASC_API_KEY_P8` base64 / `ASC_KEY_ID` / `ASC_ISSUER_ID`; the non-sensitive Team ID is the repo
+*variable* `APPLE_TEAM_ID`) manages the *provisioning profile* — but the ASC key does NOT sign. The
+actual **Apple Distribution certificate + private key** is imported at build time from the
+`APPLE_DIST_CERT_P12` (base64 `.p12`) / `APPLE_DIST_CERT_PASSWORD` secrets into a throwaway keychain
+the `Set up signing keychain` step creates, unlocks, and `set-key-partition-list`s inside the job's
+own session (deleted in the always() cleanup). This replaced an earlier assumption of "cloud
+signing, no keychain setup" — that failed on the real runner: an app-store archive needs a
+Distribution cert (automatic signing fell back to the Development cert), and `codesign` hit
+`errSecInternalComponent` because the runner's non-interactive session couldn't reach the login
+keychain. Doing it in-job makes signing survive runner reboots / headless sessions. A one-time
+`app-ios-ci.yml` per-push build still uses `CODE_SIGNING_ALLOWED=NO`, so it never exercises signing —
+the release job is the only place signing runs.
 Upload is a second `xcodebuild -exportArchive` with `destination: upload` in the exportOptions
 plist (`altool` is deprecated). `ios.buildNumber` is injected at build time by a shared `version`
 job (single source of truth — the same value is the Android versionCode): tag builds use
