@@ -130,7 +130,7 @@ Do these in order; the API upload only works after the final steps.
    | Secret | `PLAY_SERVICE_ACCOUNT_JSON` | raw contents of the service-account JSON key |
    | Secret (existing) | `KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` | reused unchanged |
    | Variable | `PLAY_PUBLISH_ENABLED` | `true` (leave unset to keep the `play` job skipped) |
-   | Variable | `PLAY_TRACK` | `internal` (default if unset) |
+   | Variable | `PLAY_TRACK` | `alpha` — the built-in **Closed testing** track (current default; falls back to `internal` only if the variable is unset) |
    | Variable | `PLAY_RELEASE_STATUS` | defaults to `draft` when unset (fail-safe: a never-published app **rejects** `completed` releases). Set to `completed` once the app is first published and you want tag releases to go live automatically |
 
 ## Dry-run procedure
@@ -142,9 +142,13 @@ as a test build in the Console), and a build number in the manual range, e.g.
 versionCode). Dispatch runs build only the selected channel — the GitHub
 `release` job and the TestFlight job are skipped — and force the Play upload to
 **draft** status, so a test can never replace a live release. Verify in the
-Play Console: the draft appears on the internal track, the what's-new text is
-right, and *App bundle explorer* shows the expected signing certificate. Each
-attempt burns its build number — bump to `9001`, `9002`, … per retry.
+Play Console: the draft appears on the track named by `PLAY_TRACK` (currently
+`alpha` / **Closed testing**), the what's-new text is right, and *App bundle
+explorer* shows the expected signing certificate. Each attempt burns its build
+number — bump to `9001`, `9002`, … per retry. (Play permanently consumes every
+versionCode, drafts included, so pick a low number deliberately rather than a
+high one — e.g. the first Closed-testing draft used version `0.2.2` / code
+`202`.)
 
 ## Promote-to-production runbook
 
@@ -152,12 +156,14 @@ attempt burns its build number — bump to `9001`, `9002`, … per retry.
    manually in the Console. Sanity-check the shared lineage once: sideload the
    GitHub APK of a version, then install the same version from the Play opt-in
    link (or vice versa) — it must update in place without an uninstall.
-2. Once trusted: set `PLAY_RELEASE_STATUS=completed` — internal-track releases
-   go live to testers automatically on every tag.
+2. Once trusted: set `PLAY_RELEASE_STATUS=completed` — releases on the
+   `PLAY_TRACK` track (currently `alpha` / Closed testing) go live to testers
+   automatically on every tag.
 3. Production: after the store listing is approved (and, for personal
-   accounts, the 12-tester/14-day closed-test requirement is met), grant the
+   accounts, the 12-tester/14-day closed-test requirement is met — this is why
+   `PLAY_TRACK` now defaults to the closed `alpha` track), grant the
    service account *Release to production* and set `PLAY_TRACK=production`.
-   Until then, promote internal → production manually in the Console.
+   Until then, promote closed testing → production manually in the Console.
 
 ## Release-notes flow ("what's new")
 
