@@ -4,7 +4,7 @@
     "slug": "rgb-sunglasses-app",
     "version": "0.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/appicon.png",
     "scheme": "rgbsunglassesapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -20,9 +20,7 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0B0B12",
-        "foregroundImage": "./assets/images/Gemini-Foreground-AppIcon.png",
-        "backgroundImage": "./assets/images/Gemini-Background-AppIcon.png",
-        "monochromeImage": "./assets/images/Gemini-Monochrome-AppIcon.png"
+        "foregroundImage": "./assets/images/appicon.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
