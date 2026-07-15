@@ -101,11 +101,13 @@ job is skipped — used for the first upload and pipeline validation). Signing: 
 `xcodebuild -allowProvisioningUpdates` authenticated by an App Store Connect API key (secrets
 `ASC_API_KEY_P8` base64 / `ASC_KEY_ID` / `ASC_ISSUER_ID`; the non-sensitive Team ID is the repo
 *variable* `APPLE_TEAM_ID`) manages the *provisioning profile* — but the ASC key does NOT sign. The
-signing **certificates + private keys** are imported at build time from the `APPLE_DIST_CERT_P12`
-(base64 `.p12`) / `APPLE_DIST_CERT_PASSWORD` secrets into a throwaway keychain the `Set up signing
-keychain` step creates, unlocks, and `set-key-partition-list`s inside the job's own session (deleted
-in the always() cleanup). **That `.p12` must contain BOTH the Apple Development and Apple
-Distribution identities**: automatic signing archives with the **Development** identity (Xcode's
+signing **certificates + private keys** are imported at build time from two secret pairs —
+`APPLE_DEV_CERT_P12` / `APPLE_DEV_CERT_PASSWORD` (Apple Development) and `APPLE_DIST_CERT_P12` /
+`APPLE_DIST_CERT_PASSWORD` (Apple Distribution), each a base64 `.p12` — into a throwaway keychain the
+`Set up signing keychain` step creates, unlocks, and `set-key-partition-list`s inside the job's own
+session (deleted in the always() cleanup). **Both identities are required** (two separate `.p12`s
+because Keychain Access / Xcode won't export both into one file): automatic signing archives with the
+**Development** identity (Xcode's
 default — the Expo project sets only `DEVELOPMENT_TEAM`, no explicit `CODE_SIGN_IDENTITY`), then
 `-exportArchive` re-signs for app-store with the **Distribution** identity — so both private keys
 must be accessible. Do NOT try to force `CODE_SIGN_IDENTITY="Apple Distribution"` on the archive: it
