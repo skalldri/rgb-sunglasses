@@ -26,7 +26,11 @@ extern "C" {
  * z_fatal_error() captures their coredump before the handler runs — the
  * periodic pass harvests those dumps while the system keeps running. */
 
-LOG_MODULE_REGISTER(coredump_manager, CONFIG_LOG_DEFAULT_LEVEL);
+/* The log module is REGISTERed once in coredump_manager_core.cpp (which the
+ * native_sim test links on its own); this glue file, compiled only into the
+ * firmware alongside it, just DECLAREs the same module so both share one log
+ * source instead of registering two confusingly-named ones. */
+LOG_MODULE_DECLARE(coredump_mgr, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace {
 

@@ -71,7 +71,7 @@ int for_each_dir_entry(const char* dir, Fn&& fn) {
 
 }  // namespace
 
-int max_dump_index(const char* dir) {
+int max_dump_index(const char* dir, int* out_max) {
     int maxIndex = -1;
     int rc = for_each_dir_entry(dir, [&maxIndex](const char* name) {
         int index = parse_dump_index(name);
@@ -80,9 +80,10 @@ int max_dump_index(const char* dir) {
         }
     });
     if (rc < 0) {
-        return -1;
+        return rc;
     }
-    return maxIndex;
+    *out_max = maxIndex;
+    return 0;
 }
 
 int format_dump_path(char* out, size_t cap, const char* dir, unsigned int index) {
@@ -137,8 +138,16 @@ int drain_to_dir(const PartitionOps& ops, const char* dir) {
         return rc;
     }
 
+    /* Pick the next free index. If the directory can't be scanned, bail rather
+     * than fall back to index 0 — that would overwrite an existing, uncollected
+     * dump. The stored dump stays valid so the next pass retries. */
+    int maxIndex = -1;
+    rc = max_dump_index(dir, &maxIndex);
+    if (rc < 0) {
+        return rc;
+    }
     char path[64];
-    int nextIndex = max_dump_index(dir) + 1;
+    int nextIndex = maxIndex + 1;
     rc = format_dump_path(path, sizeof(path), dir, static_cast<unsigned int>(nextIndex));
     if (rc < 0) {
         return rc;
@@ -146,7 +155,10 @@ int drain_to_dir(const PartitionOps& ops, const char* dir) {
 
     struct fs_file_t file;
     fs_file_t_init(&file);
-    rc = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
+    /* FS_O_TRUNC so an unexpected same-name collision replaces the file wholesale
+     * rather than leaving stale tail bytes from a longer previous dump — which
+     * would be an unparseable coredump. */
+    rc = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
     if (rc < 0) {
         return rc;
     }

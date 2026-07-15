@@ -192,7 +192,12 @@ ZTEST(coredump_manager_core, test_format_dump_path_too_small) {
 /* ---- max_dump_index / any_dump_files ------------------------------------- */
 
 ZTEST(coredump_manager_core, test_max_dump_index_missing_dir) {
-    zassert_equal(max_dump_index("/NAND:/nonexistent"), -1);
+    // A directory that can't be scanned is a negative errno, NOT an "empty" (-1):
+    // treating it as empty would let drain_to_dir reuse index 0 and clobber an
+    // existing dump. out_max is left untouched on failure.
+    int idx = 999;
+    zassert_true(max_dump_index("/NAND:/nonexistent", &idx) < 0, "missing dir must error");
+    zassert_equal(idx, 999, "out_max must be untouched on scan failure");
     zassert_false(any_dump_files("/NAND:/nonexistent"));
 }
 
@@ -204,14 +209,18 @@ ZTEST(coredump_manager_core, test_max_dump_index_ignores_non_matching) {
     createEmptyFile("/NAND:/coredump/core_12.txt");     // wrong suffix
     createEmptyFile("/NAND:/coredump/xcore_1.bin");     // wrong prefix
     createEmptyFile("/NAND:/coredump/core_00a1.bin");   // non-digit
-    zassert_equal(max_dump_index(kDumpDir), 42);
+    int idx = -1;
+    zassert_ok(max_dump_index(kDumpDir, &idx));
+    zassert_equal(idx, 42);
     zassert_true(any_dump_files(kDumpDir));
 }
 
 ZTEST(coredump_manager_core, test_any_dump_files_empty_dir) {
     fs_mkdir(kDumpDir);
     zassert_false(any_dump_files(kDumpDir));
-    zassert_equal(max_dump_index(kDumpDir), -1);
+    int idx = 999;
+    zassert_ok(max_dump_index(kDumpDir, &idx));
+    zassert_equal(idx, -1, "empty dir reports max index -1");
 }
 
 /* ---- drain_to_dir --------------------------------------------------------- */

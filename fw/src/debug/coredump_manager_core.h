@@ -26,9 +26,13 @@ struct PartitionOps {
     int (*invalidate)();
 };
 
-/* Highest NNNN among "core_NNNN.bin" files in `dir`, or -1 if the directory
- * doesn't exist or holds no matching files. Non-matching names are ignored. */
-int max_dump_index(const char* dir);
+/* Scans `dir` for "core_NNNN.bin" files. On success returns 0 and sets *out_max
+ * to the highest NNNN found, or -1 if there are no matching files (non-matching
+ * names are ignored). Returns a negative errno if the directory can't be scanned
+ * (missing directory, or a readdir error), leaving *out_max unchanged. Callers
+ * must not treat a scan failure as "empty": doing so risks reusing an index that
+ * collides with an existing, uncollected dump. */
+int max_dump_index(const char* dir, int* out_max);
 
 /* Writes "<dir>/core_NNNN.bin" (NNNN zero-padded to 4 digits) into out.
  * Returns 0, or -ENOMEM if the result would not fit in cap. */
