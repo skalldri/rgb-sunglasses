@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="index, follow">
+    <title>RGB Sunglasses — Privacy Policy</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --fg: #1a1a1a;
+            --muted: #555c66;
+            --accent: #3a5bd9;
+            --card: #f5f7fa;
+            --border: #e2e6eb;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #14171c;
+                --fg: #e6e9ef;
+                --muted: #9aa4b2;
+                --accent: #7d95f0;
+                --card: #1c2027;
+                --border: #2a2f38;
+            }
+        }
+        * { box-sizing: border-box; }
+        html { -webkit-text-size-adjust: 100%; }
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--fg);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            font-size: 17px;
+        }
+        main {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 2.5rem 1.25rem 4rem;
+        }
+        h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 0.25rem; }
+        h2 {
+            font-size: 1.25rem;
+            margin: 2.25rem 0 0.6rem;
+            padding-bottom: 0.3rem;
+            border-bottom: 1px solid var(--border);
+        }
+        p, ul { margin: 0.6rem 0; }
+        ul { padding-left: 1.35rem; }
+        li { margin: 0.35rem 0; }
+        a { color: var(--accent); }
+        .subtitle { color: var(--muted); margin: 0.1rem 0 0; }
+        .effective { color: var(--muted); font-size: 0.95rem; margin-top: 0.5rem; }
+        .tldr {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            margin: 1.75rem 0;
+        }
+        .tldr strong { color: var(--fg); }
+        footer {
+            margin-top: 3rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+        code { background: var(--card); padding: 0.1em 0.35em; border-radius: 5px; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+<main>
+    <h1>RGB Sunglasses — Privacy Policy</h1>
+    <p class="subtitle">Companion app for the RGB Sunglasses hardware</p>
+    <p class="effective"><strong>Effective date:</strong> July 15, 2026</p>
+
+    <div class="tldr">
+        <strong>In short:</strong> The RGB Sunglasses app does not collect any personal
+        information. It has no user accounts, no analytics, and no advertising. It talks to your
+        sunglasses over Bluetooth and contacts GitHub only to check for and download firmware and
+        app updates.
+    </div>
+
+    <p>
+        This Privacy Policy explains how the RGB Sunglasses companion app ("the app", "we", "us")
+        handles information. The app lets you connect to and control RGB Sunglasses hardware over
+        Bluetooth Low Energy (BLE) — adjusting colors, animations, and settings, and updating the
+        device's firmware.
+    </p>
+
+    <h2>Information we collect</h2>
+    <p>
+        <strong>We do not collect any personal information.</strong> The app has no sign-up, no
+        login, and no user accounts. We do not collect your name, email address, phone number,
+        contacts, photos, or location. We do not build any profile of you.
+    </p>
+    <p>
+        The controls you use in the app (colors, animation parameters, on/off toggles, and text
+        labels) are sent directly to your sunglasses over Bluetooth. They are not collected by us
+        or sent to any server.
+    </p>
+
+    <h2>Device permissions and why we request them</h2>
+    <ul>
+        <li>
+            <strong>Bluetooth (scan &amp; connect):</strong> Required to find your sunglasses and
+            communicate with them. This is the app's core function.
+        </li>
+        <li>
+            <strong>Location (Android only):</strong> Android requires apps to hold the location
+            permission in order to scan for nearby Bluetooth devices. The app uses this permission
+            <em>solely</em> to enable Bluetooth scanning. <strong>The app does not access, use, or
+            transmit your geographic location</strong>, and it contains no location-tracking code.
+        </li>
+        <li>
+            <strong>Install unknown apps (Android only, non-Google-Play builds):</strong> Used only
+            to install an app update you have downloaded from our GitHub Releases page. This
+            permission is removed from the Google Play version of the app, which is updated through
+            Google Play instead.
+        </li>
+    </ul>
+
+    <h2>Data stored on your device</h2>
+    <p>
+        The app does not maintain a database of your data. The only files it writes are temporary
+        firmware and app-update download files placed in the operating system's cache directory,
+        which the OS can reclaim at any time. No usage history, credentials, or personal data is
+        stored.
+    </p>
+
+    <h2>Network activity and third parties</h2>
+    <p>
+        The app's only network requests are to <strong>GitHub</strong> (the public GitHub API and
+        GitHub Releases), used to:
+    </p>
+    <ul>
+        <li>check whether newer <strong>firmware</strong> is available for your sunglasses and
+            download it so you can update the device, and</li>
+        <li>on non-Google-Play builds, check for and download <strong>app</strong> updates.</li>
+    </ul>
+    <p>
+        These requests do not include your name, account, or any personal identifier — the app has
+        none to send. However, as with any internet request, GitHub's servers receive the request,
+        including your device's IP address, and handle it under
+        <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub's Privacy Statement</a>.
+        No other third parties receive any data from the app.
+    </p>
+    <p>
+        The app's own self-update (installing a downloaded APK) is disabled on iOS and in Google
+        Play builds; the firmware-update feature for your sunglasses remains available in all
+        builds.
+    </p>
+
+    <h2>Analytics, advertising, and tracking</h2>
+    <p>
+        The app contains <strong>no analytics, crash-reporting, advertising, or tracking</strong>
+        software of any kind. We do not use any advertising identifier and we do not track your
+        activity across apps or websites.
+    </p>
+
+    <h2>Data sharing and selling</h2>
+    <p>
+        We do not sell or share personal data. There is no personal data to sell or share.
+    </p>
+
+    <h2>Children's privacy</h2>
+    <p>
+        The app is not directed at children and does not knowingly collect any information from
+        anyone, including children.
+    </p>
+
+    <h2>Changes to this policy</h2>
+    <p>
+        If we change how the app handles information, we will update this policy and revise the
+        effective date above. Continued use of the app after a change constitutes acceptance of the
+        updated policy.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+        Questions about this policy or your privacy? Email
+        <a href="mailto:privacy@autom8ed.com">privacy@autom8ed.com</a>.
+    </p>
+
+    <footer>
+        RGB Sunglasses companion app · Privacy Policy · Last updated July 15, 2026
+    </footer>
+</main>
+</body>
+</html>
