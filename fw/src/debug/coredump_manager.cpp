@@ -5,9 +5,12 @@ extern "C" {
 #include <zephyr/debug/coredump.h>
 }
 
+#include <zephyr/fs/fs.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+
+#include <cerrno>
 
 #include "coredump_manager_core.h"
 
@@ -74,6 +77,28 @@ void check_work_handler(struct k_work* work);
 K_WORK_DELAYABLE_DEFINE(sCheckWork, check_work_handler);
 
 void check_work_handler(struct k_work* work) {
+    /* Make sure the drain directory exists before anything opens it, probing
+     * with fs_stat() first — the only FS call that is silent in BOTH outcomes we
+     * hit here. fs_stat() logs nothing on success, and Zephyr's fs_stat()
+     * explicitly treats -ENOENT as "a valid stat response" and does not log it
+     * either (see subsys/fs/fs.c). The alternatives are not silent: fs_opendir()
+     * on a missing /NAND:/coredump (what any_dump_files() below does) logs an
+     * <err> "directory open error (-2)", and an unconditional fs_mkdir() logs
+     * "failed to create directory (-17)" once the directory is there. So this
+     * stat-then-mkdir stays completely quiet whether the directory already
+     * exists (skip mkdir) or is absent (mkdir creates it, silent on success),
+     * and only surfaces a log on a genuine, unexpected mkdir failure. Without
+     * it, any_dump_files() logged that spurious "-2" every period on a board
+     * that had never captured a dump. Runs here, not at init, because FATFS
+     * calls are stack-hungry and this workqueue has the larger stack for them. */
+    struct fs_dirent dir_stat;
+    if (fs_stat(kDumpDir, &dir_stat) == -ENOENT) {
+        int mkrc = fs_mkdir(kDumpDir);
+        if (mkrc < 0) {
+            LOG_WRN("coredump dir %s create failed (%d) — will retry", kDumpDir, mkrc);
+        }
+    }
+
     int rc = coredump_manager_core::drain_to_dir(kRealOps, kDumpDir);
     if (rc < 0 && rc != -ENOENT) {
         LOG_WRN("coredump drain failed (%d) — will retry", rc);
