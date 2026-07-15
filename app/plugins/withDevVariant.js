@@ -45,7 +45,7 @@ function withDebugResources(config) {
     async (cfg) => {
       const androidRoot = cfg.modRequest.platformProjectRoot;
 
-      // --- debug res: label, icon tint ---
+      // --- debug res: label + dedicated DEV app icon ---
       const debugResDir = path.join(androidRoot, 'app/src/debug/res');
       const valuesDir = path.join(debugResDir, 'values');
       fs.mkdirSync(valuesDir, { recursive: true });
@@ -58,13 +58,16 @@ function withDebugResources(config) {
           '</resources>\n'
       );
 
-      fs.writeFileSync(
-        path.join(valuesDir, 'colors.xml'),
-        '<?xml version="1.0" encoding="utf-8"?>\n' +
-          '<resources>\n' +
-          '    <color name="iconBackgroundDev">#FFB300</color>\n' +
-          '</resources>\n'
-      );
+      // Debug build gets its own launcher icon (a dark-themed variant) so it's visually
+      // distinct from the release install. Copy the DEV art in as a single nodpi drawable
+      // (Android scales it per density — no per-bucket generation needed), then repoint the
+      // adaptive-icon <foreground> at it in the debug mipmap overlay below. The debug res set
+      // wins the resource merge, so the release icon is untouched. Only the adaptive (API 26+)
+      // foreground is overridden; legacy pre-26 square/round icons keep the release art.
+      const devIconSrc = path.join(cfg.modRequest.projectRoot, 'assets/images/appicon-dev.png');
+      const debugDrawableDir = path.join(debugResDir, 'drawable-nodpi');
+      fs.mkdirSync(debugDrawableDir, { recursive: true });
+      fs.copyFileSync(devIconSrc, path.join(debugDrawableDir, 'ic_launcher_foreground_dev.png'));
 
       const mainMipmapDir = path.join(androidRoot, 'app/src/main/res/mipmap-anydpi-v26');
       const debugMipmapDir = path.join(debugResDir, 'mipmap-anydpi-v26');
@@ -75,7 +78,7 @@ function withDebugResources(config) {
         const xml = fs.readFileSync(mainIconPath, 'utf8');
         fs.writeFileSync(
           path.join(debugMipmapDir, iconFile),
-          xml.replace(/<background[^>]*\/>/, '<background android:drawable="@color/iconBackgroundDev"/>')
+          xml.replace(/<foreground[^>]*\/>/, '<foreground android:drawable="@drawable/ic_launcher_foreground_dev"/>')
         );
       }
 
