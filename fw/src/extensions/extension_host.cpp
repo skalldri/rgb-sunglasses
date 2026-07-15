@@ -45,6 +45,9 @@
 #include <zephyr/logging/log_ctrl.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/sys/libc-hooks.h>
+#include <zephyr/sys/reboot.h>
+
+#include <cmsis_core.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -265,7 +268,16 @@ void sandbox_fault(Slot &slot, const char *what, bool resetParams) {
  * sandbox thread (which is never essential). Kernel panics and faults on any
  * other thread keep the stock halt-everything behavior, preserving today's
  * debugging workflow (GDB attach to the halted CPU) for real firmware bugs.
- * Runs in exception context: keep it minimal. */
+ * Runs in exception context: keep it minimal.
+ *
+ * Coredump reboot policy (issue #80): by the time this handler runs, the
+ * coredump (if enabled) has ALREADY been written to the coredump_partition —
+ * z_fatal_error() calls coredump() before the handler. When no debugger is
+ * attached (DHCSR C_DEBUGEN clear), reboot instead of halting so the device
+ * recovers and coredump_manager can copy the dump to /NAND:/coredump on the
+ * next boot. Under a debugger the halt is kept so GDB still sees the fault
+ * live. sys_reboot() is safe here — on Nordic it's NVIC_SystemReset(), valid
+ * in handler mode with IRQs locked. */
 extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf) {
     ARG_UNUSED(esf);
     if (reason != K_ERR_KERNEL_PANIC &&
@@ -275,6 +287,12 @@ extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch
         return;
     }
     log_panic();
+#if defined(CONFIG_APP_COREDUMP_MANAGER)
+    if ((CoreDebug->DHCSR & CoreDebug_DHCSR_C_DEBUGEN_Msk) == 0) {
+        LOG_ERR("Fatal error (reason %u) — rebooting to preserve coredump", reason);
+        sys_reboot(SYS_REBOOT_COLD);
+    }
+#endif
     LOG_ERR("Halting system (reason %u)", reason);
     k_fatal_halt(reason);
 }

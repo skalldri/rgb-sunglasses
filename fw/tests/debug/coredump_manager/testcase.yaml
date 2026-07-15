@@ -1,0 +1,7 @@
+tests:
+  debug.coredump_manager:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: debug coredump

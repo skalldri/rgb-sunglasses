@@ -1,0 +1,50 @@
+name: Deploy Privacy Policy (GitHub Pages)
+
+# Publishes the static project site under `site/` to GitHub Pages, served at the
+# custom domain https://rgb-sunglasses.autom8ed.com (see site/CNAME); the privacy
+# policy lives at /privacy. Only the `site/` folder is uploaded, so internal
+# design docs under `docs/plans/` are never published.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          # Enable Pages (source = GitHub Actions) if it isn't already, so the
+          # first deploy can't fail on a repo where Pages was never turned on.
+          enablement: true
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

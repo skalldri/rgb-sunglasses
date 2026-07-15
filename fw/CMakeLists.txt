@@ -114,6 +114,12 @@ target_sources_ifdef(CONFIG_APP_CHARGER_POLICY app PRIVATE src/power/charger_pol
 target_sources_ifdef(CONFIG_APP_BATTERY_MONITOR app PRIVATE src/bluetooth/battery_service.cpp)
 target_sources_ifdef(CONFIG_APP_POWER_DEBUG_SERVICE app PRIVATE src/bluetooth/power_debug_service.cpp)
 
+target_sources_ifdef(CONFIG_APP_COREDUMP_MANAGER app PRIVATE
+    src/debug/coredump_manager.cpp
+    src/debug/coredump_manager_core.cpp
+)
+target_sources_ifdef(CONFIG_APP_CRASH_TEST_COMMANDS app PRIVATE src/debug/crash_shell.cpp)
+
 target_include_directories(
   app 
   PRIVATE

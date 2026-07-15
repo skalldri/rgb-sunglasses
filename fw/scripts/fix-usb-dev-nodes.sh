@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Recreate missing /dev/bus/usb/BBB/DDD character-device nodes.
+# Recreate missing /dev/bus/usb/BBB/DDD character-device nodes (and the board's
+# USB Mass Storage block node).
 #
 # Why this exists: the devcontainer (WSL2 docker-desktop) has no udev, so when a USB
 # device re-enumerates (new devnum), no /dev node is created for it. Worse, a library
@@ -11,11 +12,19 @@
 # shows the probe. (Same class of problem as the shifting ttyACM nodes documented in
 # fw/CLAUDE.md, which check-hardware.sh already handles for tty devices.)
 #
-# What it does, per USB device in sysfs:
-#   - computes the expected node path /dev/bus/usb/<busnum>/<devnum> and
-#     char major/minor (USB char major 189, minor = (busnum-1)*128 + devnum-1)
-#   - if the node is missing or not a character device, (re)creates it with mknod
-# and finally prunes nodes under /dev/bus/usb whose devnum no longer exists in sysfs.
+# The same missing-node problem hits the board's FAT "NAND" disk, which enumerates as
+# a SCSI block device (/dev/sdX): without its node, coredump-fetch.sh and any manual
+# mount fail with "special device /dev/sdX does not exist" even though the disk shows
+# in /sys/block and lsblk.
+#
+# What it does:
+#   - per USB device in sysfs: computes the expected node path
+#     /dev/bus/usb/<busnum>/<devnum> and char major/minor (USB char major 189,
+#     minor = (busnum-1)*128 + devnum-1); if the node is missing or not a character
+#     device, (re)creates it with mknod
+#   - for the board's Mass Storage disk (SCSI vendor "RGB-SG"): (re)creates its
+#     /dev/sdX block node from the major:minor in sysfs
+#   - finally prunes nodes under /dev/bus/usb whose devnum no longer exists in sysfs.
 #
 # Usage: fw/scripts/fix-usb-dev-nodes.sh   (needs root, which the devcontainer runs as)
 
@@ -45,6 +54,31 @@ for dev in /sys/bus/usb/devices/*; do
         idv=$(cat "$dev/idVendor" 2>/dev/null || echo '????')
         idp=$(cat "$dev/idProduct" 2>/dev/null || echo '????')
         echo "created $node (c 189 $minor) for $idv:$idp"
+        created=$((created + 1))
+    fi
+done
+
+# Recreate the block node for the board's USB Mass Storage disk (the FAT "NAND"
+# volume). Identify it by SCSI vendor "RGB-SG", never a fixed /dev/sdX letter — it
+# shifts based on whatever else is attached. The volume has no partition table
+# (blkid reports vfat on the whole disk), so only the whole-disk node is needed.
+for bdev in /sys/block/sd*; do
+    [ -e "$bdev" ] || continue
+    vendor=$(cat "$bdev/device/vendor" 2>/dev/null || true)
+    [[ "$vendor" == *"RGB-SG"* ]] || continue
+
+    name=$(basename "$bdev")
+    node="/dev/$name"
+    maj_min=$(cat "$bdev/dev")   # "MAJ:MIN"
+    maj=${maj_min%:*}
+    min=${maj_min#*:}
+
+    if [ ! -b "$node" ]; then
+        # Missing entirely, or a bogus regular file left by a failed open(O_CREAT)
+        rm -f "$node"
+        mknod "$node" b "$maj" "$min"
+        chmod 660 "$node"
+        echo "created $node (b $maj $min) for RGB-SG Mass Storage disk"
         created=$((created + 1))
     fi
 done

@@ -1,26 +1,43 @@
 # Static partition map for rgb_sunglasses_proto0 (nRF5340 CPUAPP)
 #
-# Internal flash: 1 MB (0x100000) — code only
-#   mcuboot   0x00000  80 KB  (0x14000)  — enlarged for QSPI NOR driver
-#   app       0x14200 ~943 KB (0xEBE00)  — fills ALL remaining internal flash
+# Internal flash: 1 MB (0x100000)
+#   mcuboot             0x00000  80 KB  (0x14000)  — enlarged for QSPI NOR driver
+#   app                 0x14200 ~880 KB (0xDBE00)  — shrunk from 0xEBE00 (issue #80): the last
+#                                                     64 KB of internal flash now holds the
+#                                                     coredump partition.
+#   coredump_partition  0xF0000  64 KB  (0x10000)  — crash dump storage (issue #80). Written by
+#                                                     the NCS DEBUG_COREDUMP_BACKEND_NRF_FLASH_PARTITION
+#                                                     backend from fault context (raw nrfx_nvmc —
+#                                                     external QSPI can't be driven with IRQs locked).
+#                                                     Drained to /NAND:/coredump/ by coredump_manager.
 #
 # External flash: MX25R6435F 8 MB (0x800000)
-#   mcuboot_secondary   0x000000  944 KB (0xEC000)  — must match mcuboot_primary
-#   mcuboot_secondary_1 0x0EC000  256 KB (0x40000)  — net core OTA staging
-#   settings_storage    0x12C000   32 KB (0x08000)  — NVS persistent settings. Zephyr's default
-#                                                      CONFIG_SETTINGS_NVS_SECTOR_COUNT=8 expects
-#                                                      8 × 4 KB = 32 KB; this partition matches that.
-#   fat_storage         0x134000  ~4 MB (0x3FA000)  — FAT filesystem / USB Mass Storage
-#                                                      Start has shifted over time as settings_storage
-#                                                      grew: originally 0x12E000, then 0x130000 (8→16KB
-#                                                      NVS expansion), now 0x134000 (16→32KB). Existing
-#                                                      FAT data is invalidated on any resize — reformat
-#                                                      with mkfs.vfat and re-copy GLIM files to /NAND:.
-#                                                      mcuboot.bin staging lives here too (see mcuboot_updater.cpp).
-#   external_flash      0x52E000 ~2.82 MB (0x2D2000) — remaining raw flash
+#   mcuboot_secondary   0x000000  880 KB (0xDC000) — MUST exactly match mcuboot_primary:
+#                                                     MCUboot's boot_slots_compatible() refuses
+#                                                     upgrades (silently — "just boot primary")
+#                                                     when the slots' sector counts differ, even
+#                                                     in overwrite-only mode.
+#   mcuboot_secondary_1 0x0DC000  256 KB (0x40000) — net core OTA staging
+#   settings_storage    0x11C000   32 KB (0x08000) — NVS persistent settings. Zephyr's default
+#                                                     CONFIG_SETTINGS_NVS_SECTOR_COUNT=8 expects
+#                                                     8 × 4 KB = 32 KB; this partition matches that.
+#   fat_storage         0x124000 ~6.9 MB (0x6DC000) — FAT filesystem / USB Mass Storage
+#                                                     Start has shifted over time as settings_storage
+#                                                     grew: originally 0x12E000, then 0x130000 (8→16KB
+#                                                     NVS expansion), then 0x134000 (16→32KB), now
+#                                                     0x124000 (issue #80 repack: everything after
+#                                                     mcuboot_secondary moved down 64 KB, and the FAT
+#                                                     disk absorbed the old trailing "external_flash"
+#                                                     filler to consume all remaining flash). Existing
+#                                                     FAT data is invalidated on any resize — reformat
+#                                                     with mkfs.vfat and re-copy GLIM files to /NAND:.
+#                                                     mcuboot.bin staging lives here too (see mcuboot_updater.cpp).
+#
+# The issue #80 repack moved settings_storage (0x12C000 → 0x11C000), wiping BT bonds and
+# persisted config once — accepted while devices are development-only.
 #
 # CONFIG_BOOT_MAX_IMG_SECTORS=256 is set in the mcuboot board conf to handle
-# the 236 internal-flash sectors (944 KB / 4 KB) in the primary slot.
+# the 220 internal-flash sectors (880 KB / 4 KB) in the primary slot.
 
 mcuboot:
   address: 0x0
@@ -35,7 +52,7 @@ mcuboot_pad:
 app:
   address: 0x14200
   region: flash_primary
-  size: 0xebe00
+  size: 0xdbe00
 
 mcuboot_primary:
   address: 0x14000
@@ -43,7 +60,7 @@ mcuboot_primary:
   - mcuboot_pad
   - app
   region: flash_primary
-  size: 0xec000
+  size: 0xdc000
   span: *id001
 
 mcuboot_primary_app:
@@ -51,8 +68,16 @@ mcuboot_primary_app:
   orig_span: &id002
   - app
   region: flash_primary
-  size: 0xebe00
+  size: 0xdbe00
   span: *id002
+
+# Crash dump storage (issue #80) — see the header comment. 4 KB erase-page aligned;
+# the NCS backend BUILD_ASSERTs on that. No DTS node needed: the backend resolves
+# FIXED_PARTITION_*(coredump_partition) through NCS's PM-backed flash_map_pm.h macros.
+coredump_partition:
+  address: 0xf0000
+  region: flash_primary
+  size: 0x10000
 
 # Net core primary: modelled as ram_flash (app core cannot directly access net
 # core flash; PCD copies the validated image here, then B0N pulls it in).
@@ -64,25 +89,25 @@ mcuboot_primary_1:
 
 mcuboot_secondary:
   address: 0x00000
-  size: 0xec000
+  size: 0xdc000
   device: MX25R64
   region: external_flash
 
 mcuboot_secondary_1:
-  address: 0xec000
+  address: 0xdc000
   size: 0x40000
   device: MX25R64
   region: external_flash
 
 settings_storage:
-  address: 0x12c000
+  address: 0x11c000
   size: 0x8000
   device: MX25R64
   region: external_flash
 
 fat_storage:
-  address: 0x134000
-  size: 0x3fa000        # ~4 MB — FAT filesystem (USB Mass Storage; start shifted +24 KB, see header)
+  address: 0x124000
+  size: 0x6dc000        # ~6.9 MB — FAT filesystem (USB Mass Storage), ends exactly at 0x800000
   device: MX25R64
   region: external_flash
   # affiliation: disk registers this partition with the flash disk driver (PM path).
@@ -92,12 +117,6 @@ fat_storage:
     disk_name: NAND
     disk_cache_size: 4096
     disk_sector_size: 4096
-
-external_flash:
-  address: 0x52e000
-  size: 0x2d2000        # ~2.82 MB — remaining raw flash
-  device: MX25R64
-  region: external_flash
 
 # PCD shared SRAM: MCUboot signals the net core update request here.
 pcd_sram:

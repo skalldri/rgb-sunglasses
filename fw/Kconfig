@@ -375,6 +375,58 @@ config APP_EXT_TICK_DEADLINE_MS
 	  finish one tick before declaring it hung, aborting the host thread,
 	  and falling back (issue #85 recovery path).
 
+config APP_COREDUMP_MANAGER
+	bool "Coredump manager: drain crash dumps from flash to the FAT disk"
+	depends on DEBUG_COREDUMP && FILE_SYSTEM
+	default n
+	help
+	  Periodically checks the internal-flash coredump_partition (written by
+	  the NCS DEBUG_COREDUMP_BACKEND_NRF_FLASH_PARTITION backend during a
+	  fatal fault) for a stored dump, copies it to /NAND:/coredump/
+	  core_NNNN.bin, invalidates the partition, and logs a periodic
+	  reminder while dump files await collection (issue #80). Running
+	  periodically — not just at boot — also harvests dumps from
+	  extension-sandbox faults, which are demoted to a thread abort and
+	  never reboot. Proto0 only — the DK has neither the partition nor a
+	  filesystem.
+
+config APP_COREDUMP_MANAGER_INIT_PRIORITY
+	int "Coredump manager SYS_INIT priority"
+	default 91
+	depends on APP_COREDUMP_MANAGER
+	help
+	  APPLICATION-phase init priority. Must be greater than
+	  CONFIG_APPLICATION_INIT_PRIORITY (90), where storage.cpp mounts the
+	  FAT filesystem — enforced by a static_assert in coredump_manager.cpp.
+
+config APP_COREDUMP_WORKQ_STACK_SIZE
+	int "Stack size for the coredump manager workqueue"
+	default 3072
+	depends on APP_COREDUMP_MANAGER
+	help
+	  The coredump manager does FAT filesystem I/O (fs_opendir/fs_write)
+	  from its own workqueue; FATFS calls are stack-hungry (fatfs reformat
+	  was measured at ~5 KB), so the 2 KB system workqueue is not used.
+
+config APP_COREDUMP_REMINDER_PERIOD_S
+	int "Seconds between coredump checks / collection reminders"
+	default 60
+	depends on APP_COREDUMP_MANAGER
+	help
+	  How often the manager polls the coredump partition for a new dump
+	  and re-logs the "dumps awaiting collection" reminder while any
+	  core_*.bin file exists on /NAND:/coredump.
+
+config APP_CRASH_TEST_COMMANDS
+	bool "Shell commands that deliberately crash the firmware"
+	depends on SHELL
+	default n
+	help
+	  Registers the `crash` shell command (`crash panic`, `crash mpu`) for
+	  exercising the fatal-error path end-to-end: coredump capture,
+	  reboot-on-fault, and the coredump manager's copy-to-FAT flow
+	  (issue #80).
+
 config STATUS_LED
 	bool "Onboard status LED module (led_strip_2)"
 	depends on LED_STRIP && WS2812_STRIP_SPI
