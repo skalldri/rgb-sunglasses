@@ -97,10 +97,36 @@ signed Release archive and uploads it to TestFlight. The job is gated on the
 switch that avoids editing the workflow). It runs on the same self-hosted Mac runner,
 triggered by `app-vX.Y.Z` tags (in parallel with the Android release job — neither gates the other)
 or by `workflow_dispatch` with explicit `version` + `build_number` inputs (iOS-only; the Android
-job is skipped — used for the first upload and pipeline validation). Signing is **cloud signing**:
-automatic signing + `xcodebuild -allowProvisioningUpdates` authenticated by an App Store Connect
-API key (secrets `ASC_API_KEY_P8` base64 / `ASC_KEY_ID` / `ASC_ISSUER_ID`; the non-sensitive Team
-ID is the repo *variable* `APPLE_TEAM_ID`) — no distribution .p12 or keychain setup on the runner.
+job is skipped — used for the first upload and pipeline validation). Signing: automatic signing +
+`xcodebuild -allowProvisioningUpdates` authenticated by an App Store Connect API key (secrets
+`ASC_API_KEY_P8` base64 / `ASC_KEY_ID` / `ASC_ISSUER_ID`; the non-sensitive Team ID is the repo
+*variable* `APPLE_TEAM_ID`) manages the *provisioning profile* — but the ASC key does NOT sign. The
+signing **certificates + private keys** are imported at build time from two secret pairs —
+`APPLE_DEV_CERT_P12` / `APPLE_DEV_CERT_PASSWORD` (Apple Development) and `APPLE_DIST_CERT_P12` /
+`APPLE_DIST_CERT_PASSWORD` (Apple Distribution), each a base64 `.p12` — into a throwaway keychain the
+`Set up signing keychain` step creates, unlocks, and `set-key-partition-list`s inside the job's own
+session (deleted in the always() cleanup). **Both identities are required** (two separate `.p12`s
+because Keychain Access / Xcode won't export both into one file): automatic signing archives with the
+**Development** identity (Xcode's
+default — the Expo project sets only `DEVELOPMENT_TEAM`, no explicit `CODE_SIGN_IDENTITY`), then
+`-exportArchive` re-signs for app-store with the **Distribution** identity — so both private keys
+must be accessible. Do NOT try to force `CODE_SIGN_IDENTITY="Apple Distribution"` on the archive: it
+conflicts with automatic signing ("conflicting provisioning settings").
+**The export step uses MANUAL signing**, not `-allowProvisioningUpdates` cloud signing: the ASC API
+key cannot create a distribution provisioning profile ("Cloud signing permission error / No profiles
+were found"), so the App Store profile is supplied as the base64 `APPLE_DIST_PROVISIONING_PROFILE`
+secret, installed on the runner by the `Install App Store provisioning profile` step, and referenced
+by name in `exportOptions.plist` (`signingStyle: manual`, `signingCertificate: Apple Distribution`,
+`provisioningProfiles: { com.autom8ed.rgbsunglassesapp: <profile name> }`). The archive still uses
+automatic signing (a Development profile, which the ASC key CAN cloud-create); only the export is
+manual. When the distribution cert is rotated, regenerate this profile too.
+This replaced an earlier
+assumption of "cloud signing, no keychain setup" — that failed on the real runner: `codesign` hit
+`errSecInternalComponent` because the runner's non-interactive session couldn't reach the login
+keychain (and only the Distribution cert had been imported, so the Development-signed archive step
+had no accessible key). Doing it in-job with both certs makes signing survive runner reboots /
+headless sessions. A one-time `app-ios-ci.yml` per-push build still uses `CODE_SIGNING_ALLOWED=NO`,
+so it never exercises signing — the release job is the only place signing runs.
 Upload is a second `xcodebuild -exportArchive` with `destination: upload` in the exportOptions
 plist (`altool` is deprecated). `ios.buildNumber` is injected at build time by a shared `version`
 job (single source of truth — the same value is the Android versionCode): tag builds use
