@@ -1,8 +1,9 @@
 name: Deploy Privacy Policy (GitHub Pages)
 
-# Publishes the static site under `site/` (the app's privacy policy) to GitHub
-# Pages at https://skalldri.github.io/rgb-sunglasses/. Only the `site/` folder is
-# uploaded, so internal design docs under `docs/plans/` are never published.
+# Publishes the static project site under `site/` to GitHub Pages, served at the
+# custom domain https://rgb-sunglasses.autom8ed.com (see site/CNAME); the privacy
+# policy lives at /privacy. Only the `site/` folder is uploaded, so internal
+# design docs under `docs/plans/` are never published.
 
 on:
   push:
