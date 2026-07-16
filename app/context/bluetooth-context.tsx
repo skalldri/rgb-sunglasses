@@ -1,6 +1,6 @@
 import { describeWriteError } from "@/services/ble-errors";
 import { McuMgrClient } from "@/services/mcumgr";
-import { createContext, ReactNode, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, Dispatch, ReactNode, SetStateAction, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { Characteristic, Device, Service, Subscription } from "react-native-ble-plx";
 
 export interface CharacteristicInfo {
@@ -51,7 +51,10 @@ type BluetoothContextType = {
     setIsScanning: (scanning: boolean) => void;
     // The device a connect() is currently in flight for, or null. See ConnectingDevice above.
     connectingDevice: ConnectingDevice | null;
-    setConnectingDevice: (device: ConnectingDevice | null) => void;
+    // Full useState dispatch type (accepts a functional updater), so a settling connect can clear
+    // the pin compare-and-swap style - only if it still points at its own device - rather than
+    // unconditionally nulling a slot a concurrent connect may have since overwritten.
+    setConnectingDevice: Dispatch<SetStateAction<ConnectingDevice | null>>;
     // Characteristic-query progress during connect()'s discovery walk; null when not connecting
     // or once discovery has finished. See use-ble-connection.ts.
     discoveryProgress: DiscoveryProgress | null;
