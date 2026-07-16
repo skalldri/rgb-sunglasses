@@ -35,7 +35,7 @@ EXECBRO_ALLOWLIST = {
 # locks. re-pair.sh drives the shell UART and the phone in one run.
 BASH_BOTH_PATTERNS = [r"re-pair\.(sh|py)"]
 BASH_BOARD_PATTERNS = [
-    r"jlink-flash\.sh", r"provision-device\.sh", r"JLinkExe",
+    r"jlink-flash\.sh", r"mcumgr-flash\.sh", r"provision-device\.sh", r"JLinkExe",
     r"nrfutil\s+device", r"\bmcumgr\b", r"west\s+flash",
 ]
 BASH_APP_PATTERNS = [r"\badb\b", r"expo run:android", r"adb-connect\.sh"]

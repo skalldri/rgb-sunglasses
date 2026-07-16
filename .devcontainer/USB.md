@@ -58,6 +58,28 @@ To forward only the board and leave the J-Link on Windows, pass an explicit list
 `usbipd bind --hardware-id 2fe3:0001` and run the init script with
 `-HardwareIds 2fe3:0001`.
 
+## MCUboot recovery (DFU) mode — a second board PID (`2fe3:0100`)
+
+When the board is put into **MCUboot serial-recovery / DFU mode** (hold the Left button
+during reset — see [`fw/docs/flashing-without-jlink.md`](../fw/docs/flashing-without-jlink.md)),
+it stops being the app device (`2fe3:0001`) and re-enumerates as a **different** USB
+device: `2fe3:0100` (product string `MCUBOOT`). usbipd forwards by VID:PID, so this
+device is now included by default in all three scripts — otherwise recovery-mode
+flashing (`fw/scripts/mcumgr-flash.sh --recovery`) would be invisible in the container.
+
+The catch: `2fe3:0100` **only exists while the board is in DFU mode**, and `usbipd bind`
+requires the device to be present. So its one-time bind must be done **with the board in
+recovery mode**:
+
+```powershell
+# 1. Put the board in DFU mode (hold Left button + reset), then in elevated PowerShell:
+usbipd bind --hardware-id 2fe3:0100        # or re-run usbip-bind.ps1 while in DFU mode
+```
+
+Once bound, it's persistent, and the container's auto-attach re-grabs it every time the
+board enters recovery mode. (Binding `2fe3:0001` while the board runs normally does **not**
+cover `2fe3:0100` — they are distinct devices to usbipd.)
+
 ## Verify (inside the container)
 
 ```bash

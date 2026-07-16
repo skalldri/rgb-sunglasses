@@ -597,7 +597,9 @@ Both currently report `version: 0.0.0` — the build version string is not yet w
 
 ### Firmware update flow (OTA via MCUmgr)
 
-`image upload` the signed image (`fw/build/fw/zephyr/zephyr.signed.bin`, ~3-4 min over serial), `image test <hash>`, `reset`, then `image confirm` after a good boot — MCUboot auto-reverts if the test boot fails. The step-by-step procedure (with re-enumeration handling) lives in `/flash-and-verify`; prefer the J-Link fast path above when a J-Link is attached.
+**Prefer the wrapper script `fw/scripts/mcumgr-flash.sh`** — it auto-detects the MCUmgr port, uploads the app + net-core images (from `dfu_application.zip`), auto-parses the slot hashes, tests, resets, and confirms. Default (`--app`) uses the running app's SMP server; `--recovery` targets MCUboot serial-recovery mode (hold the Left button/P1.11 at reset) for a bricked board that won't boot the app. It requires the `board` lock **only when run by an agent** (`CLAUDECODE` set), so human end-users can run it lock-free. Human-facing runbook: `fw/docs/flashing-without-jlink.md` (published at <https://rgb-sunglasses.autom8ed.com/recovery>).
+
+Under the hood it's the same MCUmgr flow: `image upload` the signed image (`fw/build/fw/zephyr/zephyr.signed.bin`, ~3-4 min over serial), `image test <hash>`, `reset`, then `image confirm` after a good boot. The step-by-step procedure (with re-enumeration handling) also lives in `/flash-and-verify`; prefer the J-Link fast path above when a J-Link is attached.
 
 ### Commands
 

@@ -278,6 +278,58 @@ code {
     font-size: 0.9em;
 }
 
+/* ---- Rendered Markdown docs (code blocks, tables, notes) ---- */
+
+.prose pre {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    overflow-x: auto;
+    line-height: 1.45;
+}
+
+.prose pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.88em;
+}
+
+.prose table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.25rem 0;
+    font-size: 0.95rem;
+    display: block;
+    overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+}
+
+.prose th {
+    background: var(--card);
+}
+
+.prose blockquote {
+    margin: 1.5rem 0;
+    padding: 0.75rem 1.25rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0;
+    color: var(--fg);
+}
+
+.prose blockquote p {
+    margin: 0.4rem 0;
+}
+
 /* ---- Footer ---- */
 
 footer {

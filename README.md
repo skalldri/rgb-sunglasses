@@ -20,7 +20,9 @@ container.
 
 - **Firmware:** the nRF Connect extension is configured to find the firmware
   application under `fw/`. Build and test commands live in
-  [`fw/CLAUDE.md`](fw/CLAUDE.md).
+  [`fw/CLAUDE.md`](fw/CLAUDE.md). No J-Link? Update or recover firmware over USB
+  with [`fw/docs/flashing-without-jlink.md`](fw/docs/flashing-without-jlink.md)
+  (published at <https://rgb-sunglasses.autom8ed.com/recovery>).
 - **App (Android):** the container also includes the React Native toolchain
   (Node, JDK 17, Android SDK/NDK). Connect a physical Android phone via wireless
   ADB (phone and container on the same network) and run the Expo dev-client — see

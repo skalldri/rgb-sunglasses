@@ -26,8 +26,12 @@
 #>
 [CmdletBinding()]
 param(
-    # Hardware IDs (VID:PID) to attach: RGB Sunglasses board and the SEGGER J-Link debug probe.
-    [string[]] $HardwareIds = @('2fe3:0001', '1366:0101'),
+    # Hardware IDs (VID:PID) to attach:
+    #   2fe3:0001  board running the app firmware (normal runtime)
+    #   2fe3:0100  board in MCUboot serial-recovery / DFU mode (different PID — must be
+    #              forwarded separately or recovery flashing is invisible in the container)
+    #   1366:0101  SEGGER J-Link debug probe
+    [string[]] $HardwareIds = @('2fe3:0001', '2fe3:0100', '1366:0101'),
 
     # Kernel modules to load into the shared WSL2 kernel.
     [string[]] $Modules = @('cdc-acm', 'usb-storage', 'vhci-hcd', 'usbip-host')

@@ -14,3 +14,8 @@ __pycache__/
 .claude/worktrees/
 
 .serial_mcp/traces/
+
+# Generated Pages docs — rendered from Markdown by scripts/build-site.py (in CI and
+# for local preview). The Markdown under fw/docs/ is the source of truth; don't
+# commit or hand-edit these.
+site/recovery/

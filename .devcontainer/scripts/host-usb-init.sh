@@ -8,7 +8,16 @@
 # usbipd attach is attempted via Windows interop (usbipd.exe). If unavailable, the
 # user can run it manually from Windows PowerShell (see USB.md).
 
-HW_IDS="2fe3:0001 1366:0101"
+# Hardware IDs (VID:PID) to forward into the container:
+#   2fe3:0001  board running the app firmware (normal runtime)
+#   2fe3:0100  board in MCUboot serial-recovery / DFU mode (product "MCUBOOT") — a
+#              DIFFERENT PID, so it must be forwarded on its own or recovery-mode
+#              flashing is invisible in the container. See
+#              fw/docs/flashing-without-jlink.md. NOTE: this device only exists
+#              while the board is held in DFU mode, so its one-time `usbipd bind`
+#              must be run then (auto-attach re-grabs it thereafter).
+#   1366:0101  SEGGER J-Link debug probe
+HW_IDS="2fe3:0001 2fe3:0100 1366:0101"
 
 log()  { printf '[usb-init] %s\n' "$*"; }
 warn() { printf '[usb-init] WARNING: %s\n' "$*"; }
