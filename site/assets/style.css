@@ -211,6 +211,23 @@ main {
     font-size: 0.98rem;
 }
 
+/* Clickable cards (e.g. the /docs index) */
+a.card {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.15s ease;
+}
+
+a.card:hover {
+    border-color: var(--accent);
+    text-decoration: none;
+}
+
+a.card h3 {
+    color: var(--accent);
+}
+
 .section {
     margin: 3rem 0;
 }

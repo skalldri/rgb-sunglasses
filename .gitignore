@@ -15,7 +15,8 @@ __pycache__/
 
 .serial_mcp/traces/
 
-# Generated Pages docs — rendered from Markdown by scripts/build-site.py (in CI and
-# for local preview). The Markdown under fw/docs/ is the source of truth; don't
-# commit or hand-edit these.
+# Generated Pages docs — produced by scripts/build-site.py (in CI and for local
+# preview). The Markdown under fw/docs/ (and the DOCS manifest) is the source of
+# truth; don't commit or hand-edit these. Add one line per generated doc dir.
+site/docs/
 site/recovery/

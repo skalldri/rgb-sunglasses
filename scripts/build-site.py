@@ -32,7 +32,7 @@ SITE_DIR = os.path.join(REPO_ROOT, "site")
 NAV_LINKS = [
     ("https://github.com/skalldri/rgb-sunglasses", "GitHub", True),
     ("https://github.com/skalldri/rgb-sunglasses/releases", "Releases", True),
-    ("/recovery", "Recovery", False),
+    ("/docs", "Docs", False),
     ("/privacy", "Privacy", False),
 ]
 
@@ -41,6 +41,7 @@ NAV_LINKS = [
 #   out   — output dir under site/ (page served at /<out>)
 #   title — page title (also used in <title>)
 #   desc  — meta description
+# Adding an entry here publishes the page AND lists it on the /docs index below.
 DOCS = [
     {
         "src": "fw/docs/flashing-without-jlink.md",
@@ -49,6 +50,13 @@ DOCS = [
         "desc": "Update or recover RGB Sunglasses firmware over USB — no J-Link required.",
     },
 ]
+
+# The /docs landing page — auto-generated from DOCS (one card per doc).
+DOCS_INDEX = {
+    "out": "docs",
+    "title": "Documentation",
+    "desc": "Guides and references for the RGB Sunglasses firmware and companion app.",
+}
 
 TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -96,6 +104,21 @@ def render_nav():
     return "\n".join(rows)
 
 
+def render_docs_index():
+    cards = "\n".join(
+        f'    <a class="card" href="/{d["out"]}">\n'
+        f'        <h3>{d["title"]}</h3>\n'
+        f'        <p>{d["desc"]}</p>\n'
+        f"    </a>"
+        for d in DOCS
+    )
+    return (
+        f'<h1>{DOCS_INDEX["title"]}</h1>\n'
+        f'<p class="subtitle">{DOCS_INDEX["desc"]}</p>\n'
+        f'<div class="cards">\n{cards}\n</div>'
+    )
+
+
 def build():
     # superfences (from pymdown-extensions) renders fenced code correctly even
     # when nested inside lists — plain fenced_code does not, which matters for
@@ -122,6 +145,20 @@ def build():
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html)
         print(f"rendered {doc['src']} -> site/{doc['out']}/index.html ({len(html)} bytes)")
+
+    # Docs landing page — generated from DOCS, so new docs appear automatically.
+    idx_html = TEMPLATE.format(
+        title=DOCS_INDEX["title"],
+        desc=DOCS_INDEX["desc"],
+        out=DOCS_INDEX["out"],
+        navlinks=nav,
+        content=render_docs_index(),
+    )
+    idx_dir = os.path.join(SITE_DIR, DOCS_INDEX["out"])
+    os.makedirs(idx_dir, exist_ok=True)
+    with open(os.path.join(idx_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(idx_html)
+    print(f"rendered docs index -> site/{DOCS_INDEX['out']}/index.html ({len(idx_html)} bytes)")
 
 
 if __name__ == "__main__":
