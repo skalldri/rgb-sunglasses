@@ -43,10 +43,19 @@ const PRUNE_INTERVAL_MS = 2_000;
 
 export default function BluetoothScreen() {
 
-    const { isScanning, setIsScanning } = useBluetooth();
+    const { isScanning, setIsScanning, connectingDevice } = useBluetooth();
     const [devices, setDevices] = useState<BleDevice[]>([]);
     const c = useThemeColors();
     const { info: appUpdate } = useAppUpdateCheck();
+
+    // The device a connect() is currently in flight for (issue #158). Kept in a ref so the
+    // prune timer and the scan (re)starts - both created once and long-lived - always read the
+    // latest value without being recreated. A connecting device stops advertising the moment its
+    // LE link is up, so it must be pinned in the list (never pruned, preserved across a scan
+    // restart) or it vanishes mid-pairing, unmounting its in-progress row and making the pair look
+    // failed until connect() finally resolves and navigates away.
+    const connectingDeviceRef = useRef(connectingDevice);
+    connectingDeviceRef.current = connectingDevice;
 
     // Per-invocation generation token that guards against orphaned scans.
     // startBluetoothScan() awaits requestPermissions() (several native round-
@@ -88,7 +97,13 @@ export default function BluetoothScreen() {
     const pruneStaleDevices = useCallback(() => {
         const now = Date.now();
         setDevices(prev => {
-            const fresh = prev.filter(d => now - (lastSeenRef.current[d.mac] ?? 0) <= DEVICE_TTL_MS);
+            // Never prune the device currently being connected/paired (issue #158): it stops
+            // advertising once its LE link is up, so its lastSeen freezes for the whole
+            // pairing+discovery phase and it would otherwise age out mid-connect.
+            const connectingMac = connectingDeviceRef.current?.mac;
+            const fresh = prev.filter(d =>
+                d.mac === connectingMac || now - (lastSeenRef.current[d.mac] ?? 0) <= DEVICE_TTL_MS
+            );
             return fresh.length === prev.length ? prev : fresh;
         });
     }, []);
@@ -167,8 +182,15 @@ export default function BluetoothScreen() {
     async function startBluetoothScan(gen: number) {
         console.log('Starting Bluetooth scan...');
         setIsScanning(true);
-        setDevices([]);
-        lastSeenRef.current = {};
+        // Preserve the device currently being connected/paired across this list reset (issue #158):
+        // it isn't advertising while its link is up, so wiping the list to [] would drop it
+        // mid-pairing and unmount its in-progress row. A fresh scan with no connect in flight just
+        // clears as before. (A live scan restart to defeat Android's de-dup goes through
+        // registerScanCallback, which never clears the list - only focus and the failure-retry
+        // reach here.)
+        const connecting = connectingDeviceRef.current;
+        setDevices(connecting ? [{ name: connecting.name, mac: connecting.mac }] : []);
+        lastSeenRef.current = connecting ? { [connecting.mac]: Date.now() } : {};
 
         // Defensive: dispose of any scan orphaned by a previous invocation that resolved
         // its permission check after the screen had already lost focus (see scanGenRef) -

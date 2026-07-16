@@ -23,12 +23,22 @@ jest.mock('@/context/bluetooth-context', () => {
 // --- shared test fixture builders ---
 
 function makeMockBluetooth() {
+    // setConnectingDevice mirrors the real useState setter: it accepts either a value or a
+    // functional updater, and applies it to a tracked `connectingDevice` value so tests can
+    // assert the resulting pin (the connect flow clears the pin compare-and-swap style via an
+    // updater, so a plain jest.fn that ignored the function wouldn't reflect the real outcome).
+    const state = { connectingDevice: null as any };
+    const setConnectingDevice = jest.fn((next: any) => {
+        state.connectingDevice = typeof next === 'function' ? next(state.connectingDevice) : next;
+    });
     return {
         selectedDevice: null as any,
         setSelectedDevice: jest.fn(),
         updateCharValue: jest.fn(),
         updateServiceCharacteristicValue: jest.fn(),
         setDiscoveryProgress: jest.fn(),
+        get connectingDevice() { return state.connectingDevice; },
+        setConnectingDevice,
         monitorSubscriptions: { current: [] as any[] },
         disconnectSubscription: { current: null as any },
     };
@@ -109,6 +119,55 @@ describe('useBleConnection', () => {
         });
         // MTU is negotiated as a separate post-connect step.
         expect(deviceConn.requestMTU).toHaveBeenCalledWith(247);
+    });
+
+    it('connect() pins the device in the Connect list for the attempt, then releases it (issue #158)', async () => {
+        const deviceConn = makeDeviceConnection([]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        // Pinned at the very start of the attempt (before any await) so the scan-derived Connect
+        // list can't prune it once the board stops advertising mid-pair; released in finally.
+        expect(ctx.setConnectingDevice).toHaveBeenNthCalledWith(1, { mac: 'AA:BB:CC', name: 'Test Device' });
+        expect(ctx.connectingDevice).toBeNull();
+    });
+
+    it('connect() clears the pin compare-and-swap - only if it still points at this device (concurrent connects, issue #158)', async () => {
+        const deviceConn = makeDeviceConnection([]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        // The release is a functional updater (not a bare null): a concurrent connect to another
+        // board shares this single context slot, so a settling attempt must never null out a pin
+        // that now points at that other in-flight device (which would un-pin it mid-pairing and
+        // reintroduce #158 for it). Exercise the updater directly.
+        const calls = (ctx.setConnectingDevice as jest.Mock).mock.calls;
+        const release = calls[calls.length - 1][0];
+        expect(typeof release).toBe('function');
+        // Clears its own pin...
+        expect(release({ mac: 'AA:BB:CC', name: 'Test Device' })).toBeNull();
+        // ...but leaves a pin a concurrent connect to another board has since installed.
+        expect(release({ mac: 'ZZ:ZZ:ZZ', name: 'Other Board' })).toEqual({ mac: 'ZZ:ZZ:ZZ', name: 'Other Board' });
+        expect(release(null)).toBeNull();
+    });
+
+    it('connect() releases the Connect-list pin even when the attempt fails (issue #158)', async () => {
+        (BleHook.bleManager.connectToDevice as jest.Mock)
+            .mockRejectedValue(new Error('Operation was cancelled'));
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        // finally runs on the failure path too, so the pin never leaks past a failed attempt.
+        expect(ctx.setConnectingDevice).toHaveBeenNthCalledWith(1, { mac: 'AA:BB:CC', name: 'Test Device' });
+        expect(ctx.connectingDevice).toBeNull();
     });
 
     it('connect() retries connectToDevice once when the first attempt fails', async () => {

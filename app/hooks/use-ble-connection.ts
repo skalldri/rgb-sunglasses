@@ -30,7 +30,7 @@ interface UseBleConnectionResult {
 export function useBleConnection(macAddress: string, deviceName: string): UseBleConnectionResult {
     const {
         selectedDevice, setSelectedDevice, updateCharValue, updateServiceCharacteristicValue,
-        monitorSubscriptions, disconnectSubscription, setDiscoveryProgress,
+        monitorSubscriptions, disconnectSubscription, setDiscoveryProgress, setConnectingDevice,
     } = useBluetooth();
 
     const [isConnecting, setIsConnecting] = useState(false);
@@ -82,6 +82,11 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
 
     async function runConnect(): Promise<boolean> {
         setIsConnecting(true);
+        // Pin this device in the Connect screen's list for the whole attempt: it stops advertising
+        // the moment its LE link comes up, so the scan-derived list would otherwise prune it
+        // mid-pairing and unmount this row (with its progress indicator), making a still-in-progress
+        // pair look failed (issue #158). Cleared in finally, once the attempt settles either way.
+        setConnectingDevice({ mac: macAddress, name: deviceName });
         try {
             // A scan running concurrently with connectToDevice() can make the
             // connect operation itself get cancelled by the OS/library even
@@ -479,6 +484,15 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             return false;
         } finally {
             setDiscoveryProgress(null);
+            // Release the list pin - but only if it still points at THIS device (compare-and-swap).
+            // connectingDevice is a single shared context slot and each device row runs its own
+            // connect(), so if a connect to another board started while this one was in flight and
+            // overwrote the slot, this attempt settling must NOT null out that other in-flight pin
+            // (which would un-pin it mid-pairing and reintroduce issue #158 for it). On success the
+            // caller navigates to the Controls screen (the device is now in selectedDevice); on
+            // failure the device returns to normal scan-driven pruning. Either way this attempt's
+            // hold is done here.
+            setConnectingDevice(prev => (prev?.mac === macAddress ? null : prev));
             if (isMountedRef.current) setIsConnecting(false);
         }
     }
