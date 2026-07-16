@@ -35,11 +35,23 @@ export type BluetoothContextDevice = {
 
 export type DiscoveryProgress = { current: number; total: number };
 
+// The device a connect() is currently in flight for (name + mac), or null when no connect is
+// running. Lives at the context level because the Connect screen (bluetooth.tsx) builds its list
+// purely from live scan advertisements, but a device stops advertising the moment its LE link
+// comes up - i.e. for the whole pairing + discovery phase. Without this, the scan-derived list
+// prunes the connecting device after its TTL and unmounts its in-progress row mid-pairing, so
+// pairing looks like it failed (issue #158). The screen reads this to pin the connecting device
+// in the list until connect() settles.
+export type ConnectingDevice = { mac: string; name: string };
+
 type BluetoothContextType = {
     selectedDevice: BluetoothContextDevice | null;
     setSelectedDevice: (device: BluetoothContextDevice | null) => void;
     isScanning: boolean;
     setIsScanning: (scanning: boolean) => void;
+    // The device a connect() is currently in flight for, or null. See ConnectingDevice above.
+    connectingDevice: ConnectingDevice | null;
+    setConnectingDevice: (device: ConnectingDevice | null) => void;
     // Characteristic-query progress during connect()'s discovery walk; null when not connecting
     // or once discovery has finished. See use-ble-connection.ts.
     discoveryProgress: DiscoveryProgress | null;
@@ -75,6 +87,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     const [selectedDevice, setSelectedDevice] = useState<BluetoothContextDevice | null>(null);
     const [isScanning, setIsScanning] = useState<boolean>(false);
     const [discoveryProgress, setDiscoveryProgress] = useState<DiscoveryProgress | null>(null);
+    const [connectingDevice, setConnectingDevice] = useState<ConnectingDevice | null>(null);
 
     // Use ref to access current device in callbacks without stale closures
     const selectedDeviceRef = useRef<BluetoothContextDevice | null>(null);
@@ -325,6 +338,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         setSelectedDevice,
         isScanning,
         setIsScanning,
+        connectingDevice,
+        setConnectingDevice,
         discoveryProgress,
         setDiscoveryProgress,
         writeToCharacteristic,
@@ -336,7 +351,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         monitorSubscriptions,
         disconnectSubscription,
     }), [
-        selectedDevice, isScanning, discoveryProgress, writeToCharacteristic, getCharacteristicInfo, updateCharValue,
+        selectedDevice, isScanning, connectingDevice, discoveryProgress, writeToCharacteristic, getCharacteristicInfo, updateCharValue,
         getServiceCharacteristicInfo, updateServiceCharacteristicValue, writeServiceCharacteristic,
     ]);
 

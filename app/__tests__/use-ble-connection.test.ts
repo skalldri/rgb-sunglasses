@@ -29,6 +29,7 @@ function makeMockBluetooth() {
         updateCharValue: jest.fn(),
         updateServiceCharacteristicValue: jest.fn(),
         setDiscoveryProgress: jest.fn(),
+        setConnectingDevice: jest.fn(),
         monitorSubscriptions: { current: [] as any[] },
         disconnectSubscription: { current: null as any },
     };
@@ -109,6 +110,33 @@ describe('useBleConnection', () => {
         });
         // MTU is negotiated as a separate post-connect step.
         expect(deviceConn.requestMTU).toHaveBeenCalledWith(247);
+    });
+
+    it('connect() pins the device in the Connect list for the attempt, then releases it (issue #158)', async () => {
+        const deviceConn = makeDeviceConnection([]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        // Pinned at the very start of the attempt (before any await) so the scan-derived Connect
+        // list can't prune it once the board stops advertising mid-pair; released in finally.
+        expect(ctx.setConnectingDevice).toHaveBeenNthCalledWith(1, { mac: 'AA:BB:CC', name: 'Test Device' });
+        expect(ctx.setConnectingDevice).toHaveBeenLastCalledWith(null);
+    });
+
+    it('connect() releases the Connect-list pin even when the attempt fails (issue #158)', async () => {
+        (BleHook.bleManager.connectToDevice as jest.Mock)
+            .mockRejectedValue(new Error('Operation was cancelled'));
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        // finally runs on the failure path too, so the pin never leaks past a failed attempt.
+        expect(ctx.setConnectingDevice).toHaveBeenNthCalledWith(1, { mac: 'AA:BB:CC', name: 'Test Device' });
+        expect(ctx.setConnectingDevice).toHaveBeenLastCalledWith(null);
     });
 
     it('connect() retries connectToDevice once when the first attempt fails', async () => {
