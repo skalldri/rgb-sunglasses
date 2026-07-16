@@ -20,3 +20,5 @@ __pycache__/
 # truth; don't commit or hand-edit these. Add one line per generated doc dir.
 site/docs/
 site/recovery/
+site/proto0-user-guide/
+site/proto0-hardware-guide/

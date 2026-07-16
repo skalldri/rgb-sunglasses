@@ -44,10 +44,22 @@ NAV_LINKS = [
 # Adding an entry here publishes the page AND lists it on the /docs index below.
 DOCS = [
     {
+        "src": "fw/docs/proto0-user-guide.md",
+        "out": "proto0-user-guide",
+        "title": "Proto0 User Guide",
+        "desc": "Set up your Proto0 hardware: unboxing, Bluetooth pairing, the USB interface, and firmware updates.",
+    },
+    {
         "src": "fw/docs/flashing-without-jlink.md",
         "out": "recovery",
         "title": "Firmware Recovery",
         "desc": "Update or recover RGB Sunglasses firmware over USB — no J-Link required.",
+    },
+    {
+        "src": "fw/docs/proto0-hardware-guide.md",
+        "out": "proto0-hardware-guide",
+        "title": "Proto0 Hardware Hacker's Guide",
+        "desc": "Nitty-gritty Proto0 hardware details: JTAG / TagConnect, jumpers, and connectors.",
     },
 ]
 
@@ -56,6 +68,8 @@ DOCS_INDEX = {
     "out": "docs",
     "title": "Documentation",
     "desc": "Guides and references for the RGB Sunglasses firmware and companion app.",
+    "banner": "https://github.com/user-attachments/assets/2a60a693-4981-4d98-bf4b-878f46d55e0b",
+    "lead": "Setup and developer guides for RGB Sunglasses hardware. Just got hardware? Start with the Proto0 User Guide.",
 }
 
 TEMPLATE = """<!DOCTYPE html>
@@ -112,11 +126,16 @@ def render_docs_index():
         f"    </a>"
         for d in DOCS
     )
-    return (
-        f'<h1>{DOCS_INDEX["title"]}</h1>\n'
-        f'<p class="subtitle">{DOCS_INDEX["desc"]}</p>\n'
-        f'<div class="cards">\n{cards}\n</div>'
+    parts = [f'<h1>{DOCS_INDEX["title"]}</h1>']
+    if DOCS_INDEX.get("banner"):
+        parts.append(
+            f'<img src="{DOCS_INDEX["banner"]}" alt="RGB Sunglasses hardware">'
+        )
+    parts.append(
+        f'<p class="subtitle">{DOCS_INDEX.get("lead", DOCS_INDEX["desc"])}</p>'
     )
+    parts.append(f'<div class="cards">\n{cards}\n</div>')
+    return "\n".join(parts)
 
 
 def build():

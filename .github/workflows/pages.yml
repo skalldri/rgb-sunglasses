@@ -16,6 +16,8 @@ on:
       - '.github/workflows/pages.yml'
       - 'scripts/build-site.py'
       - 'fw/docs/flashing-without-jlink.md'
+      - 'fw/docs/proto0-user-guide.md'
+      - 'fw/docs/proto0-hardware-guide.md'
   workflow_dispatch:
 
 permissions:
