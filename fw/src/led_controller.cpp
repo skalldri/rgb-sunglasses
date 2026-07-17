@@ -344,6 +344,30 @@ int set_pixel_in_framebuffer(const LedConfig *config, size_t x, size_t y, size_t
     return 0;
 }
 
+// Panel output mode (issue #172 power experiment): NORMAL clocks rendered
+// frames out every display tick; BLANK keeps clocking every tick but sends
+// all-black pixel data; OFF skips led_strip_update_rgb() entirely, so the
+// WS2812 data lines idle low and the panel's serial shift registers stop
+// clocking. Buffer claim/release runs identically in all three modes so the
+// render pipeline is unaffected and the only variable is the SPI output.
+enum PanelOutputMode {
+    PANEL_OUTPUT_NORMAL = 0,
+    PANEL_OUTPUT_BLANK = 1,
+    PANEL_OUTPUT_OFF = 2,
+};
+static atomic_t panelOutputMode = ATOMIC_INIT(PANEL_OUTPUT_NORMAL);
+
+// All-black frame for PANEL_OUTPUT_BLANK, sized for the longest strip.
+// Zero-initialized (.bss) and never written after that (non-const only
+// because led_strip_update_rgb takes a mutable pixel pointer).
+constexpr size_t kMaxStripPixels = std::max<size_t>(
+    {LED_STRIP_0_NUM_PIXELS, LED_STRIP_1_NUM_PIXELS,
+#if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
+     LED_STRIP_2_NUM_PIXELS,
+#endif
+     0});
+static struct led_rgb blackFrame[kMaxStripPixels];
+
 void led_display_thread_func(void *a, void *b, void *c) {
     const struct device *led_strip_0 = DEVICE_DT_GET(LED_STRIP_0_NODE_ID);
     const struct device *led_strip_1 = DEVICE_DT_GET(LED_STRIP_1_NODE_ID);
@@ -400,11 +424,27 @@ void led_display_thread_func(void *a, void *b, void *c) {
             LOG_ERR("Error claiming display buffer!");
         }
 
-        led_strip_update_rgb(led_strip_0, led_0[bufferId], LED_STRIP_0_NUM_PIXELS);
-        led_strip_update_rgb(led_strip_1, led_1[bufferId], LED_STRIP_1_NUM_PIXELS);
+        switch (atomic_get(&panelOutputMode)) {
+            case PANEL_OUTPUT_NORMAL:
+                led_strip_update_rgb(led_strip_0, led_0[bufferId], LED_STRIP_0_NUM_PIXELS);
+                led_strip_update_rgb(led_strip_1, led_1[bufferId], LED_STRIP_1_NUM_PIXELS);
 #if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
-        led_strip_update_rgb(led_strip_2, led_2[bufferId], LED_STRIP_2_NUM_PIXELS);
+                led_strip_update_rgb(led_strip_2, led_2[bufferId], LED_STRIP_2_NUM_PIXELS);
 #endif
+                break;
+            case PANEL_OUTPUT_BLANK:
+                // Same clocking as NORMAL, but all-black data
+                led_strip_update_rgb(led_strip_0, blackFrame, LED_STRIP_0_NUM_PIXELS);
+                led_strip_update_rgb(led_strip_1, blackFrame, LED_STRIP_1_NUM_PIXELS);
+#if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
+                led_strip_update_rgb(led_strip_2, blackFrame, LED_STRIP_2_NUM_PIXELS);
+#endif
+                break;
+            case PANEL_OUTPUT_OFF:
+            default:
+                // No SPI traffic at all this tick
+                break;
+        }
 
         ret = releaseBufferFromDisplay(bufferId);
         if (ret) {
@@ -427,6 +467,28 @@ void led_display_thread_func(void *a, void *b, void *c) {
 
     return;
 }
+
+#if defined(CONFIG_SHELL)
+#include <zephyr/shell/shell.h>
+
+// Issue #172 power experiment: switch what the display thread clocks out to
+// the panel, so panel power draw can be compared A/B/C from the serial shell
+// with everything else (render thread, display tick rate) unchanged.
+static int cmd_led_output_mode(const struct shell *shell, size_t argc, char **argv, void *data) {
+    atomic_set(&panelOutputMode, (atomic_val_t)(intptr_t)data);
+    shell_print(shell, "panel output mode: %s", argv[0]);
+    return 0;
+}
+
+SHELL_SUBCMD_DICT_SET_CREATE(
+    sub_led_output, cmd_led_output_mode,
+    (on, PANEL_OUTPUT_NORMAL, "Clock rendered frames to the panel (normal operation)"),
+    (blank, PANEL_OUTPUT_BLANK, "Keep clocking every display tick, but send all-black data"),
+    (off, PANEL_OUTPUT_OFF, "Stop clocking data into the panel entirely (data lines idle)"));
+
+SHELL_CMD_REGISTER(led_output, &sub_led_output,
+                   "Panel serial-output control (issue #172 power experiment)", NULL);
+#endif  // CONFIG_SHELL
 
 #if defined(CONFIG_SHELL) && 0
 #include <zephyr/shell/shell.h>
