@@ -37,7 +37,7 @@ function makeMockBluetooth() {
     // either a value or a functional updater, and apply it to a tracked value so tests can
     // assert the resulting pin (the connect flow clears the pin compare-and-swap style via an
     // updater, so a plain jest.fn that ignored the function wouldn't reflect the real outcome).
-    const state = { connectingDevice: null as any, reconnectingDevice: null as any };
+    const state = { connectingDevice: null as any, reconnectingDevice: null as any, selectedDevice: null as any };
     const setConnectingDevice = jest.fn((next: any) => {
         state.connectingDevice = typeof next === 'function' ? next(state.connectingDevice) : next;
     });
@@ -45,7 +45,16 @@ function makeMockBluetooth() {
         state.reconnectingDevice = typeof next === 'function' ? next(state.reconnectingDevice) : next;
     });
     return {
-        selectedDevice: null as any,
+        // selectedDevice and selectedDeviceRef share one backing value, mirroring the
+        // real provider (whose ref tracks the state every render). The hook reads the
+        // REF (never the state directly) in its emitter-closure paths - see the
+        // stale-ref regression test below.
+        get selectedDevice() { return state.selectedDevice; },
+        set selectedDevice(v: any) { state.selectedDevice = v; },
+        selectedDeviceRef: {
+            get current() { return state.selectedDevice; },
+            set current(v: any) { state.selectedDevice = v; },
+        },
         setSelectedDevice: jest.fn(),
         updateCharValue: jest.fn(),
         updateServiceCharacteristicValue: jest.fn(),
@@ -476,23 +485,13 @@ describe('useBleConnection', () => {
 
         const mockDestroy = jest.fn();
 
-        // After connect(), simulate the context updating selectedDevice to include a mcuMgrClient.
-        // The hook's selectedDeviceRef should pick this up on the next render.
-        const { result, rerender } = renderHook(
-            ({ sel }: { sel: any }) => {
-                (BluetoothContext.useBluetooth as jest.Mock).mockReturnValue({ ...ctx, selectedDevice: sel });
-                return useBleConnection('AA:BB:CC', 'Test Device');
-            },
-            // `as any` so the rerender below can pass a device object — TS infers the
-            // props type from this initial value, not the hook param's annotation.
-            { initialProps: { sel: null as any } }
-        );
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
 
         await act(async () => { await result.current.connect(); });
 
-        // Now simulate selectedDevice being updated with a mcuMgrClient
-        const deviceWithClient = { mac: 'AA:BB:CC', mcuMgrClient: { destroy: mockDestroy } };
-        rerender({ sel: deviceWithClient });
+        // Now simulate the context updating selectedDevice to include a mcuMgrClient
+        // (the provider keeps selectedDeviceRef mirroring this - so does the mock).
+        ctx.selectedDevice = { mac: 'AA:BB:CC', mcuMgrClient: { destroy: mockDestroy } };
 
         // Park the auto-reconnect the unexpected disconnect will start (issue #124).
         (BleHook.bleManager.connectToDevice as jest.Mock).mockReturnValue(new Promise(() => {}));
@@ -736,8 +735,30 @@ describe('useBleConnection', () => {
             expect(FgService.stopConnectionService).toHaveBeenCalled();
         });
 
+        it('REGRESSION: reconnect still fires when selectedDevice was set at disconnect time (stale-ref bug)', async () => {
+            // Hardware-observed failure: at the moment the disconnect event arrives,
+            // selectedDevice(Ref) still holds the just-dropped device. The loop's
+            // "already connected by another path" guard must not read that stale
+            // value and bail before the first attempt - the handler nulls the live
+            // ref synchronously before starting the loop.
+            const { fireDisconnect } = await connectThenDrop(mock => {
+                mock.mockReturnValue(new Promise(() => {})); // park the attempt
+            });
+            // The app believes it's connected (as it genuinely was, until this event).
+            ctx.selectedDevice = { mac: 'AA:BB:CC', name: 'Test Device' };
+
+            await act(async () => { fireDisconnect(); });
+
+            // The handler cleared the live ref synchronously...
+            expect(ctx.selectedDevice).toBeNull();
+            // ...so the loop got past its guard and actually launched an attempt.
+            await waitFor(() => expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(1));
+            expect(ctx.reconnectingDevice).toEqual({ mac: 'AA:BB:CC', name: 'Test Device' });
+        });
+
         it('verifyConnection() recovers a missed disconnect: cleanup + reconnect loop', async () => {
-            ctx.selectedDevice = { mac: 'AA:BB:CC', name: 'Test Device', mcuMgrClient: { destroy: jest.fn() } };
+            const mcuDestroy = jest.fn();
+            ctx.selectedDevice = { mac: 'AA:BB:CC', name: 'Test Device', mcuMgrClient: { destroy: mcuDestroy } };
             const monitorRemove = jest.fn();
             ctx.monitorSubscriptions.current = [{ remove: monitorRemove }];
             const removeDisconnect = jest.fn();
@@ -753,7 +774,9 @@ describe('useBleConnection', () => {
 
             expect(removeDisconnect).toHaveBeenCalledTimes(1);
             expect(monitorRemove).toHaveBeenCalledTimes(1);
-            expect(ctx.selectedDevice.mcuMgrClient.destroy).toHaveBeenCalledTimes(1);
+            expect(mcuDestroy).toHaveBeenCalledTimes(1);
+            // The live ref is nulled synchronously (stale-ref regression above).
+            expect(ctx.selectedDevice).toBeNull();
             expect(ctx.setSelectedDevice).toHaveBeenCalledWith(null);
             expect(ctx.setReconnectingDevice).toHaveBeenCalledWith({ mac: 'AA:BB:CC', name: 'Test Device' });
         });

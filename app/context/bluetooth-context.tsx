@@ -103,6 +103,15 @@ type BluetoothContextType = {
     // Monitor subscription management (persists across navigation)
     monitorSubscriptions: React.MutableRefObject<Subscription[]>;
     disconnectSubscription: React.MutableRefObject<Subscription | null>;
+    // Always-live ref mirror of selectedDevice, for callbacks that outlive component
+    // renders (the disconnect handler and the reconnect loop live on the bleManager
+    // emitter and can run long after the row that created them unmounted - a
+    // hook-local ref freezes at that row's last render and reported the OLD device
+    // as still connected, silently killing the reconnect loop; hardware-observed,
+    // issue #124). The provider keeps it updated every render; the disconnect paths
+    // also null it SYNCHRONOUSLY (before setSelectedDevice(null) commits) so a
+    // same-tick reader never sees the stale device.
+    selectedDeviceRef: React.MutableRefObject<BluetoothContextDevice | null>;
 };
 
 const BluetoothContext = createContext<BluetoothContextType | undefined>(undefined);
@@ -384,6 +393,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         writeServiceCharacteristic,
         monitorSubscriptions,
         disconnectSubscription,
+        selectedDeviceRef,
     }), [
         selectedDevice, isScanning, connectingDevice, reconnectingDevice, discoveryProgress, writeToCharacteristic, getCharacteristicInfo, updateCharValue,
         getServiceCharacteristicInfo, updateServiceCharacteristicValue, writeServiceCharacteristic,

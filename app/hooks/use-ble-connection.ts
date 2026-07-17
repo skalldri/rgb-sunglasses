@@ -63,17 +63,20 @@ const RECONNECT_BACKOFF_MS = [2000, 5000, 10000, 30000];
 
 export function useBleConnection(macAddress: string, deviceName: string): UseBleConnectionResult {
     const {
-        selectedDevice, setSelectedDevice, updateCharValue, updateServiceCharacteristicValue,
+        setSelectedDevice, updateCharValue, updateServiceCharacteristicValue,
         monitorSubscriptions, disconnectSubscription, setDiscoveryProgress, setConnectingDevice,
         setReconnectingDevice, reconnectGeneration, intentionalDisconnectRef, connectPromises,
+        // The CONTEXT-level live ref, not a hook-local one: the disconnect handler
+        // and reconnect loop run in bleManager-emitter closures that outlive this
+        // row component. A hook-local ref freezes at the row's last render on
+        // unmount, so it kept reporting the old device as connected and the
+        // reconnect loop exited before its first attempt (hardware-observed,
+        // issue #124). The provider updates this ref every render, and the
+        // disconnect paths below null it synchronously.
+        selectedDeviceRef,
     } = useBluetooth();
 
     const [isConnecting, setIsConnecting] = useState(false);
-
-    // Keeps a live reference to selectedDevice so the disconnect listener always
-    // sees the current value, not a stale closure snapshot.
-    const selectedDeviceRef = useRef(selectedDevice);
-    selectedDeviceRef.current = selectedDevice;
 
     // Guards against calling setIsConnecting after the component unmounts.
     const isMountedRef = useRef(true);
@@ -556,6 +559,11 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                         }
                     }
 
+                    // Null the live ref SYNCHRONOUSLY: setSelectedDevice(null) only
+                    // commits on the next provider render, and startReconnectLoop's
+                    // first already-connected check runs in this same tick - a stale
+                    // ref there aborts the loop before its first attempt.
+                    selectedDeviceRef.current = null;
                     setSelectedDevice(null);
                     disconnectSubscription.current = null;
 
@@ -696,6 +704,9 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 console.log('Error destroying MCUmgr client:', e);
             }
         }
+        // Synchronous ref null before the loop starts - same reasoning as the
+        // disconnect handler.
+        selectedDeviceRef.current = null;
         setSelectedDevice(null);
 
         // Deliberately not awaited - the loop outlives this call.
