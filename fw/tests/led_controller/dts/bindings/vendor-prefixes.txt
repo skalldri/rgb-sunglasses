@@ -1,0 +1,2 @@
+# Test-local vendor prefix for this suite's fake led_strip binding
+test	Test-only devices (this suite's fakes)

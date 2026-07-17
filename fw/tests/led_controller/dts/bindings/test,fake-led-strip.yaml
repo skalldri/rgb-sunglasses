@@ -1,0 +1,11 @@
+description: Fake LED strip for led_controller tests — records update_rgb calls
+
+compatible: "test,fake-led-strip"
+
+include: base.yaml
+
+properties:
+  chain-length:
+    type: int
+    required: true
+    description: Number of pixels in the fake strip
