@@ -330,10 +330,15 @@ class RePair:
         for n in self.ui.nodes:
             if n.rid.endswith("bt_header_device_name"):
                 return n.text.strip() == name
-        # Cross-OEM: the details page shows the EXACT device name (a "Device name" field on
-        # OxygenOS) AND offers an unpair/forget action. A device's details page only ever
-        # shows its own name, so name-match + unpair-action = we're on THIS device's page.
-        has_name = any(n.text.strip() == name for n in self.ui.nodes)
+        # Cross-OEM: the details page shows the device name AND offers an unpair/forget
+        # action. A device's details page only ever shows its own name, so name-match +
+        # unpair-action = we're on THIS device's page. The match is CONTAINS, not
+        # equality: Android 16's Pixel page has only a generic "Device details" header
+        # and embeds the name mid-sentence in the can't-connect banner ("Try restarting
+        # RGB Sunglasses Proto0 94E0. If that doesn't ..."). Contains stays safe as the
+        # gate: names carry the unique per-board serial suffix, so a different device's
+        # page can never contain the target's exact full name.
+        has_name = any(name in (n.text + " " + n.desc) for n in self.ui.nodes)
         return has_name and self.ui.has(self._UNPAIR_RE)
 
     def _is_some_details_page(self):
@@ -369,10 +374,14 @@ class RePair:
         return None
 
     def _scroll_down(self):
+        # Drag SLOWLY (800ms): a sub-500ms swipe is silently dropped on some
+        # devices/pages - observed on a Pixel 9 Pro (Android 16), where 300ms
+        # flings scrolled the Saved-devices list not one pixel while an 800ms
+        # drag worked every time. Screenshot-diff verified, not dump-inferred.
         w = 500
-        self.a.shell("input", "swipe", str(w), str(int(self.screen_h * 0.75)),
-                     str(w), str(int(self.screen_h * 0.30)), "300")
-        time.sleep(0.6)
+        self.a.shell("input", "swipe", str(w), str(int(self.screen_h * 0.85)),
+                     str(w), str(int(self.screen_h * 0.20)), "800")
+        time.sleep(0.8)
 
     def _manual_forget(self):
         print("", flush=True)
@@ -409,25 +418,31 @@ class RePair:
                 break
         # Find the target's own gear. On stock Android the first Bluetooth screen only
         # lists connected + a few saved devices; the rest (incl. a not-connected board)
-        # live behind "See all" -> the full "Saved devices" list. Expand that (scrolling
-        # "See all" fully into view first — it's often clipped in the gesture-nav strip,
-        # so a naive tap misses), then scroll the full list to find the target.
+        # live behind "See all" -> the full "Saved devices" list. The "See all" row
+        # itself can start entirely OFF-SCREEN (Android 16 appends it after the
+        # recent-saved rows), so hunt for it BY scrolling — the old "break when not on
+        # the first dump" bailed out here and then scrolled straight past it to the
+        # page bottom without ever expanding the list (observed on a Pixel 9 Pro /
+        # Android 16 with 40+ bonds). When visible but clipped into the gesture-nav
+        # strip, scroll once more before tapping (a tap in the strip misses).
         self.ui.dump()
         gear = self._find_device_gear(self.name)
         if not gear:
-            for _ in range(5):
+            for _ in range(8):
                 n = self.ui.find(r"^See all$")
-                if not n:
-                    break
-                if n.cy > self.screen_h - 220:   # clipped at the bottom -> scroll it up first
-                    self._scroll_down()
+                if n and n.cy <= self.screen_h - 220:
+                    log("expanding the full device list (See all)…")
+                    self.a.tap(n.cx, n.cy)
+                    time.sleep(1.2)
                     self.ui.dump()
-                    continue
-                log("expanding the full device list (See all)…")
-                self.a.tap(n.cx, n.cy)
-                time.sleep(1.2)
+                    break
+                self._scroll_down()
                 self.ui.dump()
-                break
+                # The target's gear can also come into view directly while hunting
+                # (OxygenOS lists every bond inline and has no "See all" at all).
+                gear = self._find_device_gear(self.name)
+                if gear:
+                    break
         if not gear:
             for _ in range(14):
                 gear = self._find_device_gear(self.name)
