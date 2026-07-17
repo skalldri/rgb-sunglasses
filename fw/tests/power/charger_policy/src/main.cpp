@@ -237,12 +237,15 @@ ZTEST(charger_policy, test_pd_contract_programs_input_limits) {
 
 ZTEST(charger_policy, test_contract_change_reapplies_within_one_tick) {
     emul_tps25750_bq_set_vbat_present(tps_emul, true);
-    stage_typec_tier(0x0); /* boot on a default-USB source: unmanaged */
+    stage_typec_tier(0x0); /* boot on a default-USB source */
     charger_policy_boot_init(true, 0);
 
     struct bq25792_limits limits;
     zassert_ok(bq25792_get_limits(bq_dev, &limits));
-    zassert_equal(limits.iindpm_ma, 3000, "POR IINDPM untouched on a default source");
+    /* AUTO_INDET is bypassed, so nothing else ever programs a legacy budget:
+     * a default source gets the managed 500mA USB floor (was: left at the
+     * 3000mA POR for BC1.2 to rewrite). */
+    zassert_equal(limits.iindpm_ma, 500, "default source gets the managed 500mA floor");
     zassert_equal(limits.vindpm_mv, 4600);
 
     /* Re-plug lands a 5V/3A contract. */
@@ -273,6 +276,30 @@ ZTEST(charger_policy, test_typec_tier_and_clamp) {
     zassert_ok(bq25792_get_limits(bq_dev, &limits));
     zassert_equal(limits.iindpm_ma, 3000, "IINDPM clamped to APP_INPUT_CURRENT_LIMIT_MAX_MA");
     zassert_equal(limits.vindpm_mv, 18000, "VINDPM = 90%% of 20V");
+}
+
+ZTEST(charger_policy, test_auto_indet_bypassed_at_boot_and_after_wd_expiry) {
+    emul_tps25750_bq_set_vbat_present(tps_emul, true);
+    charger_policy_boot_init(true, 0);
+
+    /* REG11 AUTO_INDET_EN (bit 6, POR 1, SLUSDG1C Table 9-27) must be cleared
+     * at boot: the BQ's D+/D- pins are not connected on this board, and a
+     * failed BC1.2 pass latches "Not qualified adaptor", blocking the
+     * converter (the 2026-07-17 no-charging incident). */
+    zassert_equal(bq_reg(0x11) & BIT(6), 0, "AUTO_INDET_EN must be cleared at boot");
+
+    /* Watchdog expiry resets AUTO_INDET_EN to POR-enabled (Table 9-27's
+     * "Reset by: WATCHDOG"); the WD-reapply path must clear it again. The
+     * emulator doesn't model REG11 as WD-scoped, so stage the reverted bit by
+     * hand alongside a real modeled expiry. */
+    uint8_t rearmed = 0x05;
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x10, &rearmed, 1));
+    uint8_t cc2 = bq_reg(0x11) | BIT(6);
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x11, &cc2, 1));
+    zassert_true(emul_tps25750_bq_expire_watchdog(tps_emul));
+
+    tick();
+    zassert_equal(bq_reg(0x11) & BIT(6), 0, "WD reapply must re-clear AUTO_INDET_EN");
 }
 
 ZTEST(charger_policy, test_auto_indet_rewrite_reconciled_under_contract) {
@@ -363,19 +390,22 @@ ZTEST(charger_policy, test_unaligned_target_quantized_no_divergence_loop) {
                       four_cc);
 }
 
-ZTEST(charger_policy, test_legacy_source_iindpm_left_alone) {
+ZTEST(charger_policy, test_legacy_source_floor_reconciled) {
     emul_tps25750_bq_set_vbat_present(tps_emul, true);
-    stage_typec_tier(0x0); /* Type-C default: BC1.2's value is the law */
+    stage_typec_tier(0x0); /* Type-C default: managed 500mA floor */
     charger_policy_boot_init(true, 0);
 
-    /* BC1.2 derives 500mA; the policy must not "fix" it. */
-    uint8_t sdp[2] = {0x00, 50};
-    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x06, sdp, sizeof(sdp)));
+    /* An external writer diverges IINDPM to a value DIFFERENT from the floor
+     * (1500mA — if it were 500mA the assertion below couldn't distinguish
+     * "reconciled" from "left alone"). With AUTO_INDET bypassed there is no
+     * lawful external writer for a legacy budget, so reconcile restores. */
+    uint8_t rewrite[2] = {0x00, 150};
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x06, rewrite, sizeof(rewrite)));
 
     tick_through_reconcile();
     struct bq25792_limits limits;
     zassert_ok(bq25792_get_limits(bq_dev, &limits));
-    zassert_equal(limits.iindpm_ma, 500, "unmanaged IINDPM must not be reconciled");
+    zassert_equal(limits.iindpm_ma, 500, "managed legacy floor must be reconciled");
 }
 
 ZTEST(charger_policy, test_boot_clamps_persisted_overlimit_current) {
@@ -406,7 +436,7 @@ ZTEST(charger_policy, test_contract_lost_without_replug_falls_back_to_500ma) {
 
     /* PD Hard Reset: contract gone, VBUS never dropped — POWER_STATUS falls
      * back to Type-C default. The stale 3A limit must NOT stay programmed;
-     * the policy programs the 500mA USB-default lawful floor once. */
+     * the policy derives the 500mA USB-default lawful floor. */
     stage_typec_tier(0x0);
     tick();
     zassert_ok(bq25792_get_limits(bq_dev, &limits));
@@ -415,15 +445,16 @@ ZTEST(charger_policy, test_contract_lost_without_replug_falls_back_to_500ma) {
 
     struct charger_policy_snapshot snap;
     charger_policy_get_snapshot(&snap);
-    zassert_equal(snap.iindpm_ma, 0, "IINDPM unmanaged after fallback");
+    zassert_equal(snap.iindpm_ma, 500, "the 500mA floor is a managed target");
 
-    /* And the fallback is one-shot: reconcile must not fight a later
-     * BC1.2-derived value on the now-unmanaged input. */
-    uint8_t bc12[2] = {0x00, 150}; /* 1500mA CDP derivation: 150 x 10mA LSB, big-endian */
-    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x06, bc12, sizeof(bc12)));
+    /* The floor is managed, not one-shot: with AUTO_INDET bypassed (D+/D-
+     * not connected) there is no lawful external writer for a legacy budget,
+     * so reconcile restores the floor against any external rewrite. */
+    uint8_t rewrite[2] = {0x00, 150}; /* 1500mA: 150 x 10mA LSB, big-endian */
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x06, rewrite, sizeof(rewrite)));
     tick_through_reconcile();
     zassert_ok(bq25792_get_limits(bq_dev, &limits));
-    zassert_equal(limits.iindpm_ma, 1500, "unmanaged IINDPM must be left alone");
+    zassert_equal(limits.iindpm_ma, 500, "managed floor must be reconciled");
 }
 
 ZTEST(charger_policy, test_partial_pd_read_failure_keeps_snapshot_consistent) {

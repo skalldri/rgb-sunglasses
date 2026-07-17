@@ -14,6 +14,24 @@ int bq25792_temp_override(const struct device* dev, bool enable);
 
 int bq25792_adc_enable(const struct device* dev, bool enable);
 
+/**
+ * @brief Enable/disable automatic D+/D- input source type detection
+ * (REG11 AUTO_INDET_EN, datasheet SLUSDG1C Table 9-27; POR enabled, reset
+ * back to enabled by watchdog expiry or REG_RST).
+ *
+ * Disabled by charger_policy on this design: the BQ's D+/D- pins are not
+ * connected, so BC1.2 probes floating pins and can latch VBUS_STAT
+ * "Not qualified adaptor", which blocks the converter (no charging) until
+ * the next successful detection. With detection bypassed the converter
+ * starts right after poor-source qualification and IINDPM is wholly
+ * host-programmed (§9.3.4.5).
+ *
+ * @param dev    BQ25792 device pointer.
+ * @param enable true to restore the chip-default automatic detection.
+ * @return 0 on success, negative errno on failure.
+ */
+int bq25792_auto_indet_enable(const struct device* dev, bool enable);
+
 int bq25792_pfm_enable(const struct device* dev, bool enable);
 
 typedef enum {

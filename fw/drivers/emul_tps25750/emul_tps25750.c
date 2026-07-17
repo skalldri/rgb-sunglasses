@@ -450,6 +450,10 @@ void emul_tps25750_bq_por_defaults(const struct emul *target) {
     data->bq_regs[0x07] = 0x2C;
     data->bq_regs[0x0F] = 0xA2;
     data->bq_regs[0x10] = 0x05;
+    /* - REG11    Control_2 = 0x40 (AUTO_INDET_EN=1; Table 9-27) — nonzero POR
+     *   matters: the policy's boot-time AUTO_INDET_EN clear is only testable
+     *   if the bit actually starts set, like on the real part. */
+    data->bq_regs[0x11] = 0x40;
 }
 
 int emul_tps25750_get_bq_reg(const struct emul *target, uint8_t reg, uint8_t *out, size_t count) {
