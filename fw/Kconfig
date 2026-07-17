@@ -196,6 +196,42 @@ config APP_MCUBOOT_UPDATER_INIT_PRIORITY
 	  after the flash subsystem (pre-APPLICATION). The default of 90 leaves
 	  room above CONFIG_MCUBOOT_INFO_INIT_PRIORITY (88).
 
+config APP_FACTORY_RESET
+	bool "Boot-time factory reset (hold Up+Down for 10 s)"
+	default y if BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP
+	default n
+	depends on FLASH_MAP
+	help
+	  On boot (SYS_INIT APPLICATION 0, before settings_load), if the Up and
+	  Down D-PAD buttons are both held, pause boot and flash the status LEDs
+	  white. After a continuous 10 s hold: erase the NVS settings partition
+	  (all config + BT bonds), erase the coredump partition, re-create the
+	  FAT filesystem (GLIM assets and extensions are lost), and reboot.
+	  Releasing earlier resumes a normal boot. Also registers the
+	  'factory_reset now' shell command. Up+Down rather than all 4 D-PAD
+	  buttons because Left is MCUboot's serial-recovery entry button — see
+	  the header comment in src/factory_reset/factory_reset.cpp. Proto0
+	  only — the DK is legacy and lacks the status LEDs, FAT disk, and
+	  coredump partition.
+
+config APP_FACTORY_RESET_HOLD_MS
+	int "Factory reset hold duration (ms)"
+	default 10000
+	depends on APP_FACTORY_RESET
+	help
+	  How long the Up+Down chord must be held continuously at boot before
+	  the factory reset is performed.
+
+config APP_SETTINGS_PARTITION_ERASE
+	bool
+	default y if APP_MCUBOOT_UPDATER || APP_FACTORY_RESET
+	depends on FLASH_MAP
+	help
+	  Hidden helper symbol: compiles src/storage/appcfg_erase.cpp
+	  (storage_erase_settings_partition() + the 'appcfg erase' shell
+	  command) for every feature that needs it, so factory reset doesn't
+	  have to borrow the unrelated APP_MCUBOOT_UPDATER gate.
+
 config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	int "Debounce interval (ms) before persisting a changed config value"
 	default 1000
