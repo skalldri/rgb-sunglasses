@@ -288,11 +288,16 @@ class RePair:
 
     # ---- preflight ----
     def preflight(self):
-        for res in ("board", "app"):
-            if os.access(HW_LOCK, os.X_OK):
-                if subprocess.run([HW_LOCK, "check", res], capture_output=True).returncode != 0:
-                    die(f"the '{res}' hw-lock is not held by this session. Hold both:\n"
-                        f'    Monitor(command: "scripts/hw-lock.sh hold board app", persistent: true)')
+        # The board+app hw-locks coordinate the shared board+phone across Claude
+        # Code agent worktrees. Only enforce them when an agent is driving --
+        # Claude Code sets CLAUDECODE=1 in every command it spawns; a solo human
+        # runs lock-free. RGBSG_NO_LOCK=1 forces the lock-free path.
+        if os.environ.get("CLAUDECODE") and not os.environ.get("RGBSG_NO_LOCK"):
+            for res in ("board", "app"):
+                if os.access(HW_LOCK, os.X_OK):
+                    if subprocess.run([HW_LOCK, "check", res], capture_output=True).returncode != 0:
+                        die(f"the '{res}' hw-lock is not held by this session. Hold both:\n"
+                            f'    Monitor(command: "scripts/hw-lock.sh hold board app", persistent: true)')
         if self.a.state() != "device":
             die("no adb device (get-state != 'device'). Check `adb devices`.")
         if serial is None:

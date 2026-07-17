@@ -38,7 +38,7 @@ BASH_BOARD_PATTERNS = [
     r"jlink-flash\.sh", r"mcumgr-flash\.sh", r"provision-device\.sh", r"JLinkExe",
     r"nrfutil\s+device", r"\bmcumgr\b", r"west\s+flash",
 ]
-BASH_APP_PATTERNS = [r"\badb\b", r"expo run:android", r"adb-connect\.sh"]
+BASH_APP_PATTERNS = [r"\badb\b", r"expo run:android", r"adb-connect\.sh", r"launch-app\.sh"]
 
 resource = ""
 

@@ -29,24 +29,31 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HW_LOCK="$REPO_ROOT/scripts/hw-lock.sh"
 
-if [ -x "$HW_LOCK" ]; then
-    if ! "$HW_LOCK" check app; then
-        echo "[!] Refusing to launch: the 'app' hardware lock is not held by this session." >&2
-        echo "    Run: Monitor(command: \"scripts/hw-lock.sh hold app\", persistent: true) first (see the hw-lock skill)." >&2
-        exit 1
+# The 'app' hw-lock coordinates the single physical phone across Claude Code agent
+# worktrees. Only enforce it when an agent is driving -- Claude Code sets CLAUDECODE=1
+# in every command it spawns; a solo human developer runs the app lock-free (they
+# own the one phone and manage Metro's lifetime themselves). RGBSG_NO_LOCK=1 forces
+# the lock-free path even under an agent.
+if [ -n "${CLAUDECODE:-}" ] && [ -z "${RGBSG_NO_LOCK:-}" ]; then
+    if [ -x "$HW_LOCK" ]; then
+        if ! "$HW_LOCK" check app; then
+            echo "[!] Refusing to launch: the 'app' hardware lock is not held by this session." >&2
+            echo "    Run: Monitor(command: \"scripts/hw-lock.sh hold app\", persistent: true) first (see the hw-lock skill)." >&2
+            exit 1
+        fi
+        # Record our own pid (exec below keeps it, so this becomes Metro's real
+        # pid) so releasing the lock can stop Metro precisely -- see
+        # cmd_note_metro_pid / cmd_release in scripts/hw-lock.sh. Refuse rather
+        # than proceed without this: a failure here means the lock was released
+        # in the gap between the check above and now, so launching would race
+        # directly against the collision this lock exists to prevent.
+        if ! "$HW_LOCK" note-metro-pid app "$$"; then
+            echo "[!] Refusing to launch: could not record this process as the 'app' lock's tracked Metro pid (the lock may have just been released) -- re-acquire the lock and retry." >&2
+            exit 1
+        fi
+    else
+        echo "[!] scripts/hw-lock.sh not found -- launching without the shared app lock." >&2
     fi
-    # Record our own pid (exec below keeps it, so this becomes Metro's real
-    # pid) so releasing the lock can stop Metro precisely -- see
-    # cmd_note_metro_pid / cmd_release in scripts/hw-lock.sh. Refuse rather
-    # than proceed without this: a failure here means the lock was released
-    # in the gap between the check above and now, so launching would race
-    # directly against the collision this lock exists to prevent.
-    if ! "$HW_LOCK" note-metro-pid app "$$"; then
-        echo "[!] Refusing to launch: could not record this process as the 'app' lock's tracked Metro pid (the lock may have just been released) -- re-acquire the lock and retry." >&2
-        exit 1
-    fi
-else
-    echo "[!] scripts/hw-lock.sh not found -- launching without the shared app lock." >&2
 fi
 
 cd "$REPO_ROOT/app"

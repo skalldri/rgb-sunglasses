@@ -50,6 +50,12 @@ DOCS = [
         "desc": "Set up your Proto0 hardware: unboxing, Bluetooth pairing, the USB interface, and firmware updates.",
     },
     {
+        "src": "fw/docs/developer-setup.md",
+        "out": "developer-setup",
+        "title": "Developer Setup",
+        "desc": "From a fresh Windows PC to building & flashing firmware and deploying the app — via the devcontainer.",
+    },
+    {
         "src": "fw/docs/flashing-without-jlink.md",
         "out": "recovery",
         "title": "Firmware Recovery",

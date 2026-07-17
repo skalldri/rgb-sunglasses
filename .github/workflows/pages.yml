@@ -18,6 +18,7 @@ on:
       - 'fw/docs/flashing-without-jlink.md'
       - 'fw/docs/proto0-user-guide.md'
       - 'fw/docs/proto0-hardware-guide.md'
+      - 'fw/docs/developer-setup.md'
   workflow_dispatch:
 
 permissions:

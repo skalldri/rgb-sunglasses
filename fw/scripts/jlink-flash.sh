@@ -9,13 +9,17 @@ JLINK_VID_PID="1366:0101"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="$REPO_ROOT/fw/build"
 
-# Refuse to flash unless this session holds the 'board' hardware lock --
-# flashing resets the board and would race with any other agent using the
-# J-Link/serial console. See scripts/hw-lock.sh, .claude/skills/hw-lock/SKILL.md.
-if ! "$REPO_ROOT/scripts/hw-lock.sh" check board; then
-    echo "[!] Refusing to flash: the 'board' hardware lock is not held by this session." >&2
-    echo "    Run: Monitor(command: \"scripts/hw-lock.sh hold board\", persistent: true)   (see the hw-lock skill)" >&2
-    exit 1
+# The 'board' hw-lock coordinates the shared dev board across Claude Code agent
+# worktrees. Only enforce it when an agent is driving — Claude Code sets CLAUDECODE=1
+# in every command it spawns; a solo human developer flashes lock-free. Set
+# RGBSG_NO_LOCK=1 to force the lock-free path even under an agent.
+# See scripts/hw-lock.sh, .claude/skills/hw-lock/SKILL.md.
+if [ -n "${CLAUDECODE:-}" ] && [ -z "${RGBSG_NO_LOCK:-}" ]; then
+    if ! "$REPO_ROOT/scripts/hw-lock.sh" check board; then
+        echo "[!] Refusing to flash: the 'board' hardware lock is not held by this session." >&2
+        echo "    Run: Monitor(command: \"scripts/hw-lock.sh hold board\", persistent: true)   (see the hw-lock skill)" >&2
+        exit 1
+    fi
 fi
 
 # A first arg that isn't an option (doesn't start with "-") is the build dir;
