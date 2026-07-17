@@ -1,4 +1,5 @@
 #include <ff.h>
+#include <storage/storage.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -34,11 +35,34 @@ static int mount_fat(void) {
 
 SYS_INIT(mount_fat, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 
-#if defined(CONFIG_SHELL) && defined(CONFIG_FILE_SYSTEM_MKFS)
+#if defined(CONFIG_FILE_SYSTEM_MKFS)
 
 // ELM FAT logical drive name: translate_path() strips the leading '/' from the
 // mount point, so "/NAND:" -> "NAND:" is what f_mkfs / fs_mkfs expect.
 static constexpr const char *kFatDiskId = "NAND:";
+
+int storage_fat_mkfs_unmounted(void) {
+    return fs_mkfs(FS_FATFS, (uintptr_t)kFatDiskId, NULL, 0);
+}
+
+int storage_fat_wipe_for_reset(void) {
+    // Skip the unmount when the volume isn't mounted (factory reset at boot
+    // runs before mount_fat's SYS_INIT) instead of letting fs_unmount() fail
+    // with -EINVAL — the SDK logs its own LOG_ERR for that expected case.
+    // sys_dnode_is_linked on the mount node is fs_unmount()'s own
+    // mounted-ness test (zephyr/subsys/fs/fs.c).
+    if (sys_dnode_is_linked(&fat_mnt.node)) {
+        int rc = fs_unmount(&fat_mnt);
+        if (rc < 0) {
+            return rc;
+        }
+    }
+    return storage_fat_mkfs_unmounted();
+}
+
+#endif /* CONFIG_FILE_SYSTEM_MKFS */
+
+#if defined(CONFIG_SHELL) && defined(CONFIG_FILE_SYSTEM_MKFS)
 
 static int cmd_storage_reformat(const struct shell *sh, size_t argc, char **argv) {
     ARG_UNUSED(argc);
@@ -52,7 +76,7 @@ static int cmd_storage_reformat(const struct shell *sh, size_t argc, char **argv
         return rc;
     }
 
-    rc = fs_mkfs(FS_FATFS, (uintptr_t)kFatDiskId, NULL, 0);
+    rc = storage_fat_mkfs_unmounted();
     if (rc < 0) {
         shell_error(sh, "Format failed: %d", rc);
         int remount_rc = fs_mount(&fat_mnt);
