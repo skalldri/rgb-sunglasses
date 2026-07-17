@@ -211,6 +211,10 @@ are denied without the lock — use the Read/Grep tools or avoid the tokens
 
 When the user says "Remember" (or "Remember that"), update the appropriate CLAUDE.md file immediately with the information. Prefer the root `CLAUDE.md` for cross-cutting rules and `fw/CLAUDE.md` for firmware-specific facts.
 
+## Worktree isolation — NEVER touch the main checkout from a worktree
+
+**When working in a git worktree (`.claude/worktrees/<name>/`), operate ONLY on files under that worktree root. Never read, build against, copy from, edit, or flash artifacts from the main checkout at `/workspaces/rgb-sunglasses` (or any other worktree).** Every path you Read/Write/Edit and every `--build-dir`/artifact reference must stay under the current worktree. If something you need doesn't exist in the worktree yet (e.g. `fw/build`), **create/build it here** — do not reach into the main repo's copy. Reading the main checkout's build, docs, or source from a worktree gives stale/wrong results and silently crosses branches. (This is a hard rule from real mistakes: editing main-checkout files while the branch lived in the worktree, and trying to flash the main checkout's build from a worktree.)
+
 ## Git workflow — ALWAYS branch before committing
 
 **Never commit directly to `main`.** Always create a feature branch first (`git checkout -b <branch-name>`), then commit, push the branch, and open a PR. Do this before editing any files if possible, but at minimum before the first `git commit`. A `PreToolUse` hook (`.claude/hooks/destructive-guard.sh`) denies `git commit` while on `main`, so branch creation must come first.
@@ -265,6 +269,7 @@ This is the project's **single** routing table — other docs link here, never c
 | Validate app changes without a phone | /validate-app |
 | Memory / FLASH / RAM work | /rom-ram-budget |
 | Flash + on-device verification | /flash-and-verify |
+| Flash / recover firmware without a J-Link (MCUmgr serial, MCUboot DFU) | `fw/scripts/mcumgr-flash.sh` + `fw/docs/flashing-without-jlink.md` |
 | Fresh worktree/session orientation | /worktree-setup |
 | Prove a change actually works | /verify |
 | Pre-PR gate | /submit-pr |

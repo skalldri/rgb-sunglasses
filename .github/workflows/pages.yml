@@ -1,9 +1,12 @@
-name: Deploy Privacy Policy (GitHub Pages)
+name: Deploy Project Site (GitHub Pages)
 
 # Publishes the static project site under `site/` to GitHub Pages, served at the
 # custom domain https://rgb-sunglasses.autom8ed.com (see site/CNAME); the privacy
-# policy lives at /privacy. Only the `site/` folder is uploaded, so internal
-# design docs under `docs/plans/` are never published.
+# policy lives at /privacy. Selected in-repo Markdown docs are rendered into the
+# site by scripts/build-site.py (single source of truth) — e.g. the firmware
+# recovery guide at /recovery, sourced from fw/docs/flashing-without-jlink.md.
+# Only the `site/` folder is uploaded, so internal design docs under `docs/plans/`
+# are never published.
 
 on:
   push:
@@ -11,6 +14,11 @@ on:
     paths:
       - 'site/**'
       - '.github/workflows/pages.yml'
+      - 'scripts/build-site.py'
+      - 'fw/docs/flashing-without-jlink.md'
+      - 'fw/docs/proto0-user-guide.md'
+      - 'fw/docs/proto0-hardware-guide.md'
+      - 'fw/docs/developer-setup.md'
   workflow_dispatch:
 
 permissions:
@@ -39,6 +47,19 @@ jobs:
           # Enable Pages (source = GitHub Actions) if it isn't already, so the
           # first deploy can't fail on a repo where Pages was never turned on.
           enablement: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Render Markdown docs into the site
+        # Renders the docs listed in scripts/build-site.py (e.g. the recovery
+        # guide) into site/<page>/index.html so the Markdown stays the single
+        # source of truth. Generated pages are git-ignored and produced here.
+        run: |
+          python -m pip install --upgrade markdown pymdown-extensions
+          python scripts/build-site.py
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3

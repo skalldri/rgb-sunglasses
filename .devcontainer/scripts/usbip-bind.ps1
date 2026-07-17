@@ -16,9 +16,16 @@
 #>
 [CmdletBinding()]
 param(
-    # Hardware IDs (VID:PID) to bind: RGB Sunglasses board and the SEGGER J-Link debug probe.
-    # A device that isn't plugged in is reported and skipped (bind it later when connected).
-    [string[]] $HardwareIds = @('2fe3:0001', '1366:0101')
+    # Hardware IDs (VID:PID) to bind:
+    #   2fe3:0001  board running the app firmware (normal runtime)
+    #   2fe3:0100  board in MCUboot serial-recovery / DFU mode (a different PID). This
+    #              device only exists WHILE the board is held in DFU mode, so to bind it
+    #              you must put the board in recovery mode first (hold the Left button at
+    #              reset) and then run this script — otherwise it's reported and skipped.
+    #   1366:0101  SEGGER J-Link debug probe
+    # A device that isn't plugged in (or not currently in the matching mode) is reported
+    # and skipped — bind it later when it's connected/in the right mode.
+    [string[]] $HardwareIds = @('2fe3:0001', '2fe3:0100', '1366:0101')
 )
 
 $ErrorActionPreference = 'Stop'

@@ -211,6 +211,23 @@ main {
     font-size: 0.98rem;
 }
 
+/* Clickable cards (e.g. the /docs index) */
+a.card {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.15s ease;
+}
+
+a.card:hover {
+    border-color: var(--accent);
+    text-decoration: none;
+}
+
+a.card h3 {
+    color: var(--accent);
+}
+
 .section {
     margin: 3rem 0;
 }
@@ -276,6 +293,65 @@ code {
     padding: 0.1em 0.35em;
     border-radius: 5px;
     font-size: 0.9em;
+}
+
+/* ---- Rendered Markdown docs (code blocks, tables, notes) ---- */
+
+.prose pre {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    overflow-x: auto;
+    line-height: 1.45;
+}
+
+.prose pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.88em;
+}
+
+.prose table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.25rem 0;
+    font-size: 0.95rem;
+    display: block;
+    overflow-x: auto;
+}
+
+.prose th,
+.prose td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+}
+
+.prose th {
+    background: var(--card);
+}
+
+.prose blockquote {
+    margin: 1.5rem 0;
+    padding: 0.75rem 1.25rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0;
+    color: var(--fg);
+}
+
+.prose blockquote p {
+    margin: 0.4rem 0;
+}
+
+.prose img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 10px;
+    margin: 1rem 0;
 }
 
 /* ---- Footer ---- */

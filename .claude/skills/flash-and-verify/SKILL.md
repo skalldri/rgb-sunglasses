@@ -55,6 +55,17 @@ It self-gates on the `board` lock (refuses without it), auto-detects the J-Link 
 
 ## 6. MCUmgr OTA path (no J-Link needed; app images only)
 
+**Prefer the wrapper script** — it auto-detects the port, uploads app + net-core images from `dfu_application.zip`, auto-parses the slot hashes, tests, resets, and confirms:
+
+```bash
+fw/scripts/mcumgr-flash.sh                 # app-mode OTA (board still boots), proto0 fw/build
+fw/scripts/mcumgr-flash.sh --app-only      # skip the net-core image (faster)
+fw/scripts/mcumgr-flash.sh --recovery      # board is in MCUboot serial recovery (Left button held at reset)
+fw/scripts/mcumgr-flash.sh --build-dir fw/build-dk   # DK (no reset over mcumgr — reset manually)
+```
+
+It still needs the `board` lock when run by an agent (it self-gates on `CLAUDECODE`), and takes ~3-4 min for the app image. Runbook: `fw/docs/flashing-without-jlink.md`. To drive it by hand instead:
+
 ```bash
 # Identify the current MCUmgr port with /check-hardware first — it shifts (step 4)
 CONN="--conntype serial --connstring dev=/dev/ttyACM1,baud=115200"   # example

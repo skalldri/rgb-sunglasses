@@ -23,13 +23,18 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="$REPO_ROOT/fw/build"
 
-# Refuse to provision unless this session holds the 'board' hardware lock --
-# this writes to the board's NAND over USB mass storage and must not race with
-# another agent flashing/resetting/talking to the board.
-if ! "$REPO_ROOT/scripts/hw-lock.sh" check board; then
-    echo "[!] Refusing to provision: the 'board' hardware lock is not held by this session." >&2
-    echo "    Run: Monitor(command: \"scripts/hw-lock.sh hold board\", persistent: true)   (see the hw-lock skill)" >&2
-    exit 1
+# The 'board' hw-lock coordinates the shared dev board across Claude Code agent
+# worktrees (this writes to the board's NAND over USB mass storage and must not
+# race with another agent flashing/resetting/talking to the board). Only enforce
+# it when an agent is driving — Claude Code sets CLAUDECODE=1 in every command it
+# spawns; a solo human developer provisions lock-free. RGBSG_NO_LOCK=1 forces the
+# lock-free path.
+if [ -n "${CLAUDECODE:-}" ] && [ -z "${RGBSG_NO_LOCK:-}" ]; then
+    if ! "$REPO_ROOT/scripts/hw-lock.sh" check board; then
+        echo "[!] Refusing to provision: the 'board' hardware lock is not held by this session." >&2
+        echo "    Run: Monitor(command: \"scripts/hw-lock.sh hold board\", persistent: true)   (see the hw-lock skill)" >&2
+        exit 1
+    fi
 fi
 
 while [ "$#" -gt 0 ]; do
