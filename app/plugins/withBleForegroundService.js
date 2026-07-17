@@ -1,4 +1,25 @@
-const { withAndroidManifest } = require('@expo/config-plugins');
+const { withAndroidManifest, withProjectBuildGradle } = require('@expo/config-plugins');
+
+// notifee resolves its native core as `app.notifee:core:+` from a maven repo BUNDLED
+// inside the npm package (android/libs). Its build.gradle tries to register that repo
+// itself via `rootProject.allprojects { repositories { ... } }`, but in this Expo
+// SDK 54 prebuild layout the app project's dependency resolution never sees it
+// (observed: gradle searched only google/mavenCentral/jitpack/sonatype and failed
+// with "Could not find any matches for app.notifee:core:+"). Register it explicitly
+// in the root build.gradle's allprojects block instead.
+function withNotifeeMavenRepo(config) {
+  return withProjectBuildGradle(config, (cfg) => {
+    const marker = '@notifee/react-native/android/libs';
+    if (!cfg.modResults.contents.includes(marker)) {
+      cfg.modResults.contents = cfg.modResults.contents.replace(
+        /allprojects\s*\{\s*\n(\s*)repositories\s*\{/,
+        (match, indent) =>
+          `${match}\n${indent}  maven { url "\${rootDir}/../node_modules/${marker}" }`
+      );
+    }
+    return cfg;
+  });
+}
 
 // Retype notifee's foreground service for long-lived BLE sessions (issue #124).
 //
@@ -12,6 +33,7 @@ const { withAndroidManifest } = require('@expo/config-plugins');
 // exactly our use case; requires the FOREGROUND_SERVICE_CONNECTED_DEVICE permission,
 // declared in app.json). tools:replace makes our attribute win over the library's.
 module.exports = function withBleForegroundService(config) {
+  config = withNotifeeMavenRepo(config);
   return withAndroidManifest(config, (cfg) => {
     const manifest = cfg.modResults.manifest;
     manifest.$['xmlns:tools'] = 'http://schemas.android.com/tools';
