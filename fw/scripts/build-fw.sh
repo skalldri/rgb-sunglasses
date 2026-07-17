@@ -8,9 +8,9 @@
 #   fw/scripts/build-fw.sh --pristine       # force a clean (from-scratch) rebuild
 #   fw/scripts/build-fw.sh proto0 -- <args> # args after -- are forwarded to west build
 #
-# The first build for a board is always a full pristine configure and is slow
-# (tens of minutes — it builds the netcore image, MCUboot, and the app). Every
-# build after that is incremental. Use --pristine if a devicetree overlay or a
+# The first build for a board is always a full pristine configure (it builds the
+# netcore image, MCUboot, and the app), so it takes noticeably longer than the
+# incremental builds after it. Use --pristine if a devicetree overlay or a
 # board .conf fragment was newly ADDED (their cached paths gate re-discovery —
 # see fw/CLAUDE.md, "Per-image Kconfig/devicetree overlays").
 set -euo pipefail

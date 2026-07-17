@@ -59,7 +59,7 @@ DOCS = [
         "src": "fw/docs/flashing-without-jlink.md",
         "out": "recovery",
         "title": "Firmware Recovery",
-        "desc": "Update or recover RGB Sunglasses firmware over USB — no J-Link required.",
+        "desc": "Recover a bricked board over USB with MCUboot's DFU mode — no J-Link required.",
     },
     {
         "src": "fw/docs/proto0-hardware-guide.md",

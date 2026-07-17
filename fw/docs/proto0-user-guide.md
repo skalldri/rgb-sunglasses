@@ -117,53 +117,13 @@ GLIM animation re-scans this folder and exposes any animations to the companion 
 
 ## Firmware Update
 
-Firmware updates can be performed in a few ways: over Bluetooth (OTA), over USB with
-MCUmgr, or via bootloader DFU.
+The glasses' firmware can be updated a few ways:
 
-### Bluetooth Over-the-Air (OTA)
-
-The companion app checks GitHub for new firmware releases and offers to install them.
-Connect to a device and tap the "Firmware Update" page to check for updates and start
-the installation process.
-
-Please note: Bluetooth OTA updates are quite slow (see
-[Issue 59](https://github.com/skalldri/rgb-sunglasses/issues/59)). It will take 5–10
-minutes to complete a Bluetooth OTA update.
-
-> TODO: companion-app update-flow walkthrough.
-
-### USB Firmware Update (MCUmgr)
-
-Firmware can be updated over the MCUmgr interface on `/dev/ttyACM1` — typically used
-during development, and the fastest cable-based option. The helper script wraps the
-whole flow (port detection, upload, reset):
-
-```bash
-fw/scripts/mcumgr-flash.sh
-```
-
-This updates the application ("app") core; the network core usually does not need
-updating. For the full step-by-step (and doing it by hand with `mcumgr`), see
-[Firmware Recovery](/recovery).
-
-### Bricked Device Recovery: DFU mode
-
-If Proto0 cannot boot the application firmware (e.g. a boot loop, or corrupted main
-application firmware), the normal firmware-update mechanisms are unavailable. If JTAG
-is unavailable, you can recover the board using MCUboot's serial **DFU mode**.
-
-To put the board in DFU mode: disconnect the USB-C cable and both batteries.
-Press and hold the **"Left" D-Pad button**. While holding it, connect the USB-C cable
-to a PC. Wait until the device has enumerated over USB-C, then release the button.
-
-The Proto0 board will enumerate as a different USB device, with VID:PID `2fe3:0100`.
-This indicates the board has entered DFU mode.
-
-You can now re-install the application firmware over DFU:
-
-```bash
-fw/scripts/mcumgr-flash.sh --recovery
-```
-
-The complete recovery procedure — including how to also restore the network core,
-and troubleshooting — is in the [Firmware Recovery](/recovery) guide.
+- **Over Bluetooth (OTA)** — the easiest for end users. The companion app checks GitHub
+  for new firmware releases and offers to install them: connect to a device and open the
+  **Firmware Update** page. (BLE OTA is slow — see
+  [Issue 59](https://github.com/skalldri/rgb-sunglasses/issues/59).)
+- **Over USB (MCUmgr)** — the fast path for developers. See
+  [Developer Setup → Flash the firmware](/developer-setup).
+- **Bricked / won't boot?** Recover it over USB with MCUboot's DFU mode — see
+  [Firmware Recovery](/recovery).

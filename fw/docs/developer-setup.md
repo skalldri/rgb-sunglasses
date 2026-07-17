@@ -39,7 +39,7 @@ Install on Windows:
 ## 2. Clone the repo and open it in the devcontainer
 
 Easiest — one click from the [firmware README](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/README.md)'s
-**"Clone in VSCode"** button (clones into a container volume). Or manually:
+**Open in Dev Containers** badge (clones into a container volume). Or manually:
 
 ```bash
 git clone https://github.com/skalldri/rgb-sunglasses.git
@@ -76,7 +76,7 @@ you normally only ever do this once.
 **Verify inside the container:**
 
 ```bash
-/check-hardware        # or: .devcontainer/scripts/check-hardware.sh
+.devcontainer/scripts/check-hardware.sh
 ```
 
 You should see the dev board detected with two serial ports (`ttyACM0` = shell,
@@ -95,10 +95,9 @@ One command (defaults to the proto0 board → `fw/build`):
 fw/scripts/build-fw.sh
 ```
 
-The **first** build is a full from-scratch configure and is slow (tens of minutes — it
-builds the network-core image, MCUboot, and the app). Every build after that is
-incremental (seconds to a couple of minutes). For the legacy DK board:
-`fw/scripts/build-fw.sh dk`.
+The **first** build is a full from-scratch configure (it builds the network-core image,
+MCUboot, and the app), so it takes noticeably longer than the incremental builds after
+it. For the legacy DK board: `fw/scripts/build-fw.sh dk`.
 
 ---
 
@@ -111,18 +110,15 @@ Your board already ships running firmware, so you can update it over USB with **
 fw/scripts/mcumgr-flash.sh
 ```
 
-This finds the MCUmgr serial port, uploads your freshly built app image, and reboots the
-board into it (a few minutes over serial). That's the whole loop: **edit → `build-fw.sh`
-→ `mcumgr-flash.sh`**.
+This finds the MCUmgr serial port, uploads your freshly built app image (showing a
+progress bar as it goes), and reboots the board into it. That's the whole loop:
+**edit → `build-fw.sh` → `mcumgr-flash.sh`**.
 
-- **Have a J-Link?** It's much faster (~40 s): `fw/scripts/jlink-flash.sh`.
+- **Have a J-Link?** It's much faster: `fw/scripts/jlink-flash.sh`.
 - **Board won't boot / bricked?** Use MCUboot's DFU recovery mode — see
   [Firmware Recovery](/recovery).
 - **Only need the app core?** `fw/scripts/mcumgr-flash.sh --app-only` skips the
   network core.
-
-> These scripts run **lock-free for you**. (The repo's shared-hardware lock only kicks
-> in when a Claude Code agent runs them; a solo developer isn't affected.)
 
 Confirm it worked over the serial shell — connect with `scripts/fw-shell.sh` and run
 `kernel version` / `kernel uptime`.
@@ -151,11 +147,11 @@ cd app && npm install
 4. Back on the *Wireless Debugging* screen, read the **debug IP:port** (different from the
    pair port) and connect:
    ```bash
-   app/scripts/adb-connect.sh <phone-ip> <debug-port>
+   adb connect <phone-ip>:<debug-port>
    ```
 
 Confirm with `adb devices` (it should list your phone). Wireless pairing is remembered by
-the phone; on later sessions just `app/scripts/adb-connect.sh <phone-ip> <debug-port>`.
+the phone; on later sessions just re-run `adb connect <phone-ip>:<debug-port>`.
 
 **c. Build, install, and run** (run this as a long-lived command — it also starts Metro):
 
