@@ -1,4 +1,6 @@
+#include <bluetooth/bt_conn_activity.h>
 #include <bluetooth/bt_state_observer.h>
+#include <bluetooth/conn_param_governor_core.h>
 #include <bluetooth/services/nsms.h>
 #include <errno.h>
 #include <string.h>
@@ -13,6 +15,10 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/shell/shell.h>
+
+#if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR) && defined(CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS)
+#include <zephyr/mgmt/mcumgr/mgmt/callbacks.h>
+#endif
 
 LOG_MODULE_REGISTER(bluetooth, LOG_LEVEL_DBG);
 
@@ -33,13 +39,46 @@ static const struct bt_le_adv_param adv_param =
     BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN | BT_LE_ADV_OPT_USE_NAME, BT_GAP_ADV_FAST_INT_MIN_2,
                          BT_GAP_ADV_FAST_INT_MAX_2, NULL);
 
-// Requested once the peer reaches CONNECTED, to cut per-GATT-operation latency during the
-// app's discovery read loop (issue #41). Neither side requests a fast interval otherwise, so
-// the connection runs at the default ~30-50ms (BT_GAP_INIT_CONN_INT_MIN/MAX) for the entire
-// ~170-operation sequential discovery walk. 6-12 (7.5-15ms) mirrors Android's "high priority"
-// connection request; latency=0, timeout=400 (4s) are conventional defaults for a peripheral
-// with no power-sensitivity concerns during this initial handshake.
+// Connection-parameter sets for the adaptive governor (issue #188; FAST predates it from
+// issue #41). Units: interval x1.25ms, timeout x10ms. The governor (see
+// conn_param_governor_core.h) picks between them from what the firmware can observe on its
+// own - inbound ATT traffic and SMP/DFU activity - because on iOS the peripheral's
+// bt_conn_le_param_update() request is the app's ONLY lever (CoreBluetooth exposes no
+// central-side parameter API, Apple QA1931); Android's requestConnectionPriority() calls
+// are same-direction accelerators. Each set below must satisfy Apple's accessory rules
+// (QA1931) or iOS silently rejects the request and the link stays fast forever:
+//   (1) interval min >= 15ms and a multiple of 15ms; (2) max >= min + 15ms;
+//   (3) max*(latency+1) <= 2s; (4) 3*max*(latency+1) < timeout; (5) latency <= 30;
+//   (6) 2s <= timeout <= 6s.
+//
+// FAST: requested at CONNECTED, to cut per-GATT-operation latency during the app's
+// discovery read loop (issue #41). Neither side requests a fast interval otherwise, so
+// the connection would run at the default ~30-50ms (BT_GAP_INIT_CONN_INT_MIN/MAX) for the
+// entire ~170-operation sequential discovery walk. 6-12 (7.5-15ms) mirrors Android's "high
+// priority" connection request; latency=0, timeout=400 (4s). On-paper this violates Apple
+// rule (1)/(2), but it is hardware-verified working (iPhone 15/iOS 26 grants 15ms) -
+// accepted nonconformance rather than risking iOS granting 30ms for the "compliant"
+// 12/24 and doubling the already-slow iOS discovery (~30-55s).
 static const struct bt_le_conn_param fast_conn_param = BT_LE_CONN_PARAM_INIT(6, 12, 0, 400);
+
+#if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR)
+// MEDIUM: activity boost while the link was idling - keeps sliders/toggles feeling
+// instant (per-op latency <= 45ms) without going back to full radio duty. Apple math:
+// 30 = 2*15 OK; 45 >= 30+15 OK; 45ms*1 <= 2s OK; 3*45ms < 4s OK; 2s <= 4s <= 6s OK.
+// Also sits inside Android's own BALANCED range (30-50ms), so the central is being asked
+// for what it would pick itself.
+static const struct bt_le_conn_param medium_conn_param = BT_LE_CONN_PARAM_INIT(24, 36, 0, 400);
+
+// SLOW: idle/backgrounded steady state. 150-165ms with peripheral latency 2 means the
+// radio wakes ~2x/s instead of the ~67x/s of a permanently-fast link (~97% duty cut on
+// BOTH ends), and the 5s supervision timeout gives the generous margin whose absence
+// produced the OnePlus "Appro LSTO" warnings during issue #124 testing. Apple math:
+// 150 = 10*15 OK; 165 = 150+15 OK; 165ms*(2+1) = 495ms <= 2s OK; 3*495ms = 1.485s < 5s
+// OK; latency 2 <= 30 OK; 2s <= 5s <= 6s OK. Core-spec validity: timeout >= 2*(1+lat)*max
+// = 990ms with 5x margin. Latency 2 (not 4) caps the worst-case first-op wake latency
+// after idle at ~0.5s for a negligible battery delta.
+static const struct bt_le_conn_param slow_conn_param = BT_LE_CONN_PARAM_INIT(120, 132, 2, 500);
+#endif /* CONFIG_APP_BT_CONN_PARAM_GOVERNOR */
 
 // Storage for runtime-built BT device name (base name + " XXXX" serial suffix)
 static char sBtDeviceName[CONFIG_BT_DEVICE_NAME_MAX + 1];
@@ -122,6 +161,197 @@ static struct bt_conn *s_active_conn = NULL;
 // human-facing diagnostic), so no lock is needed.
 static volatile BtThreadState s_current_state = BtThreadState::IDLE;
 
+#if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR)
+// ---- Connection-parameter governor wiring (issue #188) ----
+//
+// The decision core (conn_param_governor_core.{h,cpp}, native_sim-tested) is
+// single-threaded; everything funnels through one k_work_delayable on the
+// system workqueue. Event producers (BT thread, BT RX via the ATT funnels,
+// the MCUmgr SMP thread) only touch atomics/spinlocked state and reschedule
+// the work item.
+
+namespace gov = conn_param_governor_core;
+
+static gov::Governor s_governor(gov::Config{
+    .idle_timeout_ms = CONFIG_APP_BT_CONN_IDLE_TIMEOUT_S * 1000u,
+    .boost_hold_ms = CONFIG_APP_BT_CONN_BOOST_HOLD_S * 1000u,
+    .min_request_spacing_ms = CONFIG_APP_BT_CONN_PARAM_MIN_REQUEST_SPACING_MS,
+});
+
+// k_uptime is 64-bit and tears on arm32 - spinlock rather than atomics.
+static struct k_spinlock s_gov_state_lock;
+static int64_t s_gov_last_activity_ms;
+
+enum GovEventBit : uint32_t {
+    GOV_EVT_CONNECTED = BIT(0),
+    GOV_EVT_DISCONNECTED = BIT(1),
+    GOV_EVT_DFU_STARTED = BIT(2),
+    GOV_EVT_DFU_STOPPED = BIT(3),
+};
+
+static atomic_t s_gov_pending_events;
+// 1 while the governor's target is SLOW: lets the per-ATT-op hot path skip
+// waking the governor unless an activity boost is actually possible.
+static atomic_t s_gov_target_slow;
+// Shell-readable mirrors of the governor's state, same idiom as the
+// s_current_state volatile mirror above: written only from the system
+// workqueue (gov_apply), read from the shell thread in cmd_bt_state; a
+// one-transition-stale read in a human diagnostic is harmless.
+static volatile gov::ParamSet s_gov_target_mirror = gov::ParamSet::NONE;
+static volatile bool s_gov_dfu_mirror;
+// Last requested set (as gov::ParamSet) + one-shot flag so a request-vs-grant
+// divergence is warned about exactly once per request, never re-requested -
+// the central has final say (edge-triggered anti-ping-pong).
+static atomic_t s_gov_expected_set = ATOMIC_INIT((atomic_val_t)gov::ParamSet::NONE);
+static atomic_t s_gov_grant_checked;
+
+static struct k_work_delayable s_gov_work;
+
+static const struct bt_le_conn_param *param_set_to_conn_param(gov::ParamSet set) {
+    switch (set) {
+        case gov::ParamSet::MEDIUM:
+            return &medium_conn_param;
+        case gov::ParamSet::SLOW:
+            return &slow_conn_param;
+        case gov::ParamSet::FAST:
+        case gov::ParamSet::NONE:
+            break;
+    }
+    return &fast_conn_param;
+}
+
+static void gov_apply(const gov::Decision &decision) {
+    if (decision.request != gov::ParamSet::NONE) {
+        // Same take-a-ref-first idiom as cmd_bt_state: s_active_conn can go
+        // NULL (and drop its last ref) on the BT RX thread at any moment.
+        struct bt_conn *conn = s_active_conn;
+        conn = conn ? bt_conn_ref(conn) : NULL;
+        if (conn) {
+            LOG_INF("conn param request: %s (%s)", gov::param_set_to_string(decision.request),
+                    decision.reason);
+            int ret = bt_conn_le_param_update(conn, param_set_to_conn_param(decision.request));
+            if (ret) {
+                LOG_WRN("conn param request failed: %d", ret);
+            }
+            atomic_set(&s_gov_expected_set, (atomic_val_t)decision.request);
+            atomic_set(&s_gov_grant_checked, 0);
+            bt_conn_unref(conn);
+        }
+    }
+
+    atomic_set(&s_gov_target_slow, s_governor.target() == gov::ParamSet::SLOW ? 1 : 0);
+    s_gov_target_mirror = s_governor.target();
+    s_gov_dfu_mirror = s_governor.dfuActive();
+
+    if (decision.next_eval_in_ms > 0) {
+        k_work_reschedule(&s_gov_work, K_MSEC(decision.next_eval_in_ms));
+    }
+}
+
+static void gov_work_handler(struct k_work *work) {
+    gov::Inputs in;
+    in.now_ms = k_uptime_get();
+    K_SPINLOCK(&s_gov_state_lock) {
+        in.last_activity_ms = s_gov_last_activity_ms;
+    }
+
+    // Drain queued lifecycle events; a run with none queued is a timer/activity
+    // re-evaluation (the boost decision is data-driven inside the core, so
+    // TIMER covers it).
+    uint32_t events = (uint32_t)atomic_clear(&s_gov_pending_events);
+
+    // A bitmask can't preserve ordering: when a disconnect and a (re)connect
+    // coalesce into one batch (fast reconnects are normal - the app's issue
+    // #124 auto-reconnect loop produces exactly this), draining them in fixed
+    // order could end the batch in the wrong state - e.g. real order
+    // disconnect->connect drained as connect->disconnect leaves the governor
+    // reset while the link is live, and it would never downgrade again.
+    // Reconstruct from ground truth instead: reset via DISCONNECTED, then
+    // re-enter CONNECTED only if a connection exists right now. (A racy
+    // s_active_conn read is fine - any change in it re-submits an event.)
+    if ((events & GOV_EVT_CONNECTED) && (events & GOV_EVT_DISCONNECTED)) {
+        gov_apply(s_governor.step(gov::Trigger::DISCONNECTED, in));
+        if (s_active_conn != NULL) {
+            gov_apply(s_governor.step(gov::Trigger::CONNECTED, in));
+        }
+        events &= ~((uint32_t)GOV_EVT_CONNECTED | (uint32_t)GOV_EVT_DISCONNECTED);
+    }
+
+    if (events & GOV_EVT_CONNECTED) {
+        gov_apply(s_governor.step(gov::Trigger::CONNECTED, in));
+    }
+    if (events & GOV_EVT_DFU_STARTED) {
+        gov_apply(s_governor.step(gov::Trigger::DFU_STARTED, in));
+    }
+    if (events & GOV_EVT_DFU_STOPPED) {
+        gov_apply(s_governor.step(gov::Trigger::DFU_STOPPED, in));
+    }
+    if (events & GOV_EVT_DISCONNECTED) {
+        gov_apply(s_governor.step(gov::Trigger::DISCONNECTED, in));
+    }
+    if (events == 0) {
+        gov_apply(s_governor.step(gov::Trigger::TIMER, in));
+    }
+}
+
+static void gov_submit_event(uint32_t bit) {
+    atomic_or(&s_gov_pending_events, (atomic_val_t)bit);
+    k_work_reschedule(&s_gov_work, K_NO_WAIT);
+}
+
+#if defined(CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS)
+// SMP/DFU observation (the firmware IS the SMP server, so it sees upload
+// start/stop and every command directly - no app coordination needed).
+static enum mgmt_cb_return gov_mgmt_evt_cb(uint32_t event, enum mgmt_cb_return prev_status,
+                                           int32_t *rc, uint16_t *group, bool *abort_more,
+                                           void *data, size_t data_size) {
+    switch (event) {
+        case MGMT_EVT_OP_IMG_MGMT_DFU_STARTED:
+            gov_submit_event(GOV_EVT_DFU_STARTED);
+            break;
+        case MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED:
+        case MGMT_EVT_OP_IMG_MGMT_DFU_PENDING:
+            gov_submit_event(GOV_EVT_DFU_STOPPED);
+            break;
+        case MGMT_EVT_OP_CMD_RECV:
+            // Every SMP command (upload chunks included) counts as inbound
+            // activity. UART-transport commands land here too - a harmless
+            // boost on a link that is otherwise idle.
+            bt_conn_activity_note();
+            break;
+        default:
+            break;
+    }
+    return MGMT_CB_OK;
+}
+
+// Same-group events may be OR'd into one registration; CMD_RECV (SMP group)
+// needs its own (see the event_id doc in mgmt/callbacks.h).
+static struct mgmt_callback s_gov_smp_cb = {
+    .callback = gov_mgmt_evt_cb,
+    .event_id = MGMT_EVT_OP_CMD_RECV,
+};
+static struct mgmt_callback s_gov_img_cb = {
+    .callback = gov_mgmt_evt_cb,
+    .event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED | MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED |
+                MGMT_EVT_OP_IMG_MGMT_DFU_PENDING,
+};
+#endif /* CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS */
+
+void bt_conn_activity_note(void) {
+    const int64_t now = k_uptime_get();
+    K_SPINLOCK(&s_gov_state_lock) {
+        s_gov_last_activity_ms = now;
+    }
+    // Hot path (runs on every inbound ATT op): only wake the governor when its
+    // target is SLOW and a boost is therefore possible. FAST/MEDIUM downgrade
+    // timers are already armed and read the refreshed timestamp when they fire.
+    if (atomic_get(&s_gov_target_slow)) {
+        k_work_reschedule(&s_gov_work, K_NO_WAIT);
+    }
+}
+#endif /* CONFIG_APP_BT_CONN_PARAM_GOVERNOR */
+
 static void connected(struct bt_conn *conn, uint8_t err) {
     if (err) {
         LOG_ERR("Connection failed (err %u)", err);
@@ -170,6 +400,10 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
         s_active_conn = NULL;
     }
 
+#if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR)
+    gov_submit_event(GOV_EVT_DISCONNECTED);
+#endif
+
     BtThreadCommand cmd;
     cmd.event = BtThreadEvent::DISCONNECTION;
 
@@ -196,6 +430,27 @@ static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t l
     LOG_INF("LE conn param updated: interval=%u units (%u.%02ums), latency=%u, timeout=%u units (%ums)",
             interval, (interval * 125) / 100, (interval * 125) % 100, latency, timeout,
             timeout * 10);
+
+#if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR)
+    // One-shot request-vs-grant divergence check (issue #188): the central has
+    // final say over parameters, so a grant outside what the governor asked for
+    // is expected OEM behavior sometimes (e.g. Android BALANCED can land at
+    // 50ms against MEDIUM's 30-45ms). Warn once per request so the on-device
+    // log tells the story, and deliberately never re-request on a level - only
+    // the next trigger edge sends another request (anti-ping-pong).
+    const gov::ParamSet expected = (gov::ParamSet)atomic_get(&s_gov_expected_set);
+    if (expected != gov::ParamSet::NONE && !atomic_get(&s_gov_grant_checked)) {
+        const struct bt_le_conn_param *p = param_set_to_conn_param(expected);
+        if (interval < p->interval_min || interval > p->interval_max || latency != p->latency) {
+            LOG_WRN(
+                "central granted interval=%u latency=%u vs requested %s "
+                "[%u-%u lat %u] - accepting, not re-requesting",
+                interval, latency, gov::param_set_to_string(expected), p->interval_min,
+                p->interval_max, p->latency);
+        }
+        atomic_set(&s_gov_grant_checked, 1);
+    }
+#endif
 }
 
 #if IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED)
@@ -522,10 +777,22 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
             if (cmd->level == REQUIRED_BT_SECURITY_LEVEL) {
                 LOG_DBG("Required security level achieved");
 
+#if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR)
+                // The governor owns all parameter requests from here on: its
+                // CONNECTED step issues the FAST request (same params, same
+                // point in the connection as the direct call below used to),
+                // then adapts from observed activity. Stamp the activity clock
+                // first so the idle window starts at the connect, not at boot.
+                bt_conn_activity_note();
+                gov_submit_event(GOV_EVT_CONNECTED);
+#else
+                // Governor disabled (e.g. rgb_sunglasses_dk, flash budget):
+                // legacy issue-#41 behavior, one-shot fast request forever.
                 int ret = bt_conn_le_param_update(ctx->conn, &fast_conn_param);
                 if (ret) {
                     LOG_WRN("Failed to request fast connection parameters: %d", ret);
                 }
+#endif
 
                 bt_state_change_to(ctx, BtThreadState::CONNECTED);
             } else {
@@ -668,6 +935,15 @@ void bt_thread_func(void *a, void *b, void *c) {
 
 static int bluetooth_init(void) {
     int err = 0;
+
+#if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR)
+    k_work_init_delayable(&s_gov_work, gov_work_handler);
+#if defined(CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS)
+    mgmt_callback_register(&s_gov_smp_cb);
+    mgmt_callback_register(&s_gov_img_cb);
+#endif
+#endif
+
     if (IS_ENABLED(CONFIG_BT_STATUS_SECURITY_ENABLED)) {
         err = bt_conn_auth_cb_register(&conn_auth_callbacks);
         if (err) {
@@ -820,6 +1096,21 @@ static int cmd_bt_state(const struct shell *sh, size_t argc, char **argv) {
                     info.le.interval, (info.le.interval * 125) / 100,
                     (info.le.interval * 125) % 100, info.le.latency, info.le.timeout * 10);
     }
+
+#if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR)
+    // Governor snapshot (issue #188), read from the volatile mirrors (same
+    // idiom as s_current_state above) - a one-transition-stale answer in a
+    // human diagnostic is fine.
+    int64_t last_activity;
+    K_SPINLOCK(&s_gov_state_lock) {
+        last_activity = s_gov_last_activity_ms;
+    }
+    const int64_t idle_ms = k_uptime_get() - last_activity;
+    shell_print(sh, "Param governor: target %s%s, last inbound activity %lldms ago",
+                gov::param_set_to_string(s_gov_target_mirror),
+                s_gov_dfu_mirror ? " (DFU boost active)" : "",
+                (long long)(idle_ms < 0 ? 0 : idle_ms));
+#endif
 
     bt_conn_unref(conn);
     return 0;

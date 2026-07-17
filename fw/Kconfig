@@ -155,6 +155,54 @@ config APP_BT_METADATA_CHARACTERISTIC
 	  internal-flash image slot has no spare room for this, and per
 	  fw/CLAUDE.md it's legacy / doesn't get new features.
 
+config APP_BT_CONN_PARAM_GOVERNOR
+	bool "Adaptive LE connection-parameter governor"
+	default y
+	depends on BT_PERIPHERAL
+	help
+	  Renegotiates LE connection parameters from observed activity (issue
+	  #188): FAST (7.5-15ms, issue #41's discovery speed - unchanged) at
+	  connect and during MCUmgr DFU uploads, MEDIUM (30-45ms) while the
+	  user is actively interacting, SLOW (150-165ms + peripheral latency 2,
+	  ~97% idle radio-duty cut on both ends) after a quiet window. The
+	  firmware observes everything itself (it is the GATT and SMP server),
+	  so no app coordination is needed - which is also the ONLY way to get
+	  parameter policy on iOS, where apps have no central-side API. Decision
+	  core: src/bluetooth/conn_param_governor_core.{h,cpp} (native_sim
+	  suite tests/bluetooth/conn_param_governor); wiring in bluetooth.cpp.
+	  When disabled the legacy behavior remains: one fast request at
+	  connect, never renegotiated. Disabled on rgb_sunglasses_dk (see its
+	  board .conf): legacy board, no new features per fw/CLAUDE.md.
+
+config APP_BT_CONN_IDLE_TIMEOUT_S
+	int "Quiet seconds before the link downgrades to the SLOW parameter set"
+	default 20
+	depends on APP_BT_CONN_PARAM_GOVERNOR
+	help
+	  Seconds without an inbound ATT operation or SMP command before the
+	  governor requests the SLOW set. Every discovery read refreshes this
+	  clock, so FAST naturally holds through the app's whole discovery walk
+	  (including iOS's 30-55s one) and drops ~this long after it finishes.
+
+config APP_BT_CONN_BOOST_HOLD_S
+	int "Quiet seconds before an activity boost falls back to SLOW"
+	default 10
+	depends on APP_BT_CONN_PARAM_GOVERNOR
+	help
+	  An inbound ATT operation while the link is SLOW boosts it to MEDIUM;
+	  the boost is held for a sliding window of this many quiet seconds
+	  (each further operation refreshes it) before dropping back to SLOW.
+
+config APP_BT_CONN_PARAM_MIN_REQUEST_SPACING_MS
+	int "Minimum milliseconds between two governor parameter requests"
+	default 2000
+	depends on APP_BT_CONN_PARAM_GOVERNOR
+	help
+	  Rate bound on bt_conn_le_param_update() requests (anti-ping-pong): a
+	  state transition that fires sooner after the previous request is
+	  deferred and re-derived when the spacing elapses. The first request
+	  after a connect is never deferred.
+
 config APP_MCUBOOT_INFO_SERVICE
 	bool "MCUboot version BLE service and shell command"
 	default y
