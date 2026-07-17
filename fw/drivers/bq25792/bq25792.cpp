@@ -138,6 +138,33 @@ int bq25792_temp_override(const struct device* dev, bool enable) {
     return set_field<BQ25792_NTC_CONTROL_1_TS_IGNORE>(reg, ts_ignore);
 }
 
+int bq25792_auto_indet_enable(const struct device* dev, bool enable) {
+    if (!dev) {
+        LOG_ERR("NULL-device pointer");
+        return -ENODEV;
+    }
+
+    const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
+
+    // REG11 AUTO_INDET_EN (bit 6): automatic D+/D- input source type
+    // detection on VBUS plug-in (datasheet SLUSDG1C Table 9-27, p.69; POR 1,
+    // reset back to 1 by WATCHDOG expiry or REG_RST — re-apply after either).
+    // With it disabled, "the Input Source Type Detection is bypassed, and the
+    // Input Current Limit (IINDPM) register remains unchanged from its
+    // previous value" (§9.3.4.5, p.29) — the converter starts right after
+    // poor-source qualification. Disabled on this design: the BQ's D+/D- pins
+    // are not connected (hardware-confirmed 2026-07-17), so BC1.2 probes
+    // floating pins and can latch VBUS_STAT=8h "Not qualified adaptor"
+    // (Table 9-37), which blocks the converter and thus all charging; the
+    // real input budget comes from the TPS25750 PD contract via
+    // charger_policy, which programs IINDPM for every source type.
+    LOG_INF("Setting AUTO_INDET_EN to %u", enable ? 1 : 0);
+
+    XactGuard guard(dev);
+    return set_field_verified<BQ25792_CHARGER_CONTROL_2, BQ25792_CHARGER_CONTROL_2_AUTO_INDET_EN>(
+        cfg, enable ? 1 : 0);
+}
+
 int bq25792_adc_enable(const struct device* dev, bool enable) {
     if (!dev) {
         LOG_ERR("NULL-device pointer");

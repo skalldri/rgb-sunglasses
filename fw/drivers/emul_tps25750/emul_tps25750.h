@@ -50,9 +50,10 @@ int emul_tps25750_set_bq_reg(const struct emul *target, uint8_t reg, const uint8
 
 /* Seed the emulated BQ25792 register file with the datasheet power-on-reset
  * values for the registers the drivers touch (ICHG=2A, VINDPM=3600mV,
- * IINDPM=3000mA, REG0F=0xA2 incl. EN_CHG=1, REG10=0x05 incl. WATCHDOG=40s) —
- * so read-modify-write driver behavior is exercised against realistic
- * contents instead of zeros. Other registers are zeroed.
+ * IINDPM=3000mA, REG0F=0xA2 incl. EN_CHG=1, REG10=0x05 incl. WATCHDOG=40s,
+ * REG11=0x40 incl. AUTO_INDET_EN=1) — so read-modify-write driver behavior
+ * is exercised against realistic contents instead of zeros. Other registers
+ * are zeroed.
  */
 void emul_tps25750_bq_por_defaults(const struct emul *target);
 

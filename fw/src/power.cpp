@@ -505,7 +505,7 @@ static int cmd_power_policy(const struct shell *shell, size_t argc, char **argv,
                 snap.charge_gated ? 1 : 0, snap.vbat_present ? 1 : 0, snap.vbus_present ? 1 : 0);
     shell_print(shell, "ichg_target=%u mA (0=unmanaged)  vindpm_target=%u mV  wd_redisables=%u",
                 snap.charge_current_ma, snap.vindpm_mv, snap.wd_redisable_count);
-    shell_print(shell, "iindpm_target=%u mA (0=unmanaged)  pd: source=%u %u mV @ %u mA",
+    shell_print(shell, "iindpm_target=%u mA  pd: source=%u %u mV @ %u mA",
                 snap.iindpm_ma, snap.pd_source, snap.pd_available_mv, snap.pd_available_ma);
     return 0;
 }

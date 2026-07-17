@@ -24,7 +24,9 @@ static bool s_vbat_present;
 static bool s_vbus_present;
 static uint32_t s_charge_current_ma; /* 0 = unmanaged (until PR D) */
 static uint32_t s_vindpm_mv = CONFIG_APP_VINDPM_MV;
-static uint32_t s_iindpm_ma;       /* 0 = unmanaged (legacy/BC1.2 sources) */
+static uint32_t s_iindpm_ma; /* 0 only before the first derive (then always
+                              * managed; 500mA floor for legacy/none sources
+                              * since AUTO_INDET is bypassed) */
 static struct tps25750_pd_power_info s_pd_info;
 static uint32_t s_wd_redisable_count;
 static uint32_t s_tick_count;
@@ -74,12 +76,17 @@ static int apply_effective_charge_enable_locked(void) {
  *   VINDPM = 90% of the contract voltage (rounded down to the 100mV LSB,
  *   floored at the Kconfig fallback for 5V-class contracts) so a sagging
  *   source folds back before collapsing.
- * - Type-C default / unknown / disconnected: leave IINDPM unmanaged — the
- *   BQ's own BC1.2 detection result is the lawful budget for legacy sources
- *   (deliberately probing past it belongs to ICO, kept off per the plan).
+ * - Type-C default / unknown / disconnected: manage IINDPM at the 500mA USB
+ *   default floor. The BQ's BC1.2 detection used to be the lawful budget for
+ *   legacy sources, but it is now bypassed (AUTO_INDET_EN=0 in
+ *   apply_config_locked — D+/D- are not connected on this board), so nothing
+ *   else would ever program a budget for them; 500mA is the lawful floor for
+ *   any USB source (deliberately probing past it belongs to ICO, kept off
+ *   per the plan). This also covers the brief window after a fresh attach
+ *   before the TPS reports the negotiated budget.
  */
 static bool derive_input_targets_locked(void) {
-    uint32_t iindpm_target = 0;
+    uint32_t iindpm_target = 500;
     uint32_t vindpm_target = CONFIG_APP_VINDPM_MV;
 
     switch (s_pd_info.source) {
@@ -103,8 +110,8 @@ static bool derive_input_targets_locked(void) {
     s_iindpm_ma = iindpm_target;
     s_vindpm_mv = vindpm_target;
     if (changed) {
-        LOG_INF("input budget: source=%d -> IINDPM=%umA (0=unmanaged) VINDPM=%umV",
-                (int)s_pd_info.source, s_iindpm_ma, s_vindpm_mv);
+        LOG_INF("input budget: source=%d -> IINDPM=%umA VINDPM=%umV", (int)s_pd_info.source,
+                s_iindpm_ma, s_vindpm_mv);
     }
     return changed;
 }
@@ -118,6 +125,21 @@ static void apply_config_locked(void) {
         LOG_ERR("watchdog disable failed");
     }
 
+    /* Bypass D+/D- input type detection: the BQ's D+/D- pins are not
+     * connected on this design, so BC1.2 probes floating pins and can latch
+     * VBUS_STAT "Not qualified adaptor" — which blocks the converter and
+     * thus ALL charging until a detection pass happens to succeed
+     * (hardware-diagnosed 2026-07-17: board stopped charging on every
+     * source, survived replug/HIZ-toggle/full POR). With detection bypassed
+     * the converter starts right after poor-source qualification and this
+     * module owns IINDPM for every source type (see
+     * derive_input_targets_locked). AUTO_INDET_EN is watchdog/REG_RST-reset
+     * back to enabled (SLUSDG1C Table 9-27), so it lives in this reapply
+     * path, not just boot. */
+    if (bq25792_auto_indet_enable(bq, false) != 0) {
+        LOG_ERR("AUTO_INDET_EN disable failed");
+    }
+
     /* Deterministic input-OVP headroom for any contract voltage we would
      * accept (0h = 26V; the datasheet's REG10 reset annotations are
      * self-inconsistent, and hardware read back 26V — make it explicit). */
@@ -129,10 +151,18 @@ static void apply_config_locked(void) {
         LOG_ERR("VINDPM=%umV apply failed", s_vindpm_mv);
     }
 
+    /* INVARIANT: every caller must run derive_input_targets_locked() before
+     * this function (boot_init does; the WD-reapply path inherits a prior
+     * tick's derive), so s_iindpm_ma is 0 only if that ordering is ever
+     * broken. With AUTO_INDET bypassed, skipping the IINDPM write here would
+     * silently leave the input budget unprogrammed — the exact no-budget bug
+     * the 500mA floor exists to prevent — so a 0 here is loud, not skipped. */
     if (s_iindpm_ma != 0) {
         if (bq25792_set_input_current_limit_ma(bq, s_iindpm_ma) != 0) {
             LOG_ERR("IINDPM=%umA apply failed", s_iindpm_ma);
         }
+    } else {
+        LOG_ERR("apply_config called before input targets were derived");
     }
 
     if (s_charge_current_ma != 0) {
@@ -295,28 +325,18 @@ void charger_policy_tick(const struct bq25792_status *status) {
     struct tps25750_pd_power_info pd_info;
     if (tps25750_get_pd_power_info(pd, &pd_info) == 0) {
         s_pd_info = pd_info;
-        uint32_t prev_iindpm = s_iindpm_ma;
         if (derive_input_targets_locked()) {
             s_config_gen++;
             if (bq25792_set_input_voltage_limit_mv(bq, s_vindpm_mv) != 0) {
                 LOG_ERR("VINDPM=%umV apply failed", s_vindpm_mv);
             }
-            if (s_iindpm_ma != 0) {
-                if (bq25792_set_input_current_limit_ma(bq, s_iindpm_ma) != 0) {
-                    LOG_ERR("IINDPM=%umA apply failed", s_iindpm_ma);
-                }
-            } else if (prev_iindpm != 0) {
-                /* Managed -> unmanaged transition (e.g. a PD Hard Reset that
-                 * drops the contract WITHOUT a VBUS drop): the old contract's
-                 * high limit would otherwise stay programmed with nothing
-                 * reconciling it — and the BQ's own auto-INDET rewrite only
-                 * runs on a physical replug. Program the 500mA USB-default
-                 * lawful floor once; a real replug's BC1.2 detection then
-                 * derives the proper legacy budget. */
-                LOG_WRN("input budget lost without replug — falling back to 500mA");
-                if (bq25792_set_input_current_limit_ma(bq, 500) != 0) {
-                    LOG_ERR("IINDPM fallback apply failed");
-                }
+            /* Every source type derives a managed budget now (500mA floor for
+             * legacy/none — AUTO_INDET is bypassed, so no BC1.2 rewrite ever
+             * programs one). This also covers the PD-Hard-Reset-without-VBUS-
+             * drop case: losing the contract re-derives the 500mA floor here
+             * within one tick. */
+            if (bq25792_set_input_current_limit_ma(bq, s_iindpm_ma) != 0) {
+                LOG_ERR("IINDPM=%umA apply failed", s_iindpm_ma);
             }
         }
     }
