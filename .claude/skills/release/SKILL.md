@@ -10,7 +10,7 @@ files need editing** for any release track.
 
 | Track | Tag convention | CI workflow | Artifact |
 |---|---|---|---|
-| Firmware | `fw-vX.Y.Z` | `release.yaml` | `dfu_application_proto0.zip`, `dfu_application_dk.zip` |
+| Firmware | `fw-vX.Y.Z` | `release.yaml` | `dfu_application_proto0.zip`, `dfu_application_dk.zip`, plus one bare `<name>.llext` per in-repo extension (proto0-only; issue #163) |
 | App | `app-vX.Y.Z` | `app-release.yml` | `rgb-sunglasses-<version>.apk` + iOS build on TestFlight + Google Play AAB (track from the `PLAY_TRACK` repo variable, default `internal`) |
 | MCUboot bootloader | `mcuboot-vX.Y.Z` | `mcuboot-release.yaml` | `mcuboot-<version>-proto0.bin` |
 
@@ -26,6 +26,8 @@ files need editing** for any release track.
 the newest release of ANY track and broke the update check (PRs #55/#57) — and
 matches firmware zips by `proto0`/`dk` substring (`findAssetForBoard`) and the APK
 by `.apk` suffix (`findApkAsset`). Renaming assets breaks the in-app updater.
+The extension assets must stay bare `<name>.llext` files — never a zip bundle with
+`proto0`/`dk` in its name, which could shadow the `dfu_application_*.zip` match.
 
 The in-repo `fw/sysbuild/mcuboot/VERSION` is set to `0.0.0` so dev builds always
 report a lower version than any official release, prompting users to upgrade.

@@ -104,6 +104,14 @@ and `ld -r` the result. Both rgbx headers ship inside the archive.
 
 ## Installing on the device
 
+You don't have to build the in-repo extensions yourself: prebuilt `.llext` files
+are attached to every firmware (`fw-vX.Y.Z`) GitHub release, alongside the
+firmware zips they were built with — download the ones matching your installed
+firmware. (An extension is only accepted by firmware with the same
+`RGBX_ABI_VERSION` and display dimensions, so always take firmware + extensions
+from the same release.) CI also uploads them as an `extensions-proto0` workflow
+artifact on every firmware build.
+
 ```bash
 # Mount the board's USB mass-storage disk (see fw/CLAUDE.md "USB Flash Disk"),
 # then:
