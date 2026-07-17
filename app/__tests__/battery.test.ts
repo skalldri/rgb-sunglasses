@@ -1,5 +1,6 @@
 import {
   batteryWatts,
+  CHARGE_STATUS_COMM_ERROR,
   CHARGE_STATUS_LABELS,
   chargeDirection,
   chargeStatusLabel,
@@ -72,6 +73,12 @@ describe('charge status labels', () => {
   it('falls back gracefully for unknown values', () => {
     expect(chargeStatusLabel(42)).toBe('Unknown (42)');
   });
+
+  it('labels the firmware comm-error sentinel as Error', () => {
+    expect(chargeStatusLabel(CHARGE_STATUS_COMM_ERROR)).toBe('Error');
+    // The sentinel must sit outside the real 3-bit CHG_STAT range.
+    expect(CHARGE_STATUS_COMM_ERROR).toBeGreaterThan(7);
+  });
 });
 
 describe('chargeDirection', () => {
@@ -89,6 +96,13 @@ describe('chargeDirection', () => {
     expect(chargeDirection(-350, 0)).toBe('discharging');
     expect(chargeDirection(20, 0)).toBe('charging');
     expect(chargeDirection(0, 0)).toBe('idle');
+  });
+
+  it('reports error for the comm-error sentinel regardless of the (stale) current', () => {
+    expect(chargeDirection(0, CHARGE_STATUS_COMM_ERROR)).toBe('error');
+    // ibatMa is a stale last-good reading during an outage — its sign must not win.
+    expect(chargeDirection(-350, CHARGE_STATUS_COMM_ERROR)).toBe('error');
+    expect(chargeDirection(500, CHARGE_STATUS_COMM_ERROR)).toBe('error');
   });
 });
 

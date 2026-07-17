@@ -52,6 +52,7 @@ function buildDevice(fixture: {
   chargeEnabled?: boolean;
   chargeCurrentMa?: number;
   withPowerDebug?: boolean;
+  powerFlags?: number; // overrides the Power Flags value (needs withPowerDebug)
 }) {
   const batteryChars: Record<string, any> = {
     [UUID_BATTERY_VOLTAGE]: readonlyInfo(sint32Value(fixture.vbatMv), 0x10),
@@ -87,7 +88,7 @@ function buildDevice(fixture: {
         [`${UUID_POWER_DEBUG_SERVICE.slice(0, -4)}0000`]: readonlyInfo(
           encodeUint32ToBase64(3000), 0x08, 'Input Limit (mA)'),
         [`${UUID_POWER_DEBUG_SERVICE.slice(0, -4)}0001`]: readonlyInfo(
-          uint8Value(0b0000011), 0x04, 'Power Flags'),
+          uint8Value(fixture.powerFlags ?? 0b0000011), 0x04, 'Power Flags'),
       }
     : {};
 
@@ -156,6 +157,48 @@ describe('BatteryDetailScreen', () => {
     expect(getByText('Not Charging')).toBeTruthy();
     // Battery discharge power and system power are both 7.91 V × 0.35 A ≈ 2.77 W here
     expect(getAllByText('2.77 W').length).toBe(2);
+  });
+
+  it('shows the orange Error badge on the firmware comm-error sentinel (0xFF)', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({
+        // Stale last-good telemetry alongside the sentinel.
+        vbatMv: 7910,
+        ibatMa: -350,
+        vbusMv: 0,
+        ibusMa: 0,
+        chgStat: 0xff,
+      }),
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getAllByText, queryByText } = render(<BatteryDetailScreen />);
+    // Twice: the direction badge and the Charge Status row label.
+    expect(getAllByText('Error').length).toBe(2);
+    // The stale current's sign must not win over the sentinel.
+    expect(queryByText('Discharging')).toBeNull();
+    expect(queryByText('Unknown (255)')).toBeNull();
+  });
+
+  it('Error outranks No Battery: presence flags are stale during a comm outage', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({
+        vbatMv: 1200,
+        ibatMa: 0,
+        vbusMv: 5000,
+        ibusMa: 500,
+        chgStat: 0xff,
+        withPowerDebug: true,
+        powerFlags: 0b0000010, // VBUS present, VBAT absent — but stale
+      }),
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getAllByText, queryByText } = render(<BatteryDetailScreen />);
+    expect(getAllByText('Error').length).toBeGreaterThan(0);
+    expect(queryByText('No Battery')).toBeNull();
   });
 
   it('prefers the firmware Battery Percent over the voltage-derived estimate', () => {

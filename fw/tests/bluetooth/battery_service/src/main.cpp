@@ -258,3 +258,46 @@ ZTEST(battery_service_tests, test_update_publishes_without_charger_traffic) {
 
     zassert_equal(fake_set_charge_enable_calls, 0);
 }
+
+ZTEST(battery_service_tests, test_charger_comm_error_sentinel) {
+    /* Position 4 = "Charge Status". */
+    const struct bt_gatt_attr *chg_attr = find_value_attr(4);
+    const struct bt_gatt_attr *vbat_attr = find_value_attr(0);
+    zassert_not_null(chg_attr, "Charge Status value attribute not found");
+    zassert_not_null(vbat_attr, "Battery Voltage value attribute not found");
+
+    /* Seed last-good telemetry, then declare the comm error. */
+    battery_service_update(7910, -350, 5000, 1000, 3);
+    battery_service_set_charger_comm_error();
+
+    uint8_t chg = 0;
+    zassert_equal(chg_attr->read(NULL, chg_attr, &chg, sizeof(chg), 0), 1);
+    zassert_equal(chg, BATTERY_SERVICE_CHG_STAT_COMM_ERROR,
+                  "comm error must publish the 0xFF sentinel, got %u", chg);
+
+    /* The sentinel can never collide with a real reading: CHG_STAT is 3 bits. */
+    zassert_true(BATTERY_SERVICE_CHG_STAT_COMM_ERROR > 7);
+
+    /* Other telemetry deliberately keeps its last-good (stale) value — the
+     * Error charge state is the app's signal that it is stale. */
+    int32_t vbat = 0;
+    zassert_equal(vbat_attr->read(NULL, vbat_attr, &vbat, sizeof(vbat), 0), 4);
+    zassert_equal(vbat, 7910, "stale telemetry must survive the error state, got %d", vbat);
+
+    /* No charger traffic from the presentation change. */
+    zassert_equal(fake_set_charge_enable_calls, 0);
+}
+
+ZTEST(battery_service_tests, test_comm_error_cleared_by_next_update) {
+    const struct bt_gatt_attr *chg_attr = find_value_attr(4);
+    zassert_not_null(chg_attr, "Charge Status value attribute not found");
+
+    battery_service_set_charger_comm_error();
+
+    /* The next successful sample implicitly clears the sentinel. */
+    battery_service_update(7910, -350, 5000, 1000, 3);
+
+    uint8_t chg = 0xEE;
+    zassert_equal(chg_attr->read(NULL, chg_attr, &chg, sizeof(chg), 0), 1);
+    zassert_equal(chg, 3, "real CHG_STAT must replace the sentinel, got %u", chg);
+}

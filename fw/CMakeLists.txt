@@ -111,6 +111,7 @@ target_sources_ifdef(CONFIG_APP_MCUBOOT_UPDATER app PRIVATE
     src/bluetooth/mcuboot_updater_service.cpp
 )
 target_sources_ifdef(CONFIG_APP_CHARGER_POLICY app PRIVATE src/power/charger_policy.cpp)
+target_sources_ifdef(CONFIG_BQ25792 app PRIVATE src/power/comm_health.cpp)
 target_sources_ifdef(CONFIG_APP_BATTERY_MONITOR app PRIVATE src/bluetooth/battery_service.cpp)
 target_sources_ifdef(CONFIG_APP_POWER_DEBUG_SERVICE app PRIVATE src/bluetooth/power_debug_service.cpp)
 

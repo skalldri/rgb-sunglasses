@@ -10,6 +10,7 @@
 
 #if defined(CONFIG_BQ25792)
 #include <battery_soc.h>
+#include <power/comm_health.h>
 #include <zephyr/drivers/bq25792/bq25792.h>
 #include <status_led/status_led.h>
 #endif
@@ -205,6 +206,25 @@ static void charger_status_thread_func(void *, void *, void *) {
     uint32_t power_debug_tick = 0;
 #endif
 
+    /* Charger comm-error hysteresis (comm_health.h). Entry threshold 5 ticks
+     * = 2.5 s: a healthy runtime PTCH recovery in the tps25750 driver (bridge
+     * reject -> +100 ms schedule -> MODE read -> ~1-2 s patch download) is
+     * expected to finish within ~2-4 ticks, so a successful self-heal should
+     * not flash the error indication, while a genuinely wedged bridge
+     * surfaces within ~3 s. The recovery duration is emulator-derived, not
+     * yet hardware-timed (the wedge needs a plug/unplug storm to reproduce)
+     * — if a real self-heal is ever observed flashing Error, bump this
+     * threshold rather than doubting the recovery. Exit is instant on the
+     * first good read. */
+    constexpr uint32_t kCommErrorEntryTicks = 5;
+    /* Poll cadences: 500 ms normally; 5 s while in the comm-error state. The
+     * backoff throttles the per-attempt driver LOG_ERRs (fw/CLAUDE.md
+     * no-log-spam rule) and still re-arms the tps25750's 5 s-debounced PTCH
+     * recovery on every attempt — the two cadences are aligned by design. */
+    constexpr int32_t kNormalPollMs    = 500;
+    constexpr int32_t kCommErrorPollMs = 5000;
+    CommHealth comm_health;
+
     while (true) {
         /* Read VBAT first — the charger may report TrickleCharge even with no
          * battery present, so we must gate on voltage before trusting CHG_STAT. */
@@ -216,6 +236,11 @@ static void charger_status_thread_func(void *, void *, void *) {
         struct bq25792_status bq_status = {};
         bool chg_ok      = (bq25792_get_status(bq, &bq_status) == 0);
         uint8_t chg_stat = bq_status.chg_stat;
+
+        /* Every getter propagates bridge failures (they used to swallow
+         * them), so any read failing this tick is a real comm signal. The
+         * battery-monitor block below folds its own reads into read_ok. */
+        bool read_ok = vbat_ok && chg_ok;
 
 #if defined(CONFIG_APP_CHARGER_POLICY)
         if (chg_ok) {
@@ -229,11 +254,38 @@ static void charger_status_thread_func(void *, void *, void *) {
         int32_t ibat_ma = 0;
         int32_t vbus_mv = 0;
         int32_t ibus_ma = 0;
-        if (vbat_ok && chg_ok && bq25792_get_ibat_ma(bq, &ibat_ma) == 0 &&
+        if (read_ok && bq25792_get_ibat_ma(bq, &ibat_ma) == 0 &&
             bq25792_get_vbus_mv(bq, &vbus_mv) == 0 && bq25792_get_ibus_ma(bq, &ibus_ma) == 0) {
             battery_service_update(vbat_mv, ibat_ma, vbus_mv, ibus_ma, chg_stat);
+        } else {
+            /* A failed telemetry read counts toward the comm-error state too
+             * — otherwise a partial outage (e.g. only the IBAT read failing)
+             * would silently freeze the app's values with no Error badge,
+             * the exact bug this state exists to fix. The short-circuit also
+             * skips the extra bridge traffic while already failing. */
+            read_ok = false;
         }
 #endif
+
+        switch (comm_health_tick(comm_health, read_ok, kCommErrorEntryTicks)) {
+            case CommHealthEvent::EnteredError:
+                LOG_WRN("charger comm error: %u consecutive failed read cycles; polling every %d ms",
+                        kCommErrorEntryTicks, kCommErrorPollMs);
+#if defined(CONFIG_APP_BATTERY_MONITOR)
+                /* Publish the 0xFF sentinel so the app shows its orange
+                 * "Error" charge state instead of silently-stale values. */
+                battery_service_set_charger_comm_error();
+#endif
+                break;
+            case CommHealthEvent::Recovered:
+                /* The publish above already ran with good reads this tick
+                 * (read_ok implies it), replacing the sentinel; the normal
+                 * LED block below replaces the orange flash. */
+                LOG_WRN("charger comm recovered");
+                break;
+            case CommHealthEvent::None:
+                break;
+        }
 
 #if defined(CONFIG_APP_POWER_DEBUG_SERVICE)
         /* Power Debug telemetry at the reconcile cadence (every 4th 500 ms
@@ -327,7 +379,28 @@ static void charger_status_thread_func(void *, void *, void *) {
 #endif /* CONFIG_STATUS_LED */
         }
 
-        k_msleep(500);
+#if defined(CONFIG_STATUS_LED)
+        /* Re-assert the orange flash every errored tick, deliberately AFTER
+         * the charge-status LED block: (a) that block is skipped entirely
+         * when chg_ok is false, which used to leave a stale charge indication
+         * for the whole outage; (b) in a partial failure (chg_ok true but
+         * vbat read failing) the block does run — asserting afterwards makes
+         * the error indication win either way. */
+        if (comm_health.in_error) {
+            status_led_set(0, StatusIndication::Blinking, StatusColor::Orange);
+        }
+#endif
+
+        /* Back off only when the primary status read is failing too (the
+         * whole-bridge outage): charger_policy_tick and the Power Debug
+         * cadence are gated on chg_ok and bake in the 500 ms tick (2 s
+         * reconcile / re-plug reaction windows — see charger_policy.cpp), so
+         * a partial failure with chg_ok still true must not starve them to
+         * 20 s. A full outage skips those blocks anyway, and 5 s polling
+         * there both throttles the driver error-log flood and keeps
+         * re-arming the tps25750's 5 s-debounced PTCH recovery. */
+        bool full_outage = comm_health.in_error && !chg_ok;
+        k_msleep(full_outage ? kCommErrorPollMs : kNormalPollMs);
     }
 }
 

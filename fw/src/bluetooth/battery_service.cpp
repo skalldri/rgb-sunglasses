@@ -198,6 +198,13 @@ bool battery_service_get_charge_enable(void) { return chargingEnabled.value(); }
 
 uint32_t battery_service_get_charge_current_ma(void) { return chargeCurrentMa.value(); }
 
+void battery_service_set_charger_comm_error(void) {
+    /* Assignment notifies on change; repeated calls while already errored are
+     * silent no-ops. Other telemetry keeps its last-good values on purpose
+     * (see the header comment). */
+    chargeStatus = BATTERY_SERVICE_CHG_STAT_COMM_ERROR;
+}
+
 void battery_service_update(int32_t vbat_mv, int32_t ibat_ma, int32_t vbus_mv, int32_t ibus_ma,
                             uint8_t chg_stat) {
     /* 10 mV / 10 mA steps — see battery_quantize() for why raw readings would
