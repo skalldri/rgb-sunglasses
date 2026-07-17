@@ -74,7 +74,7 @@ jobs:
           imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           push: never
-          runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw" -DVERSION_TWEAK_MODE=release
+          runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw" -DVERSION_TWEAK_MODE=release && /workspaces/rgb-sunglasses/fw/extensions/build.sh /workspaces/rgb-sunglasses/fw/build
 
       - name: Copy Proto0 DFU artifact
         run: cp ${{ github.workspace }}/fw/build/dfu_application.zip ${{ github.workspace }}/dfu_application_proto0.zip
@@ -83,9 +83,15 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
+          # Asset names are an API consumed by the in-app updater
+          # (app/services/github-releases.ts findAssetForBoard: first asset whose
+          # name contains the board revision AND ends with .zip). Bare *.llext
+          # names are safe; never bundle extensions as a zip with "proto0"/"dk"
+          # in its name or it can shadow the dfu_application zips.
           files: |
             ${{ github.workspace }}/dfu_application_dk.zip
             ${{ github.workspace }}/dfu_application_proto0.zip
+            ${{ github.workspace }}/fw/build/extensions/*.llext
           body: "Release ${{ steps.version.outputs.version }}"
           draft: false
           prerelease: false
