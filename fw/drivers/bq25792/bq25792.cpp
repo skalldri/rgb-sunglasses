@@ -235,7 +235,13 @@ int bq25792_get_charge_status(const struct device* dev, uint8_t* chg_stat) {
     }
     const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
     BQ25792_CHARGER_STATUS_1 reg(cfg);
-    *chg_stat = (uint8_t)reg.get<BQ25792_CHARGER_STATUS_1_CHG_STAT>(0, true /* read from hw */);
+    // Explicit read so bus errors propagate — a failed bridged read must not
+    // decode as a plausible-looking value (these used to swallow I2C errors).
+    int ret = reg.read();
+    if (ret) {
+        return ret;
+    }
+    *chg_stat = (uint8_t)reg.get<BQ25792_CHARGER_STATUS_1_CHG_STAT>(0, false);
     return 0;
 }
 
@@ -245,7 +251,14 @@ int bq25792_get_vbat_mv(const struct device* dev, int32_t* vbat_mv) {
     }
     const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
     BQ25792_VBAT_ADC reg(cfg);
-    uint32_t raw = reg.get<BQ25792_VBAT_ADC_VBAT_ADC>(0, true /* read from hw */);
+    // Explicit read so bus errors propagate — a failed bridged read used to
+    // decode as a stale/zero-but-plausible voltage, hiding bridge outages
+    // from every caller keying on this getter's return value.
+    int ret = reg.read();
+    if (ret) {
+        return ret;
+    }
+    uint32_t raw = reg.get<BQ25792_VBAT_ADC_VBAT_ADC>(0, false);
     *vbat_mv = (int32_t)BQ25792_ADC_VOLTAGE_UnitConversion::conversion(raw);
     return 0;
 }
@@ -301,7 +314,12 @@ int bq25792_get_ibat_ma(const struct device* dev, int32_t* ibat_ma) {
     }
     const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
     BQ25792_IBAT_ADC reg(cfg);
-    uint32_t raw = reg.get<BQ25792_IBAT_ADC_IBAT_ADC>(0, true /* read from hw */);
+    // Explicit read so bus errors propagate (see bq25792_get_vbat_mv).
+    int ret = reg.read();
+    if (ret) {
+        return ret;
+    }
+    uint32_t raw = reg.get<BQ25792_IBAT_ADC_IBAT_ADC>(0, false);
     *ibat_ma = (int32_t)BQ25792_ADC_CURRENT_UnitConversion::conversion(raw);
     return 0;
 }
@@ -312,7 +330,12 @@ int bq25792_get_vbus_mv(const struct device* dev, int32_t* vbus_mv) {
     }
     const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
     BQ25792_VBUS_ADC reg(cfg);
-    uint32_t raw = reg.get<BQ25792_VBUS_ADC_VBUS_ADC>(0, true /* read from hw */);
+    // Explicit read so bus errors propagate (see bq25792_get_vbat_mv).
+    int ret = reg.read();
+    if (ret) {
+        return ret;
+    }
+    uint32_t raw = reg.get<BQ25792_VBUS_ADC_VBUS_ADC>(0, false);
     *vbus_mv = (int32_t)BQ25792_ADC_VOLTAGE_UnitConversion::conversion(raw);
     return 0;
 }
@@ -323,7 +346,12 @@ int bq25792_get_ibus_ma(const struct device* dev, int32_t* ibus_ma) {
     }
     const struct bq25792_dev_config* cfg = (const struct bq25792_dev_config*)dev->config;
     BQ25792_IBUS_ADC reg(cfg);
-    uint32_t raw = reg.get<BQ25792_IBUS_ADC_IBUS_ADC>(0, true /* read from hw */);
+    // Explicit read so bus errors propagate (see bq25792_get_vbat_mv).
+    int ret = reg.read();
+    if (ret) {
+        return ret;
+    }
+    uint32_t raw = reg.get<BQ25792_IBUS_ADC_IBUS_ADC>(0, false);
     *ibus_ma = (int32_t)BQ25792_ADC_CURRENT_UnitConversion::conversion(raw);
     return 0;
 }

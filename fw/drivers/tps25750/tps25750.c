@@ -857,6 +857,79 @@ int tps25750_clear_dead_battery(const struct device *dev) {
     return ret;
 }
 
+int tps25750_go2p(const struct device *dev, uint8_t *task_result) {
+    if (!dev || !task_result) {
+        LOG_ERR("NULL pointer");
+        return -ENODEV;
+    }
+
+    const struct tps25750_dev_config *cfg = dev->config;
+
+    if (!device_is_ready(cfg->i2c.bus)) {
+        LOG_ERR("bus not ready");
+        return -ENODEV;
+    }
+
+    // Pre-flight context for the operator (plain register read, no task):
+    // GO2P's documented reject rule keys off BOOT_STATUS.PatchConfigSource,
+    // so log what the part actually reports before issuing the task.
+    tps25750_boot_status_t status;
+    int ret = tps25750_read_boot_status(dev, &status);
+    if (ret) {
+        LOG_ERR("tps25750_read_boot_status: %d", ret);
+        return ret;
+    }
+    LOG_WRN("GO2P pre-flight: PatchConfigSource=%u DeadBatteryFlag=%u",
+            status.boot_flags[3] >> 5, (status.boot_flags[0] & 0b100) ? 1 : 0);
+
+    tps25750_task_lock(dev);
+
+    // 'GO2P' task, host interface TRM SLVUC05A Table 3-12 (sec. 3.3.5, p.58):
+    // forces the PD controller back into PTCH mode to await a patch over I2C.
+    // The task takes NO input data (nothing is staged in DATA1); the output is
+    // byte 1 of DATA1 = the standard task return code (Table 3-1, p.43:
+    // 0=success, 3=rejected). Side effects on success: MODE reads 'PTCH', the
+    // USB PD PHY is disabled, and the part may temporarily NAK I2C; the host
+    // must then service ReadyForPatch and push the patch "as soon as possible"
+    // -- our IRQ work and runtime PTCH recovery both do exactly that.
+    //
+    // TRM cautions: (a) the task is intended for the ADCINx
+    // NegotiateHighVoltage strap option; (b) its reject rule cites
+    // PatchConfigSource values 3h/4h, which the same TRM's BOOT_STATUS table
+    // (Table 2-15, p.25) marks Reserved (I2C-loaded configs read 6h) -- an
+    // apparent TI doc inconsistency, so a clean REJECTED result here is an
+    // expected, harmless outcome on this design. Hardware-confirmed
+    // 2026-07-17: proto0 reads PatchConfigSource=6 and the part rejects the
+    // task (result 3), leaving the bridge fully healthy.
+    //
+    // This is a test instrument for the PTCH-wedge recovery path (the wedge
+    // otherwise needs USB plug/unplug storms to reproduce). Sanctioned caller:
+    // the `power pd go2p` shell command, batteries connected.
+    ret = tps25750_write_cmd1(dev, TPS25750_REG_CMD1_VAL_GO2P);
+    if (ret) {
+        LOG_ERR("tps25750_write_cmd1: %d", ret);
+    } else {
+        ret = tps25750_read_cmd_status(dev);
+        if (ret) {
+            // An unrecognized 4CC reads back "!CMD" and surfaces as -EBUSY.
+            LOG_ERR("'%s': tps25750_read_cmd_status: %d", TPS25750_REG_CMD1_VAL_GO2P, ret);
+        } else {
+            tps25750_data1_t data;
+            ret = tps25750_read_data1(dev, &data);
+            if (ret) {
+                LOG_ERR("tps25750_read_data1: %d", ret);
+            } else {
+                *task_result = data.data[0];
+                LOG_WRN("GO2P task result: %u (0=accepted, 3=rejected)", data.data[0]);
+            }
+        }
+    }
+
+    tps25750_task_unlock(dev);
+
+    return ret;
+}
+
 #define TPS25750_WORKQ_STACK_SIZE 1024
 #define TPS25750_WORKQ_PRIORITY 5
 
@@ -872,17 +945,30 @@ void tps25750_irq_work(struct k_work *item) {
     const struct tps25750_dev_config *cfg = dev->config;
     int ret = 0;
 
-    LOG_INF("dev: %p", dev);
-    LOG_INF("cfg: %p", cfg);
-    LOG_INF("data: %p", data);
+    LOG_DBG("dev: %p", dev);
+    LOG_DBG("cfg: %p", cfg);
+    LOG_DBG("data: %p", data);
 
     // Figure out what caused the interrupt
     tps25750_int_t interrupt;
     ret = tps25750_read_int_event1(dev, &interrupt);
     if (ret) {
         LOG_ERR("tps25750_read_int_event1: %d", ret);
+        // The part may be temporarily NAKing mid self-reset (TRM SLVUC05A Table
+        // 3-12). A silent return here used to permanently swallow the edge --
+        // the INT line stays asserted, no new edge ever comes, and a PTCH-wedged
+        // part was stranded until reboot. Retry a few times instead.
+        if (data->irq_retries < TPS25750_RECOVERY_MAX_RETRIES) {
+            data->irq_retries++;
+            k_work_reschedule_for_queue(&tps25750_work_q, &data->work,
+                                        K_MSEC(TPS25750_RECOVERY_RETRY_MS));
+        }
         return;
     }
+    // irq_retries is deliberately NOT reset here: the nested MODE read below
+    // shares the same bound, and resetting after every successful INT_EVENT1
+    // read would let a stuck-NAK MODE read retry forever. It resets at the
+    // handler's completion points instead.
 
     // TODO: need to refactor this to handle other kinds of interrupts
     if (interrupt.ReadyForPatch) {
@@ -894,8 +980,15 @@ void tps25750_irq_work(struct k_work *item) {
         int ret = tps25750_read_mode(data->dev, &mode);
         if (ret) {
             LOG_ERR("tps25750_read_mode: %d", ret);
+            // Same transient-NAK reasoning as the read_int_event1 path above.
+            if (data->irq_retries < TPS25750_RECOVERY_MAX_RETRIES) {
+                data->irq_retries++;
+                k_work_reschedule_for_queue(&tps25750_work_q, &data->work,
+                                            K_MSEC(TPS25750_RECOVERY_RETRY_MS));
+            }
             return;
         }
+        data->irq_retries = 0;
         LOG_INF("MODE: %.*s", sizeof(mode.mode), mode.mode);
 
         // If we are in mode == PTCH, we can proceed
@@ -927,7 +1020,12 @@ void tps25750_irq_work(struct k_work *item) {
         } else {
             LOG_INF("Patch download success!");
         }
+#else
+        // No internal patch: nothing to retry, so the transient is over.
+        data->irq_retries = 0;
 #endif  // CONFIG_TPS25750_INTERNAL_PATCH
+    } else {
+        data->irq_retries = 0;
     }
 }
 
@@ -935,12 +1033,120 @@ void tps25750_irq(const struct device *dev, const struct device *port, struct gp
                   gpio_port_pins_t pins) {
     struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
 
-    k_work_schedule_for_queue(&tps25750_work_q, &data->work, K_MSEC(3000));
+    // Reschedule (not schedule): schedule_for_queue is a no-op while the work is
+    // already pending, so during a plug/unplug storm every edge after the first
+    // was swallowed and the stale first-edge deadline won. Rescheduling restarts
+    // the timer on each edge, giving a true "quiet period" debounce. 250 ms
+    // (down from 3 s) still rides out contact bounce while honoring the TRM's
+    // requirement to push a patch "as soon as possible" after ReadyForPatch
+    // asserts (host interface TRM SLVUC05A Table 3-12).
+    k_work_reschedule_for_queue(&tps25750_work_q, &data->work, K_MSEC(250));
 
-    LOG_INF("Got a TPS25750 callback!");
+    LOG_DBG("Got a TPS25750 callback!");
 }
 
 #if DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT)
+
+// Runtime PTCH recovery: the part can self-reset into PTCH (patch-wait) mode on
+// USB plug/unplug transients. In that mode every I2Cm task completes with
+// standard task result REJECTED (0x3, host interface TRM SLVUC05A Table 3-1),
+// so all bridged BQ25792 traffic fails with -EFAULT while charging continues
+// autonomously -- a wedge that used to persist until reboot whenever the
+// ReadyForPatch edge was missed (see tps25750_irq_work). This work item is the
+// edge-independent healer: triggered by the failure signature itself, it
+// re-checks MODE (a plain read) and re-runs the boot-proven patch download.
+// It performs no hardware writes beyond that established download sequence.
+static void tps25750_recovery_work(struct k_work *item) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(item);
+    struct tps25750_dev_data *data = CONTAINER_OF(dwork, struct tps25750_dev_data, recovery_work);
+    const struct device *dev = data->dev;
+
+    tps25750_mode_t mode;
+    int ret = tps25750_read_mode(dev, &mode);
+    if (ret) {
+        // Possibly a transient NAK right after the self-reset (TRM SLVUC05A
+        // Table 3-12); retry briefly, then go dormant -- the next REJECTED
+        // bridge task re-arms recovery. recovery_retries is shared with the
+        // bridge callers' tps25750_maybe_schedule_recovery, hence the lock.
+        tps25750_task_lock(dev);
+        bool retry = data->recovery_retries < TPS25750_RECOVERY_MAX_RETRIES;
+        if (retry) {
+            data->recovery_retries++;
+        }
+        tps25750_task_unlock(dev);
+
+        if (retry) {
+            k_work_schedule_for_queue(&tps25750_work_q, &data->recovery_work,
+                                      K_MSEC(TPS25750_RECOVERY_RETRY_MS));
+        } else {
+            LOG_ERR("PTCH recovery: tps25750_read_mode: %d (dormant until next reject)", ret);
+        }
+        return;
+    }
+    tps25750_task_lock(dev);
+    data->recovery_retries = 0;
+    tps25750_task_unlock(dev);
+
+    if (strncmp(mode.mode, TPS25750_REG_MODE_VAL_PTCH, sizeof(mode.mode)) != 0) {
+        // Not the PTCH wedge -- a task can be rejected for transient reasons in
+        // APP mode (e.g. mid PD renegotiation); nothing to heal.
+        LOG_DBG("PTCH recovery: MODE is %.*s, nothing to do", sizeof(mode.mode), mode.mode);
+        return;
+    }
+
+#if defined(CONFIG_TPS25750_INTERNAL_PATCH)
+    LOG_WRN("PD controller self-reset to PTCH mode at runtime; re-downloading patch");
+
+    const char *patch;
+    size_t size;
+    ret = tps25750_get_patch(&patch, &size);
+    if (ret) {
+        LOG_ERR("tps25750_get_patch: %d", ret);
+        return;
+    }
+
+    // download_patch holds task_mutex for the entire download and re-checks
+    // MODE under the lock, so racing the IRQ-triggered download (same work
+    // queue anyway) degenerates to "Patch already loaded!".
+    ret = tps25750_download_patch(dev, patch, size);
+    if (ret) {
+        LOG_ERR("Runtime patch recovery failed: %d", ret);
+        k_work_schedule_for_queue(&tps25750_work_q, &data->recovery_work,
+                                  K_MSEC(TPS25750_RECOVERY_DEBOUNCE_MS));
+    } else {
+        LOG_WRN("Runtime patch recovery complete; I2Cm bridge restored");
+    }
+#else
+    LOG_ERR("PD controller is in PTCH mode but no internal patch is available");
+#endif  // CONFIG_TPS25750_INTERNAL_PATCH
+}
+
+// Called after every bridged I2Cm task, with task_mutex still held (it guards
+// last_recovery_ms/recovery_retries against the recovery work item and other
+// bridge callers). A task that completed with REJECTED while the driver
+// expected it to work is the PTCH-wedge signature; kick the recovery work to
+// confirm via MODE and heal. Rate-limited so the charger thread's 500 ms
+// polling can't stack patch downloads.
+static void tps25750_maybe_schedule_recovery(const struct device *dev, int ret, uint8_t status) {
+    struct tps25750_dev_data *data = (struct tps25750_dev_data *)dev->data;
+
+    // Only the DATA1-status branch returns -EFAULT; combined with the recorded
+    // status byte this filters out plain bus errors (-EIO), CMD1 timeouts
+    // (-ETIMEDOUT) and "!CMD" rejections (-EBUSY).
+    if (ret != -EFAULT || status != REJECTED) {
+        return;
+    }
+
+    int64_t now = k_uptime_get();
+    if (now - data->last_recovery_ms < TPS25750_RECOVERY_DEBOUNCE_MS) {
+        return;
+    }
+    data->last_recovery_ms = now;
+    data->recovery_retries = 0;
+
+    // Short delay off the caller's thread; no-op if already pending.
+    k_work_schedule_for_queue(&tps25750_work_q, &data->recovery_work, K_MSEC(100));
+}
 
 static int tps25750_init(const struct device *dev) {
     const struct tps25750_dev_config *cfg = dev->config;
@@ -961,6 +1167,10 @@ static int tps25750_init(const struct device *dev) {
                        NULL);
 
     k_work_init_delayable(&data->work, tps25750_irq_work);
+    k_work_init_delayable(&data->recovery_work, tps25750_recovery_work);
+    // Let the very first REJECTED bridge task schedule recovery immediately,
+    // even inside the first TPS25750_RECOVERY_DEBOUNCE_MS of uptime.
+    data->last_recovery_ms = -TPS25750_RECOVERY_DEBOUNCE_MS;
 
     if (!device_is_ready(cfg->i2c.bus)) {
         LOG_ERR("bus not ready");
@@ -1062,6 +1272,10 @@ static int tps25750_i2cm_write_reg_locked(const struct device *dev, uint8_t addr
         return ret;
     }
 
+    // Record the task status byte for the recovery heuristic (see
+    // tps25750_maybe_schedule_recovery) -- written under task_mutex.
+    ((struct tps25750_dev_data *)dev->data)->last_i2cm_status = data.data[0];
+
     if (data.data[0] != 0) {
         LOG_ERR("PD Controller I2CM write failure: %u", data.data[0]);
         return -EFAULT;
@@ -1074,6 +1288,10 @@ static int tps25750_i2cm_write_reg(const struct device *dev, uint8_t addr, uint8
                                    uint8_t *dataBuff, uint8_t dataSize) {
     tps25750_task_lock(dev);
     int ret = tps25750_i2cm_write_reg_locked(dev, addr, reg, dataBuff, dataSize);
+    // Still under task_mutex: last_i2cm_status and the recovery bookkeeping
+    // (last_recovery_ms, recovery_retries) are all guarded by the same lock.
+    tps25750_maybe_schedule_recovery(dev, ret,
+                                     ((struct tps25750_dev_data *)dev->data)->last_i2cm_status);
     tps25750_task_unlock(dev);
 
     return ret;
@@ -1123,6 +1341,10 @@ static int tps25750_i2cm_read_reg_locked(const struct device *dev, uint8_t addr,
         return ret;
     }
 
+    // Record the task status byte for the recovery heuristic (see
+    // tps25750_maybe_schedule_recovery) -- written under task_mutex.
+    ((struct tps25750_dev_data *)dev->data)->last_i2cm_status = data.data[0];
+
     if (data.data[0] != 0) {
         LOG_ERR("PD Controller I2CM read failure: %u", data.data[0]);
         return -EFAULT;
@@ -1144,6 +1366,10 @@ static int tps25750_i2cm_read_reg(const struct device *dev, uint8_t addr, uint8_
                                   uint8_t *dataBuff, uint8_t dataSize) {
     tps25750_task_lock(dev);
     int ret = tps25750_i2cm_read_reg_locked(dev, addr, reg, dataBuff, dataSize);
+    // Still under task_mutex: last_i2cm_status and the recovery bookkeeping
+    // (last_recovery_ms, recovery_retries) are all guarded by the same lock.
+    tps25750_maybe_schedule_recovery(dev, ret,
+                                     ((struct tps25750_dev_data *)dev->data)->last_i2cm_status);
     tps25750_task_unlock(dev);
 
     return ret;

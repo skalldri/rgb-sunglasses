@@ -112,7 +112,20 @@ static void stage_response(struct emul_tps25750_data *data, uint8_t status, cons
 static bool execute_task(struct emul_tps25750_data *data) {
     uint8_t status = data->armed_i2cm_status;
 
+    /* In PTCH (patch-wait) mode the real part rejects every I2Cm bridge task:
+     * CMD1 completes cleanly but DATA1[0] reads standard task result 3 =
+     * REJECTED (host interface TRM SLVUC05A Table 3-1) — the exact signature
+     * observed on hardware after a plug/unplug-induced self-reset ("PD
+     * Controller I2CM read failure: 3"). Modeled here so the driver's runtime
+     * PTCH recovery is testable on native_sim. */
+    bool in_ptch = memcmp(data->mode, TPS25750_REG_MODE_VAL_PTCH, TPS25750_REG_MODE_SIZE) == 0;
+
     if (memcmp(data->cmd1, TPS25750_REG_CMD1_VAL_I2CR, TPS25750_REG_CMD1_SIZE) == 0) {
+        if (in_ptch) {
+            stage_response(data, REJECTED, NULL, 0);
+            return true;
+        }
+
         /* Request: [byte_count=3][addr][reg][len] */
         uint8_t addr = data->data1[1];
         uint8_t reg = data->data1[2];
@@ -131,6 +144,11 @@ static bool execute_task(struct emul_tps25750_data *data) {
     }
 
     if (memcmp(data->cmd1, TPS25750_REG_CMD1_VAL_I2CW, TPS25750_REG_CMD1_SIZE) == 0) {
+        if (in_ptch) {
+            stage_response(data, REJECTED, NULL, 0);
+            return true;
+        }
+
         /* Request: [byte_count=4+n][addr][n+1][rsvd][reg][payload x n] */
         uint8_t addr = data->data1[1];
         uint8_t n = data->data1[0] >= 4 ? data->data1[0] - 4 : 0;
@@ -147,7 +165,23 @@ static bool execute_task(struct emul_tps25750_data *data) {
         return true;
     }
 
+    if (memcmp(data->cmd1, TPS25750_REG_CMD1_VAL_GO2P, TPS25750_REG_CMD1_SIZE) == 0) {
+        /* 'GO2P' (TRM SLVUC05A Table 3-12): re-enter PTCH mode and await a
+         * patch; no input data, standard task response. The real part can
+         * reject this based on BOOT_STATUS.PatchConfigSource — deliberately
+         * modeled permissive here so native_sim tests exercise the success
+         * path; hardware may legitimately return REJECTED instead. */
+        memcpy(data->mode, TPS25750_REG_MODE_VAL_PTCH, TPS25750_REG_MODE_SIZE);
+        data->patch_receiving = false;
+        stage_response(data, 0, NULL, 0);
+        return true;
+    }
+
     if (memcmp(data->cmd1, TPS25750_REG_CMD1_VAL_DBFG, TPS25750_REG_CMD1_SIZE) == 0) {
+        if (in_ptch) {
+            stage_response(data, REJECTED, NULL, 0);
+            return true;
+        }
         stage_response(data, 0, NULL, 0);
         return true;
     }
@@ -183,7 +217,7 @@ static bool execute_task(struct emul_tps25750_data *data) {
         return true;
     }
 
-    /* Unknown 4CC (e.g. "GO2P") -> "!CMD", like the real part. */
+    /* Unknown 4CC -> "!CMD", like the real part. */
     return false;
 }
 
@@ -251,6 +285,11 @@ static int reg_read(struct emul_tps25750_data *data, uint8_t reg, uint8_t *buf, 
         case TPS25750_REG_MODE_ADDR:
             buf[0] = TPS25750_REG_MODE_SIZE;
             memcpy(&buf[1], data->mode, MIN(len - 1, TPS25750_REG_MODE_SIZE));
+            return 0;
+        case TPS25750_REG_BOOT_STATUS_ADDR:
+            /* All-zero boot flags (PatchConfigSource=0, no dead-battery) —
+             * enough for tps25750_go2p()'s pre-flight read. */
+            buf[0] = TPS25750_REG_BOOT_STATUS_SIZE;
             return 0;
         case TPS25750_REG_CMD1_ADDR:
             poll_cmd1(data);
@@ -487,6 +526,19 @@ void emul_tps25750_arm_i2cm_status(const struct emul *target, uint8_t status) {
     struct emul_tps25750_data *data = target->data;
 
     data->armed_i2cm_status = status;
+}
+
+void emul_tps25750_force_ptch(const struct emul *target) {
+    struct emul_tps25750_data *data = target->data;
+
+    /* Simulate the field failure: the part self-resets into PTCH mode (e.g.
+     * from a USB plug/unplug transient). MODE reads 'PTCH', ReadyForPatch
+     * asserts on INT_EVENT1 reads (existing PTCH behavior in reg_read), any
+     * in-flight patch window is cancelled, and every subsequent I2Cr/I2Cw
+     * task completes with standard task result REJECTED until a PBMs/PBMc
+     * download moves MODE back to 'APP '. */
+    memcpy(data->mode, TPS25750_REG_MODE_VAL_PTCH, TPS25750_REG_MODE_SIZE);
+    data->patch_receiving = false;
 }
 
 void emul_tps25750_get_mode(const struct emul *target, char out[5]) {

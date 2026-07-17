@@ -272,8 +272,26 @@ typedef struct __packed tps25750_data1 {
     uint8_t data[TPS25750_REG_DATA1_SIZE];
 } tps25750_data1_t;
 
+/* Minimum spacing between runtime patch-recovery attempts. Long enough to span
+ * a full patch download (~1-2 s) plus margin, short enough that a wedged bridge
+ * heals well inside the charger thread's comm-error window. */
+#define TPS25750_RECOVERY_DEBOUNCE_MS 5000
+
+/* Retry spacing/count for transient register-read failures inside the recovery
+ * and IRQ work items — the part may temporarily NAK I2C right after a
+ * self-reset (host interface TRM SLVUC05A Table 3-12 notes this for PTCH
+ * re-entry). After the retries are exhausted the work goes dormant; the next
+ * REJECTED bridge task (or INT edge) re-arms it. */
+#define TPS25750_RECOVERY_RETRY_MS 1000
+#define TPS25750_RECOVERY_MAX_RETRIES 3
+
 struct tps25750_dev_data {
     struct k_work_delayable work;
+    /* Runtime PTCH recovery (see tps25750_recovery_work): scheduled from the
+     * I2Cm bridge failure path when a task completes with standard task result
+     * REJECTED — the signature of the part having self-reset into PTCH mode,
+     * where every I2Cm task is rejected until a patch is re-downloaded. */
+    struct k_work_delayable recovery_work;
     struct gpio_callback callback;
     const struct device *dev;
     /* Serializes every CMD1/DATA1 4CC-task sequence (I2Cr/I2Cw bridge transfers,
@@ -283,6 +301,15 @@ struct tps25750_dev_data {
      * BT RX, the tps25750 work queue) corrupt each other's request/result
      * without this lock. */
     struct k_mutex task_mutex;
+    /* DATA1 status byte of the last completed I2Cr/I2Cw task (written under
+     * task_mutex by the _locked bridge functions; 0 on success). */
+    uint8_t last_i2cm_status;
+    /* Uptime of the last recovery attempt — rate-limits re-patching under the
+     * charger thread's polling storm. */
+    int64_t last_recovery_ms;
+    /* Bounded-retry counters for transient read failures in the two work items. */
+    uint8_t recovery_retries;
+    uint8_t irq_retries;
 };
 
 struct tps25750_dev_config {

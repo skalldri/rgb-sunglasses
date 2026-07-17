@@ -26,6 +26,10 @@
 
 #include "emul_tps25750.h"
 
+/* For TPS25750_RECOVERY_DEBOUNCE_MS (plain-C header, unlike bq25792_priv.h --
+ * the recovery tests must track the driver's real debounce constant). */
+#include "../../../../drivers/tps25750/tps25750_priv.h"
+
 static const struct device *tps_dev = DEVICE_DT_GET(DT_NODELABEL(tps25750));
 static const struct device *bq_dev = DEVICE_DT_GET(DT_NODELABEL(bq25792));
 static const struct emul *tps_emul = EMUL_DT_GET(DT_NODELABEL(tps25750));
@@ -540,6 +544,136 @@ ZTEST(emul_tps25750, test_patch_download_at_boot) {
 #else
     ztest_test_skip();
 #endif
+}
+
+/* ---- runtime PTCH-wedge recovery ---- */
+
+/* The field failure: the part self-resets into PTCH mode (plug/unplug
+ * transient), every bridged task completes REJECTED (DATA1 status 3), and —
+ * before the recovery work existed — the system stayed wedged until reboot.
+ * The failing bridged read itself must now arm the driver's recovery work,
+ * which re-checks MODE and re-runs the patch download, restoring the bridge
+ * with no re-init. Also covers the debounce: a second wedge immediately after
+ * a recovery attempt must NOT stack another download until the debounce
+ * window has passed (but must still heal after it). */
+ZTEST(emul_tps25750, test_runtime_ptch_recovery) {
+#if defined(CONFIG_TPS25750_INTERNAL_PATCH)
+    uint8_t buf[2];
+    char mode[5];
+
+    /* Move past any recovery attempt an earlier test may have triggered, so
+     * the failing read below arms recovery instead of being debounced. */
+    k_msleep(TPS25750_RECOVERY_DEBOUNCE_MS + 100);
+
+    /* Precondition (suite_before preserves MODE): a "PTCH" here means an
+     * earlier PTCH test failed mid-flow and poisoned the shared state --
+     * fail loudly on that instead of producing a confusing cascade. */
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "APP ", 4, "MODE poisoned by an earlier failed test (%s)", mode);
+
+    /* Baseline: bridge works. */
+    zassert_ok(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)));
+
+    emul_tps25750_force_ptch(tps_emul);
+
+    /* Wedged: CMD1 completes but DATA1 status = REJECTED -> -EFAULT. This
+     * failure is also what arms the recovery work. */
+    zassert_equal(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)), -EFAULT);
+
+    /* Recovery: +100ms MODE check, then the full emulated download. */
+    k_msleep(1000);
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "APP ", 4, "recovery did not re-download (MODE %s)", mode);
+    zassert_ok(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)),
+               "bridge not restored after recovery");
+
+    /* Rate limit: wedge again inside the debounce window — the failing read
+     * must not stack a second download yet. */
+    emul_tps25750_force_ptch(tps_emul);
+    zassert_equal(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)), -EFAULT);
+    k_msleep(1000);
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "PTCH", 4, "recovery ignored the debounce");
+
+    /* ...but once the window passes, the next failing read re-arms it. */
+    k_msleep(TPS25750_RECOVERY_DEBOUNCE_MS);
+    zassert_equal(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)), -EFAULT);
+    k_msleep(1000);
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "APP ", 4, "recovery did not re-arm after the debounce");
+    zassert_ok(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)));
+#else
+    /* Without CONFIG_TPS25750_INTERNAL_PATCH the recovery work has no patch
+     * to download and would leave the emulated part stuck in PTCH, poisoning
+     * the rest of the suite. */
+    ztest_test_skip();
+#endif
+}
+
+/* GO2P (TRM SLVUC05A Table 3-12) re-enters PTCH mode; the recovery machinery
+ * then heals it exactly like a spontaneous self-reset — this is the on-device
+ * repro flow (`power pd go2p`) run against the emulator. */
+ZTEST(emul_tps25750, test_go2p_reenters_ptch_and_recovers) {
+#if defined(CONFIG_TPS25750_INTERNAL_PATCH)
+    uint8_t buf[2];
+    char mode[5];
+    char four_cc[5];
+    uint8_t task_result = 0xFF;
+
+    k_msleep(TPS25750_RECOVERY_DEBOUNCE_MS + 100);
+
+    /* Precondition — see test_runtime_ptch_recovery. */
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "APP ", 4, "MODE poisoned by an earlier failed test (%s)", mode);
+
+    zassert_ok(tps25750_go2p(tps_dev, &task_result));
+    zassert_equal(task_result, 0, "GO2P task result %u", task_result);
+    emul_tps25750_last_4cc(tps_emul, four_cc);
+    zassert_mem_equal(four_cc, "GO2P", 4);
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "PTCH", 4);
+
+    /* The next bridged read fails REJECTED and arms recovery... */
+    zassert_equal(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)), -EFAULT);
+    k_msleep(1000);
+
+    /* ...which re-downloads the patch and restores the bridge, no reboot. */
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "APP ", 4);
+    zassert_ok(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)));
+#else
+    ztest_test_skip();
+#endif
+}
+
+/* A REJECTED task while the part is still in APP mode (transient — e.g. task
+ * engine busy) must NOT trigger a patch download: the recovery work reads
+ * MODE first and no-ops. */
+ZTEST(emul_tps25750, test_transient_reject_in_app_mode_no_download) {
+    uint8_t buf[2];
+    char mode[5];
+    char four_cc[5];
+
+    k_msleep(TPS25750_RECOVERY_DEBOUNCE_MS + 100);
+
+    /* Precondition — see test_runtime_ptch_recovery. */
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "APP ", 4, "MODE poisoned by an earlier failed test (%s)", mode);
+
+    /* One-shot REJECTED on the next I2Cr while MODE stays "APP ". */
+    emul_tps25750_arm_i2cm_status(tps_emul, 3);
+    zassert_equal(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)), -EFAULT);
+
+    /* Let the recovery work run its MODE check and (correctly) do nothing:
+     * no PBMs may be issued — the last 4CC must still be the failing I2Cr. */
+    k_msleep(1000);
+    emul_tps25750_get_mode(tps_emul, mode);
+    zassert_mem_equal(mode, "APP ", 4);
+    emul_tps25750_last_4cc(tps_emul, four_cc);
+    zassert_mem_equal(four_cc, "I2Cr", 4, "recovery issued a task in APP mode (%s)", four_cc);
+
+    /* One-shot cleared: bridge healthy. */
+    zassert_ok(i2c_burst_read(tps_dev, 0x6B, kRegVbatAdc, buf, sizeof(buf)));
 }
 
 static void suite_before(void *fixture) {
