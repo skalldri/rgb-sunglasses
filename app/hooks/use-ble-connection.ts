@@ -34,6 +34,13 @@ interface UseBleConnectionResult {
     // Stops the auto-reconnect loop (issue #124) for this device, aborting any
     // pending background connect. No-op when no reconnect is running.
     cancelReconnect: () => void;
+    // Checks whether the OS-level link still matches the app's belief that this
+    // device is connected; if the link is gone (a disconnect event the app missed,
+    // e.g. delivered while iOS had the JS engine suspended), runs the same cleanup
+    // the disconnect handler would have and starts the auto-reconnect loop. Called
+    // from the AppState foreground-verify hook (issue #124). No-op when this device
+    // isn't the selected one or the link is healthy.
+    verifyConnection: () => Promise<void>;
 }
 
 // How the link-establishment step of a connect attempt behaves (issue #124):
@@ -662,6 +669,39 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         void stopConnectionService();
     }
 
+    async function verifyConnection(): Promise<void> {
+        const current = selectedDeviceRef.current;
+        if (!current || current.mac !== macAddress) return;
+
+        let connected = false;
+        try {
+            connected = await bleManager.isDeviceConnected(macAddress);
+        } catch (error) {
+            console.log(`isDeviceConnected(${macAddress}) failed; treating as disconnected:`, error);
+        }
+        if (connected) return;
+
+        console.log(`Foreground verify: ${deviceName} (${macAddress}) link is gone but app state says connected - recovering`);
+
+        // Same cleanup the onDeviceDisconnected handler performs for a drop whose
+        // event the app actually received.
+        disconnectSubscription.current?.remove();
+        disconnectSubscription.current = null;
+        monitorSubscriptions.current.forEach(sub => sub.remove());
+        monitorSubscriptions.current = [];
+        if (current.mcuMgrClient) {
+            try {
+                current.mcuMgrClient.destroy();
+            } catch (e) {
+                console.log('Error destroying MCUmgr client:', e);
+            }
+        }
+        setSelectedDevice(null);
+
+        // Deliberately not awaited - the loop outlives this call.
+        void startReconnectLoop();
+    }
+
     async function disconnect(): Promise<void> {
         setIsConnecting(true);
         try {
@@ -688,5 +728,5 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         }
     }
 
-    return { isConnecting, connect, disconnect, cancelReconnect };
+    return { isConnecting, connect, disconnect, cancelReconnect, verifyConnection };
 }

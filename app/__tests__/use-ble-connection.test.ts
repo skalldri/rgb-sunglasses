@@ -736,6 +736,47 @@ describe('useBleConnection', () => {
             expect(FgService.stopConnectionService).toHaveBeenCalled();
         });
 
+        it('verifyConnection() recovers a missed disconnect: cleanup + reconnect loop', async () => {
+            ctx.selectedDevice = { mac: 'AA:BB:CC', name: 'Test Device', mcuMgrClient: { destroy: jest.fn() } };
+            const monitorRemove = jest.fn();
+            ctx.monitorSubscriptions.current = [{ remove: monitorRemove }];
+            const removeDisconnect = jest.fn();
+            ctx.disconnectSubscription.current = { remove: removeDisconnect };
+            (BluetoothContext.useBluetooth as jest.Mock).mockReturnValue(ctx);
+
+            (BleHook.bleManager.isDeviceConnected as jest.Mock).mockResolvedValue(false);
+            // Park the reconnect the recovery starts.
+            (BleHook.bleManager.connectToDevice as jest.Mock).mockReturnValue(new Promise(() => {}));
+
+            const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+            await act(async () => { await result.current.verifyConnection(); });
+
+            expect(removeDisconnect).toHaveBeenCalledTimes(1);
+            expect(monitorRemove).toHaveBeenCalledTimes(1);
+            expect(ctx.selectedDevice.mcuMgrClient.destroy).toHaveBeenCalledTimes(1);
+            expect(ctx.setSelectedDevice).toHaveBeenCalledWith(null);
+            expect(ctx.setReconnectingDevice).toHaveBeenCalledWith({ mac: 'AA:BB:CC', name: 'Test Device' });
+        });
+
+        it('verifyConnection() is a no-op when the link is healthy or the device is not selected', async () => {
+            // Healthy link
+            ctx.selectedDevice = { mac: 'AA:BB:CC', name: 'Test Device' };
+            (BluetoothContext.useBluetooth as jest.Mock).mockReturnValue(ctx);
+            (BleHook.bleManager.isDeviceConnected as jest.Mock).mockResolvedValue(true);
+
+            const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+            await act(async () => { await result.current.verifyConnection(); });
+            expect(ctx.setSelectedDevice).not.toHaveBeenCalled();
+
+            // Different device selected
+            ctx.selectedDevice = { mac: 'ZZ:ZZ:ZZ', name: 'Other' };
+            (BluetoothContext.useBluetooth as jest.Mock).mockReturnValue(ctx);
+            const { result: result2 } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+            await act(async () => { await result2.current.verifyConnection(); });
+            expect(ctx.setSelectedDevice).not.toHaveBeenCalled();
+            expect(ctx.setReconnectingDevice).not.toHaveBeenCalled();
+        });
+
         it('a superseded pending connect that resolves later is aborted, not adopted', async () => {
             let resolvePending!: (v: any) => void;
             const { result, fireDisconnect } = await connectThenDrop(mock => {

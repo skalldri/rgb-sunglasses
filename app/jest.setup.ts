@@ -85,6 +85,7 @@ jest.mock('react-native-ble-plx', () => {
     setLogLevel = jest.fn();
     startDeviceScan = jest.fn();
     connectedDevices = jest.fn(async () => []);
+    isDeviceConnected = jest.fn(async () => false);
     stopDeviceScan = jest.fn();
     connectToDevice = jest.fn();
     cancelDeviceConnection = jest.fn(async () => undefined);
