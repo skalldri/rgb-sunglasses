@@ -15,6 +15,11 @@ device would unpair real personal hardware (earbuds, a car, ...). So the forget 
 The device-name verification gate is the hard guarantee that we never forget a device
 we haven't positively identified.
 
+The forget step also force-stops the companion app first and, if the unpair doesn't
+stick, cycles the Bluetooth stack and retries once: Android's Settings "Unpair"
+silently no-ops while any client holds a pending LE connection to the target (the
+running app's auto-connect is such a client) — see forget() for the full account.
+
 LOCKS: touches the board (serial) and the phone (adb) -> requires this session to hold
 BOTH the `board` and `app` hw-locks (checked, never acquired). SERIAL: opens and OWNS
 the shell UART; close any mcp__serial__ connection first (preflight aborts if it's busy).
@@ -386,6 +391,13 @@ class RePair:
                 die("bond still present after 120s — aborting.")
         log("forget: bond cleared (manual).")
 
+    def _cycle_bt(self):
+        log("cycling the phone's Bluetooth stack (drops stuck pending LE connections)…")
+        self.a.shell("svc", "bluetooth", "disable")
+        time.sleep(3)
+        self.a.shell("svc", "bluetooth", "enable")
+        time.sleep(5)
+
     def forget(self):
         if self.forget_mode == "none":
             log("forget: skipped (--no-forget).")
@@ -396,6 +408,37 @@ class RePair:
         if self.forget_mode == "manual":
             return self._manual_forget()
 
+        # GOTCHA (observed 2026-07-17, OxygenOS/OnePlus 9 Pro): Settings' Unpair
+        # silently NO-OPS while any client still holds a pending LE connection to the
+        # target — the tap lands on the verified details page, navigates back, and the
+        # bond survives (`dumpsys bluetooth_manager` keeps showing it under "devices
+        # attempting connection"). The running companion app is exactly such a client
+        # (its BleManager auto-connect re-arms forever), so kill it BEFORE unpairing;
+        # relaunch happens later in the pairing phase anyway. If the unpair still
+        # doesn't stick, a BT-stack cycle clears the stuck pending connect.
+        log("forget: force-stopping the app (a pending LE connection blocks unpair)…")
+        self.a.shell("am", "force-stop", PKG)
+        time.sleep(1)
+
+        if not self._forget_via_settings():
+            return self._manual_forget()
+        if self.is_bonded():
+            warn("bond still present after automated forget — cycling BT and retrying once.")
+            self._cycle_bt()
+            if not self.is_bonded():
+                log("forget: bond cleared (after BT cycle).")
+                return
+            if not self._forget_via_settings():
+                return self._manual_forget()
+            if self.is_bonded():
+                warn("bond still present after the BT-cycle retry — manual fallback.")
+                return self._manual_forget()
+        log("forget: bond cleared.")
+
+    def _forget_via_settings(self):
+        """Drive Bluetooth Settings to unpair the (name-verified) target. Returns True
+        if the flow got as far as tapping Unpair (caller re-checks the bond), False if
+        it couldn't safely locate/verify the device (caller falls back to manual)."""
         log(f"forget: locating '{self.name}' in Bluetooth settings…")
         self.a.shell("am", "start", "-a", "android.settings.BLUETOOTH_SETTINGS")
         time.sleep(1.5)
@@ -437,7 +480,7 @@ class RePair:
                 self.ui.dump()
         if not gear:
             warn(f"could not locate '{self.name}' in the settings list — falling back to manual.")
-            return self._manual_forget()
+            return False
 
         self.a.tap(*gear)
         time.sleep(1.2)
@@ -447,20 +490,17 @@ class RePair:
             warn("opened details page does NOT match the target device — NOT forgetting. "
                  "Backing out and falling back to manual.")
             self.a.key(4)
-            return self._manual_forget()
+            return False
 
         log(f"forget: on '{self.name}' details page (verified) — tapping Forget/Unpair.")
         if not self.ui.tap(r"^forget$|^unpair$"):
             warn("no Forget/Unpair action on the details page — manual fallback.")
-            return self._manual_forget()
+            return False
         time.sleep(0.8)
         self.ui.dump()
         self.ui.tap(r"^forget( device)?$|^unpair$|^ok$")  # confirmation dialog, if any
         time.sleep(1.2)
-        if self.is_bonded():
-            warn("bond still present after automated forget — manual fallback.")
-            return self._manual_forget()
-        log("forget: bond cleared.")
+        return True
 
     # ---- pairing ----
     def relaunch_app(self):

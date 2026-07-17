@@ -120,5 +120,83 @@ def test_pixel_list_is_not_a_details_page_but_details_is():
     assert _rp(_ui(*PX_DETAILS), RGB)._is_some_details_page() is True
 
 
+# ---- forget() control flow: pending-LE-connection gotcha (2026-07-17) --------
+# Settings' Unpair silently no-ops while a client (the running app) holds a pending
+# LE connection to the target, so forget() must (a) force-stop the app BEFORE driving
+# Settings, and (b) cycle the BT stack + retry once if the unpair didn't stick.
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    monkeypatch.setattr(re_pair.time, "sleep", lambda s: None)
+
+
+class _AdbRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def shell(self, *args, **kw):
+        self.calls.append(args)
+        return ""
+
+
+def _flow_rp(bonded_seq, settings_results):
+    """RePair with the adb/UI-driving parts stubbed out; records the order of the
+    force-stop, settings-drive, BT-cycle, and manual-fallback steps."""
+    rp = re_pair.RePair.__new__(re_pair.RePair)
+    rp.name = RGB
+    rp.forget_mode = "auto"
+    rp.a = _AdbRecorder()
+    rp.steps = []
+    bonded = iter(bonded_seq)
+    rp.is_bonded = lambda: next(bonded)
+    results = iter(settings_results)
+
+    def settings():
+        rp.steps.append("settings")
+        return next(results)
+
+    rp._forget_via_settings = settings
+    rp._cycle_bt = lambda: rp.steps.append("cycle_bt")
+    rp._manual_forget = lambda: rp.steps.append("manual")
+    return rp
+
+
+def test_forget_force_stops_app_before_driving_settings():
+    rp = _flow_rp(bonded_seq=[True, False], settings_results=[True])
+    rp.forget()
+    assert ("am", "force-stop", re_pair.PKG) in rp.a.calls
+    # the force-stop must come before the Settings drive, and a clean first pass
+    # needs no BT cycle and no manual fallback.
+    assert rp.steps == ["settings"]
+
+
+def test_forget_cycles_bt_and_retries_when_unpair_does_not_stick():
+    # bonded: initial check True; still True after attempt 1; still True after the
+    # cycle (the cycle alone doesn't unbond); False after attempt 2.
+    rp = _flow_rp(bonded_seq=[True, True, True, False], settings_results=[True, True])
+    rp.forget()
+    assert rp.steps == ["settings", "cycle_bt", "settings"]
+
+
+def test_forget_falls_back_to_manual_when_retry_also_fails():
+    rp = _flow_rp(bonded_seq=[True, True, True, True], settings_results=[True, True])
+    rp.forget()
+    assert rp.steps == ["settings", "cycle_bt", "settings", "manual"]
+
+
+def test_forget_falls_back_to_manual_when_settings_cannot_verify_target():
+    # _forget_via_settings returning False = couldn't safely locate/verify the device.
+    rp = _flow_rp(bonded_seq=[True], settings_results=[False])
+    rp.forget()
+    assert rp.steps == ["settings", "manual"]
+
+
+def test_forget_skips_everything_when_not_bonded():
+    rp = _flow_rp(bonded_seq=[False], settings_results=[])
+    rp.forget()
+    assert rp.steps == [] and rp.a.calls == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
