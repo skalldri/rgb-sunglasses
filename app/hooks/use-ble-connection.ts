@@ -12,6 +12,11 @@ import {
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { bleManager } from "@/hooks/ble-manager";
+import {
+    startConnectionService,
+    stopConnectionService,
+    updateConnectionNotification,
+} from "@/services/ble-foreground-service";
 import { decodeUtf8FromBase64, MetadataBlobEntry, parseMetadataBlob } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useEffect, useRef, useState } from "react";
@@ -560,6 +565,19 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             });
 
             console.log('Pairing complete');
+
+            // Android: keep the process (and this connection) alive in the background
+            // (issue #124). Fire-and-forget - the permission prompt / notification
+            // plumbing must not delay connect() resolving. Only an 'initial' (user-
+            // initiated, therefore foregrounded) connect may START the service -
+            // Android 12+ forbids background FGS starts; a reconnect success just
+            // refreshes the still-running service's notification text.
+            if (mode === 'initial') {
+                void startConnectionService(deviceName);
+            } else {
+                void updateConnectionNotification(`Connected to ${deviceName}`);
+            }
+
             return true;
         } catch (error) {
             console.error(`Connection failed for ${macAddress}:`, error);
@@ -598,6 +616,9 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         const gen = ++reconnectGeneration.current;
         setReconnectingDevice({ mac: macAddress, name: deviceName });
         console.log(`Auto-reconnect: starting loop for ${deviceName} (${macAddress})`);
+        // Text-only update of the (still running) foreground service notification -
+        // never a service start, which the background would forbid on Android 12+.
+        void updateConnectionNotification(`Reconnecting to ${deviceName}…`);
 
         for (let attempt = 1; reconnectGeneration.current === gen; attempt++) {
             if (selectedDeviceRef.current?.mac === macAddress) {
@@ -637,6 +658,8 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         bleManager.cancelDeviceConnection(macAddress).catch(() => {
             // Nothing pending/connected for this mac - fine.
         });
+        // No connection to keep alive anymore - drop the foreground service.
+        void stopConnectionService();
     }
 
     async function disconnect(): Promise<void> {

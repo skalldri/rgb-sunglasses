@@ -21,6 +21,15 @@ jest.mock('@/context/bluetooth-context', () => {
     return { ...actual, useBluetooth: jest.fn() };
 });
 
+jest.mock('@/services/ble-foreground-service', () => ({
+    startConnectionService: jest.fn(async () => undefined),
+    stopConnectionService: jest.fn(async () => undefined),
+    updateConnectionNotification: jest.fn(async () => undefined),
+}));
+
+// eslint-disable-next-line import/first
+import * as FgService from '@/services/ble-foreground-service';
+
 // --- shared test fixture builders ---
 
 function makeMockBluetooth() {
@@ -702,6 +711,29 @@ describe('useBleConnection', () => {
             expect(ctx.reconnectGeneration.current).toBe(genBefore + 1);
             expect(ctx.reconnectingDevice).toBeNull();
             expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledWith('AA:BB:CC');
+        });
+
+        it('foreground service wiring: start on initial connect, update on drop + reconnect, stop on user disconnect', async () => {
+            const { result, fireDisconnect } = await connectThenDrop();
+
+            // Initial (user-initiated) connect STARTED the service.
+            expect(FgService.startConnectionService).toHaveBeenCalledWith('Test Device');
+
+            await act(async () => { fireDisconnect(); });
+
+            // The unexpected drop switched the notification to Reconnecting… (an
+            // update, never a service start - background starts are banned).
+            expect(FgService.updateConnectionNotification).toHaveBeenCalledWith('Reconnecting to Test Device…');
+            // The reconnect success refreshed it back to Connected.
+            await waitFor(() => {
+                expect(FgService.updateConnectionNotification).toHaveBeenCalledWith('Connected to Test Device');
+            });
+            // A reconnect success never STARTS the service (only the initial connect may).
+            expect(FgService.startConnectionService).toHaveBeenCalledTimes(1);
+
+            // User disconnect stops it.
+            await act(async () => { await result.current.disconnect(); });
+            expect(FgService.stopConnectionService).toHaveBeenCalled();
         });
 
         it('a superseded pending connect that resolves later is aborted, not adopted', async () => {

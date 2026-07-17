@@ -61,6 +61,25 @@ jest.mock('expo-web-browser', () => ({
   openBrowserAsync: jest.fn(async () => ({ type: 'opened' })),
 }));
 
+jest.mock('@notifee/react-native', () => ({
+  __esModule: true,
+  default: {
+    registerForegroundService: jest.fn(),
+    createChannel: jest.fn(async () => 'ble-connection'),
+    displayNotification: jest.fn(async () => 'ble-connection'),
+    stopForegroundService: jest.fn(async () => undefined),
+    cancelNotification: jest.fn(async () => undefined),
+    requestPermission: jest.fn(async () => ({ authorizationStatus: 1 })),
+  },
+  AndroidImportance: {
+    NONE: 0,
+    MIN: 1,
+    LOW: 2,
+    DEFAULT: 3,
+    HIGH: 4,
+  },
+}));
+
 jest.mock('react-native-ble-plx', () => {
   class BleManager {
     setLogLevel = jest.fn();
