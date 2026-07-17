@@ -8,7 +8,9 @@ import {
 } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
-import { batteryPresent, chargeStatusLabel, voltageToPercent } from "@/services/battery";
+import {
+    batteryPresent, CHARGE_STATUS_COMM_ERROR, chargeStatusLabel, voltageToPercent,
+} from "@/services/battery";
 import { decodeSint32FromBase64, decodeUint8FromBase64 } from "@/services/ble-value-codec";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { Link } from "expo-router";
@@ -34,7 +36,8 @@ function decodeUint8OrNull(encoded: string | null | undefined): number | null {
 }
 
 /** Badge tone for a raw BQ25792 CHG_STAT value (mirrors chargeDirection's buckets). */
-function chargeStatusTone(chgStat: number): 'success' | 'info' | 'neutral' {
+function chargeStatusTone(chgStat: number): 'success' | 'info' | 'neutral' | 'warning' {
+    if (chgStat === CHARGE_STATUS_COMM_ERROR) return 'warning'; // charger unreachable
     if (chgStat === 7) return 'info'; // Charge Done
     if ((chgStat >= 1 && chgStat <= 4) || chgStat === 6) return 'success'; // charging states
     return 'neutral'; // Not Charging / Reserved
@@ -76,7 +79,12 @@ export function BatteryCard({ style }: { style?: ViewStyle }) {
                     <View style={styles.row}>
                         <ThemedText type="defaultSemiBold">Battery</ThemedText>
                         <View style={styles.rowRight}>
-                            {!hasBattery ? (
+                            {/* Comm error outranks No Battery: powerFlags is a
+                                stale last-good reading during an outage, so
+                                battery presence is unknowable then. */}
+                            {chgStat === CHARGE_STATUS_COMM_ERROR ? (
+                                <Badge label="Error" tone="warning" />
+                            ) : !hasBattery ? (
                                 <Badge label="No Battery" tone="danger" />
                             ) : chgStat != null && (
                                 <Badge label={chargeStatusLabel(chgStat)} tone={chargeStatusTone(chgStat)} />

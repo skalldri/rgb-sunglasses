@@ -1,0 +1,7 @@
+tests:
+  power.comm_health:
+    tags: power
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

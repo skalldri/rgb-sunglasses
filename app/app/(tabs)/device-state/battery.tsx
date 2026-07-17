@@ -52,11 +52,12 @@ function decodeUint8OrNull(encoded: string | null | undefined): number | null {
 
 const NO_BATTERY_BADGE = { label: "No Battery", tone: 'danger' as const };
 
-const DIRECTION_BADGE: Record<ChargeDirection, { label: string; tone: 'success' | 'neutral' | 'info' }> = {
+const DIRECTION_BADGE: Record<ChargeDirection, { label: string; tone: 'success' | 'neutral' | 'info' | 'warning' }> = {
     charging: { label: "Charging", tone: 'success' },
     discharging: { label: "Discharging", tone: 'neutral' },
     idle: { label: "Idle", tone: 'neutral' },
     done: { label: "Charge Done", tone: 'info' },
+    error: { label: "Error", tone: 'warning' },
 };
 
 /**
@@ -125,7 +126,11 @@ export default function BatteryDetailScreen() {
     const powerFlags = decodeUint8OrNull(chars?.[UUID_POWER_FLAGS]?.value);
     const hasBattery = batteryPresent(powerFlags, vbatMv);
     const direction = ibatMa != null && chgStat != null ? chargeDirection(ibatMa, chgStat) : null;
-    const badge = !hasBattery ? NO_BATTERY_BADGE : direction ? DIRECTION_BADGE[direction] : null;
+    // Comm error outranks No Battery: powerFlags is a stale last-good reading
+    // during an outage, so battery presence is unknowable then.
+    const badge = direction === 'error' ? DIRECTION_BADGE.error
+        : !hasBattery ? NO_BATTERY_BADGE
+        : direction ? DIRECTION_BADGE[direction] : null;
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>

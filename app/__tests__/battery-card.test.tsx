@@ -136,4 +136,37 @@ describe('BatteryCard (slim tile)', () => {
     expect(getByText('No Battery')).toBeTruthy();
     expect(queryByText('Not Charging')).toBeNull();
   });
+
+  it('shows the orange Error badge on the firmware comm-error sentinel (0xFF)', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({
+        // Telemetry is stale-but-present during an outage.
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(68), 0x04),
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(7910), 0x10),
+        [UUID_BATTERY_CHARGE_STATUS]: charInfo(uint8Value(0xff), 0x04),
+      }),
+    } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>);
+
+    const { getByText, queryByText } = render(<BatteryCard />);
+    expect(getByText('Error')).toBeTruthy();
+    // The stale percent still renders — Error is the staleness signal.
+    expect(getByText('68%')).toBeTruthy();
+    expect(queryByText('Unknown (255)')).toBeNull();
+  });
+
+  it('Error outranks No Battery: presence flags are stale during a comm outage', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(0), 0x04),
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(1200), 0x10),
+        [UUID_BATTERY_CHARGE_STATUS]: charInfo(uint8Value(0xff), 0x04),
+        // Stale flags claim VBAT absent — must not produce "No Battery".
+        [UUID_POWER_FLAGS]: charInfo(uint8Value(0x02), 0x04),
+      }),
+    } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>);
+
+    const { getByText, queryByText } = render(<BatteryCard />);
+    expect(getByText('Error')).toBeTruthy();
+    expect(queryByText('No Battery')).toBeNull();
+  });
 });

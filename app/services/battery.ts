@@ -79,7 +79,16 @@ export const CHARGE_STATUS_LABELS: Record<number, string> = {
   5: 'Reserved',
   6: 'Top-off',
   7: 'Charge Done',
+  0xff: 'Error',
 };
+
+// Published by the firmware when its charger status thread cannot talk to the
+// BQ25792 (TPS25750 I2Cm bridge down). Must match
+// BATTERY_SERVICE_CHG_STAT_COMM_ERROR in fw/src/bluetooth/battery_service.h.
+// While this is the charge status, the other battery telemetry values are the
+// last-good readings from before the outage (or zeros if the device booted
+// already wedged) — don't trust them while Error is showing.
+export const CHARGE_STATUS_COMM_ERROR = 0xff;
 
 export function chargeStatusLabel(chgStat: number): string {
   return CHARGE_STATUS_LABELS[chgStat] ?? `Unknown (${chgStat})`;
@@ -139,13 +148,16 @@ export function pdSourceLabel(source: number): string {
   return PD_SOURCE_LABELS[source] ?? `Unknown (${source})`;
 }
 
-export type ChargeDirection = 'charging' | 'discharging' | 'idle' | 'done';
+export type ChargeDirection = 'charging' | 'discharging' | 'idle' | 'done' | 'error';
 
 /**
  * Overall charge/discharge indication, combining the charger state machine
  * ("why") with the battery current's sign ("which way power is flowing").
  */
 export function chargeDirection(ibatMa: number, chgStat: number): ChargeDirection {
+  // Comm error wins over everything: ibatMa is a stale last-good reading
+  // during an outage, so its sign means nothing.
+  if (chgStat === CHARGE_STATUS_COMM_ERROR) return 'error';
   if (chgStat === 7) return 'done';
   if ((chgStat >= 1 && chgStat <= 4) || chgStat === 6) return 'charging';
   if (ibatMa < 0) return 'discharging';
