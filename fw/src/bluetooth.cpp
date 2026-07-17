@@ -77,6 +77,14 @@ static const struct bt_le_conn_param medium_conn_param = BT_LE_CONN_PARAM_INIT(2
 // OK; latency 2 <= 30 OK; 2s <= 5s <= 6s OK. Core-spec validity: timeout >= 2*(1+lat)*max
 // = 990ms with 5x margin. Latency 2 (not 4) caps the worst-case first-op wake latency
 // after idle at ~0.5s for a negligible battery delta.
+//
+// HARDWARE DEPENDENCY: on proto0 this set is only stable with the netcore's 500ppm
+// sleep-clock declaration (fw/sysbuild/ipc_radio/boards/..._proto0_...conf - the
+// board's 32k crystal is out of its assumed accuracy class). Without it, any interval
+// >= ~120ms died of supervision timeout one window after the update, on two different
+// phones' stacks - hardware-bisected during issue #188 verification. If SLOW ever
+// starts dropping links with "Disconnected (reason 8)" shortly after the idle
+// downgrade, re-check that declaration before suspecting this code.
 static const struct bt_le_conn_param slow_conn_param = BT_LE_CONN_PARAM_INIT(120, 132, 2, 500);
 #endif /* CONFIG_APP_BT_CONN_PARAM_GOVERNOR */
 
