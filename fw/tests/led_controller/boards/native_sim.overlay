@@ -1,0 +1,23 @@
+/ {
+	/* Same chain lengths as the proto0 panel strips so kFrameLedConfig's
+	 * geometry (40x12 over two 216-pixel banks) maps 1:1 in tests. No
+	 * led-strip-2 alias on purpose: led_controller.cpp only drives it when
+	 * CONFIG_STATUS_LED is disabled AND the alias exists.
+	 */
+	fake_led_strip_0: fake-led-strip-0 {
+		compatible = "test,fake-led-strip";
+		chain-length = <216>;
+		status = "okay";
+	};
+
+	fake_led_strip_1: fake-led-strip-1 {
+		compatible = "test,fake-led-strip";
+		chain-length = <216>;
+		status = "okay";
+	};
+
+	aliases {
+		led-strip-0 = &fake_led_strip_0;
+		led-strip-1 = &fake_led_strip_1;
+	};
+};
