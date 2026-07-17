@@ -77,19 +77,19 @@ const requestAndroid31Permissions = async () => {
             buttonPositive: "OK",
         }
     );
-    const fineLocationPermission = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        {
-            title: "Location Permission",
-            message: "Required for Bluetooth device scanning on Android",
-            buttonPositive: "OK",
-        }
-    );
+    // No location permission on API 31+: BLUETOOTH_SCAN carries
+    // android:usesPermissionFlags="neverForLocation" (set by the ble-plx Expo
+    // plugin via "neverForLocation": true in app.json), which asserts scan
+    // results are never used to derive location — so ACCESS_FINE_LOCATION is
+    // not required for scanning and isn't even declared beyond maxSdkVersion
+    // 30 in the manifest. Requesting it here would always come back denied.
+    // Trade-off accepted with the flag: Android filters some location-beacon
+    // advertisement frames from scans; the board is a plain connectable
+    // advertiser and is unaffected (issue #189, B-PR1).
 
     return (
         bluetoothScanPermission === "granted" &&
-        bluetoothConnectPermission === "granted" &&
-        fineLocationPermission === "granted"
+        bluetoothConnectPermission === "granted"
     );
 };
 

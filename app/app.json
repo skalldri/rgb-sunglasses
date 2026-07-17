@@ -57,6 +57,7 @@
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": true,
+          "neverForLocation": true,
           "modes": [
             "peripheral",
             "central"
