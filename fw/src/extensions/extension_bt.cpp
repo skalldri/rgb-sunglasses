@@ -22,6 +22,7 @@
 #include <pattern_controller.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/byteorder.h>
 
 #include <array>
 #include <cstring>
@@ -328,8 +329,15 @@ int extension_bt_register(size_t slot) {
     }
     bs->slot = slot;
 
-    const uint32_t animId = static_cast<uint32_t>(extension_host::animationId(slot));
-    bs->svcUuid = BT_ANIMATION_SERVICE_UUID(animId);
+    /* BT_ANIMATION_SERVICE_UUID(animId) can't take a runtime id: every byte
+     * of its braced initializer becomes a non-constant int -> uint8_t
+     * conversion, i.e. a -Wnarrowing warning (issue #164). Start from the
+     * constexpr id-0 UUID and patch in the id group exactly where the macro
+     * would put it: w16_3 of BT_UUID_128_ENCODE lands at val[6..7],
+     * little-endian (see zephyr/bluetooth/uuid.h). */
+    const uint16_t animId = static_cast<uint16_t>(extension_host::animationId(slot));
+    bs->svcUuid = BT_ANIMATION_SERVICE_UUID(0);
+    sys_put_le16(static_cast<uint16_t>(animId << 8), &bs->svcUuid.val[6]);
 
     /* Reset the metadata blob on every (re)registration — a slot can be
      * re-registered after unload with a different manifest, so stale

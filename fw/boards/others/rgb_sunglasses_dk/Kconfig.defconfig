@@ -87,11 +87,16 @@ config BT_HCI_IPC
 config HEAP_MEM_POOL_SIZE
 	default 4096 if BT_RPMSG
 
-endif #  BOARD_RGB_SUNGLASSES_DK_NRF5340_CPUAPP || BOARD_RGB_SUNGLASSES_DK_NRF5340_CPUAPP_NS
-
-if BOARD_RGB_SUNGLASSES_DK_NRF5340_CPUNET
-
-config BT_CTLR
+# Power up the network core at boot whenever the app core uses Bluetooth
+# (the controller runs there). Replaces the deprecated board-level
+# BOARD_ENABLE_CPUNET symbol (issue #164); the SoC-level bring-up in
+# nrf53_cpunet_mgmt.c performs the same power-up sequence the old board
+# cpunet_reset.c did (see the note in this board's Kconfig).
+config SOC_NRF53_CPUNET_ENABLE
 	default y if BT
 
-endif # BOARD_RGB_SUNGLASSES_DK_NRF5340_CPUNET
+endif #  BOARD_RGB_SUNGLASSES_DK_NRF5340_CPUAPP || BOARD_RGB_SUNGLASSES_DK_NRF5340_CPUAPP_NS
+
+# The cpunet image needs no BT_CTLR default here: that symbol is deprecated
+# (LL implementations select HAS_BT_CTLR instead), and the SoftDevice
+# Controller (BT_LL_SOFTDEVICE, default y) already selects it (issue #164).
