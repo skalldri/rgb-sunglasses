@@ -14,6 +14,26 @@ int tps25750_download_patch(const struct device *dev, const char *patch, uint32_
 
 int tps25750_clear_dead_battery(const struct device *dev);
 
+/**
+ * @brief Issue the 'GO2P' 4CC task: force the PD controller back into PTCH
+ * (patch-wait) mode.
+ *
+ * Host interface TRM SLVUC05A Table 3-12 (p.58). On success MODE reads 'PTCH',
+ * the USB PD PHY is disabled and the part awaits a patch over I2C — the
+ * driver's ReadyForPatch IRQ path and runtime PTCH recovery then re-download
+ * it automatically. DANGER-class test instrument for the PTCH-wedge recovery
+ * path; only call with batteries connected (the PD PHY drop can cost the
+ * input power budget until re-patch). See `power pd go2p`.
+ *
+ * @param dev         TPS25750 device pointer.
+ * @param task_result Output: standard task return code from DATA1 byte 1
+ *                    (TRM Table 3-1: 0=success, 3=rejected — rejection is an
+ *                    expected outcome on some configurations and is harmless).
+ * @return 0 when the task executed and @p task_result is valid (including a
+ *         rejected task); negative errno when the 4CC sequence itself failed.
+ */
+int tps25750_go2p(const struct device *dev, uint8_t *task_result);
+
 #if defined(CONFIG_TPS25750_INTERNAL_PATCH)
 int tps25750_get_patch(const char **patch, size_t *patch_size);
 #endif

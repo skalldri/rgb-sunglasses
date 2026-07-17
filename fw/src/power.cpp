@@ -477,12 +477,17 @@ static int cmd_power_bq_status(const struct shell *shell, size_t argc, char **ar
     uint8_t chg_stat = 0;
     bool en_chg      = false;
 
-    bq25792_get_vbat_mv(bq, &vbat_mv);
-    bq25792_get_ibat_ma(bq, &ibat_ma);
-    bq25792_get_vbus_mv(bq, &vbus_mv);
-    bq25792_get_ibus_ma(bq, &ibus_ma);
-    bq25792_get_charge_status(bq, &chg_stat);
-    bq25792_get_charge_enable(bq, &en_chg);
+    int fails = 0;
+    fails += bq25792_get_vbat_mv(bq, &vbat_mv) ? 1 : 0;
+    fails += bq25792_get_ibat_ma(bq, &ibat_ma) ? 1 : 0;
+    fails += bq25792_get_vbus_mv(bq, &vbus_mv) ? 1 : 0;
+    fails += bq25792_get_ibus_ma(bq, &ibus_ma) ? 1 : 0;
+    fails += bq25792_get_charge_status(bq, &chg_stat) ? 1 : 0;
+    fails += bq25792_get_charge_enable(bq, &en_chg) ? 1 : 0;
+    if (fails) {
+        shell_warn(shell, "%d of 6 reads failed — zeros below are failed reads, not measurements",
+                   fails);
+    }
 
     /* Integer prints only - no %f (CONFIG_CBPRINTF_FP_SUPPORT=n). */
     shell_print(shell, "VBAT=%d mV IBAT=%d mA VBUS=%d mV IBUS=%d mA CHG_STAT=%u EN_CHG=%u",
@@ -535,13 +540,19 @@ static int cmd_power_bq_limits(const struct shell *shell, size_t argc, char **ar
         shell_print(shell, "VSYS=%d mV", vsys_mv);
     }
 
-    // Legacy getters always return 0 for non-null args and swallow I2C errors
-    // (fw/CLAUDE.md power-subsystem caveat) — a failed read shows as 0/stale.
+    // Print whatever reads succeed, but never pass a failed read off as a
+    // real 0 -- that ambiguity is exactly what the getters' error
+    // propagation exists to eliminate.
     int32_t vbat_mv = 0, ibat_ma = 0, vbus_mv = 0, ibus_ma = 0;
-    bq25792_get_vbat_mv(bq, &vbat_mv);
-    bq25792_get_ibat_ma(bq, &ibat_ma);
-    bq25792_get_vbus_mv(bq, &vbus_mv);
-    bq25792_get_ibus_ma(bq, &ibus_ma);
+    int vbat_ret = bq25792_get_vbat_mv(bq, &vbat_mv);
+    int ibat_ret = bq25792_get_ibat_ma(bq, &ibat_ma);
+    int vbus_ret = bq25792_get_vbus_mv(bq, &vbus_mv);
+    int ibus_ret = bq25792_get_ibus_ma(bq, &ibus_ma);
+    if (vbat_ret || ibat_ret || vbus_ret || ibus_ret) {
+        shell_warn(shell, "ADC read failed (VBAT=%d IBAT=%d VBUS=%d IBUS=%d) — zeros below are "
+                          "failed reads, not measurements",
+                   vbat_ret, ibat_ret, vbus_ret, ibus_ret);
+    }
     shell_print(shell, "VBAT=%d mV IBAT=%d mA VBUS=%d mV IBUS=%d mA", vbat_mv, ibat_ma, vbus_mv,
                 ibus_ma);
 
@@ -609,6 +620,47 @@ static int cmd_power_pd_contract(const struct shell *shell, size_t argc, char **
 static int cmd_power_pd_clear_dead_battery(const struct shell *shell, size_t argc, char **argv,
                                            void *data) {
     tps25750_clear_dead_battery(pd);
+    return 0;
+}
+
+static int cmd_power_pd_go2p(const struct shell *shell, size_t argc, char **argv, void *data) {
+    // DANGER-class test instrument for the runtime PTCH-wedge recovery path
+    // (host interface TRM SLVUC05A Table 3-12; full caveats in tps25750_go2p).
+    // Refuse without a battery: GO2P drops the USB PD PHY, so on a VBUS-only
+    // system the input budget (and possibly the whole board) dies mid-PTCH
+    // with nothing left to re-patch it -- the suspected aggravator of the
+    // 2026-07-05 GO2P incident.
+    struct bq25792_status st;
+    int ret = bq25792_get_status(bq, &st);
+    if (ret != 0) {
+        shell_error(shell, "status read failed (%d); refusing GO2P", ret);
+        return ret;
+    }
+    if (!st.vbat_present) {
+        shell_error(shell, "no battery present — GO2P would drop the only power source; refusing");
+        return -EPERM;
+    }
+
+    uint8_t task_result = 0;
+    ret = tps25750_go2p(pd, &task_result);
+    if (ret != 0) {
+        shell_error(shell, "GO2P task sequence failed: %d", ret);
+        return ret;
+    }
+
+    if (task_result == 0) {
+        shell_print(shell,
+                    "GO2P accepted: controller re-entering PTCH mode. Expect a brief burst of "
+                    "'I2CM ... failure: 3' logs, then an automatic patch re-download ('Patch "
+                    "download success!' / 'Runtime patch recovery complete') within ~5-10 s.");
+    } else {
+        shell_print(shell,
+                    "GO2P rejected by controller (task result %u) — harmless no-op. Expected on "
+                    "configs whose BOOT_STATUS.PatchConfigSource doesn't match TRM Table 3-12 "
+                    "(see tps25750_go2p); fall back to USB plug/unplug cycling to reproduce the "
+                    "PTCH wedge.",
+                    task_result);
+    }
     return 0;
 }
 
@@ -693,6 +745,10 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
               cmd_power_pd_contract),
     SHELL_CMD(clear_dbfg, NULL, "Clear TPS25750 dead battery flag",
               cmd_power_pd_clear_dead_battery),
+    SHELL_CMD(go2p, NULL,
+              "DANGER: force PD controller into PTCH mode to exercise the runtime patch-recovery "
+              "path (requires battery present; PD PHY drops until re-patch)",
+              cmd_power_pd_go2p),
     SHELL_CMD(patch, &sub_patch, "Download TPS25750 firmware patch", NULL), SHELL_SUBCMD_SET_END);
 
 SHELL_SUBCMD_DICT_SET_CREATE(sub_temp_override, cmd_power_bq_temp_override,

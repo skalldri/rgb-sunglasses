@@ -99,6 +99,14 @@ void emul_tps25750_arm_cmd_wedge(const struct emul *target);
  */
 void emul_tps25750_arm_i2cm_status(const struct emul *target, uint8_t status);
 
+/* Simulate the part self-resetting into PTCH (patch-wait) mode — the field
+ * failure triggered by USB plug/unplug transients. MODE reads 'PTCH',
+ * ReadyForPatch asserts on INT_EVENT1 reads, any in-flight patch window is
+ * cancelled, and every I2Cr/I2Cw task completes with standard task result
+ * REJECTED (3) until a PBMs/PBMc download moves MODE back to 'APP '.
+ */
+void emul_tps25750_force_ptch(const struct emul *target);
+
 /* Current MODE register content (4 chars + NUL terminator). */
 void emul_tps25750_get_mode(const struct emul *target, char out[5]);
 

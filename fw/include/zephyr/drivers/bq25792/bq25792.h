@@ -131,9 +131,9 @@ int bq25792_get_ibus_ma(const struct device* dev, int32_t* ibus_ma);
 /**
  * @brief Read the system rail voltage from the VSYS_ADC register (REG3D).
  *
- * ADC must be enabled first via bq25792_adc_enable(). Unlike the legacy
- * bq25792_get_* getters, this propagates I2C errors instead of returning
- * stale data.
+ * ADC must be enabled first via bq25792_adc_enable(). Propagates I2C errors
+ * instead of returning stale data (as every bq25792_get_* getter now does —
+ * the legacy getters used to swallow bus errors).
  *
  * @param dev     BQ25792 device pointer.
  * @param vsys_mv Output: VSYS voltage in millivolts.
