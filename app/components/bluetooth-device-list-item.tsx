@@ -14,12 +14,19 @@ interface Props {
 }
 
 export default function BluetoothDeviceListItem({ deviceName, macAddress }: Props) {
-    const { selectedDevice, discoveryProgress } = useBluetooth();
-    const { isConnecting, connect, disconnect } = useBleConnection(macAddress, deviceName);
+    const { selectedDevice, discoveryProgress, reconnectingDevice } = useBluetooth();
+    const { isConnecting, connect, disconnect, cancelReconnect } = useBleConnection(macAddress, deviceName);
     const router = useRouter();
     const c = useThemeColors();
 
     const isSelected = selectedDevice?.mac === macAddress;
+    // An auto-reconnect loop is running for this device (issue #124). The button
+    // becomes a tappable "Reconnecting…" that CANCELS the loop - reconnection
+    // retries indefinitely, so the user needs an escape hatch. Note the loop's
+    // connect attempts run in a context-level closure, not this row instance, so
+    // local isConnecting is NOT reliable here - discoveryProgress/reconnecting
+    // state from context drive the visuals instead.
+    const isReconnecting = reconnectingDevice?.mac === macAddress;
 
     return (
         <View style={styles.outer}>
@@ -33,11 +40,14 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
                 </View>
                 <View style={styles.buttonContainer}>
                     <AppButton
-                        title={isSelected ? "Disconnect" : "Connect"}
-                        variant={isSelected ? "secondary" : "primary"}
-                        disabled={isConnecting}
+                        title={isSelected ? "Disconnect" : isReconnecting ? "Reconnecting…" : "Connect"}
+                        variant={isSelected || isReconnecting ? "secondary" : "primary"}
+                        disabled={isConnecting && !isReconnecting}
                         onPress={async () => {
-                            if (isSelected) {
+                            if (isReconnecting) {
+                                // Tap = cancel the auto-reconnect (issue #124).
+                                cancelReconnect();
+                            } else if (isSelected) {
                                 await disconnect();
                             } else {
                                 // Only navigate once the device is genuinely connected -
@@ -51,14 +61,16 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
                             }
                         }}
                     />
-                    {isConnecting && !discoveryProgress && (
-                        <View style={styles.loadingOverlay}>
+                    {(isConnecting || isReconnecting) && !discoveryProgress && (
+                        // pointerEvents="none": the overlay must not swallow taps - while
+                        // reconnecting, the button underneath is the cancel affordance.
+                        <View style={styles.loadingOverlay} pointerEvents="none">
                             <ActivityIndicator size="small" color={c.onPrimary} />
                         </View>
                     )}
                 </View>
             </View>
-            {isConnecting && discoveryProgress && (
+            {(isConnecting || isReconnecting) && discoveryProgress && (
                 <View style={styles.progressContainer}>
                     <ProgressBar
                         progress={discoveryProgress.current / Math.max(1, discoveryProgress.total)}

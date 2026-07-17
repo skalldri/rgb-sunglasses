@@ -13,6 +13,7 @@ import * as BluetoothContext from '@/context/bluetooth-context';
 import * as BleHook from '@/hooks/ble-manager';
 import { useBleConnection } from '@/hooks/use-ble-connection';
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from '@/services/mcumgr';
+import { Platform } from 'react-native';
 import { ConnectionPriority } from 'react-native-ble-plx';
 
 jest.mock('@/context/bluetooth-context', () => {
@@ -23,13 +24,16 @@ jest.mock('@/context/bluetooth-context', () => {
 // --- shared test fixture builders ---
 
 function makeMockBluetooth() {
-    // setConnectingDevice mirrors the real useState setter: it accepts either a value or a
-    // functional updater, and applies it to a tracked `connectingDevice` value so tests can
+    // setConnectingDevice/setReconnectingDevice mirror the real useState setters: they accept
+    // either a value or a functional updater, and apply it to a tracked value so tests can
     // assert the resulting pin (the connect flow clears the pin compare-and-swap style via an
     // updater, so a plain jest.fn that ignored the function wouldn't reflect the real outcome).
-    const state = { connectingDevice: null as any };
+    const state = { connectingDevice: null as any, reconnectingDevice: null as any };
     const setConnectingDevice = jest.fn((next: any) => {
         state.connectingDevice = typeof next === 'function' ? next(state.connectingDevice) : next;
+    });
+    const setReconnectingDevice = jest.fn((next: any) => {
+        state.reconnectingDevice = typeof next === 'function' ? next(state.reconnectingDevice) : next;
     });
     return {
         selectedDevice: null as any,
@@ -39,6 +43,11 @@ function makeMockBluetooth() {
         setDiscoveryProgress: jest.fn(),
         get connectingDevice() { return state.connectingDevice; },
         setConnectingDevice,
+        get reconnectingDevice() { return state.reconnectingDevice; },
+        setReconnectingDevice,
+        reconnectGeneration: { current: 0 },
+        intentionalDisconnectRef: { current: false },
+        connectPromises: { current: {} as Record<string, Promise<boolean>> },
         monitorSubscriptions: { current: [] as any[] },
         disconnectSubscription: { current: null as any },
     };
@@ -431,6 +440,11 @@ describe('useBleConnection', () => {
 
         await act(async () => { await result.current.connect(); });
 
+        // The unexpected disconnect below starts the auto-reconnect loop (issue #124);
+        // park its connect attempt on a never-resolving pending promise so this test's
+        // assertions aren't raced by a mock reconnect completing.
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockReturnValue(new Promise(() => {}));
+
         act(() => { disconnectCallback?.(null, { id: 'AA:BB:CC' }); });
 
         expect(monitorRemove).toHaveBeenCalledTimes(1);
@@ -470,6 +484,9 @@ describe('useBleConnection', () => {
         // Now simulate selectedDevice being updated with a mcuMgrClient
         const deviceWithClient = { mac: 'AA:BB:CC', mcuMgrClient: { destroy: mockDestroy } };
         rerender({ sel: deviceWithClient });
+
+        // Park the auto-reconnect the unexpected disconnect will start (issue #124).
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockReturnValue(new Promise(() => {}));
 
         act(() => { disconnectCallback?.(null, { id: 'AA:BB:CC' }); });
 
@@ -529,5 +546,184 @@ describe('useBleConnection', () => {
         await act(async () => { await result.current.connect(); });
 
         expect(result.current.isConnecting).toBe(false);
+    });
+
+    // ------------------------------------------------------------------
+    // auto-reconnect (issue #124)
+    // ------------------------------------------------------------------
+
+    describe('auto-reconnect', () => {
+        // The reconnect link step's expected connectToDevice options are
+        // platform-dependent: Android uses an autoConnect pending connection,
+        // iOS a timeout-less direct connect (natively never-expiring).
+        const pendingConnectOptions = Platform.OS === 'android' ? { autoConnect: true } : {};
+
+        // Connects, captures the registered disconnect callback, then fires an
+        // unexpected disconnect with the NEXT connectToDevice call resolving to
+        // `reconnectResult` (default: a fresh device connection). Returns helpers.
+        async function connectThenDrop(reconnectImpl?: (mock: jest.Mock) => void) {
+            const deviceConn = makeDeviceConnection([]);
+            (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+            let disconnectCallback: ((error: any, device: any) => void) | null = null;
+            (BleHook.bleManager.onDeviceDisconnected as jest.Mock).mockImplementation(
+                (_mac: string, cb: any) => {
+                    disconnectCallback = cb;
+                    return { remove: jest.fn() };
+                }
+            );
+
+            const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+            await act(async () => { await result.current.connect(); });
+            (BleHook.bleManager.connectToDevice as jest.Mock).mockClear();
+
+            if (reconnectImpl) {
+                reconnectImpl(BleHook.bleManager.connectToDevice as jest.Mock);
+            } else {
+                (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(makeDeviceConnection([]));
+            }
+
+            return { result, fireDisconnect: () => disconnectCallback?.(null, { id: 'AA:BB:CC' }) };
+        }
+
+        it('an unexpected disconnect starts a reconnect with a pending (no-timeout) connect', async () => {
+            const { fireDisconnect } = await connectThenDrop();
+
+            await act(async () => { fireDisconnect(); });
+
+            // Reconnecting state was pinned for the row UI...
+            expect(ctx.setReconnectingDevice).toHaveBeenCalledWith({ mac: 'AA:BB:CC', name: 'Test Device' });
+            await waitFor(() => {
+                // ...and the reconnect attempt used the pending-connect options - crucially
+                // NO timeout (a timeout cancels a pending connect).
+                expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledWith('AA:BB:CC', pendingConnectOptions);
+            });
+            // Reconnect succeeded -> reconnecting state cleared (CAS updater semantics).
+            await waitFor(() => { expect(ctx.reconnectingDevice).toBeNull(); });
+            // The reconnected device was published back into context.
+            expect(ctx.setSelectedDevice).toHaveBeenLastCalledWith(expect.objectContaining({ mac: 'AA:BB:CC' }));
+        });
+
+        it('does NOT reconnect when the disconnect was user-initiated (structural guard: disconnect() removes the listener first)', async () => {
+            const removeDisconnect = jest.fn();
+            ctx.disconnectSubscription.current = { remove: removeDisconnect };
+            (BleHook.bleManager.cancelDeviceConnection as jest.Mock).mockResolvedValue(undefined);
+
+            const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+            await act(async () => { await result.current.disconnect(); });
+
+            // The subscription was removed BEFORE cancelDeviceConnection, so the OS
+            // disconnect event can never reach the auto-reconnect handler.
+            expect(removeDisconnect).toHaveBeenCalledTimes(1);
+            // And no reconnect state was ever pinned.
+            expect(ctx.setReconnectingDevice).not.toHaveBeenCalledWith({ mac: 'AA:BB:CC', name: 'Test Device' });
+            expect(ctx.reconnectingDevice).toBeNull();
+        });
+
+        it('retries with backoff after a failed attempt, then succeeds', async () => {
+            jest.useFakeTimers();
+            try {
+                const { fireDisconnect } = await connectThenDrop(mock => {
+                    mock
+                        .mockRejectedValueOnce(new Error('gatt error'))
+                        .mockResolvedValue(makeDeviceConnection([]));
+                });
+
+                await act(async () => { fireDisconnect(); });
+
+                // First attempt fired and failed; the retry must NOT run before the 2s backoff.
+                await act(async () => { await jest.advanceTimersByTimeAsync(0); });
+                expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(1);
+
+                await act(async () => { await jest.advanceTimersByTimeAsync(2000); });
+                await act(async () => { await jest.advanceTimersByTimeAsync(0); });
+
+                expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(2);
+                expect(ctx.reconnectingDevice).toBeNull(); // second attempt succeeded
+            } finally {
+                jest.useRealTimers();
+            }
+        });
+
+        it('hedges every 3rd attempt with a direct (timeout-bounded) connect', async () => {
+            jest.useFakeTimers();
+            try {
+                const { fireDisconnect } = await connectThenDrop(mock => {
+                    mock.mockRejectedValue(new Error('gatt error'));
+                });
+
+                await act(async () => { fireDisconnect(); });
+                // Attempt 1 (pending) fails -> +2s -> attempt 2 (pending) fails -> +5s -> attempt 3 (direct).
+                await act(async () => { await jest.advanceTimersByTimeAsync(2000); });
+                await act(async () => { await jest.advanceTimersByTimeAsync(5000); });
+
+                const calls = (BleHook.bleManager.connectToDevice as jest.Mock).mock.calls;
+                expect(calls.length).toBeGreaterThanOrEqual(3);
+                expect(calls[0][1]).toEqual(pendingConnectOptions);
+                expect(calls[1][1]).toEqual(pendingConnectOptions);
+                expect(calls[2][1]).toEqual({ timeout: 60000 });
+            } finally {
+                jest.useRealTimers();
+            }
+        });
+
+        it('a user Connect tap mid-reconnect shares the in-flight attempt instead of colliding', async () => {
+            let resolvePending!: (v: any) => void;
+            const { result, fireDisconnect } = await connectThenDrop(mock => {
+                mock.mockReturnValue(new Promise(res => { resolvePending = res; }));
+            });
+
+            await act(async () => { fireDisconnect(); });
+            await waitFor(() => expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(1));
+
+            const genBefore = ctx.reconnectGeneration.current;
+            let userResult: boolean | undefined;
+            act(() => { result.current.connect().then(r => { userResult = r; }); });
+
+            // No second connectToDevice, and the user tap did NOT cancel the loop.
+            expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(1);
+            expect(ctx.reconnectGeneration.current).toBe(genBefore);
+
+            await act(async () => { resolvePending(makeDeviceConnection([])); });
+            await waitFor(() => expect(userResult).toBe(true));
+        });
+
+        it('cancelReconnect() stops the loop, clears the pin, and aborts the pending connect', async () => {
+            const { result, fireDisconnect } = await connectThenDrop(mock => {
+                mock.mockReturnValue(new Promise(() => {})); // pending forever
+            });
+
+            await act(async () => { fireDisconnect(); });
+            await waitFor(() => expect(ctx.reconnectingDevice).toEqual({ mac: 'AA:BB:CC', name: 'Test Device' }));
+            const genBefore = ctx.reconnectGeneration.current;
+
+            act(() => { result.current.cancelReconnect(); });
+
+            expect(ctx.reconnectGeneration.current).toBe(genBefore + 1);
+            expect(ctx.reconnectingDevice).toBeNull();
+            expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledWith('AA:BB:CC');
+        });
+
+        it('a superseded pending connect that resolves later is aborted, not adopted', async () => {
+            let resolvePending!: (v: any) => void;
+            const { result, fireDisconnect } = await connectThenDrop(mock => {
+                mock.mockReturnValue(new Promise(res => { resolvePending = res; }));
+            });
+
+            await act(async () => { fireDisconnect(); });
+            await waitFor(() => expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledTimes(1));
+
+            act(() => { result.current.cancelReconnect(); });
+            (ctx.setSelectedDevice as jest.Mock).mockClear();
+            (BleHook.bleManager.cancelDeviceConnection as jest.Mock).mockClear();
+
+            // The pending connect resolves AFTER cancellation - it must not be adopted.
+            await act(async () => { resolvePending(makeDeviceConnection([])); });
+
+            await waitFor(() => {
+                expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledWith('AA:BB:CC');
+            });
+            expect(ctx.setSelectedDevice).not.toHaveBeenCalledWith(expect.objectContaining({ mac: 'AA:BB:CC' }));
+        });
     });
 });
