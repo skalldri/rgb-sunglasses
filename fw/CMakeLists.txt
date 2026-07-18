@@ -86,6 +86,7 @@ target_sources_ifdef(CONFIG_ANIMATION_GLIM_PLAYER app PRIVATE src/animations/gli
 target_sources_ifdef(CONFIG_ANIMATION_MATRIX_CODE app PRIVATE src/animations/matrix_code_animation.cpp)
 target_sources_ifdef(CONFIG_IMU app PRIVATE src/imu/imu.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_TILT app PRIVATE src/animations/tilt_animation.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_PULSE app PRIVATE src/animations/pulse_animation.cpp)
 
 # The extension host also binds these adapter sources (rgbx_inputs audio/IMU
 # snapshots), so they must compile whenever it is enabled with the matching
@@ -108,6 +109,7 @@ target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/bluetooth/animati
 target_sources_ifdef(CONFIG_ANIMATION_GLIM_PLAYER app PRIVATE src/bluetooth/animation_adapters/glim_player_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_MATRIX_CODE app PRIVATE src/bluetooth/animation_adapters/matrix_code_animation_bt.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_TILT app PRIVATE src/bluetooth/animation_adapters/tilt_animation_bt.cpp)
+target_sources_ifdef(CONFIG_ANIMATION_PULSE app PRIVATE src/bluetooth/animation_adapters/pulse_animation_bt.cpp)
 
 target_sources_ifdef(CONFIG_STATUS_LED app PRIVATE src/status_led/status_led.cpp)
 

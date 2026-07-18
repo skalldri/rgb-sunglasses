@@ -29,6 +29,10 @@
 #include <animations/tilt_animation.h>
 #endif
 
+#if defined(CONFIG_ANIMATION_PULSE)
+#include <animations/pulse_animation.h>
+#endif
+
 #if defined(CONFIG_APP_EXTENSION_HOST)
 #include <extensions/extension_host.h>
 #endif
@@ -89,6 +93,10 @@ using MatrixCodeAnimationIsActive = AnimationIsActiveBinding<Animation::MatrixCo
 using TiltAnimationIsActive = AnimationIsActiveBinding<Animation::Tilt>;
 #endif
 
+#if defined(CONFIG_ANIMATION_PULSE)
+using PulseAnimationIsActive = AnimationIsActiveBinding<Animation::Pulse>;
+#endif
+
 BaseAnimation *null_animation_factory() {
     return NullAnimation::getInstance();
 }
@@ -144,6 +152,12 @@ BaseAnimation *tilt_animation_factory() {
     return TiltAnimation::getInstance();
 }
 #endif
+
+#if defined(CONFIG_ANIMATION_PULSE)
+BaseAnimation *pulse_animation_factory() {
+    return PulseAnimation::getInstance();
+}
+#endif
 }  // namespace
 
 int animation_registry_register_defaults() {
@@ -172,6 +186,9 @@ int animation_registry_register_defaults() {
 #endif
 #if defined(CONFIG_ANIMATION_TILT)
     AnimationIsActiveBinding<Animation::Tilt>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_ANIMATION_PULSE)
+    AnimationIsActiveBinding<Animation::Pulse>::registerActivator(&sActivator);
 #endif
 
     animation_registry_reset();
@@ -316,6 +333,21 @@ int animation_registry_register_defaults() {
 
     tilt_animation_bind_default_imu_dependencies();
     tilt_animation_bind_default_bt_dependencies();
+#endif
+
+#if defined(CONFIG_ANIMATION_PULSE)
+    ret = animation_registry_register(Animation::Pulse, pulse_animation_factory);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::Pulse,
+                                                PulseAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    pulse_animation_bind_default_dependencies();
 #endif
 
 #if defined(CONFIG_APP_EXTENSION_HOST) && defined(CONFIG_IMU)
