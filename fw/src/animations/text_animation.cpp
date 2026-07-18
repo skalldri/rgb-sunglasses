@@ -8,6 +8,14 @@
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 
+// Minimum time a message stays on screen before we advance to the next slot. A real
+// message scrolls for seconds before it finishes (a 1-char message at the 50ms default
+// step time dwells ~2.8s), so this floor never affects normal content; it only bounds
+// the degenerate case where an empty slot would otherwise advance every render tick and
+// flood the shared BT TX buffer pool with getUpNext()'s notifications. Caps advances at
+// ~2/s (worst case, all slots empty), which the pool absorbs comfortably.
+static constexpr size_t kMinMessageDwellMs = 500;
+
 TextAnimation::TextAnimation() = default;
 
 void TextAnimation::setDependencies(const TextAnimationDependencies &deps) {
@@ -28,6 +36,7 @@ const char *TextAnimation::getStringFromSlot(size_t slot) {
 
 void TextAnimation::init() {
     currentCycleTimeMs = 0;
+    currentMessageDwellMs = 0;
     currentTextOffset = 0;
     strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
 }
@@ -103,9 +112,18 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
         }
     }
 
-    // If we have finished scrolling the current message, pick the next message
-    if (firstChar >= currentMessageLen) {
+    // Accumulate how long the current message has been shown (every tick, including the
+    // early-return path below) so an empty message still ages toward the dwell floor.
+    currentMessageDwellMs += timeSinceLastTickMs;
+
+    // If we have finished scrolling the current message, pick the next message - but not
+    // before it has been shown for at least kMinMessageDwellMs. Without this floor an
+    // empty slot (currentMessageLen == 0) satisfies firstChar >= currentMessageLen on
+    // every tick and advances at the full render rate, and each advance calls getUpNext()
+    // which fires two GATT notifications - flooding the BT TX buffer pool (notify -12).
+    if (firstChar >= currentMessageLen && currentMessageDwellMs >= kMinMessageDwellMs) {
         currentTextOffset = 0;
+        currentMessageDwellMs = 0;
         strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
         return;
     }

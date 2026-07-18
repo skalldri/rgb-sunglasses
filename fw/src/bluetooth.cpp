@@ -76,15 +76,23 @@ static const struct bt_le_conn_param medium_conn_param = BT_LE_CONN_PARAM_INIT(2
 // 150 = 10*15 OK; 165 = 150+15 OK; 165ms*(2+1) = 495ms <= 2s OK; 3*495ms = 1.485s < 5s
 // OK; latency 2 <= 30 OK; 2s <= 5s <= 6s OK. Core-spec validity: timeout >= 2*(1+lat)*max
 // = 990ms with 5x margin. Latency 2 (not 4) caps the worst-case first-op wake latency
-// after idle at ~0.5s for a negligible battery delta.
+// after idle at ~0.5s for a negligible battery delta. This long interval is deliberately
+// kept (not shortened) so the idle-battery win is not left on the table.
 //
-// HARDWARE DEPENDENCY: on proto0 this set is only stable with the netcore's 500ppm
-// sleep-clock declaration (fw/sysbuild/ipc_radio/boards/..._proto0_...conf - the
-// board's 32k crystal is out of its assumed accuracy class). Without it, any interval
-// >= ~120ms died of supervision timeout one window after the update, on two different
-// phones' stacks - hardware-bisected during issue #188 verification. If SLOW ever
-// starts dropping links with "Disconnected (reason 8)" shortly after the idle
-// downgrade, re-check that declaration before suspecting this code.
+// HARDWARE DEPENDENCY / issue #199: on proto0 this set is only stable with the netcore's
+// 500ppm sleep-clock declaration (fw/sysbuild/ipc_radio/boards/..._proto0_...cpunet.conf)
+// - the board's 32k crystal is out of its assumed accuracy class, so without the honest
+// declaration the controller's RX window widening (Core v5 Vol 6 Part B 4.5.7, which
+// scales with interval x sleep-clock-accuracy) is too narrow at this interval and every
+// idle downgrade dies of supervision timeout ("Disconnected (reason 8)") one window later
+// - hardware-bisected during issue #188 (>= ~120ms dead, <= ~105ms survived). That
+// declaration is a newly-added per-image board fragment which can silently fail to apply
+// on an incremental build; it did in the field, which is why this set dropped the link on
+// every idle downgrade. It is now enforced at compile time by a proto0-gated BUILD_ASSERT
+// in fw/ipc_radio/src/main.c, so a dropped/unapplied fragment fails the build instead of
+// the link. If SLOW ever starts dropping links with "reason 8" shortly after the idle
+// downgrade, re-check that the netcore actually built with the fragment before suspecting
+// this code.
 static const struct bt_le_conn_param slow_conn_param = BT_LE_CONN_PARAM_INIT(120, 132, 2, 500);
 #endif /* CONFIG_APP_BT_CONN_PARAM_GOVERNOR */
 
