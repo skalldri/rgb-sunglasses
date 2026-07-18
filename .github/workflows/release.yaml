@@ -17,9 +17,6 @@ jobs:
       contents: write
       packages: read
     steps:
-      - name: Free up space
-        run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /usr/local/lib/android && sudo rm -rf /opt/ghc && sudo rm -rf /opt/hostedtoolcache/CodeQL
-
       - name: Check HDD space
         run: df -h
 
@@ -62,6 +59,7 @@ jobs:
         with:
           imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          configFile: .devcontainer/ci/devcontainer.json
           push: never
           runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw" -DVERSION_TWEAK_MODE=release && /workspaces/rgb-sunglasses/fw/extensions/build.sh /workspaces/rgb-sunglasses/fw/build
 
