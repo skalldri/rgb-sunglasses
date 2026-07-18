@@ -1,6 +1,5 @@
 /*
- * Tests for the fallible GATT write hook (onWriteChecked, issue #97) and the
- * battery telemetry quantizer.
+ * Tests for the fallible GATT write hook (onWriteChecked, issue #97).
  *
  * onWriteChecked lets a characteristic reject a remote write when its side
  * effect (e.g. an I2C register write) fails: storage must roll back to the
@@ -13,7 +12,6 @@
 
 #include <zephyr/ztest.h>
 
-#include <battery_util.h>
 #include <bluetooth/bt_service_cpp.h>
 
 namespace {
@@ -125,28 +123,6 @@ ZTEST(checked_write_tests, test_no_hook_unaffected) {
     zassert_equal((uint32_t)ch, 5u);
 }
 
-/* ---- battery_quantize ---- */
-
-ZTEST_SUITE(battery_quantize_tests, NULL, NULL, NULL, NULL, NULL);
-
-ZTEST(battery_quantize_tests, test_rounds_to_nearest) {
-    zassert_equal(battery_quantize(7914, 10), 7910);
-    zassert_equal(battery_quantize(7915, 10), 7920);
-    zassert_equal(battery_quantize(7916, 10), 7920);
-    zassert_equal(battery_quantize(7910, 10), 7910);
-    zassert_equal(battery_quantize(0, 10), 0);
-}
-
-ZTEST(battery_quantize_tests, test_negative_values_symmetric) {
-    /* Sign encodes charge/discharge direction — rounding must be symmetric. */
-    zassert_equal(battery_quantize(-14, 10), -10);
-    zassert_equal(battery_quantize(-15, 10), -20);
-    zassert_equal(battery_quantize(-350, 10), -350);
-    zassert_equal(battery_quantize(-7914, 10), -7910);
-}
-
-ZTEST(battery_quantize_tests, test_degenerate_steps) {
-    zassert_equal(battery_quantize(1234, 1), 1234);
-    zassert_equal(battery_quantize(1234, 0), 1234);
-    zassert_equal(battery_quantize(-5, -3), -5);
-}
+/* battery_quantize() tests moved to their own dedicated suite at
+ * fw/tests/power/battery_util - this suite is about the fallible-write hook, not
+ * battery telemetry rounding. */

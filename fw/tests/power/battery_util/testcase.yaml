@@ -1,0 +1,7 @@
+tests:
+  power.battery_util:
+    tags: power
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
