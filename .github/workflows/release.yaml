@@ -57,17 +57,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build DK firmware
-        uses: devcontainers/ci@v0.3
-        with:
-          imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          push: never
-          runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw" -DVERSION_TWEAK_MODE=release
-
-      - name: Copy DK DFU artifact
-        run: cp ${{ github.workspace }}/fw/build/dfu_application.zip ${{ github.workspace }}/dfu_application_dk.zip
-
       - name: Build Proto0 firmware
         uses: devcontainers/ci@v0.3
         with:
@@ -87,9 +76,11 @@ jobs:
           # (app/services/github-releases.ts findAssetForBoard: first asset whose
           # name contains the board revision AND ends with .zip). Bare *.llext
           # names are safe; never bundle extensions as a zip with "proto0"/"dk"
-          # in its name or it can shadow the dfu_application zips.
+          # in its name or it can shadow the dfu_application zips (the app still
+          # matches "dk" against older releases; DK builds now live only on the
+          # dk-support branch, and DK releases must never reuse the fw-v* tag
+          # prefix — the app serves the latest fw-v* release to proto0 users).
           files: |
-            ${{ github.workspace }}/dfu_application_dk.zip
             ${{ github.workspace }}/dfu_application_proto0.zip
             ${{ github.workspace }}/fw/build/extensions/*.llext
           body: "Release ${{ steps.version.outputs.version }}"

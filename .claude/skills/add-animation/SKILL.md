@@ -56,9 +56,8 @@ before starting.
 8. **Enable** — `CONFIG_ANIMATION_<NAME>=y` in
    `fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf` — the FLAT file next to
    `fw/boards/others/`, NOT inside `fw/boards/others/<board>/` (a conf there is
-   silently ignored). New features are proto0-only; the DK image is nearly full
-   (FLASH ~94% as of 2026-07, PR #89 — re-verify from your own build output).
-   `default y` in Kconfig is only OK if it fits on BOTH boards.
+   silently ignored). New features are proto0-only (the legacy DK board lives on
+   the `dk-support` branch and gets no new features).
 9. **DI test suite** — `fw/tests/animations/<name>_animation_di/` (copy
    `rainbow_animation_di`). Full recipe including the exact
    prj.conf/testcase.yaml/CMakeLists incantations: /add-fw-test. No `CONFIG_BT` is
@@ -74,7 +73,7 @@ before starting.
     (`twister -T fw/tests/animations/<name>_animation_di -p native_sim --outdir fw/twister-out-one`
     — the scratch `--outdir` is /test-fw's targeted-run rule; without it twister
     drops a non-gitignored `twister-out/` at the repo root), then
-    /build-proto0 AND /build-dk (both must link; watch DK FLASH%), then /submit-pr.
+    /build-proto0 (must link), then /submit-pr.
     On-device verification is /flash-and-verify — not part of this skill. When
     reporting what remains unverified, explicitly include the Is Active notify path
     and GATT service registration: the DI suite is BT-free and never exercises
@@ -93,7 +92,8 @@ before starting.
   20/1000 = 0.02) is applied downstream — dim source colors render as *black* and
   have been mistaken for a crash before.
 - **Never hardcode 40x12.** Use `renderer.displayWidth()` / `displayHeight()`
-  (`fw/src/animations/animation_renderer.h`) — the DK display is 8x2.
+  (`fw/src/animations/animation_renderer.h`) — the same rendering code also drives
+  other geometries (e.g. the 2×1 proto0 onboard status LEDs).
 - **Never setPixel off-display** (`x >= displayWidth() || y >= displayHeight()`): it
   returns -1 and spams `LOG_ERR` every frame.
 - **Nose cutout**: on the glasses frame, pixels with x in [15,25) AND y in [6,12)

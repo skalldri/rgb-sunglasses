@@ -195,8 +195,7 @@ To make it drivable via `mcp__serial__rgb_sunglasses_set_animation`: add the she
 1. **DI suite alone** (seconds):
    `twister -T fw/tests/animations/<name>_animation_di -p native_sim --outdir fw/twister-out-one`
    — the scratch `--outdir` is mandatory (/test-fw's targeted-run rule).
-2. **Both boards link**: /build-proto0 then /build-dk; DK FLASH% overflow → gate the
-   feature off the DK via board conf / Kconfig default (/rom-ram-budget). Confirm
+2. **Firmware links**: /build-proto0. Confirm
    `CONFIG_ANIMATION_<NAME>=y` landed in `fw/build/fw/zephyr/include/generated/zephyr/autoconf.h`.
-3. **Full gate**: /submit-pr (both builds + full test suite + coverage). On-device
+3. **Full gate**: /submit-pr (proto0 build + full test suite + coverage). On-device
    behavior is /flash-and-verify — hardware lock required, not covered here.

@@ -27,7 +27,12 @@ the newest release of ANY track and broke the update check (PRs #55/#57) — and
 matches firmware zips by `proto0`/`dk` substring (`findAssetForBoard`) and the APK
 by `.apk` suffix (`findApkAsset`). Renaming assets breaks the in-app updater.
 The extension assets must stay bare `<name>.llext` files — never a zip bundle with
-`proto0`/`dk` in its name, which could shadow the `dfu_application_*.zip` match.
+`proto0`/`dk` in its name, which could shadow the `dfu_application_*.zip` match
+(the `dk` rule still matters even though main no longer ships a DK zip: the app
+matches `dk` against older releases). Since issue #203, firmware releases attach
+only `dfu_application_proto0.zip`; DK builds live on the `dk-support` branch, and
+`fw-v*` tags must never be cut from that branch — the app serves the latest
+`fw-v*` release to proto0 users.
 
 The in-repo `fw/sysbuild/mcuboot/VERSION` is set to `0.0.0` so dev builds always
 report a lower version than any official release, prompting users to upgrade.
@@ -150,11 +155,9 @@ The app tag is **annotated** (`-a -m`): its message becomes the Google Play
   field — compute elapsed time from `startedAt`/`updatedAt`
   (`gh run list --json workflowName,status,startedAt,updatedAt`).
 - Watch each to completion: `gh run watch <id> --exit-status`. Observed durations,
-  as of 2026-07 — re-verify: firmware `release.yaml` ~9–13 min, MCUboot
-  `mcuboot-release.yaml` ~9 min, app `app-release.yml` ~19–21 min for the Android
-  job. The firmware job runs its two pristine NCS builds sequentially (DK first,
-  then proto0), so a proto0-only build failure surfaces only after the DK build
-  finishes, ~5 min in.
+  as of 2026-07 — re-verify: firmware `release.yaml` ~9–13 min (one pristine
+  proto0 NCS build since issue #203), MCUboot `mcuboot-release.yaml` ~9 min, app
+  `app-release.yml` ~19–21 min for the Android job.
 - The app release runs **five** jobs: `test` and `version` (a fast ubuntu job
   that derives the shared version/build number and validates the collision
   guards), then `release` (Android APK, ubuntu), `ios-testflight` (self-hosted

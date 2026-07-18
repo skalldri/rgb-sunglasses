@@ -18,41 +18,8 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Free up space
-        run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /usr/local/lib/android && sudo rm -rf /opt/ghc && sudo rm -rf /opt/hostedtoolcache/CodeQL
-
-      - name: Check HDD space
-        run: df -h
-
-      - name: Checkout (GitHub)
-        uses: actions/checkout@v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and run dev container task
-        uses: devcontainers/ci@v0.3
-        with:
-          imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          push: always
-          runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dfu_application_dk.zip
-          path: ${{ github.workspace }}/fw/build/dfu_application.zip
-
+  # The legacy rgb_sunglasses_dk board is no longer built on main (issue #203);
+  # its board support and CI live on the dk-support branch.
   build-proto0:
     runs-on: ubuntu-latest
     permissions:

@@ -35,7 +35,8 @@ class BtGattPersistentCharacteristic
 
     BtGattPersistentCharacteristic() {
         // Discarded entirely (no doLoad/doSave codegen, no registry call) when
-        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
+        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on the legacy DK board (dk-support
+        // branch) - see fw/Kconfig.
         // Failures (duplicate key) are logged inside persistent_value_registry_register()
         // itself, which already has the key for context - no need to duplicate that here.
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
@@ -66,7 +67,7 @@ class BtGattPersistentCharacteristic
     // CONFIG_APP_PERSIST_BT_CONFIG: the register() call below is inside `if constexpr`, but
     // an unqualified member name must still resolve at template-definition time, so gating
     // the member out breaks the disabled build. It's a few bytes of BSS and zero flash when
-    // persistence is off - DK's constraint is flash, not RAM.
+    // persistence is off - the legacy DK board's constraint was flash, not RAM.
     PersistentValueRegistryEntry mPersistEntry{};
 
     static void doLoad(void *target, const void *data, size_t len) {

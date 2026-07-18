@@ -106,7 +106,7 @@ void set_leds_white(void*, bool on) {
     led_strip_update_rgb(strip, buf, ARRAY_SIZE(buf));
 }
 #else
-// DK-style boards have no status LEDs; the hold loop still works, silently.
+// Boards without status LEDs: the hold loop still works, silently.
 void set_leds_white(void*, bool) {}
 #endif
 

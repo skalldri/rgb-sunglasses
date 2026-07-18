@@ -88,9 +88,6 @@ case "$BUILD_DIR" in
   *)  BUILD_DIR="$REPO_ROOT/$BUILD_DIR" ;;
 esac
 
-IS_DK=0
-case "$BUILD_DIR" in *dk*) IS_DK=1 ;; esac
-
 # ── Resolve the mcumgr CLI ───────────────────────────────────────────────────
 if ! command -v mcumgr >/dev/null 2>&1; then
   cat >&2 <<'EOF'
@@ -213,9 +210,6 @@ CONN=(--conntype serial --connstring "$(_connstr "$PORT")")
 mcm() { mcumgr "${CONN[@]}" -t "$MCUMGR_TIMEOUT" "$@"; }
 
 info "Mode: $MODE   Port: $PORT   Build: $BUILD_DIR"
-if [ "$IS_DK" -eq 1 ] && [ "$MODE" = "recovery" ]; then
-  die "the DK board has no MCUboot serial-recovery button entrance — use --app or a J-Link. See fw/docs/flashing-without-jlink.md."
-fi
 
 # ── Connectivity check ───────────────────────────────────────────────────────
 # MCUboot's serial recovery implements only a subset of SMP and does NOT support
@@ -311,12 +305,6 @@ done
 [ "$TESTED" -gt 0 ] || die "no images were marked for test — nothing to boot"
 
 # ── Reset and wait for the board to re-enumerate ─────────────────────────────
-if [ "$IS_DK" -eq 1 ]; then
-  info "DK build: the MCUmgr OS group is disabled, so 'mcumgr reset' is unavailable."
-  info "Reset the board manually (button/power-cycle) to apply the update, then confirm."
-  exit 0
-fi
-
 info "Resetting to apply the update..."
 mcm reset || info "reset returned non-zero — reset the board manually if it doesn't reboot"
 

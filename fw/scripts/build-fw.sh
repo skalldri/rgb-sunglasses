@@ -4,7 +4,6 @@
 #
 # Usage:
 #   fw/scripts/build-fw.sh                  # proto0 (default) -> fw/build
-#   fw/scripts/build-fw.sh dk               # DK              -> fw/build-dk
 #   fw/scripts/build-fw.sh --pristine       # force a clean (from-scratch) rebuild
 #   fw/scripts/build-fw.sh proto0 -- <args> # args after -- are forwarded to west build
 #
@@ -22,10 +21,10 @@ EXTRA=()
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    proto0|dk)  BOARD="$1" ;;
+    proto0)     BOARD="$1" ;;
     --pristine) PRISTINE=(--pristine) ;;
     --)         shift; EXTRA=("$@"); break ;;
-    -h|--help)  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)          echo "[!] unknown argument: $1 (see --help)" >&2; exit 1 ;;
   esac
   shift
@@ -33,7 +32,6 @@ done
 
 case "$BOARD" in
   proto0) BUILD_DIR="$REPO_ROOT/fw/build";    ZBOARD="rgb_sunglasses_proto0/nrf5340/cpuapp" ;;
-  dk)     BUILD_DIR="$REPO_ROOT/fw/build-dk"; ZBOARD="rgb_sunglasses_dk/nrf5340/cpuapp" ;;
 esac
 
 # Run from the workspace/repo root (where the documented west invocation runs).

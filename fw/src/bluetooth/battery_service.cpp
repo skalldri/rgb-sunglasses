@@ -80,7 +80,8 @@ class ChargeEnableCharacteristic
     // Caller-owned registry storage (see persistent_value_registry.h). Not #if-gated: this
     // is a concrete (non-template) class, so the CONFIG_APP_PERSIST_BT_CONFIG=n build still
     // semantically checks the disabled register() branch, which references it. It's a few
-    // bytes of BSS and zero flash when persistence is off - DK's constraint is flash.
+    // bytes of BSS and zero flash when persistence is off - the legacy DK board's
+    // constraint was flash.
     PersistentValueRegistryEntry mPersistEntry{};
 
     // POD-only copies of BtGattPersistentCharacteristic's doLoad/doSave (bool storage).

@@ -36,7 +36,6 @@ guess at what a missing or outdated skill would have said.
 |---|---|---|
 | `app/node_modules` | `cd app && npm ci` | ~30s; `postinstall` reapplies the ble-plx patch. **Never** symlink from the main checkout — Metro breaks (see `app/CLAUDE.md`, "Running the app from inside a git worktree"). |
 | `fw/build` (proto0) | `/build-proto0` | First build is pristine and slow; the skill handles it. |
-| `fw/build-dk` (DK) | `/build-dk` | Separate dir on purpose — never mix boards in one build dir. |
 | `fw/twister-out` | `/test-fw` creates it | See coverage trap below. |
 
 **Coverage trap:** the MAIN checkout usually has a populated `fw/twister-out/` of its
@@ -122,5 +121,5 @@ calling out anything NOT READY / NOT AUTHENTICATED.
 
 ## Done — next steps by task type
 
-Building: **/build-proto0** (or **/build-dk**). Testing: **/test-fw**. App checks
+Building: **/build-proto0**. Testing: **/test-fw**. App checks
 without a phone: **/validate-app**. Hardware: **/hw-lock** first. PR: **/submit-pr**.

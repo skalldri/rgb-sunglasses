@@ -97,7 +97,8 @@ fw/scripts/build-fw.sh
 
 The **first** build is a full from-scratch configure (it builds the network-core image,
 MCUboot, and the app), so it takes noticeably longer than the incremental builds after
-it. For the legacy DK board: `fw/scripts/build-fw.sh dk`.
+it. (The legacy DK board is no longer buildable from `main` — its board support lives
+on the `dk-support` branch.)
 
 ---
 

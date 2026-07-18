@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Hardware Revisions
 
-- The "rgb_sunglasses_dk" board is legacy. We need to retain build support for it, but no new features are added to this board.
-- The "rgb_sunglasses_proto0" board is the latest hardware revision. Always enable new features on the proto0 hardware revision by default. When I ask you to add a new feature, ensure it's enabled on the Proto0 hardware KConfig
+- The legacy "rgb_sunglasses_dk" board was removed from `main` (issue #203): its board support and CI live on the **`dk-support` branch**, which is frozen (no new features, never merge main into it, never cut `fw-v*` tags from it). Do not add DK build steps, board files, or gates on `main`.
+- The "rgb_sunglasses_proto0" board is the latest hardware revision and the only board built from `main`. Always enable new features on the proto0 hardware revision by default. When I ask you to add a new feature, ensure it's enabled on the Proto0 hardware KConfig
 
 ## Project vs SDK
 
@@ -26,23 +26,21 @@ The firwmare is composed for 4 applications:
 - b0n: the netcore bootloader
 - ipc_radio: the netcore's main application
 
-## Build directories — never mix boards in the same dir
+## Build directory
 
 | Board | Build dir | When to use |
 |---|---|---|
 | `rgb_sunglasses_proto0` | `fw/build` | Day-to-day development (incremental) |
-| `rgb_sunglasses_dk` | `fw/build-dk` | Pre-PR validation only |
 
-Switching boards inside the same build dir forces a full pristine rebuild (minutes of wasted time). Always use the correct dir for each board.
+Never point a different board at the same build dir — switching boards inside one build dir forces a full pristine rebuild (minutes of wasted time).
 
-Use the project skills — `/build-proto0`, `/build-dk`, `/test-fw` — instead of raw `west build` commands. Use `/submit-pr` instead of manually pushing and creating PRs; it enforces both-board builds and coverage gates.
+Use the project skills — `/build-proto0`, `/test-fw` — instead of raw `west build` commands. Use `/submit-pr` instead of manually pushing and creating PRs; it enforces the build and coverage gates.
 
 For which skill fits which task (built-in animation vs. `.llext` extension vs. GATT characteristic, debugging, flashing, releases), see the **Task routing** table in the root `CLAUDE.md` — it is the single routing table; do not duplicate it here.
 
 **Before any `git push` or PR creation**, you must:
 1. Run `/build-proto0` — proto0 must compile clean
-2. Run `/build-dk` — DK must compile clean (no flash overflow)
-3. Run `/test-fw` — all tests must pass. (`/test-fw` reports **overall** coverage only; the ≥ 50% **patch**-coverage gate is checked by `/submit-pr`.)
+2. Run `/test-fw` — all tests must pass. (`/test-fw` reports **overall** coverage only; the ≥ 50% **patch**-coverage gate is checked by `/submit-pr`.)
 
 ## Build and Test Commands (raw — prefer the skills above)
 
@@ -53,9 +51,6 @@ west build --build-dir fw/build fw --pristine --board rgb_sunglasses_proto0/nrf5
 
 # Full incremental build of proto0 (preferred for daily dev)
 west build --build-dir fw/build fw --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
-
-# DK build (pre-PR validation)
-west build --build-dir fw/build-dk fw --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
 
 # Run all tests on native simulator
 twister -T fw/tests -p native_sim
@@ -111,7 +106,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
 
 - `src/led_controller.cpp` — manages dual-bank WS2812 LED strip hardware and a double-framebuffer. Callers claim a buffer via `claimBufferForRender`, write pixels via `set_pixel_in_framebuffer`, then release it.
 - `src/pattern_controller.cpp` — sits above the LED controller. Owns the active animation slot and an optional `Indicator` overlay (BT advertising/connecting/pairing). Callers request an indicator with `pattern_controller_request_indicator` or switch animations with `pattern_controller_change_to_animation`. **Note `pattern_controller_change_to_animation()` runs synchronously on the caller's thread** — BT RX for GATT writes, the shell thread for `anim set`; only the boot-time restore in the thread entry runs on the pattern-controller thread itself. Nothing in this file may assume pattern-controller-thread context, and no automated gate checks this.
-- `src/led_config.h` — compile-time constants for the frame LED geometry (40×12 logical display over two banks, serpentine wiring) and the devkit LED geometry (8×2). All rendering code receives a `const LedConfig*` so the same logic runs on both targets.
+- `src/led_config.h` — compile-time constants for the frame LED geometry (40×12 logical display over two banks, serpentine wiring) and the proto0 onboard status-LED geometry (2×1). All rendering code receives a `const LedConfig*` so the same logic runs on any geometry.
 
 **Animation system**
 
@@ -129,7 +124,7 @@ This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED su
   - **`bt_conn_info` shell command and `le_param_updated` connection callback (issue #41 follow-up)**: added to verify, rather than assume, what connection interval is actually in effect — `bt_conn_le_param_update()` only sends a _request_; it doesn't tell you what the central actually granted. `le_param_updated(conn, interval, latency, timeout)` (registered in `conn_callbacks`, a `BT_CONN_CB_DEFINE`) logs the real negotiated parameters every time they change, with a timestamp, so you can see exactly when/whether a fast-interval request converged relative to other events. `bt_conn_info` (a standalone `SHELL_CMD_REGISTER`, no subcommands) prints the _current_ parameters of `s_active_conn` (a diagnostic-only tracked pointer, ref-counted via the existing `connected()`/`disconnected()` callbacks) on demand — useful for polling mid-connection from a second shell session while the app is mid-discovery. Confirmed finding from using these: the interval briefly converges to 7.5ms right after `CONNECTED`, has a ~400ms excursion to 45ms about 2s in (during the app's `connectToDevice()`/GATT-cache-refresh phase, before the per-characteristic read loop starts), then settles at **15ms** (the slow end of our requested 7.5-15ms range) for the rest of the connection — not the 7.5ms fast end originally assumed. This is very likely Android's own `CONNECTION_PRIORITY_HIGH` policy floor (~11.25-15ms is its documented range), which as GAP central it has final say over regardless of what `fast_conn_param` proposes — there's no public Android API tier faster than "high priority" to request instead.
 - `src/bluetooth/bt_service_cpp.h` — C++23 compile-time GATT server assembler. `BtGattServer<Providers...>` collects `BtGattAttributeProvider` objects, assigns auto UUIDs in provider-declaration order, and flattens them to a `bt_gatt_attr[]` backed by a `std::array`. Use `BT_GATT_SERVER_REGISTER(name, server)` to register with Zephyr.
   - **Bulk metadata characteristic, gated by `CONFIG_APP_BT_METADATA_CHARACTERISTIC` (issue #41 follow-up)**: `BtGattServer` automatically synthesizes and appends one extra read-only characteristic per service (fixed shared UUID `kMetadataCharacteristicUuid`, same pattern as `kAnimationNameCharacteristicUuid`) whose value is a compile-time-constant packed blob containing every sibling characteristic's CUD name + CPF format — `[version][entry_count]` then `[cpf_format][name_len][name_bytes]` per entry, in `Providers...` declaration order. This lets the app read one characteristic per service instead of two descriptor reads (CUD + CPF) per characteristic, cutting ATT op count roughly in half for discovery. **No per-service `.cpp` file needs to change** — the blob is derived automatically from the same `Providers...` pack each service already passes into `BtGattServer(...)`, via `getDescription()`/`getCpf()` static accessors added to `BtGattCharacteristicCommon` and the `BtGattMetadataBearingProvider` concept + `MetadataBlobBuilder<Ps...>` fold (both just above `BtGattServer` in this file), which skip the primary-service provider automatically since it doesn't expose those statics. Hardware-verified: discovery across all 9 services dropped from ~13-30s to ~6s with zero fallback/mismatch warnings.
-    - **Disabled on `rgb_sunglasses_dk`** (`CONFIG_APP_BT_METADATA_CHARACTERISTIC=n` in its board `.conf`): the blob duplicates every characteristic's CUD description string as packed binary data, which pushed that board's image past its internal-flash slot size (confirmed: imgtool `Image size ... exceeds requested size` with this enabled) — same flash-budget reasoning as `CONFIG_APP_PERSIST_BT_CONFIG` below. When disabled, `getMetadataAttrsTuple()`/`kMetadataBlob` are never referenced and so are never instantiated (class template members are only instantiated when used) — zero flash cost on that board.
+    - **Disabled on the legacy `rgb_sunglasses_dk` board** (`CONFIG_APP_BT_METADATA_CHARACTERISTIC=n` in its board `.conf`, now on the `dk-support` branch): the blob duplicates every characteristic's CUD description string as packed binary data, which pushed that board's image past its internal-flash slot size (confirmed: imgtool `Image size ... exceeds requested size` with this enabled) — same flash-budget reasoning as `CONFIG_APP_PERSIST_BT_CONFIG` below. When disabled, `getMetadataAttrsTuple()`/`kMetadataBlob` are never referenced and so are never instantiated (class template members are only instantiated when used) — zero flash cost on that board.
     - **Ordering assumption**: the app's positional zip (`use-ble-connection.ts`) assumes `characteristicsForService()` returns characteristics in the same order as this blob, i.e. firmware GATT declaration order. This holds because ATT "Read By Type" (used internally by characteristic discovery) is spec-required to return attributes in ascending handle order, and handles are assigned in exactly `Providers...`'s declaration order — not a platform convention that could silently change. Verified (this session) that react-native-ble-plx's Android module (`BleModule.java:511-517` → `Service.java:51-53`) passes Android's native `BluetoothGattService.getCharacteristics()` result straight through with no client-side re-sort. A same-count _reordering_ would not be caught by the blob's `entry_count` check — only a count mismatch is detected — this residual risk is accepted rather than paying for a fully self-describing (per-entry UUID-tagged) wire format.
   - Characteristic aliases: `BtGattReadWriteCharacteristic`, `BtGattReadNotifyCharacteristic`, `BtGattAutoReadWriteCharacteristic`, etc.
   - Write hooks: if a characteristic class defines `onWrite(const T&)`, it is called automatically after each successful remote write.
@@ -182,7 +177,7 @@ Every BT-settable config value (core config, animation parameters/strings/colors
 - `src/bluetooth/persistent_characteristic.h` — see the GATT layer bullet above.
 - Bespoke (non-mixin) persistence: `glim_player_animation_bt.cpp` persists the glim selection by **file name**, not index (`glim_registry`'s enumeration order can shift between boots) — and since `glim_registry::init()` runs after `settings_load()`, the loaded name is resolved to an index later, in `glim_player_animation_bind_default_bt_dependencies()`. `pattern_controller.cpp` persists a single "last active animation" key (hooked into `pattern_controller_change_to_animation()`) rather than per-animation booleans, to avoid reconstructing "which one was active" from independent flags.
 - **Extension animation parameters** (`extensions/extension_param_persistence.{h,cpp}` + `extensions/extension_host.cpp`, issue #90 follow-up): a third bespoke consumer, same idea as glim — one combined `Blob` (every scalar + string param value) per extension, registered against `persistent_value_registry` under key `"ext/<sanitized displayName>"` (never slot index, since `/NAND:/ext/` file sets can shift between boots) in `scan_slot()`. Extensions hit a real ordering wrinkle glim doesn't: their identity (`displayName`) is only known from the manifest, discovered on the pattern-controller thread — strictly *after* `bluetooth_init()`'s boot-wide `settings_load()` replay has already run — so the registry's automatic dispatch-during-`settings_load()` path can never find these keys. `scan_slot()` therefore calls the new `persistent_value_store::load_value()` (a direct, synchronous `settings_load_one()`, symmetric with the existing `save_value()`) right after registering, instead of relying on the replay. Saves reuse `persistent_value_registry_mark_dirty()` + `request_save()` unchanged, hooked into `extension_host::setParamValue()`/`writeParamString()` exactly like `BtGattPersistentCharacteristic::onWrite()` does for built-ins. **A faulted extension has its persisted params cleared**: `sandbox_fault()` resets `paramValues`/`stringValues` to manifest defaults and synchronously (not via the debounce) overwrites the persisted blob with those defaults, since a bad persisted value could be what caused the crash — without this, both an `ext select` retry and a future reboot would immediately reproduce the same crash from the same poisoned value.
-- **`CONFIG_APP_PERSIST_BT_CONFIG`** (default `y`, `n` on `rgb_sunglasses_dk`) gates the whole feature: every call site above is wrapped in `if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG))` (in the template mixin) or `if (IS_ENABLED(...))` (in plain `.cpp` files), so the doLoad/doSave code is fully compiled out and linked away when disabled. This exists because DK's internal-flash image slot has no spare room for it (it was already at ~75% before this feature existed) and DK is legacy / doesn't get new features per the Hardware Revisions note above — disabling needed its own gate rather than `#ifdef`-ing every one of the ~33 characteristic declarations.
+- **`CONFIG_APP_PERSIST_BT_CONFIG`** (default `y`; the legacy DK board set it to `n`) gates the whole feature: every call site above is wrapped in `if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG))` (in the template mixin) or `if (IS_ENABLED(...))` (in plain `.cpp` files), so the doLoad/doSave code is fully compiled out and linked away when disabled. The gate exists because the DK's internal-flash image slot had no spare room for it (already at ~75% before this feature existed) and the DK got no new features — disabling needed its own gate rather than `#ifdef`-ing every one of the ~33 characteristic declarations. The gate is kept on `main` (DK now lives on the `dk-support` branch) for any future flash-tight board.
 
 ### Kconfig and optional features
 
@@ -248,7 +243,7 @@ Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suit
 
 ### CONFIG_USERSPACE / kernel-user mode separation (issue #79, proto0 only)
 
-Enabled on proto0 (`CONFIG_USERSPACE=y` in `boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`). **Not enabled on DK** — its flash budget is already tight (~95% used) and the motivation (future LLEXT animation sandboxing) is proto0-only anyway.
+Enabled on proto0 (`CONFIG_USERSPACE=y` in `boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`). **Never enabled on the legacy DK board** (dk-support branch) — its flash budget was already tight (~95% used) and the motivation (LLEXT animation sandboxing) is proto0-only anyway.
 
 **FLASH cost**: `CONFIG_USERSPACE=y` alone (no threads converted) costs ~105-246KB — mostly `z_vrfy_*`/`z_mrsh_*` syscall verifier functions Zephyr generates for every syscall-covered API already compiled in (GPIO, I2C, SPI, flash, sensor, LED, etc.), regardless of whether anything actually calls them from user mode. This is generated per-Kconfig-enabled-subsystem, not per-actual-usage — **there is no way to selectively emit syscalls for only the subsystems a converted thread needs**; confirmed by reading `parse_syscalls.py`/`gen_syscalls.py`/`syscall_dispatch.c`. `CONFIG_EMIT_ALL_SYSCALLS` only widens emission further, never narrows it. Fitting this required a dedicated flash-reduction pass first: `CONFIG_DUMP_DEVICE_REGISTERS=n` (~94KB, see the comment at its Kconfig line), `CONFIG_FLASH_SIMULATOR_STATS=n` in `prj.conf` (~4KB), and a `tuple_cat` collapse in `bt_service_cpp.h` (see that file's comment).
 
@@ -550,8 +545,9 @@ find on reboot). The budget is enforced by `DEBUG_COREDUMP_THREAD_STACK_TOP_LIMI
 `boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`. Redo it before raising the limit or
 adding many threads.
 
-**DK**: coredump support was dropped entirely (`DEBUG_COREDUMP` left `prj.conf` for the
-proto0 board conf) — no partition, no spare flash, legacy board.
+**Legacy DK board (dk-support branch)**: coredump support was dropped entirely
+(`DEBUG_COREDUMP` left `prj.conf` for the proto0 board conf) — no partition, no spare
+flash, legacy board.
 
 ## Flashing via J-Link (fast path)
 

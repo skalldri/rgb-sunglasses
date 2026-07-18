@@ -1,6 +1,6 @@
 ---
 name: rom-ram-budget
-description: Check, verify, or recover firmware FLASH/RAM usage — linker overflow on DK, RAM% jumps, sizing a new feature, right-sizing stacks. Every size claim must be verified against the linker map, not footprint scripts.
+description: Check, verify, or recover firmware FLASH/RAM usage — linker overflow, RAM% jumps, sizing a new feature, right-sizing stacks. Every size claim must be verified against the linker map, not footprint scripts.
 allowed-tools: Bash, Read, Grep, Glob
 ---
 
@@ -12,7 +12,6 @@ The only numbers that govern link success are the linker's. Per root `CLAUDE.md`
 ("Working with hardware"), verify every memory-accounting claim against:
 
 - proto0: `fw/build/fw/zephyr/zephyr.map`
-- DK: `fw/build-dk/fw/zephyr/zephyr.map`
 
 The linker's RAM% **counts `.noinit` buffers** (e.g. the llext heap,
 `CONFIG_LLEXT_HEAP_SIZE` in `fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`).
@@ -24,9 +23,10 @@ one block per image; the appcore app image is the one that matters here.
 
 ## Current envelope — historically observed as of 2026-07, re-verify from build output
 
-- **DK appcore FLASH: 92–94%.** A change that is safe on proto0 can overflow the DK
-  (imgtool `Image size ... exceeds requested size`). This is why `/submit-pr` builds
-  BOTH boards; do the same in ad-hoc checks.
+- **The legacy DK board (dk-support branch) ran at 92–94% appcore FLASH** — the
+  historical reason many features are Kconfig-gated with per-board `=n` overrides.
+  Main is proto0-only now (issue #203), but keep the discipline: gate optional
+  features so a future flash-tight board revision can shed them the same way.
 - **proto0 appcore RAM history:** 75.3% (PR #81) → 90.5% (USERSPACE #82 + LLEXT #89)
   → 76.2% (recovery pass PR #103). proto0 FLASH was ~66% after #103.
 - Do not treat any of these as current facts — rebuild and read the real numbers.
@@ -38,7 +38,7 @@ one block per image; the appcore app image is the one that matters here.
 | `K_THREAD_STACK_DEFINE` under `CONFIG_USERSPACE` | silently +1KB privileged stack per thread | PR #103; `priv_stacks` in zephyr.map |
 | `CONFIG_SIZE_OPTIMIZATIONS=y` (`-Og`→`-Os`) | saved ~255KB FLASH | PR #82; already `=y` in both board confs |
 | Template-heavy `fw/src/bluetooth/bt_service_cpp.h` instantiations | ≈70KB FLASH | issue #84 (open) |
-| DK feature shedding | frees DK FLASH | `fw/boards/rgb_sunglasses_dk_nrf5340_cpuapp.conf` |
+| Per-board feature shedding (`=n` overrides in a board .conf) | frees FLASH on a tight board | precedent: the legacy DK board conf on the `dk-support` branch |
 
 Details:
 
@@ -49,26 +49,25 @@ Details:
   persistent_value_store). The only `K_THREAD_STACK_DEFINE`s left are the two K_USER
   threads (`fw/src/imu/imu.cpp`, `fw/src/extensions/extension_host.cpp`) — those are
   correct as-is. Don't "normalize" in either direction.
-- **DK-only FLASH overflow → the sanctioned fix is shedding features in
-  `fw/boards/rgb_sunglasses_dk_nrf5340_cpuapp.conf`** via `=n` lines. Existing
-  precedent in that file: `CONFIG_MCUMGR_GRP_*=n`, `CONFIG_APP_PERSIST_BT_CONFIG=n`,
-  `CONFIG_APP_BT_METADATA_CHARACTERISTIC=n`, `CONFIG_APP_MCUBOOT_INFO_SERVICE=n` (+
-  retention stack). DK is legacy and doesn't get new features (per `fw/CLAUDE.md`), so
-  cutting there is acceptable; follow the file's comment style (each `=n` explains why).
+- **Board-specific FLASH overflow → the sanctioned fix is shedding features in that
+  board's flat `.conf`** (`fw/boards/<board>_nrf5340_cpuapp.conf`) via `=n` lines.
+  Precedent: the legacy DK board's conf (now on the `dk-support` branch) shed
+  `CONFIG_MCUMGR_GRP_*`, `CONFIG_APP_PERSIST_BT_CONFIG`,
+  `CONFIG_APP_BT_METADATA_CHARACTERISTIC`, `CONFIG_APP_MCUBOOT_INFO_SERVICE` (+
+  retention stack) this way. Follow that comment style (each `=n` explains why).
   An `=n` override only reclaims flash if the feature's code compiles out cleanly when
   disabled — wrap call sites in `IS_ENABLED(CONFIG_...)` / `if constexpr (IS_ENABLED(...))`
   or gate the sources with `target_sources_ifdef` in `fw/CMakeLists.txt` (working
   precedent: `CONFIG_APP_PERSIST_BT_CONFIG`, documented in `fw/CLAUDE.md`).
 - **`default y` Kconfig danger:** a new feature symbol in `fw/Kconfig` with a bare
-  `default y` lands on BOTH boards, including the nearly-full DK. Either gate it
+  `default y` lands on EVERY board built from this tree. Either gate it
   (`default y if BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP` + `default n` — precedent:
-  `APP_MCUBOOT_UPDATER`) or add an `=n` override to the DK board conf.
+  `APP_MCUBOOT_UPDATER`) or add an `=n` override to the affected board's conf.
 
 ## Procedure
 
-1. **Build** with `/build-proto0` and `/build-dk` (never duplicate their commands; they
-   also state the report/warn thresholds). Both boards, always — a proto0-only check
-   is how DK overflows land.
+1. **Build** with `/build-proto0` (never duplicate its command; it also states the
+   report/warn thresholds).
 2. **Read the FLASH/RAM `%age Used` lines** from the end of each build's output.
    For deltas, compare against a pre-change build of the same board/build dir.
    When hunting savings, flip ONE config symbol per rebuild so each map delta is
@@ -85,8 +84,7 @@ Details:
    from the map, not from a footprint report or from memory).
 5. **Report deltas in the PR body** per house style — see PR #103 for the model: a
    table of change → RAM/FLASH saved, each map-verified, plus before/after percentages
-   in the Pre-PR checks (`proto0 build: PASS (RAM x%, FLASH y%)`, `DK build: PASS
-   (FLASH z%, no overflow)`).
+   in the Pre-PR checks (`proto0 build: PASS (RAM x%, FLASH y%)`).
 
 ## Known open right-sizing tasks (safe starter work)
 
@@ -114,7 +112,7 @@ access grants, `k_mem_domain` with `{own_partition, z_libc_partition}`, then
 
 ## Validation
 
-Both boards build clean (`/build-proto0`, `/build-dk`) and `/test-fw` passes. Any
+proto0 builds clean (`/build-proto0`) and `/test-fw` passes. Any
 change touching stack sizes or thread definitions of hardware-bound subsystems also
 needs on-device verification before PR — that path goes through `/submit-pr`, which
 owns the hardware gates; this skill has no hardware steps.
