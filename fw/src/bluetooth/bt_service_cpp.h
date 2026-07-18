@@ -775,9 +775,11 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
             // printk("NOTIFY: %p\n", attr);
             // BtGattNotifyTraits controls how much of storage_ actually gets sent - by default
             // the full string length (matching read()), but BtGattDropdownList<N> overrides
-            // this to just its first token, since notify (unlike read) can't fragment across
-            // multiple ATT PDUs and must fit within the connection's negotiated MTU. See
-            // BtGattNotifyTraits in bt_gatt_traits.h for the full rationale.
+            // this to just its first token (further capped to a length guaranteed to fit even
+            // an unnegotiated 23-byte ATT_MTU), since notify (unlike read) can't fragment
+            // across multiple ATT PDUs and must fit within the connection's *current* MTU,
+            // which is not always the negotiated one. See BtGattNotifyTraits in
+            // bt_gatt_traits.h for the full rationale.
             int ret;
             size_t payloadLen = BtGattNotifyTraits<T>::length(storage_);
             if constexpr (BtGattStringTraits<T>::kIsString) {
