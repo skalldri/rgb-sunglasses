@@ -3,6 +3,7 @@
 #include <bluetooth/gatt_cpf.h>
 #include <zephyr/bluetooth/gatt.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -93,13 +94,32 @@ struct BtGattNotifyTraits {
 
 template <size_t N>
 struct BtGattNotifyTraits<BtGattDropdownList<N>> {
+    // Bounds the notify payload to a length that's guaranteed to fit in a single ATT
+    // Handle-Value Notification PDU on ANY connected, encrypted ATT bearer - negotiated or
+    // not. The Bluetooth Core Spec fixes the default/minimum LE ATT_MTU at 23 octets (Vol 3,
+    // Part F, 3.2.8); Zephyr's own host enforces this as a floor (BT_ATT_DEFAULT_LE_MTU == 23
+    // in subsys/bluetooth/host/att_internal.h, and an MTU Exchange requesting less is rejected
+    // in att.c). 3 of those 23 bytes are always consumed by the ATT_HANDLE_VALUE_NTF header (1
+    // opcode + 2-byte handle), leaving 20 payload bytes that are safe unconditionally.
+    //
+    // Without this cap, a selected GLIM filename's first token (kMaxNameLen == 32, see
+    // glim_registry.h) can exceed that 20-byte floor. When the connection hasn't negotiated a
+    // larger MTU yet - or is stuck at the default because of a stale Android GATT cache after
+    // a GATT-layout-changing OTA (issue #115) - bt_gatt_notify() then fails outright with
+    // -ENOMEM (logged by the host as "No ATT channel for MTU ..."), and the notification is
+    // silently dropped. Since the app-side contract for dropdown-list characteristics is
+    // already "any notification means go re-read the canonical value" (it never trusts the
+    // notified bytes directly - see the DROPDOWN_LIST handling in
+    // app/hooks/use-ble-connection.ts), truncating the preview sent here costs nothing
+    // functionally in exchange for a notify that can never fail to fit.
+    static constexpr size_t kGuaranteedSafeNotifyLen = 20;
+
     static size_t length(const BtGattDropdownList<N> &value) {
         const char *data = value.value.data();
         const char *newline = static_cast<const char *>(memchr(data, '\n', N));
-        if (newline != nullptr) {
-            return static_cast<size_t>(newline - data);
-        }
-        return strnlen(data, N);
+        size_t tokenLen =
+            newline != nullptr ? static_cast<size_t>(newline - data) : strnlen(data, N);
+        return std::min(tokenLen, kGuaranteedSafeNotifyLen);
     }
 };
 
