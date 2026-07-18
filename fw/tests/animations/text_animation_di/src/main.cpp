@@ -59,6 +59,14 @@ class FixedSlotSource : public TextAnimationSlotSource {
         return "UNKNOWN";
     }
 };
+
+class EmptySlotSource : public TextAnimationSlotSource {
+   public:
+    const char *getStringFromSlot(size_t slot) const override {
+        ARG_UNUSED(slot);
+        return "";
+    }
+};
 }  // namespace
 
 ZTEST_SUITE(text_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
@@ -152,4 +160,36 @@ ZTEST(text_animation_di_tests, test_tick_does_not_advance_offset_before_step_tim
 
     zassert_equal(animation->currentTextOffset, 0,
                   "Expected offset unchanged when step time has not elapsed");
+}
+
+// Regression (issue #188 follow-up): an empty slot satisfies "finished scrolling"
+// (firstChar >= currentMessageLen == 0) on every tick, so without a minimum-dwell floor
+// it advanced to the next slot - and fired GATT notifications via getUpNext() - at the
+// full render rate, exhausting the BT TX buffer pool. The floor must bound advancement.
+ZTEST(text_animation_di_tests, test_empty_slot_does_not_advance_every_tick) {
+    ConstUint32Source stepTimeMs(10);
+    ConstUint32Source color(0xFFFFFF);
+    EmptySlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();  // one initial consume
+
+    const size_t indexAfterInit = upNextSource.index;
+
+    NullTestRenderer renderer;
+    // 20 ticks * 20ms = 400ms, still under the 500ms dwell floor: an empty message must
+    // NOT keep advancing (and notifying) on every tick.
+    for (int i = 0; i < 20; i++) {
+        animation->tick(renderer, 20);
+    }
+    zassert_equal(upNextSource.index, indexAfterInit,
+                  "Empty slot must not advance before the dwell floor elapses");
+
+    // Crossing the floor (400 + 200 = 600ms >= 500ms) advances exactly once.
+    animation->tick(renderer, 200);
+    zassert_equal(upNextSource.index, indexAfterInit + 1,
+                  "Empty slot should advance exactly once after the dwell floor elapses");
 }

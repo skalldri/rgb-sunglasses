@@ -56,6 +56,13 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
     // Current cycle time within the animation cycle
     size_t currentCycleTimeMs = 0;
 
+    // Time the current message has been displayed, accumulated every tick. Used to
+    // enforce a minimum dwell before advancing to the next slot so an empty/degenerate
+    // slot (currentMessageLen == 0, which satisfies the "finished scrolling" test on
+    // every tick) cannot advance - and thus fire GATT notifications via getUpNext() -
+    // at the full render rate and exhaust the BT TX buffer pool (issue #188 follow-up).
+    size_t currentMessageDwellMs = 0;
+
     int32_t currentTextOffset = 0;
 };
 

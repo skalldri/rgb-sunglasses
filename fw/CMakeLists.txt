@@ -71,6 +71,11 @@ target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extens
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_registry.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_animation_proxy.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_bt.cpp)
+
+# BT-free decision core for the connection-parameter governor (issue #188);
+# the wiring lives in src/bluetooth.cpp behind the same Kconfig symbol.
+target_sources_ifdef(CONFIG_APP_BT_CONN_PARAM_GOVERNOR app PRIVATE
+                     src/bluetooth/conn_param_governor_core.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_metadata_blob.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_MY_EYES app PRIVATE src/animations/my_eyes_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_RAINBOW app PRIVATE src/animations/rainbow_animation.cpp)

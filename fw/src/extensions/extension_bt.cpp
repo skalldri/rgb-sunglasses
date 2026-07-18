@@ -14,6 +14,7 @@
  */
 
 #include <animations/animation_registry.h>
+#include <bluetooth/bt_conn_activity.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/gatt_cpf.h>
 #include <extensions/extension_bt.h>
@@ -103,9 +104,13 @@ void push_is_active(BtSlot *bs) {
 }
 
 /* --- value callbacks ---------------------------------------------------- */
+/* Every handler below notes inbound activity for the conn-param governor
+ * (issue #188) - these runtime-built services bypass bt_service_cpp.h's
+ * funnels, so they carry their own calls. */
 
 ssize_t read_name(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len,
                   uint16_t offset) {
+    bt_conn_activity_note();
     const auto *bs = static_cast<const BtSlot *>(attr->user_data);
     const char *name = extension_host::name(bs->slot);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, name, strlen(name));
@@ -113,6 +118,7 @@ ssize_t read_name(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *b
 
 ssize_t read_is_active(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
                        uint16_t len, uint16_t offset) {
+    bt_conn_activity_note();
     const auto *bs = static_cast<const BtSlot *>(attr->user_data);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &bs->isActive, sizeof(bs->isActive));
 }
@@ -120,6 +126,7 @@ ssize_t read_is_active(struct bt_conn *conn, const struct bt_gatt_attr *attr, vo
 #if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
 ssize_t read_metadata(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
                       uint16_t len, uint16_t offset) {
+    bt_conn_activity_note();
     const auto *bs = static_cast<const BtSlot *>(attr->user_data);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, bs->metadataBlob, bs->metadataBlobPos);
 }
@@ -139,6 +146,7 @@ ssize_t read_metadata(struct bt_conn *conn, const struct bt_gatt_attr *attr, voi
  * Only `ext select` (deliberate developer action) resets a faulted slot. */
 ssize_t write_is_active(struct bt_conn *, const struct bt_gatt_attr *attr, const void *buf,
                         uint16_t len, uint16_t offset, uint8_t) {
+    bt_conn_activity_note();
     if (offset != 0 || len != 1) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
@@ -167,6 +175,7 @@ ssize_t write_is_active(struct bt_conn *, const struct bt_gatt_attr *attr, const
  * RGBX_PARAM_STRING_MAX-1 bytes with a forced NUL, UINT32/COLOR = 4-byte LE. */
 ssize_t read_param(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len,
                    uint16_t offset) {
+    bt_conn_activity_note();
     const auto *ctx = static_cast<const ParamCtx *>(attr->user_data);
     const extension_host::ParamInfo *info = extension_host::paramInfo(ctx->slot, ctx->index);
     if (info == nullptr) {
@@ -190,6 +199,7 @@ ssize_t read_param(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *
 
 ssize_t write_param(struct bt_conn *, const struct bt_gatt_attr *attr, const void *buf,
                     uint16_t len, uint16_t offset, uint8_t flags) {
+    bt_conn_activity_note();
     const auto *ctx = static_cast<const ParamCtx *>(attr->user_data);
     const extension_host::ParamInfo *info = extension_host::paramInfo(ctx->slot, ctx->index);
     if (info == nullptr) {

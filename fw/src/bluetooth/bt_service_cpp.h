@@ -1,6 +1,7 @@
 #pragma once
 
 #include <animations/animation_types.h>
+#include <bluetooth/bt_conn_activity.h>
 #include <bluetooth/bt_gatt_traits.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -460,6 +461,9 @@ class BtGattServer {
 
     static ssize_t readMetadata(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
                                 uint16_t len, uint16_t offset) {
+        // Inbound activity for the conn-param governor (issue #188) - the
+        // discovery walk is mostly these reads plus the value reads below.
+        bt_conn_activity_note();
         return bt_gatt_attr_read(conn, attr, buf, len, offset, kMetadataBlob.data(),
                                  kMetadataBlob.size());
     }
@@ -569,6 +573,10 @@ static ssize_t _write(struct bt_conn *conn, const struct bt_gatt_attr *attr, con
                       T &storage) {
     static_assert(!(BtGattWriteHook<TInstance, T> && BtGattCheckedWriteHook<TInstance, T>),
                   "Define either onWrite or onWriteChecked on a characteristic type, not both");
+
+    // Inbound activity for the conn-param governor (issue #188) - every app
+    // characteristic write funnels through this overload.
+    bt_conn_activity_note();
 
     if constexpr (BtGattStringTraits<T>::kIsString) {
         // Checked write hooks are not supported for string-backed types: long/prepared
@@ -805,6 +813,9 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
 
     static ssize_t read(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
                         uint16_t len, uint16_t offset) {
+        // Inbound activity for the conn-param governor (issue #188).
+        bt_conn_activity_note();
+
         Self *instance =
             reinterpret_cast<Self *>(const_cast<struct bt_gatt_attr *>(attr)->user_data);
 
