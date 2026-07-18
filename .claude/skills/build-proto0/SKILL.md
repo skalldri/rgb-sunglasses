@@ -15,6 +15,7 @@ images and prints 4 separate memory tables, so anything you need later (the appc
 further up) can be pulled from the file with Read/Grep instead of re-running the whole build.
 
 ```bash
+. scripts/fw-env.sh   # no-op in the devcontainer; on macOS puts west + the NCS toolchain on PATH
 west build \
   --build-dir fw/build \
   fw \

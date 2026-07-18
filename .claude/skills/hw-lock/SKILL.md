@@ -9,7 +9,10 @@ Root `CLAUDE.md` § "Hardware locking" (always loaded) is canonical for the core
 the `hold` task stops, waiter nudges, release timing). This skill: command surface + details.
 
 Resources: `board` (dev board + J-Link, together) and `app` (the one phone) — nothing more
-granular. Locks are directories under the repo's shared `.git` dir, visible from every worktree.
+granular. Locks are directories under the repo's shared `.git` dir, visible from every worktree
+(and therefore per-host — correct, since the hardware is attached to one host at a time).
+Works on macOS too: the script re-execs into Homebrew bash ≥ 4 (from `scripts/macos-setup.sh`)
+when run under the stock bash 3.2.
 
 ## hold
 

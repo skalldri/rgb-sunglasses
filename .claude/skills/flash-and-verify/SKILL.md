@@ -5,6 +5,8 @@ description: "Flash firmware to the physical board over J-Link and verify it on-
 
 Read `fw/CLAUDE.md` first if you haven't — it is the authoritative memory for every mechanism below; this skill sequences it into one loop.
 
+**Platform routing**: in the Linux devcontainer with a J-Link attached, use the J-Link fast path (§3). On a **macOS host** (e.g. the Mac Mini — see `fw/CLAUDE.md` "macOS host"), there is no J-Link/SEGGER tooling: flash via the MCUmgr OTA path (§6, `fw/scripts/mcumgr-flash.sh`), skip `fix-usb-dev-nodes.sh` (Linux-only; macOS manages /dev itself), and read every `/dev/ttyACM*` reference as `/dev/cu.usbmodem*` (`/check-hardware` identifies them on both OSes). OTA covers app + netcore images, and MCUboot alone can go via the `mcuboot_update` sideload/commit shell path — only a b0n (netcore bootloader) reflash still needs the devcontainer + J-Link.
+
 > **DANGER — this loop never writes power/PD registers.** On-device verification here is read-only shell diagnostics only. Anything beyond that on the TPS25750/BQ25792 (register writes, 4CC tasks, `power pd patch`, `power bq charge/adc/pfm/freq/temp_override`, `power boost`) goes through root `CLAUDE.md`'s "NEVER write unverified commands or data into hardware parts" rule: obtain the datasheet/TRM first or stop and ask the user. A hallucinated 4CC write already bricked a part once (2026-07-05).
 
 ## 1. Hold the `board` lock — first, and across the ENTIRE loop
@@ -27,7 +29,7 @@ If the poll fails, someone else holds it — report the holder and stop; don't s
    ```bash
    grep CONFIG_MY_SYMBOL fw/build/fw/zephyr/include/generated/zephyr/autoconf.h
    ```
-3. Run `fw/scripts/fix-usb-dev-nodes.sh` (standard pre-flash step). The devcontainer has no udev, so re-enumeration leaves missing/bogus `/dev/bus/usb/*` nodes — symptoms are `JLinkExe` "Cannot connect to J-Link" or `nrfutil` "Failed to open connection" while `lsusb` shows `1366:0101` fine.
+3. Run `fw/scripts/fix-usb-dev-nodes.sh` (standard pre-flash step; Linux/devcontainer-only — skip on macOS). The devcontainer has no udev, so re-enumeration leaves missing/bogus `/dev/bus/usb/*` nodes — symptoms are `JLinkExe` "Cannot connect to J-Link" or `nrfutil` "Failed to open connection" while `lsusb` shows `1366:0101` fine.
 
 ## 3. Flash over J-Link
 
@@ -42,7 +44,7 @@ It self-gates on the `board` lock (refuses without it), auto-detects the J-Link 
 ## 4. USB re-enumeration — after every flash or reset
 
 - Wait ~15 s. `/dev/ttyACM*` disappears and takes longer than expected to come back.
-- **ttyACM numbering SHIFTS on every re-enumeration.** Re-run `/check-hardware` before any serial use — it recreates missing `/dev` nodes and identifies the ports by USB interface number: shell = interface **x.0**, MCUmgr = interface **x.2** (may be ttyACM0/1/2/...).
+- **Port naming/numbering SHIFTS on every re-enumeration** (ttyACM minor numbers on Linux; the `cu.usbmodem` suffix can shift on macOS too). Re-run `/check-hardware` before any serial use — it identifies the ports by USB identity on both OSes (Linux: shell = interface **x.0**, MCUmgr = **x.2**, recreating missing `/dev` nodes; macOS: `/dev/cu.usbmodem*` via the IORegistry).
 - Already-open `mcp__serial__*` connections go stale (`[Errno 5]` on write). `serial_close` the stale connection_id, then `serial_open` the **new** shell path — never retry the old path/id.
 
 ## 5. Verify on-device via the serial shell

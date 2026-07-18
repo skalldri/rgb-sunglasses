@@ -6,6 +6,8 @@ allowed-tools: Bash, Read
 
 Run all firmware tests using Twister with lcov coverage. Output goes to `fw/twister-out`.
 
+**Linux/devcontainer only** — `native_sim` does not build on macOS. On the Mac Mini, rely on CI (or a devcontainer session) for Twister runs; local iteration there is build + on-device verification (see `fw/CLAUDE.md` "macOS host").
+
 ```bash
 twister \
   -T fw/tests \

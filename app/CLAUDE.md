@@ -180,9 +180,11 @@ There is currently **no iOS dev-variant** (the Android `.dev` side-by-side insta
 - execbro works against a physical iPhone at the **JS level only** (Metro CDP: `scan_metro`,
   `get_logs`, `execute_in_app`); screenshots/tap drivers are simulator-only.
 - The board's serial shell from macOS: `/dev/cu.usbmodem*` at 115200 (interface 0 of 2fe3:0001 =
-  lower-numbered node). `scripts/fw-shell.sh` is Linux-only (sysfs), and `scripts/hw-lock.sh` needs
-  bash ≥ 4 so it does not run on macOS stock bash — when the board is physically attached to the Mac,
-  devcontainer agents can't reach it anyway.
+  lower-numbered node). The firmware dev loop (build → OTA flash → serial verify) runs natively on
+  the Mac too — one-time setup via `scripts/macos-setup.sh`, details in `fw/CLAUDE.md`'s
+  "macOS host" section. `scripts/hw-lock.sh` works on macOS (it re-execs into Homebrew bash ≥ 4),
+  and the same lock discipline applies. Locks are per-host (`$GIT_COMMON_DIR`), which is fine:
+  the board is physically attached to exactly one host at a time.
 
 **iOS BLE behavior differences (all hardware-verified):**
 
