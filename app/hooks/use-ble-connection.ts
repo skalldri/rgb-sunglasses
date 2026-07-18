@@ -731,7 +731,24 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             monitorSubscriptions.current.forEach(sub => sub.remove());
             monitorSubscriptions.current = [];
 
-            await bleManager.cancelDeviceConnection(macAddress);
+            // Tolerate a "not connected" rejection here. Disconnect's goal is a
+            // disconnected app state, and the app can legitimately believe it's
+            // connected while ble-plx no longer holds a device for this mac -
+            // e.g. a drop whose onDeviceDisconnected we missed while foregrounded
+            // (verifyConnection only reconciles on AppState->active), or a failed
+            // reconnect whose runConnect catch already disposed the client entry
+            // while the OS-level link lingered. In that state cancelDeviceConnection
+            // rejects with "Device <mac> is not connected"; without this guard the
+            // rejection escapes disconnect()'s promise unhandled and red-boxes
+            // (hardware-observed on the #124 stack). cancelReconnect() already
+            // guards the same call the same way. Either way we're where we want to
+            // be, so swallow it and always clear selectedDevice below.
+            try {
+                await bleManager.cancelDeviceConnection(macAddress);
+            } catch (error) {
+                console.log(`cancelDeviceConnection(${macAddress}) during disconnect (already gone from ble-plx?):`, error);
+            }
+            selectedDeviceRef.current = null;
             setSelectedDevice(null);
         } finally {
             intentionalDisconnectRef.current = false;

@@ -524,6 +524,29 @@ describe('useBleConnection', () => {
         expect(ctx.setSelectedDevice).toHaveBeenCalledWith(null);
     });
 
+    it('disconnect() swallows a "not connected" rejection and still clears state (no unhandled rejection)', async () => {
+        // The app can believe it's connected while ble-plx no longer holds a
+        // device for this mac (missed onDeviceDisconnected while foregrounded, or a
+        // failed reconnect that already disposed the client entry). Tapping
+        // Disconnect then rejects cancelDeviceConnection with "not connected"; this
+        // must NOT escape as an unhandled promise rejection (hardware-observed
+        // red-box). disconnect() must resolve and still clear selectedDevice.
+        ctx.monitorSubscriptions.current = [];
+        ctx.disconnectSubscription.current = null;
+        (BleHook.bleManager.cancelDeviceConnection as jest.Mock).mockRejectedValue(
+            new Error('Device AA:BB:CC is not connected')
+        );
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        // Resolves (does not throw), and the app is returned to a disconnected state.
+        await act(async () => { await expect(result.current.disconnect()).resolves.toBeUndefined(); });
+
+        expect(BleHook.bleManager.cancelDeviceConnection).toHaveBeenCalledWith('AA:BB:CC');
+        expect(ctx.setSelectedDevice).toHaveBeenCalledWith(null);
+        expect(ctx.selectedDeviceRef.current).toBeNull();
+    });
+
     // ------------------------------------------------------------------
     // isConnecting state
     // ------------------------------------------------------------------
