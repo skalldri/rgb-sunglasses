@@ -16,7 +16,9 @@ if command -v west >/dev/null 2>&1; then
     return 0 2>/dev/null || exit 0
 fi
 
-_FW_ENV_FILE="$HOME/ncs/env-v3.1.1.sh"
+# env-current.sh is a version-stable symlink maintained by macos-setup.sh (the
+# single place the NCS version is pinned) to the env-<version>.sh it generated.
+_FW_ENV_FILE="$HOME/ncs/env-current.sh"
 if [ "$(uname -s)" = "Darwin" ] && [ -f "$_FW_ENV_FILE" ]; then
     . "$_FW_ENV_FILE"
     unset _FW_ENV_FILE
@@ -24,6 +26,6 @@ if [ "$(uname -s)" = "Darwin" ] && [ -f "$_FW_ENV_FILE" ]; then
 fi
 
 echo "error: no firmware toolchain found (west is not on PATH and $_FW_ENV_FILE does not exist)." >&2
-echo "       On macOS, run scripts/macos-setup.sh once to install NCS v3.1.1." >&2
+echo "       On macOS, run scripts/macos-setup.sh once to install the NCS toolchain." >&2
 unset _FW_ENV_FILE
 return 1 2>/dev/null || exit 1

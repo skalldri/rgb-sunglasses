@@ -311,8 +311,9 @@ The full firmware dev loop (build → flash → serial verify) also runs nativel
 |---|---|---|
 | Shell port | `/dev/ttyACM0` (iface x.0) | `/dev/cu.usbmodem*`, lower suffix (data iface 1) |
 | MCUmgr port | `/dev/ttyACM1`/`ttyACM2` (iface x.2) | `/dev/cu.usbmodem*`, higher suffix (data iface 3) |
-| Flashing | J-Link fast path (`jlink-flash.sh`) | **MCUmgr OTA only** (`fw/scripts/mcumgr-flash.sh`) — no SEGGER tooling |
-| Bootloader/netcore-only reflash | J-Link | not possible — use the devcontainer |
+| Flashing (app + netcore) | J-Link fast path (`jlink-flash.sh`) | **MCUmgr OTA only** (`fw/scripts/mcumgr-flash.sh`) — no SEGGER tooling |
+| MCUboot reflash | J-Link, or `mcuboot_update` shell path | `mcuboot_update` sideload/commit shell path only |
+| b0n (netcore bootloader) reflash | J-Link | not possible — use the devcontainer |
 | Build env | west on PATH | `. scripts/fw-env.sh` first (skills do this) |
 | Twister tests | `/test-fw` (native_sim) | **not supported** (native_sim is Linux-only) — use CI or the devcontainer |
 | /NAND: disk mount | `dmesg`/`lsblk`/`mount` | Finder/`diskutil` (`/Volumes`); same sync → eject → reboot discipline |

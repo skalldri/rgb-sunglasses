@@ -37,6 +37,11 @@ esac
 # Run from the workspace/repo root (where the documented west invocation runs).
 cd "$REPO_ROOT"
 
+# Put west + the NCS toolchain on PATH when needed — no-op in the devcontainer,
+# activates the ~/ncs env on a macOS host (fails with instructions if neither
+# is available; see scripts/fw-env.sh).
+. "$REPO_ROOT/scripts/fw-env.sh"
+
 LABEL=""
 [ "${#PRISTINE[@]}" -gt 0 ] && LABEL=" (pristine)"
 echo "[*] Building $BOARD -> $BUILD_DIR$LABEL"

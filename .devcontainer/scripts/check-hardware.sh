@@ -21,8 +21,13 @@ if [ "$(uname -s)" = "Darwin" ]; then
     SHELL_PORT="$(serial_find_shell_port 2>/dev/null || true)"
     MCUMGR_PORT="$(serial_find_mcumgr_port 2>/dev/null || true)"
 
+    # Note for both awk probes below: ioreg prints a node's properties
+    # alphabetically (idProduct BEFORE idVendor), so v/p must be reset at every
+    # node boundary ("+-o" line) — otherwise one node's leftover vendor can pair
+    # with a later node's product and fire a false DETECTED.
     if [ -n "$SHELL_PORT" ] || [ -n "$MCUMGR_PORT" ] ||
        ioreg -p IOUSB -l 2>/dev/null | awk '
+           /\+-o /          { v = ""; p = "" }
            /"idVendor" = /  { v = $NF }
            /"idProduct" = / { p = $NF }
            v == 12259 && p == 1 { found = 1 }
@@ -49,6 +54,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     # J-Link: no SEGGER tooling is installed on the Mac; flashing here is via
     # MCUmgr OTA (fw/scripts/mcumgr-flash.sh) regardless. 4966/257 = 1366:0101.
     if ioreg -p IOUSB -l 2>/dev/null | awk '
+           /\+-o /          { v = ""; p = "" }
            /"idVendor" = /  { v = $NF }
            /"idProduct" = / { p = $NF }
            v == 4966 && p == 257 { found = 1 }
@@ -62,7 +68,10 @@ if [ "$(uname -s)" = "Darwin" ]; then
 
     # Phone: on the Mac the companion-app device is an iPhone over devicectl.
     if command -v xcrun >/dev/null 2>&1; then
-        IPHONES="$(xcrun devicectl list devices 2>/dev/null | tail -n +3 | grep . || true)"
+        # Match device rows by their CoreDevice UUID rather than assuming a
+        # fixed-height header — devicectl's table layout is not a stable contract.
+        IPHONES="$(xcrun devicectl list devices 2>/dev/null \
+            | grep -E '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}' || true)"
         if [ -n "$IPHONES" ]; then
             echo "iPhone (devicectl):"
             echo "$IPHONES" | sed 's/^/  /'

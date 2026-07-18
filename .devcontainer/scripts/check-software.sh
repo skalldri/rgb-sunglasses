@@ -49,11 +49,16 @@ if [ "$(uname -s)" = "Darwin" ]; then
         echo "serial_mcp (MCP server): NOT INSTALLED  [run scripts/macos-setup.sh]"
     fi
 
-    NCS_ENV_FILE="$HOME/ncs/env-v3.1.1.sh"
-    if [ -f "$NCS_ENV_FILE" ] && [ -d "$HOME/ncs/v3.1.1/zephyr" ]; then
-        echo "NCS v3.1.1 toolchain: OK  [. scripts/fw-env.sh to use]"
+    # env-current.sh is the version-stable symlink macos-setup.sh maintains (the
+    # setup script is the only place the NCS version is pinned); the installed
+    # version is derived from the ZEPHYR_BASE it exports.
+    NCS_ENV_FILE="$HOME/ncs/env-current.sh"
+    NCS_ZEPHYR_BASE="$( [ -f "$NCS_ENV_FILE" ] && . "$NCS_ENV_FILE" >/dev/null 2>&1 && echo "$ZEPHYR_BASE" )"
+    if [ -n "$NCS_ZEPHYR_BASE" ] && [ -d "$NCS_ZEPHYR_BASE" ]; then
+        NCS_VER="$(basename "$(dirname "$NCS_ZEPHYR_BASE")")"
+        echo "NCS toolchain ($NCS_VER): OK  [. scripts/fw-env.sh to use]"
     else
-        echo "NCS v3.1.1 toolchain: NOT READY  [no firmware builds — run scripts/macos-setup.sh]"
+        echo "NCS toolchain: NOT READY  [no firmware builds — run scripts/macos-setup.sh]"
     fi
 
     echo "Twister tests: not supported on macOS (native_sim is Linux-only) — use CI or the devcontainer"

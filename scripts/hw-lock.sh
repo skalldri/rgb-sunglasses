@@ -185,10 +185,17 @@ sanitize_for_filename() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 
 # Nanoseconds since the epoch, always exactly 19 digits (zero-padded) so ticket
 # filenames lexically sort in arrival order. GNU date supports %s%N directly;
-# BSD date (macOS) prints a literal 'N', so fall back to python there.
+# BSD date (macOS) prints a literal 'N', so fall back to coreutils gdate
+# (installed by scripts/macos-setup.sh; absolute paths since hook environments
+# may not have the brew bin dir on PATH), then python3 as a last resort.
 now_ns() {
-    local ns
+    local ns g
     ns="$(date +%s%N 2>/dev/null)"
+    if [[ ! "$ns" =~ ^[0-9]+$ ]]; then
+        for g in /opt/homebrew/bin/gdate /usr/local/bin/gdate; do
+            [[ -x "$g" ]] && { ns="$("$g" +%s%N)"; break; }
+        done
+    fi
     if [[ "$ns" =~ ^[0-9]+$ ]]; then
         printf '%019d' "$ns"
     else
