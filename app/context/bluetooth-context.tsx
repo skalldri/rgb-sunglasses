@@ -55,6 +55,28 @@ type BluetoothContextType = {
     // the pin compare-and-swap style - only if it still points at its own device - rather than
     // unconditionally nulling a slot a concurrent connect may have since overwritten.
     setConnectingDevice: Dispatch<SetStateAction<ConnectingDevice | null>>;
+    // The device an automatic reconnect loop is currently running for (issue #124), or null.
+    // Set when an UNEXPECTED disconnect fires the onDeviceDisconnected handler; cleared on
+    // reconnect success, user cancel, or user disconnect. Drives the "Reconnecting…" row state
+    // and pins the device in the Connect list (it may not be advertising reliably mid-loop).
+    reconnectingDevice: ConnectingDevice | null;
+    setReconnectingDevice: Dispatch<SetStateAction<ConnectingDevice | null>>;
+    // Cancel token for the reconnect supervision loop (issue #124): the loop captures the value
+    // at start and bails once it changes. Bumped by cancelReconnect()/disconnect(). A ref (not
+    // state) so the loop - which lives in a bleManager-listener closure, possibly outliving the
+    // component that created it - always reads the current value synchronously.
+    reconnectGeneration: React.MutableRefObject<number>;
+    // Belt-and-suspenders flag marking a user-initiated disconnect (issue #124). The primary
+    // guard is structural (disconnect() removes the onDeviceDisconnected subscription before
+    // cancelling), but any future code path that drops the link on purpose (e.g. an OTA-reboot
+    // flow) can set this to suppress the auto-reconnect the resulting disconnect event would
+    // otherwise start.
+    intentionalDisconnectRef: React.MutableRefObject<boolean>;
+    // In-flight connect() promise per device MAC (issue #124). Lives at context level (not in
+    // useBleConnection's per-row instance) so the same-device dedup survives the row unmounting
+    // and remounting - the reconnect loop and a user tapping Connect must share one attempt, or
+    // overlapping connectToDevice() calls split-brain the native module (see use-ble-connection).
+    connectPromises: React.MutableRefObject<Record<string, Promise<boolean>>>;
     // Characteristic-query progress during connect()'s discovery walk; null when not connecting
     // or once discovery has finished. See use-ble-connection.ts.
     discoveryProgress: DiscoveryProgress | null;
@@ -81,6 +103,15 @@ type BluetoothContextType = {
     // Monitor subscription management (persists across navigation)
     monitorSubscriptions: React.MutableRefObject<Subscription[]>;
     disconnectSubscription: React.MutableRefObject<Subscription | null>;
+    // Always-live ref mirror of selectedDevice, for callbacks that outlive component
+    // renders (the disconnect handler and the reconnect loop live on the bleManager
+    // emitter and can run long after the row that created them unmounted - a
+    // hook-local ref freezes at that row's last render and reported the OLD device
+    // as still connected, silently killing the reconnect loop; hardware-observed,
+    // issue #124). The provider keeps it updated every render; the disconnect paths
+    // also null it SYNCHRONOUSLY (before setSelectedDevice(null) commits) so a
+    // same-tick reader never sees the stale device.
+    selectedDeviceRef: React.MutableRefObject<BluetoothContextDevice | null>;
 };
 
 const BluetoothContext = createContext<BluetoothContextType | undefined>(undefined);
@@ -91,6 +122,10 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     const [isScanning, setIsScanning] = useState<boolean>(false);
     const [discoveryProgress, setDiscoveryProgress] = useState<DiscoveryProgress | null>(null);
     const [connectingDevice, setConnectingDevice] = useState<ConnectingDevice | null>(null);
+    const [reconnectingDevice, setReconnectingDevice] = useState<ConnectingDevice | null>(null);
+    const reconnectGeneration = useRef(0);
+    const intentionalDisconnectRef = useRef(false);
+    const connectPromises = useRef<Record<string, Promise<boolean>>>({});
 
     // Use ref to access current device in callbacks without stale closures
     const selectedDeviceRef = useRef<BluetoothContextDevice | null>(null);
@@ -343,6 +378,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         setIsScanning,
         connectingDevice,
         setConnectingDevice,
+        reconnectingDevice,
+        setReconnectingDevice,
+        reconnectGeneration,
+        intentionalDisconnectRef,
+        connectPromises,
         discoveryProgress,
         setDiscoveryProgress,
         writeToCharacteristic,
@@ -353,8 +393,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         writeServiceCharacteristic,
         monitorSubscriptions,
         disconnectSubscription,
+        selectedDeviceRef,
     }), [
-        selectedDevice, isScanning, connectingDevice, discoveryProgress, writeToCharacteristic, getCharacteristicInfo, updateCharValue,
+        selectedDevice, isScanning, connectingDevice, reconnectingDevice, discoveryProgress, writeToCharacteristic, getCharacteristicInfo, updateCharValue,
         getServiceCharacteristicInfo, updateServiceCharacteristicValue, writeServiceCharacteristic,
     ]);
 

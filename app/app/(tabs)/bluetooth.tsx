@@ -43,7 +43,7 @@ const PRUNE_INTERVAL_MS = 2_000;
 
 export default function BluetoothScreen() {
 
-    const { isScanning, setIsScanning, connectingDevice } = useBluetooth();
+    const { isScanning, setIsScanning, connectingDevice, reconnectingDevice } = useBluetooth();
     const [devices, setDevices] = useState<BleDevice[]>([]);
     const c = useThemeColors();
     const { info: appUpdate } = useAppUpdateCheck();
@@ -56,6 +56,12 @@ export default function BluetoothScreen() {
     // failed until connect() finally resolves and navigates away.
     const connectingDeviceRef = useRef(connectingDevice);
     connectingDeviceRef.current = connectingDevice;
+
+    // Same treatment for the device an auto-reconnect loop is running for (issue
+    // #124): it may not be advertising (a pending autoConnect adopts it the moment
+    // it is), so pin it in the list rather than letting the pruner age it out.
+    const reconnectingDeviceRef = useRef(reconnectingDevice);
+    reconnectingDeviceRef.current = reconnectingDevice;
 
     // Per-invocation generation token that guards against orphaned scans.
     // startBluetoothScan() awaits requestPermissions() (several native round-
@@ -99,10 +105,13 @@ export default function BluetoothScreen() {
         setDevices(prev => {
             // Never prune the device currently being connected/paired (issue #158): it stops
             // advertising once its LE link is up, so its lastSeen freezes for the whole
-            // pairing+discovery phase and it would otherwise age out mid-connect.
+            // pairing+discovery phase and it would otherwise age out mid-connect. Same for a
+            // device being auto-reconnected (issue #124).
             const connectingMac = connectingDeviceRef.current?.mac;
+            const reconnectingMac = reconnectingDeviceRef.current?.mac;
             const fresh = prev.filter(d =>
-                d.mac === connectingMac || now - (lastSeenRef.current[d.mac] ?? 0) <= DEVICE_TTL_MS
+                d.mac === connectingMac || d.mac === reconnectingMac ||
+                now - (lastSeenRef.current[d.mac] ?? 0) <= DEVICE_TTL_MS
             );
             return fresh.length === prev.length ? prev : fresh;
         });
@@ -261,6 +270,11 @@ export default function BluetoothScreen() {
         setIsScanning(false);
     }
 
+    // Whether an auto-reconnect loop is pending (issue #124). A dependency of the
+    // focus effect below so scanning stops when a reconnect starts and resumes when
+    // it settles (success, cancel, or user disconnect) while the screen stays focused.
+    const isReconnectPending = reconnectingDevice != null;
+
     // Start scanning when the screen is focused, stop when it loses focus
     useFocusEffect(
         useCallback(() => {
@@ -268,6 +282,24 @@ export default function BluetoothScreen() {
             // bumps it again so any invocation still mid-await is left behind.
             const gen = ++scanGenRef.current;
             scanRetriedRef.current = false;
+
+            // While an auto-reconnect is pending, do NOT scan: a scan running
+            // concurrently with the loop's (long-lived, pending) connectToDevice can
+            // get it cancelled by the OS/library - the same hazard as the "Scan must
+            // stop before connecting" rule. Show just the pinned reconnecting device;
+            // scanning resumes when the reconnect settles (this effect re-runs).
+            if (isReconnectPending) {
+                const rec = reconnectingDeviceRef.current;
+                if (rec) {
+                    setDevices([{ name: rec.name, mac: rec.mac }]);
+                    lastSeenRef.current = { [rec.mac]: Date.now() };
+                }
+                setIsScanning(false);
+                return () => {
+                    scanGenRef.current++;
+                };
+            }
+
             startBluetoothScan(gen);
             // Age out devices that stop advertising while the screen stays focused (the
             // scan-restart that used to be the only list-clear happens only on focus/blur).
@@ -306,7 +338,7 @@ export default function BluetoothScreen() {
                 }
                 stopBluetoothScan();
             };
-        }, [])
+        }, [isReconnectPending])
     );
 
     return (

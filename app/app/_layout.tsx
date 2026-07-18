@@ -5,6 +5,7 @@ import 'react-native-reanimated';
 
 import { Colors } from '@/constants/theme';
 import { BluetoothProvider } from '@/context/bluetooth-context';
+import { useBleAppStateVerify } from '@/hooks/use-ble-app-state';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -35,12 +36,20 @@ const navDark: Theme = {
   },
 };
 
+// Must be its own component (not a hook call in RootLayout): useBleAppStateVerify
+// reads the Bluetooth context, so it has to render INSIDE BluetoothProvider.
+function BleAppStateVerifier() {
+  useBleAppStateVerify();
+  return null;
+}
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const palette = colorScheme === 'dark' ? Colors.dark : Colors.light;
 
   return (
     <BluetoothProvider>
+      <BleAppStateVerifier />
       <ThemeProvider value={colorScheme === 'dark' ? navDark : navLight}>
         <Stack
           screenOptions={{

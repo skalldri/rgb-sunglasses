@@ -12,9 +12,15 @@ import {
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { bleManager } from "@/hooks/ble-manager";
+import {
+    startConnectionService,
+    stopConnectionService,
+    updateConnectionNotification,
+} from "@/services/ble-foreground-service";
 import { decodeUtf8FromBase64, MetadataBlobEntry, parseMetadataBlob } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useEffect, useRef, useState } from "react";
+import { Platform } from "react-native";
 import { ConnectionPriority } from "react-native-ble-plx";
 
 interface UseBleConnectionResult {
@@ -25,20 +31,52 @@ interface UseBleConnectionResult {
     // result rather than assuming a resolved promise means "connected".
     connect: () => Promise<boolean>;
     disconnect: () => Promise<void>;
+    // Stops the auto-reconnect loop (issue #124) for this device, aborting any
+    // pending background connect. No-op when no reconnect is running.
+    cancelReconnect: () => void;
+    // Checks whether the OS-level link still matches the app's belief that this
+    // device is connected; if the link is gone (a disconnect event the app missed,
+    // e.g. delivered while iOS had the JS engine suspended), runs the same cleanup
+    // the disconnect handler would have and starts the auto-reconnect loop. Called
+    // from the AppState foreground-verify hook (issue #124). No-op when this device
+    // isn't the selected one or the link is healthy.
+    verifyConnection: () => Promise<void>;
 }
+
+// How the link-establishment step of a connect attempt behaves (issue #124):
+// - 'initial': user-initiated. Two timeout-bounded connectToDevice attempts (the
+//   just-rebooted-bonded-board retry, see the loop comment below).
+// - 'reconnect-pending': auto-reconnect. One connectToDevice with NO timeout;
+//   on Android additionally autoConnect: true - a background "pending connection"
+//   that completes the moment the (re-advertising) board is seen again, with no
+//   scanning. On iOS a timeout-less connectToDevice is natively a never-expiring
+//   pending connect - same semantics for free.
+// - 'reconnect-direct': auto-reconnect hedge. Every 3rd loop attempt uses a plain
+//   timeout-bounded connect in case the OEM stack's autoConnect proves flaky.
+type ConnectMode = 'initial' | 'reconnect-pending' | 'reconnect-direct';
+
+// Reconnect-loop backoff between failed attempts (errors only - a pending connect
+// that is simply *waiting* for the device doesn't consume attempts). Caps at 30s;
+// the loop retries indefinitely while the app is alive (issue #124 decision:
+// walking back into range at a concert should just reconnect, whenever that is).
+const RECONNECT_BACKOFF_MS = [2000, 5000, 10000, 30000];
 
 export function useBleConnection(macAddress: string, deviceName: string): UseBleConnectionResult {
     const {
-        selectedDevice, setSelectedDevice, updateCharValue, updateServiceCharacteristicValue,
+        setSelectedDevice, updateCharValue, updateServiceCharacteristicValue,
         monitorSubscriptions, disconnectSubscription, setDiscoveryProgress, setConnectingDevice,
+        setReconnectingDevice, reconnectGeneration, intentionalDisconnectRef, connectPromises,
+        // The CONTEXT-level live ref, not a hook-local one: the disconnect handler
+        // and reconnect loop run in bleManager-emitter closures that outlive this
+        // row component. A hook-local ref freezes at the row's last render on
+        // unmount, so it kept reporting the old device as connected and the
+        // reconnect loop exited before its first attempt (hardware-observed,
+        // issue #124). The provider updates this ref every render, and the
+        // disconnect paths below null it synchronously.
+        selectedDeviceRef,
     } = useBluetooth();
 
     const [isConnecting, setIsConnecting] = useState(false);
-
-    // Keeps a live reference to selectedDevice so the disconnect listener always
-    // sees the current value, not a stale closure snapshot.
-    const selectedDeviceRef = useRef(selectedDevice);
-    selectedDeviceRef.current = selectedDevice;
 
     // Guards against calling setIsConnecting after the component unmounts.
     const isMountedRef = useRef(true);
@@ -62,25 +100,55 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     // returns the real attempt's eventual result instead of resolving immediately:
     // the caller navigates on genuine success, and a double-tap doesn't push the
     // device-state screen off a no-op early return before anything is connected.
-    const connectPromiseRef = useRef<Promise<boolean> | null>(null);
+    //
+    // The promise map lives in the CONTEXT (keyed by mac, see bluetooth-context) so
+    // the dedup also holds across this row unmounting/remounting and against the
+    // auto-reconnect loop (issue #124), which runs in a listener closure that can
+    // outlive any single row instance: a user tapping Connect mid-reconnect shares
+    // the loop's in-flight attempt instead of starting a colliding one.
 
     function connect(): Promise<boolean> {
-        // Synchronous dedup: the ref is assigned below before runConnect() yields
-        // at its first await, so a second same-tick call sees it and shares the
-        // same promise rather than starting a colliding connectToDevice().
-        if (connectPromiseRef.current) {
-            return connectPromiseRef.current;
+        // A user-initiated connect supersedes any auto-reconnect loop in progress -
+        // including one for a DIFFERENT board (only one device can be selected, so a
+        // stale loop completing later would clobber this connection with that one).
+        // Bumping the generation makes the loop exit at its next check, and any
+        // still-in-flight reconnect attempt self-aborts before setSelectedDevice
+        // (see the generation snapshot in runConnect). Skipped implicitly for the
+        // same mac while its reconnect attempt is in flight: startConnect() returns
+        // the existing promise before this runs only when connect() is called via
+        // the loop; for a user tap the dedup check below returns the shared attempt.
+        if (!connectPromises.current[macAddress]) {
+            reconnectGeneration.current++;
+            setReconnectingDevice(null);
         }
-        const attempt = runConnect();
-        connectPromiseRef.current = attempt;
+        return startConnect('initial');
+    }
+
+    function startConnect(mode: ConnectMode): Promise<boolean> {
+        // Synchronous dedup: the map slot is assigned below before runConnect()
+        // yields at its first await, so a second same-tick call sees it and shares
+        // the same promise rather than starting a colliding connectToDevice().
+        const existing = connectPromises.current[macAddress];
+        if (existing) {
+            return existing;
+        }
+        const attempt = runConnect(mode);
+        connectPromises.current[macAddress] = attempt;
         // Clear once settled so a later reconnect starts a fresh attempt. runConnect
         // resolves true/false and never rejects, so this never leaves a rejection
         // unhandled.
-        attempt.finally(() => { connectPromiseRef.current = null; });
+        attempt.finally(() => { delete connectPromises.current[macAddress]; });
         return attempt;
     }
 
-    async function runConnect(): Promise<boolean> {
+    async function runConnect(mode: ConnectMode): Promise<boolean> {
+        // Reconnect attempts snapshot the cancel token: if cancelReconnect() (or a
+        // superseding user connect) bumps it while this attempt is in flight, the
+        // attempt must abort itself rather than complete later and clobber whatever
+        // the user has since connected to (a pending autoConnect can otherwise
+        // resolve minutes after it was logically cancelled).
+        const genAtStart = reconnectGeneration.current;
+        const isReconnectAttempt = mode !== 'initial';
         setIsConnecting(true);
         // Pin this device in the Connect screen's list for the whole attempt: it stops advertising
         // the moment its LE link comes up, so the scan-derived list would otherwise prune it
@@ -134,32 +202,48 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             // failed attempt's half-open BluetoothGatt is force-closed before retrying
             // so the next connectGatt doesn't queue behind a zombie client.
             let deviceConnection = null;
-            const kConnectAttempts = 2;
-            for (let attempt = 1; attempt <= kConnectAttempts; attempt++) {
-                try {
-                    // Barebones: link only. No refreshGatt, no inline requestMTU (both
-                    // reasons above); MTU is negotiated as its own step below.
-                    // 60s (not 15s): a first-time pair has to wait for the user (or the
-                    // /re-pair autoresponder) to accept Android's pairing dialog before
-                    // the encrypted link comes up and this resolves — 15s raced that.
-                    deviceConnection = await bleManager.connectToDevice(macAddress, { timeout: 60000 });
-                    break;
-                } catch (error) {
-                    console.log(`connectToDevice attempt ${attempt}/${kConnectAttempts} failed for ${macAddress}:`, error);
-                    if (attempt === kConnectAttempts) {
-                        throw error;
-                    }
-                    // Close the failed attempt's half-open native GATT client before
-                    // retrying - a timed-out connectToDevice() does not reliably close
-                    // the BluetoothGatt it opened, and a still-registered zombie client
-                    // blocks the next connectGatt for the same device.
+            if (mode === 'initial') {
+                const kConnectAttempts = 2;
+                for (let attempt = 1; attempt <= kConnectAttempts; attempt++) {
                     try {
-                        await bleManager.cancelDeviceConnection(macAddress);
-                    } catch {
-                        // Expected when ble-plx never got far enough to consider the
-                        // device connected - nothing to cancel is fine.
+                        // Barebones: link only. No refreshGatt, no inline requestMTU (both
+                        // reasons above); MTU is negotiated as its own step below.
+                        // 60s (not 15s): a first-time pair has to wait for the user (or the
+                        // /re-pair autoresponder) to accept Android's pairing dialog before
+                        // the encrypted link comes up and this resolves — 15s raced that.
+                        deviceConnection = await bleManager.connectToDevice(macAddress, { timeout: 60000 });
+                        break;
+                    } catch (error) {
+                        console.log(`connectToDevice attempt ${attempt}/${kConnectAttempts} failed for ${macAddress}:`, error);
+                        if (attempt === kConnectAttempts) {
+                            throw error;
+                        }
+                        // Close the failed attempt's half-open native GATT client before
+                        // retrying - a timed-out connectToDevice() does not reliably close
+                        // the BluetoothGatt it opened, and a still-registered zombie client
+                        // blocks the next connectGatt for the same device.
+                        try {
+                            await bleManager.cancelDeviceConnection(macAddress);
+                        } catch {
+                            // Expected when ble-plx never got far enough to consider the
+                            // device connected - nothing to cancel is fine.
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 1000));
                     }
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            } else {
+                // Auto-reconnect link step (issue #124) - see ConnectMode above. One
+                // attempt only: for 'reconnect-pending' the pending connect IS the retry
+                // (it sits waiting until the board is seen), and the supervision loop
+                // owns backoff/retry for real errors.
+                const options = mode === 'reconnect-pending'
+                    ? (Platform.OS === 'android' ? { autoConnect: true } : {})
+                    : { timeout: 60000 };
+                deviceConnection = await bleManager.connectToDevice(macAddress, options);
+                if (reconnectGeneration.current !== genAtStart) {
+                    // Logically cancelled while the pending connect waited - do not adopt
+                    // this link (the throw routes through the catch below, which closes it).
+                    throw new Error('reconnect attempt superseded');
                 }
             }
             if (!deviceConnection) {
@@ -365,6 +449,12 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 }
             }
 
+            if (isReconnectAttempt && reconnectGeneration.current !== genAtStart) {
+                // Cancelled while discovery ran (same reasoning as the post-link check
+                // above): abort before publishing this connection into context.
+                throw new Error('reconnect attempt superseded');
+            }
+
             setSelectedDevice({
                 name: deviceName,
                 mac: macAddress,
@@ -451,6 +541,12 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 if (device && device.id === macAddress) {
                     console.log(`Device disconnected: ${deviceName} (${macAddress})`);
 
+                    // Remove this subscription before anything else: a successful
+                    // reconnect registers a FRESH listener, and without this the stale
+                    // one stays live on the emitter - the next disconnect would then
+                    // fire both, starting duplicate reconnect loops (issue #124).
+                    disconnectSubscription.current?.remove();
+
                     console.log(`Cleaning up ${monitorSubscriptions.current.length} characteristic monitors on disconnect`);
                     monitorSubscriptions.current.forEach(sub => sub.remove());
                     monitorSubscriptions.current = [];
@@ -463,12 +559,40 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                         }
                     }
 
+                    // Null the live ref SYNCHRONOUSLY: setSelectedDevice(null) only
+                    // commits on the next provider render, and startReconnectLoop's
+                    // first already-connected check runs in this same tick - a stale
+                    // ref there aborts the loop before its first attempt.
+                    selectedDeviceRef.current = null;
                     setSelectedDevice(null);
                     disconnectSubscription.current = null;
+
+                    // Unexpected drop (user-initiated disconnects never reach this
+                    // handler - disconnect() removes the subscription first, and the
+                    // intentional flag is the belt-and-suspenders for future
+                    // on-purpose drops like OTA reboots): start auto-reconnecting
+                    // (issue #124). Deliberately not awaited - the loop outlives this
+                    // callback.
+                    if (!intentionalDisconnectRef.current) {
+                        startReconnectLoop();
+                    }
                 }
             });
 
             console.log('Pairing complete');
+
+            // Android: keep the process (and this connection) alive in the background
+            // (issue #124). Fire-and-forget - the permission prompt / notification
+            // plumbing must not delay connect() resolving. Only an 'initial' (user-
+            // initiated, therefore foregrounded) connect may START the service -
+            // Android 12+ forbids background FGS starts; a reconnect success just
+            // refreshes the still-running service's notification text.
+            if (mode === 'initial') {
+                void startConnectionService(deviceName);
+            } else {
+                void updateConnectionNotification(`Connected to ${deviceName}`);
+            }
+
             return true;
         } catch (error) {
             console.error(`Connection failed for ${macAddress}:`, error);
@@ -497,10 +621,106 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         }
     }
 
+    // Auto-reconnect supervision loop (issue #124). Runs as a detached async task in
+    // this closure - it may outlive the row component that created it (context
+    // setters/refs stay valid; local setState is guarded by isMountedRef inside
+    // runConnect). Exits on: success, cancellation (generation bump), or the device
+    // getting connected by another path (user tap sharing the dedup'd attempt).
+    // Otherwise retries indefinitely with capped backoff - see RECONNECT_BACKOFF_MS.
+    async function startReconnectLoop(): Promise<void> {
+        const gen = ++reconnectGeneration.current;
+        setReconnectingDevice({ mac: macAddress, name: deviceName });
+        console.log(`Auto-reconnect: starting loop for ${deviceName} (${macAddress})`);
+        // Text-only update of the (still running) foreground service notification -
+        // never a service start, which the background would forbid on Android 12+.
+        void updateConnectionNotification(`Reconnecting to ${deviceName}…`);
+
+        for (let attempt = 1; reconnectGeneration.current === gen; attempt++) {
+            if (selectedDeviceRef.current?.mac === macAddress) {
+                // Already connected (a user-initiated connect landed between attempts).
+                break;
+            }
+            // Every 3rd attempt hedges with a direct (timeout-bounded) connect in case
+            // the OEM stack's autoConnect pending connection is flaky - see ConnectMode.
+            const mode: ConnectMode = attempt % 3 === 0 ? 'reconnect-direct' : 'reconnect-pending';
+            const ok = await startConnect(mode);
+            if (reconnectGeneration.current !== gen) {
+                // Cancelled mid-attempt; the canceller owns the UI state.
+                return;
+            }
+            if (ok) {
+                console.log(`Auto-reconnect: reconnected to ${deviceName} (${macAddress}) on attempt ${attempt}`);
+                break;
+            }
+            const delay = RECONNECT_BACKOFF_MS[Math.min(attempt - 1, RECONNECT_BACKOFF_MS.length - 1)];
+            console.log(`Auto-reconnect: attempt ${attempt} for ${macAddress} failed; retrying in ${delay}ms`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+
+        if (reconnectGeneration.current === gen) {
+            // Clear compare-and-swap style: never null out a slot a newer loop (for
+            // this or another device) has since claimed.
+            setReconnectingDevice(prev => (prev?.mac === macAddress ? null : prev));
+        }
+    }
+
+    function cancelReconnect(): void {
+        reconnectGeneration.current++;
+        setReconnectingDevice(prev => (prev?.mac === macAddress ? null : prev));
+        // Abort a still-pending background connect so it can't complete later and
+        // adopt a link nobody asked for (the generation snapshot in runConnect is
+        // the backstop if this races the connect actually resolving).
+        bleManager.cancelDeviceConnection(macAddress).catch(() => {
+            // Nothing pending/connected for this mac - fine.
+        });
+        // No connection to keep alive anymore - drop the foreground service.
+        void stopConnectionService();
+    }
+
+    async function verifyConnection(): Promise<void> {
+        const current = selectedDeviceRef.current;
+        if (!current || current.mac !== macAddress) return;
+
+        let connected = false;
+        try {
+            connected = await bleManager.isDeviceConnected(macAddress);
+        } catch (error) {
+            console.log(`isDeviceConnected(${macAddress}) failed; treating as disconnected:`, error);
+        }
+        if (connected) return;
+
+        console.log(`Foreground verify: ${deviceName} (${macAddress}) link is gone but app state says connected - recovering`);
+
+        // Same cleanup the onDeviceDisconnected handler performs for a drop whose
+        // event the app actually received.
+        disconnectSubscription.current?.remove();
+        disconnectSubscription.current = null;
+        monitorSubscriptions.current.forEach(sub => sub.remove());
+        monitorSubscriptions.current = [];
+        if (current.mcuMgrClient) {
+            try {
+                current.mcuMgrClient.destroy();
+            } catch (e) {
+                console.log('Error destroying MCUmgr client:', e);
+            }
+        }
+        // Synchronous ref null before the loop starts - same reasoning as the
+        // disconnect handler.
+        selectedDeviceRef.current = null;
+        setSelectedDevice(null);
+
+        // Deliberately not awaited - the loop outlives this call.
+        void startReconnectLoop();
+    }
+
     async function disconnect(): Promise<void> {
         setIsConnecting(true);
         try {
             console.log(`Disconnecting from device: ${deviceName} (${macAddress})`);
+
+            // A user disconnect also means "stop trying to reconnect" (issue #124).
+            cancelReconnect();
+            intentionalDisconnectRef.current = true;
 
             if (disconnectSubscription.current) {
                 disconnectSubscription.current.remove();
@@ -514,9 +734,10 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             await bleManager.cancelDeviceConnection(macAddress);
             setSelectedDevice(null);
         } finally {
+            intentionalDisconnectRef.current = false;
             if (isMountedRef.current) setIsConnecting(false);
         }
     }
 
-    return { isConnecting, connect, disconnect };
+    return { isConnecting, connect, disconnect, cancelReconnect, verifyConnection };
 }

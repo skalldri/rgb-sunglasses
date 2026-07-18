@@ -133,6 +133,25 @@ Do these in order; the API upload only works after the final steps.
    | Variable | `PLAY_TRACK` | `alpha` — the built-in **Closed testing** track (current default; falls back to `internal` only if the variable is unset) |
    | Variable | `PLAY_RELEASE_STATUS` | defaults to `draft` when unset (fail-safe: a never-published app **rejects** `completed` releases). Set to `completed` once the app is first published and you want tag releases to go live automatically |
 
+## Foreground-service declaration (connectedDevice)
+
+The app declares a `connectedDevice`-typed foreground service (issue #124: it keeps
+the BLE connection alive while the app is backgrounded — notifee's service, retyped
+by `plugins/withBleForegroundService.js`, permissions `FOREGROUND_SERVICE` +
+`FOREGROUND_SERVICE_CONNECTED_DEVICE` in `app.json`). Google Play requires a
+**Foreground service permissions declaration** for every typed FGS (Play Console →
+*App content* → *Foreground service permissions*): pick the `CONNECTED_DEVICE` type,
+describe the use case ("maintains the Bluetooth LE connection to the user's RGB
+Sunglasses so animation changes apply instantly while the app is backgrounded"), and
+attach a short screen-recording of connect → HOME → notification visible → control
+still works. Submissions without the declaration are rejected at review time — do
+this before the first Play upload that contains the FGS.
+
+Do NOT add `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` to "fix" OEM kills — it is a
+Play-restricted permission with its own (rarely granted) declaration. The in-app
+guidance for aggressive OEMs (OxygenOS "advanced optimization") is to exempt the app
+manually: Settings → Battery → the app → *Don't optimize*.
+
 ## Dry-run procedure
 
 Trigger the `App Release` workflow via **workflow_dispatch** with
