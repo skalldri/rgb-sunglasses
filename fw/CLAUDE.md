@@ -70,7 +70,24 @@ Treat successful `west build` as the primary validation step after any change. T
 
 **Always use `west build` for building — never invoke `cmake` or `ninja` directly.** The `west build` command handles multi-image (sysbuild) coordination correctly; raw `cmake`/`ninja` invocations bypass that and produce misleading results.
 
-Known non-blocking warning: `multi-line comment [-Wcomment]` in `src/bluetooth/bt_service.h`.
+### Known non-blocking build warnings (issue #164 cleanup, 2026-07-17)
+
+A clean proto0 sysbuild still emits these warnings; all are accepted — do not
+"fix" them, and treat anything NOT on this list as new and worth investigating:
+
+- `Experimental symbol USB_DEVICE_STACK_NEXT / UDC_DRIVER is enabled` (×2 each)
+  — deliberate choice of the new USB stack (see prj.conf comment).
+- `Experimental symbol DEBUG_COREDUMP_BACKEND_NRF_FLASH_PARTITION is enabled`
+  — deliberate coredump backend choice.
+- `usbd_cdc_acm.c: #warning "USBD_CDC_ACM_LOG_LEVEL forced to LOG_LEVEL_NONE"`
+  — upstream NCS code, not ours to change.
+- `Deprecated symbol TINYCRYPT is enabled` (ipc_radio image) — our
+  `netcore_version.c` still uses TinyCrypt SHA-256; migrating to PSA/mbedTLS
+  on the flash-tight netcore is a tracked follow-up to issue #164 (see the
+  comment in `fw/sysbuild/ipc_radio/prj.conf`).
+
+(The old `-Wcomment` note that used to live here referred to
+`src/bluetooth/bt_service.h`, which no longer exists.)
 
 ## Commenting rules
 

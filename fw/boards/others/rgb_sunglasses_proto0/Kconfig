@@ -10,39 +10,14 @@ config BOARD_ENABLE_UICR_ACCESS
 	select SOC_FLASH_NRF_UICR
 	default y
 
-config BOARD_ENABLE_CPUNET
-	bool "NRF53 Network MCU"
-	select SOC_NRF_GPIO_FORWARDER_FOR_NRF5340 if \
-		$(dt_compat_enabled,$(DT_COMPAT_NORDIC_NRF_GPIO_FORWARDER))
-	help
-	  This option enables releasing the Network 'force off' signal, which
-	  as a consequence will power up the Network MCU during system boot.
-	  Additionally, the option allocates GPIO pins that will be used by UARTE
-	  of the Network MCU.
-	  Note: GPIO pin allocation can only be configured by the secure Application
-	  MCU firmware, so when this option is used with the non-secure version of
-	  the board, the application needs to take into consideration, that the
-	  secure firmware image must already have configured GPIO allocation for the
-	  Network MCU.
-	default y if (BT || NRF_802154_SER_HOST)
-
-config DOMAIN_CPUNET_BOARD
-	string
-	default "rgb_sunglasses_proto0_cpunet"
-	depends on BOARD_ENABLE_CPUNET
-	help
-	  The board which will be used for CPUNET domain when creating a multi
-	  image application where one or more images should be located on
-	  another board. For example hci_rpmsg on the nRF5340_cpunet for
-	  Bluetooth applications.
+# Powering up the network core at boot is handled by the SoC-level
+# SOC_NRF53_CPUNET_ENABLE symbol (see Kconfig.defconfig, which defaults it on
+# when BT is enabled). The board-level BOARD_ENABLE_CPUNET symbol this file
+# used to define is deprecated upstream (zephyr/soc/nordic/nrf53/Kconfig) and
+# its cpunet_reset.c has been removed with it (issue #164): the SoC-level
+# bring-up (nrf53_cpunet_mgmt.c) performs the same SPU secure retention, GPIO
+# forwarding, and FORCEOFF release this project relied on. (cpunet_reset.c
+# also had a BT_CTLR_DEBUG_PINS_CPUAPP debug-pin hook, but that symbol
+# depends on the upstream nRF5340DK board and was unreachable here.)
 
 endif #  BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP || BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP_NS
-
-config DOMAIN_CPUAPP_BOARD
-	string
-	default "rgb_sunglasses_proto0_cpuapp"
-	depends on BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUNET
-	help
-	  The board which will be used for CPUAPP domain when creating a multi
-	  image application where one or more images should be located on
-	  another board.
