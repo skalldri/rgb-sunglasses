@@ -52,6 +52,19 @@
 # waiter can never permanently jam the line for those behind it.
 set -euo pipefail
 
+# macOS ships bash 3.2, which can't parse the associative arrays below; re-exec
+# into a Homebrew bash (>= 4) when invoked under the stock one. Absolute paths,
+# not PATH lookup -- hook environments (e.g. .claude/hooks/hw-lock-guard.sh)
+# may not have the brew bin dir on PATH. The version check makes this a no-op
+# everywhere bash is already modern (devcontainer, brew bash itself).
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    for _newer_bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+        [ -x "$_newer_bash" ] && exec "$_newer_bash" "$0" "$@"
+    done
+    echo "[!] hw-lock.sh needs bash >= 4 (this is $BASH_VERSION); run scripts/macos-setup.sh to install it via Homebrew." >&2
+    exit 1
+fi
+
 VALID_RESOURCES=(board app)
 declare -A MY_TICKETS=()
 # Resources this cmd_hold invocation ADOPTED (took over an existing same-session
@@ -104,7 +117,7 @@ write_meta() {
         echo "branch=$BRANCH"
         echo "hostname=$(hostname)"
         echo "acquired_at=$(date +%s)"
-        echo "acquired_at_human=$(date -Is)"
+        echo "acquired_at_human=$(date +%Y-%m-%dT%H:%M:%S%z)"
         echo "pid=$pid"
         echo "reason=$reason"
     } > "$(lock_dir_for "$resource")/info"
@@ -170,6 +183,19 @@ queue_dir_for() { echo "$LOCK_ROOT/$1/queue"; }
 
 sanitize_for_filename() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 
+# Nanoseconds since the epoch, always exactly 19 digits (zero-padded) so ticket
+# filenames lexically sort in arrival order. GNU date supports %s%N directly;
+# BSD date (macOS) prints a literal 'N', so fall back to python there.
+now_ns() {
+    local ns
+    ns="$(date +%s%N 2>/dev/null)"
+    if [[ "$ns" =~ ^[0-9]+$ ]]; then
+        printf '%019d' "$ns"
+    else
+        python3 -c 'import time; print("%019d" % time.time_ns())'
+    fi
+}
+
 # Registers a waiting ticket for resource $1, sets TICKET_PATH. Filename is
 # <19-digit nanosecond timestamp>-<holder>-<pid>.ticket -- fixed-width numeric
 # prefix so a plain lexical `sort` gives arrival order.
@@ -177,13 +203,13 @@ register_ticket() {
     local resource="$1" qdir name path
     qdir="$(queue_dir_for "$resource")"
     mkdir -p "$qdir"
-    name="$(date +%s%N)-$(sanitize_for_filename "$HOLDER_ID")-$$.ticket"
+    name="$(now_ns)-$(sanitize_for_filename "$HOLDER_ID")-$$.ticket"
     path="$qdir/$name"
     {
         echo "session_id=$HOLDER_ID"
         echo "pid=$$"
         echo "worktree=$WORKTREE_ROOT"
-        echo "queued_at_human=$(date -Is)"
+        echo "queued_at_human=$(date +%Y-%m-%dT%H:%M:%S%z)"
     } > "$path"
     TICKET_PATH="$path"
 }
@@ -437,7 +463,7 @@ kill_orphaned_metro() {
 
     for pid in $candidates; do
         [ "$pid" = "$$" ] && continue
-        cmdline="$(ps -o cmd= -p "$pid" 2>/dev/null || true)"
+        cmdline="$(ps -o command= -p "$pid" 2>/dev/null || true)"
         case "$cmdline" in
             *hw-lock.sh*) continue ;;
         esac

@@ -20,5 +20,10 @@ port=$(serial_find_shell_port) || {
 }
 
 echo "Zephyr shell: $port @ 115200 (exit: Ctrl-A then k, then y)"
-stty -F "$port" 115200 cs8 -cstopb -parenb raw -echo
+# BSD stty spells the device flag -f; GNU spells it -F.
+if [ "$(uname -s)" = "Darwin" ]; then
+  stty -f "$port" 115200 cs8 -cstopb -parenb raw -echo
+else
+  stty -F "$port" 115200 cs8 -cstopb -parenb raw -echo
+fi
 exec screen "$port" 115200

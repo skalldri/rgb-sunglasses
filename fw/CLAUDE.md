@@ -61,7 +61,14 @@ twister -T fw/tests/animations/animation_registry -p native_sim
 
 Commands above are relative to the repo root (or worktree root) — always run them from there, not from inside `fw/`.
 
-Treat successful `west build` as the primary validation step after any change. The NCS SDK lives at `/root/ncs/v3.1.1`.
+Treat successful `west build` as the primary validation step after any change. The NCS SDK lives at:
+
+| Host | NCS v3.1.1 path | How west gets on PATH |
+|---|---|---|
+| Linux devcontainer | `/root/ncs/v3.1.1` | already on PATH (base image) |
+| macOS host (Mac Mini) | `~/ncs/v3.1.1` | `. scripts/fw-env.sh` (venv + ZEPHYR_BASE; installed by `scripts/macos-setup.sh`) |
+
+Docs in this file that reference `/root/ncs/v3.1.1/...` paths (Kconfig sources, Zephyr docs) map to `~/ncs/v3.1.1/...` on macOS.
 
 **Always use `west build` for building — never invoke `cmake` or `ninja` directly.** The `west build` command handles multi-image (sysbuild) coordination correctly; raw `cmake`/`ninja` invocations bypass that and produce misleading results.
 
@@ -294,11 +301,27 @@ Read the documentation directly from /root/ncs/v3.1.1/zephyr/doc
 
 ## Hardware Environment
 
-Run `/check-hardware` at the start of any session to discover what's available. The skill checks lsusb for the dev board, verifies the TTY ports, and checks for a connected Android device via ADB.
+Run `/check-hardware` at the start of any session to discover what's available. The skill checks for the dev board (lsusb on Linux, IORegistry on macOS), verifies the TTY ports, and checks for the phone (Android via ADB in the devcontainer; iPhone via devicectl on macOS).
+
+### macOS host (Mac Mini)
+
+The full firmware dev loop (build → flash → serial verify) also runs natively on the Mac Mini when the board is attached there. One-time setup: `scripts/macos-setup.sh` (idempotent — Homebrew bash for hw-lock, Go + mcumgr, NCS v3.1.1 west workspace + Zephyr SDK at `~/ncs`, `serial_mcp`). Differences from the devcontainer:
+
+| Aspect | devcontainer | macOS host |
+|---|---|---|
+| Shell port | `/dev/ttyACM0` (iface x.0) | `/dev/cu.usbmodem*`, lower suffix (data iface 1) |
+| MCUmgr port | `/dev/ttyACM1`/`ttyACM2` (iface x.2) | `/dev/cu.usbmodem*`, higher suffix (data iface 3) |
+| Flashing | J-Link fast path (`jlink-flash.sh`) | **MCUmgr OTA only** (`fw/scripts/mcumgr-flash.sh`) — no SEGGER tooling |
+| Bootloader/netcore-only reflash | J-Link | not possible — use the devcontainer |
+| Build env | west on PATH | `. scripts/fw-env.sh` first (skills do this) |
+| Twister tests | `/test-fw` (native_sim) | **not supported** (native_sim is Linux-only) — use CI or the devcontainer |
+| /NAND: disk mount | `dmesg`/`lsblk`/`mount` | Finder/`diskutil` (`/Volumes`); same sync → eject → reboot discipline |
+
+Never hardcode the `cu.usbmodem` names — discover them via `/check-hardware` (they can shift on re-enumeration, same rule as ttyACM). Everything else — hw-lock discipline, `mcp__serial__*` usage, the shell command surface — is identical; `scripts/hw-lock.sh` re-execs itself into Homebrew bash on macOS.
 
 ## Serial Console (Zephyr Shell)
 
-The dev board exposes two USB-CDC-ACM ports:
+The dev board exposes two USB-CDC-ACM ports (Linux names shown; on macOS they are `/dev/cu.usbmodem*` — lower suffix = shell, higher = MCUmgr, see "macOS host" above; always discover via `/check-hardware`, names shift on both OSes):
 
 | Port           | Role                                        | Baud   |
 | -------------- | ------------------------------------------- | ------ |
@@ -586,7 +609,7 @@ nrfutil device reset --serial-number <jlink-serial> --reset-kind RESET_PIN
 
 ## MCUmgr
 
-`mcumgr` is installed in the devcontainer (built from source during image build). The MCUmgr port is always USB interface x.2 — run `/check-hardware` to find the current port (it shifts after resets; see WSL2 note below).
+`mcumgr` is installed in the devcontainer (built from source during image build) and on the Mac Mini (via `scripts/macos-setup.sh`). The MCUmgr port is always USB interface x.2 on Linux (`/dev/cu.usbmodem*` with the higher suffix on macOS) — run `/check-hardware` to find the current port (it shifts after resets; see WSL2 note below).
 
 ```bash
 # Run /check-hardware first to identify the current MCUmgr port (may be ttyACM1, ttyACM2, etc.)

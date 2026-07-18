@@ -17,7 +17,7 @@ Hardware iterations are slow and mistakes can cause damage. Before flashing anyt
 
 - Read the relevant source code to confirm assumptions (Kconfig deps, handler logic, buffer sizes)
 - Verify changes in `build/fw/zephyr/include/generated/zephyr/autoconf.h` before uploading
-- Don't rely on web search results for Kconfig symbol names — check the actual NCS source under `/root/ncs/v3.1.1/`
+- Don't rely on web search results for Kconfig symbol names — check the actual NCS source under `/root/ncs/v3.1.1/` (devcontainer) / `~/ncs/v3.1.1/` (macOS host)
 - Verify memory-accounting claims against the linker map (`build/fw/zephyr/zephyr.map`) before proposing size/config changes — e.g. `.noinit` buffers (like the llext heap) ARE counted in the linker's RAM percentage, and secondary reports (footprint scripts) use different accounting than what governs link success
 
 ### NEVER write unverified commands or data into hardware parts
@@ -202,6 +202,13 @@ at preemptively.
 See `.claude/skills/hw-lock/SKILL.md` for the full command surface (status,
 `--steal`, `--force`, `release --all`) and known enforcement limitations.
 
+Locking works on a macOS host too: `hw-lock.sh` re-execs itself into Homebrew
+bash ≥ 4 (installed by `scripts/macos-setup.sh`) when invoked under the stock
+macOS bash 3.2. Locks are per-host (stored under the repo's `$GIT_COMMON_DIR`),
+which is correct: the physical hardware is attached to exactly one host at a
+time, and agents on that host contend with each other, not with agents
+elsewhere.
+
 Note the hook's Bash matcher keys on command **text**: even read-only commands
 containing the literal tokens `adb`/`mcumgr`/`JLinkExe` (e.g. a `grep` for them)
 are denied without the lock — use the Read/Grep tools or avoid the tokens
@@ -230,7 +237,10 @@ When the user says "Remember" (or "Remember that"), update the appropriate CLAUD
 
 ## Installing tools
 
-When installing any new CLI tool or dependency, **always add it to the devcontainer** (`.devcontainer/Dockerfile` or `postCreateCommand` in `.devcontainer/devcontainer.json`) so it is available to all users after a rebuild. Do not rely on ad-hoc `apt install` or `pip install` commands that only affect the current container instance.
+When installing any new CLI tool or dependency, **always add it to the environment's setup definition** so it is available to all users after a rebuild/re-run — never ad-hoc `apt install`/`brew install`/`pip install` commands that only affect the current instance:
+
+- Linux devcontainer: `.devcontainer/Dockerfile` or `postCreateCommand` in `.devcontainer/devcontainer.json`
+- macOS host (Mac Mini): `scripts/macos-setup.sh` (firmware + agent tooling) or `app/scripts/macos-setup.sh` (iOS app toolchain) — both idempotent, safe to re-run
 
 ## Session startup
 

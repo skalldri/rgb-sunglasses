@@ -9,6 +9,14 @@ JLINK_VID_PID="1366:0101"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="$REPO_ROOT/fw/build"
 
+# This script is Linux/devcontainer-only (lsusb probe, nrfutil runner, SEGGER
+# tools). On a macOS host, flash over MCUmgr serial OTA instead.
+if [ "$(uname -s)" = "Darwin" ]; then
+    echo "[!] jlink-flash.sh does not support macOS — use fw/scripts/mcumgr-flash.sh (MCUmgr OTA over serial)." >&2
+    echo "    See fw/CLAUDE.md, 'macOS host (Mac Mini)'." >&2
+    exit 1
+fi
+
 # The 'board' hw-lock coordinates the shared dev board across Claude Code agent
 # worktrees. Only enforce it when an agent is driving — Claude Code sets CLAUDECODE=1
 # in every command it spawns; a solo human developer flashes lock-free. Set

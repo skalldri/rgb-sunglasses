@@ -8,6 +8,76 @@ JLINK_VID_PID="1366:0101"
 echo "=== RGB Sunglasses Hardware Check ==="
 echo ""
 
+# ── macOS host ─────────────────────────────────────────────────────────────
+# On a Mac (e.g. the Mac Mini with the board + an iPhone attached) there is no
+# lsusb/sysfs and no adb phone; detection goes through the IORegistry and the
+# phone is an iPhone via devicectl. This branch must stay bash-3.2-clean: the
+# SessionStart hook runs this script with the stock macOS bash.
+if [ "$(uname -s)" = "Darwin" ]; then
+    REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+    # shellcheck source=../../scripts/lib/serial-port.sh
+    . "$REPO_ROOT/scripts/lib/serial-port.sh"
+
+    SHELL_PORT="$(serial_find_shell_port 2>/dev/null || true)"
+    MCUMGR_PORT="$(serial_find_mcumgr_port 2>/dev/null || true)"
+
+    if [ -n "$SHELL_PORT" ] || [ -n "$MCUMGR_PORT" ] ||
+       ioreg -p IOUSB -l 2>/dev/null | awk '
+           /"idVendor" = /  { v = $NF }
+           /"idProduct" = / { p = $NF }
+           v == 12259 && p == 1 { found = 1 }
+           END { exit !found }'; then
+        echo "Dev board (2fe3:0001): DETECTED"
+        if [ -n "$SHELL_PORT" ]; then
+            echo "  $SHELL_PORT: OK  [Zephyr shell, 115200 baud]"
+        else
+            echo "  Zephyr shell port: NOT FOUND"
+        fi
+        if [ -n "$MCUMGR_PORT" ]; then
+            echo "  $MCUMGR_PORT: OK  [MCUmgr firmware update, 115200 baud]"
+        else
+            echo "  MCUmgr port: NOT FOUND (board may still be booting)"
+        fi
+    else
+        echo "Dev board (2fe3:0001): NOT DETECTED"
+        echo "  Zephyr shell port: N/A"
+        echo "  MCUmgr port: N/A"
+    fi
+
+    echo ""
+
+    # J-Link: no SEGGER tooling is installed on the Mac; flashing here is via
+    # MCUmgr OTA (fw/scripts/mcumgr-flash.sh) regardless. 4966/257 = 1366:0101.
+    if ioreg -p IOUSB -l 2>/dev/null | awk '
+           /"idVendor" = /  { v = $NF }
+           /"idProduct" = / { p = $NF }
+           v == 4966 && p == 257 { found = 1 }
+           END { exit !found }'; then
+        echo "J-Link (1366:0101): DETECTED  [unused on macOS — flashing is via MCUmgr OTA]"
+    else
+        echo "J-Link (1366:0101): NOT DETECTED  [normal on macOS — flashing is via MCUmgr OTA]"
+    fi
+
+    echo ""
+
+    # Phone: on the Mac the companion-app device is an iPhone over devicectl.
+    if command -v xcrun >/dev/null 2>&1; then
+        IPHONES="$(xcrun devicectl list devices 2>/dev/null | tail -n +3 | grep . || true)"
+        if [ -n "$IPHONES" ]; then
+            echo "iPhone (devicectl):"
+            echo "$IPHONES" | sed 's/^/  /'
+        else
+            echo "iPhone (devicectl): NOT CONNECTED"
+        fi
+    else
+        echo "iPhone (devicectl): N/A (xcrun not found — install Xcode)"
+    fi
+
+    echo ""
+    echo "======================================"
+    exit 0
+fi
+
 # ── Dev board ──────────────────────────────────────────────────────────────
 if lsusb 2>/dev/null | grep -qi "$BOARD_VID_PID"; then
     echo "Dev board (2fe3:0001): DETECTED"
