@@ -1,13 +1,15 @@
-name: 'build' 
+name: 'build (dk-support)'
 on:
   pull_request:
+    branches:
+      - dk-support
     paths:
       - 'fw/**'
       - '.github/workflows/**'
       - '.devcontainer/**'
   push:
     branches:
-      - main
+      - dk-support
     paths:
       - 'fw/**'
       - '.github/workflows/**'
@@ -22,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: read
     steps:
       - name: Free up space
         run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /usr/local/lib/android && sudo rm -rf /opt/ghc && sudo rm -rf /opt/hostedtoolcache/CodeQL
@@ -40,148 +42,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # push: never — this branch must never republish the ghcr devcontainer
+      # image; main's CI owns it. cacheFrom still pulls main's image.
       - name: Build and run dev container task
         uses: devcontainers/ci@v0.3
         with:
           imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          push: always
+          push: never
           runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw"
 
       - uses: actions/upload-artifact@v4
         with:
           name: dfu_application_dk.zip
           path: ${{ github.workspace }}/fw/build/dfu_application.zip
-
-  build-proto0:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Free up space
-        run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /usr/local/lib/android && sudo rm -rf /opt/ghc && sudo rm -rf /opt/hostedtoolcache/CodeQL
-
-      - name: Check HDD space
-        run: df -h
-
-      - name: Checkout (GitHub)
-        uses: actions/checkout@v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and run dev container task
-        uses: devcontainers/ci@v0.3
-        with:
-          imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          push: always
-          runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw" && west build --build-dir /workspaces/rgb-sunglasses/fw/build --domain fw -t llext-edk && /workspaces/rgb-sunglasses/fw/extensions/build.sh /workspaces/rgb-sunglasses/fw/build
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dfu_application_proto0.zip
-          path: ${{ github.workspace }}/fw/build/dfu_application.zip
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: llext-edk.tar.xz
-          path: ${{ github.workspace }}/fw/build/fw/zephyr/llext-edk.tar.xz
-
-      # Prebuilt in-repo animation extensions (issue #163). Glob only *.llext —
-      # fw/build/extensions/ also holds the extracted EDK tree.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: extensions-proto0
-          path: ${{ github.workspace }}/fw/build/extensions/*.llext
-
-  tests:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      pull-requests: write
-    steps:
-      - name: Free up space
-        run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /usr/local/lib/android && sudo rm -rf /opt/ghc && sudo rm -rf /opt/hostedtoolcache/CodeQL
-
-      - name: Check HDD space
-        run: df -h
-
-      - name: Checkout (GitHub)
-        uses: actions/checkout@v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run Twister tests
-        uses: devcontainers/ci@v0.3
-        with:
-          imageName: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          push: always
-          runCmd: twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim --coverage --coverage-tool lcov --outdir /workspaces/rgb-sunglasses/fw/twister-out-ci
-
-      - name: Fix permissions on test output
-        if: always()
-        run: |
-          # Remove symlinks created by the Zephyr build system that point to
-          # paths only accessible inside the container (e.g. syscalls_links).
-          # upload-artifact follows symlinks and hits EACCES on those targets.
-          sudo find "${{ github.workspace }}/fw/twister-out-ci" -type l -delete 2>/dev/null || true
-          # Fix ownership so the upload-artifact action can read all remaining files.
-          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/fw/twister-out-ci" || true
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: twister-out-ci
-          path: ${{ github.workspace }}/fw/twister-out-ci
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: ${{ github.workspace }}/fw/twister-out-ci/coverage/coverage.info
-          flags: zephyr
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-  python-tests:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: fw
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install Pillow numpy pytest pytest-cov
-
-      - name: Run Python tests
-        run: |
-          pytest tools/tests/ -v \
-            --cov=tools/convert_bad_apple \
-            --cov=tools/convert_gif_to_glim \
-            --cov-report=xml:coverage-python.xml \
-            --cov-report=term-missing
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: fw/coverage-python.xml
-          flags: python
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
