@@ -49,7 +49,9 @@ jobs:
 
   build-android:
     name: Build Android (debug)
-    needs: test
+    # Deliberately NOT `needs: test`: jest takes ~40 s, the Gradle build ~16 min,
+    # so serializing them only delays the wall clock. Both jobs are required
+    # checks; a jest failure still fails the PR.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

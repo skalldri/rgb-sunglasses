@@ -1,0 +1,23 @@
+{
+    // Minimal devcontainer config used ONLY by CI (via the `configFile:` input of
+    // devcontainers/ci in .github/workflows/*.yaml). It reuses the same Dockerfile
+    // as the dev config, so the GHCR image layer cache is shared between CI and
+    // local dev — only the lifecycle differs.
+    //
+    // The dev config's postCreateCommand (J-Link deb, pip tools, app npm install,
+    // claude-code, NDK/cmake, cargo install adb-wireless) is human-workstation
+    // setup: none of it is needed for `west build`, the llext extension build, or
+    // twister, and its `[ -n "$CI" ]` guards never fired in CI anyway because
+    // devcontainers/ci does not set CI inside the container. Running it burned
+    // ~50 s per job up front and kept stealing CPU (NDK unzip, cargo build)
+    // during the actual firmware build/tests.
+    "name": "RGB Sunglasses CI",
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "context": ".."
+    },
+    "containerEnv": {
+        "ACCEPT_JLINK_LICENSE": "1",
+        "CI": "true"
+    }
+}
