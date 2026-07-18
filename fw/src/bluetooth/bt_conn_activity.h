@@ -11,9 +11,10 @@
  *
  * Cheap and callable from any thread context. Defined in bluetooth.cpp when
  * the governor is compiled in; otherwise an inline no-op RIGHT HERE, so TUs
- * that include bt_service_cpp.h without linking bluetooth.cpp (the DK build
- * with the governor off, and native_sim GATT test suites like
- * tests/bluetooth/battery_service) never need the symbol at link time. */
+ * that include bt_service_cpp.h without linking bluetooth.cpp (governor-off
+ * builds like the legacy DK board's — dk-support branch — and native_sim GATT
+ * test suites like tests/bluetooth/battery_service) never need the symbol at
+ * link time. */
 #if defined(CONFIG_APP_BT_CONN_PARAM_GOVERNOR)
 void bt_conn_activity_note(void);
 #else

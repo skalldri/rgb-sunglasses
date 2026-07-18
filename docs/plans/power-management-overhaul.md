@@ -146,7 +146,7 @@ Each firmware PR goes through `/submit-pr` (both boards, tests, ≥50% patch cov
 
 ## Verification
 
-- **Pre-hardware**: `/build-proto0` + `/build-dk` + `/test-fw` per PR; `/validate-app` (jest + tsc + eslint) for app changes.
+- **Pre-hardware**: `/build-proto0` + `/test-fw` per PR; `/validate-app` (jest + tsc + eslint) for app changes.
 - **Hardware**: Experiment A dumps before (PR A) and after (PR C/D) — expect: faceplate attached + PD charger → fast-charge at configured ICHG with IINDPM_STAT clear; no battery + charge toggle ON → boots stably, `charge_gated` flag set. `/flash-and-verify` for each on-device pass; app verified against a live board for PR E.
 
 ## Risks / open questions

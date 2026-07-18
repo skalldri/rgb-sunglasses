@@ -237,14 +237,16 @@ void glimLoopModeDoSave(void *) {
 
 // Caller-owned registry storage (see persistent_value_registry.h) - file-scope statics,
 // since these values persist by hand (no mixin object to hold an entry). Zero flash when
-// persistence is off; the registrations below are dead-code-eliminated on DK via IS_ENABLED.
+// persistence is off; the registrations below are dead-code-eliminated via IS_ENABLED
+// when CONFIG_APP_PERSIST_BT_CONFIG=n.
 PersistentValueRegistryEntry sGlimSelectionEntry{};
 PersistentValueRegistryEntry sGlimLoopModeEntry{};
 
 struct GlimPersistenceRegistrar {
     GlimPersistenceRegistrar() {
         // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
-        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
+        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on the legacy DK board (dk-support
+        // branch) - see fw/Kconfig.
         // Failures are logged inside persistent_value_registry_register() itself.
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
             persistent_value_registry_register(&sGlimSelectionEntry, kGlimSelectionKey, nullptr,

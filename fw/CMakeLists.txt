@@ -42,8 +42,8 @@ target_sources(
 
 # The TPS25750 patch blob: LZ4-compressed (decompressed into RAM at first use) or
 # uncompressed rodata, selected per-board — see CONFIG_TPS25750_COMPRESSED_PATCH in
-# prj.conf (proto0: uncompressed, saves 14.3KB RAM) and the DK board .conf (compressed,
-# saves ~4.8KB of its nearly-full FLASH slot).
+# prj.conf (proto0: uncompressed, saves 14.3KB RAM) and the legacy DK board .conf on
+# the dk-support branch (compressed, saves ~4.8KB of its nearly-full FLASH slot).
 if(CONFIG_TPS25750_COMPRESSED_PATCH)
   target_sources(app PRIVATE misc/tps25750/tps25750-config-compressed.c)
 elseif(CONFIG_TPS25750_INTERNAL_PATCH)

@@ -119,13 +119,14 @@ void lastActiveAnimationDoSave(void *) {
 // Caller-owned registry storage (see persistent_value_registry.h) - a file-scope static,
 // since this value has no natural per-value object (its state lives in the file statics
 // above). Zero flash when persistence is off; the registration below is dead-code-
-// eliminated on DK via IS_ENABLED.
+// eliminated via IS_ENABLED when CONFIG_APP_PERSIST_BT_CONFIG=n.
 PersistentValueRegistryEntry sLastActiveAnimationEntry{};
 
 struct LastActiveAnimationRegistrar {
     LastActiveAnimationRegistrar() {
         // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
-        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on rgb_sunglasses_dk - see fw/Kconfig.
+        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on the legacy DK board (dk-support
+        // branch) - see fw/Kconfig.
         // Failures are logged inside persistent_value_registry_register() itself.
         if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
             persistent_value_registry_register(&sLastActiveAnimationEntry,

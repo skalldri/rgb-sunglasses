@@ -130,4 +130,8 @@ forward — re-attach it (see
 
 - **proto0** (production hardware): supports button-hold DFU recovery as described above.
 - **DK** (legacy dev board): has **no** button entry into DFU mode — recover it with a
-  J-Link instead.
+  J-Link instead. DK firmware and tooling are maintained on the
+  [`dk-support` branch](https://github.com/skalldri/rgb-sunglasses/tree/dk-support);
+  `main`'s `mcumgr-flash.sh` no longer special-cases the DK, and firmware releases
+  no longer include a DK image (the newest release with a `dfu_application_dk.zip`
+  asset is the last one usable for DK OTA updates).

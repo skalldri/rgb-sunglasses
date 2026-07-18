@@ -90,7 +90,7 @@ config IMU
 	  Enables a dedicated thread that reads accel+gyro frames from the BMI270
 	  via the data-ready interrupt, then publishes them to a K_MSGQ so
 	  animations can consume the data without knowing about the driver.
-	  Proto0 only — the DK has no BMI270.
+	  Proto0 only — the legacy DK board (dk-support branch) has no BMI270.
 
 config IMU_THREAD_PRIORITY
 	int "IMU thread priority"
@@ -123,9 +123,9 @@ config APP_PERSIST_BT_CONFIG
 	  animation, extension animation parameters) with Zephyr's settings
 	  subsystem so values survive a power cycle. See src/settings/ and
 	  src/bluetooth/persistent_characteristic.h.
-	  Disabled on rgb_sunglasses_dk (see its board .conf): that board's
-	  internal-flash image slot has no spare room for this, and per
-	  fw/CLAUDE.md it's legacy / doesn't get new features.
+	  The legacy rgb_sunglasses_dk board (maintained on the dk-support
+	  branch) disables this in its board .conf: its internal-flash image
+	  slot has no spare room, and it gets no new features.
 
 config APP_PERSIST_WORKQ_STACK_SIZE
 	int "Stack size for the persistent-value-store workqueue"
@@ -151,9 +151,9 @@ config APP_BT_METADATA_CHARACTERISTIC
 	  issue #90 follow-up) — built at runtime there instead of at compile
 	  time, so it costs RAM (a few hundred bytes per extension slot) rather
 	  than flash and is not part of the flash-budget reasoning below.
-	  Disabled on rgb_sunglasses_dk (see its board .conf): that board's
-	  internal-flash image slot has no spare room for this, and per
-	  fw/CLAUDE.md it's legacy / doesn't get new features.
+	  The legacy rgb_sunglasses_dk board (maintained on the dk-support
+	  branch) disables this in its board .conf: its internal-flash image
+	  slot has no spare room, and it gets no new features.
 
 config APP_BT_CONN_PARAM_GOVERNOR
 	bool "Adaptive LE connection-parameter governor"
@@ -171,8 +171,9 @@ config APP_BT_CONN_PARAM_GOVERNOR
 	  core: src/bluetooth/conn_param_governor_core.{h,cpp} (native_sim
 	  suite tests/bluetooth/conn_param_governor); wiring in bluetooth.cpp.
 	  When disabled the legacy behavior remains: one fast request at
-	  connect, never renegotiated. Disabled on rgb_sunglasses_dk (see its
-	  board .conf): legacy board, no new features per fw/CLAUDE.md.
+	  connect, never renegotiated. The legacy rgb_sunglasses_dk board
+	  (dk-support branch) disabled this in its board .conf (no new
+	  features, no flash headroom).
 
 config APP_BT_CONN_IDLE_TIMEOUT_S
 	int "Quiet seconds before the link downgrades to the SLOW parameter set"
@@ -213,9 +214,10 @@ config APP_MCUBOOT_INFO_SERVICE
 	  characteristic (McubootInfo service) and a Zephyr shell command
 	  (mcuboot_version). Requires the zephyr,bootloader-info DTS chosen
 	  node and the matching BOOT_SHARE_DATA Kconfig in the MCUboot image.
-	  Disabled on rgb_sunglasses_dk (see its board .conf): DK is legacy
-	  and doesn't get new features per fw/CLAUDE.md, and its internal-flash
-	  image slot has no spare room for the blinfo stack.
+	  The legacy rgb_sunglasses_dk board (maintained on the dk-support
+	  branch) disables this in its board .conf: it gets no new features,
+	  and its internal-flash image slot has no spare room for the blinfo
+	  stack.
 
 config APP_MCUBOOT_UPDATER
 	bool "BLE MCUboot bootloader updater (proto0 escape hatch)"
@@ -228,7 +230,8 @@ config APP_MCUBOOT_UPDATER
 	  staging partition, validates the CRC32, then page-by-page rewrites
 	  internal flash 0x0-0x14000. Requires CONFIG_FPROTECT=n in the MCUboot
 	  sysbuild conf so the SPU does not lock that region before jumping to the
-	  app. Proto0 only — not offered on rgb_sunglasses_dk.
+	  app. Proto0 only — never offered on the legacy DK board (dk-support
+	  branch).
 
 config APP_MCUBOOT_UPDATER_STACK_SIZE
 	int "MCUboot updater worker thread stack size"
@@ -259,8 +262,8 @@ config APP_FACTORY_RESET
 	  'factory_reset now' shell command. Up+Down rather than all 4 D-PAD
 	  buttons because Left is MCUboot's serial-recovery entry button — see
 	  the header comment in src/factory_reset/factory_reset.cpp. Proto0
-	  only — the DK is legacy and lacks the status LEDs, FAT disk, and
-	  coredump partition.
+	  only — the legacy DK board (dk-support branch) lacks the status
+	  LEDs, FAT disk, and coredump partition.
 
 config APP_FACTORY_RESET_HOLD_MS
 	int "Factory reset hold duration (ms)"
@@ -394,9 +397,8 @@ config APP_BATTERY_MONITOR
 	  read/notify BLE GATT service, plus a persisted charging enable/disable
 	  toggle (default ON; persistence requires APP_PERSIST_BT_CONFIG). Sampled
 	  by the existing 500 ms charger status thread in src/power.cpp. Enabled
-	  on rgb_sunglasses_proto0 via its board .conf; left off on
-	  rgb_sunglasses_dk (legacy, no new features, flash budget — see
-	  fw/CLAUDE.md).
+	  on rgb_sunglasses_proto0 via its board .conf; the legacy DK board
+	  (dk-support branch) left it off (no new features, flash budget).
 
 config APP_POWER_DEBUG_SERVICE
 	bool "Power Debug BLE service"
@@ -409,8 +411,8 @@ config APP_POWER_DEBUG_SERVICE
 	  charge gating), the negotiated PD source type/budget, and the ICO
 	  result. Fed by the charger status thread in src/power.cpp at the
 	  reconcile cadence (~2s). Enabled on rgb_sunglasses_proto0 via its
-	  board .conf; left off on rgb_sunglasses_dk (legacy, no new
-	  features — see fw/CLAUDE.md).
+	  board .conf; the legacy DK board (dk-support branch) left it off
+	  (no new features).
 
 config APP_USB_PRODUCT_STRING
 	string "USB device product string"
@@ -418,8 +420,8 @@ config APP_USB_PRODUCT_STRING
 	help
 	  The USB Product string descriptor reported to the host (Device
 	  Manager / lsusb / etc). Overridden per-board (see board .conf
-	  files) to distinguish rgb_sunglasses_proto0 from
-	  rgb_sunglasses_dk, mirroring CONFIG_BT_DEVICE_NAME.
+	  files) so each hardware revision reports its own name, mirroring
+	  CONFIG_BT_DEVICE_NAME.
 
 config APP_EXTENSION_HOST
 	bool "Sandboxed LLEXT animation extension host"
@@ -432,8 +434,9 @@ config APP_EXTENSION_HOST
 	  memory domain (issue #85). The kernel-side pattern controller
 	  exchanges data with the extension purely through the extension's own
 	  exported globals (see include/rgbx/rgbx_api.h), enforcing a per-tick
-	  deadline with abort/recreate/fallback recovery. Proto0 only — the DK
-	  has neither LLEXT nor USERSPACE enabled.
+	  deadline with abort/recreate/fallback recovery. Proto0 only — the
+	  legacy DK board (dk-support branch) has neither LLEXT nor USERSPACE
+	  enabled.
 
 config APP_EXT_HOST_THREAD_PRIORITY
 	int "Extension host thread priority"
@@ -471,7 +474,8 @@ config APP_COREDUMP_MANAGER
 	  reminder while dump files await collection (issue #80). Running
 	  periodically — not just at boot — also harvests dumps from
 	  extension-sandbox faults, which are demoted to a thread abort and
-	  never reboot. Proto0 only — the DK has neither the partition nor a
+	  never reboot. Proto0 only — the legacy DK board (dk-support branch)
+	  has neither the partition nor a
 	  filesystem.
 
 config APP_COREDUMP_MANAGER_INIT_PRIORITY

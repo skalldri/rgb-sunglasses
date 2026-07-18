@@ -75,8 +75,8 @@ one write-hooked characteristic + `BT_GATT_SERVER_REGISTER`. Steps:
    `depends on BT` + hardware deps), one
    `target_sources_ifdef(CONFIG_APP_<NAME> app PRIVATE src/bluetooth/<file>.cpp)` in
    `fw/CMakeLists.txt` (grep `APP_BATTERY_MONITOR` there for the spot), enable with `=y` in
-   `fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf` only — DK is legacy and flash-full
-   (its `.conf` disables `CONFIG_APP_BT_METADATA_CHARACTERISTIC` etc. for budget).
+   `fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf` — the flat per-board conf
+   (the legacy DK board on the `dk-support` branch shed such features there for budget).
 4. **Metadata blob is automatic.** `BtGattServer` appends a per-service metadata characteristic
    (fixed UUID `...cccc-56789abd0000`) when `CONFIG_APP_BT_METADATA_CHARACTERISTIC=y`.
    `kMetadataBlobVersion` (`bt_service_cpp.h`) and `METADATA_BLOB_VERSION`
@@ -114,7 +114,7 @@ the service UUID itself** (see `UUID_BATTERY_SERVICE` == `UUID_BATTERY_VOLTAGE` 
 
 ## Validate
 
-1. Firmware: `/build-proto0` and `/build-dk` must both compile clean.
+1. Firmware: `/build-proto0` must compile clean.
 2. Add a native_sim test via /add-fw-test — for write hooks copy
    `fw/tests/bluetooth/checked_write/` (drives the characteristic's static `write()` callback
    directly, no BT stack); for a whole service copy `fw/tests/bluetooth/battery_service/`.

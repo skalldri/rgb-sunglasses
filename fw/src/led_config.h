@@ -86,42 +86,6 @@ const LedConfig kFrameLedConfig = {kFrameDisplayWidth, kFrameDisplayHeight, kFra
                                    kFrameLedsOnRow,    kFrameRowStartIndex, kFrameRowIsLeftToRight};
 
 /**
- * @brief Constants for the DevKit built-in LED bank
- *
- */
-
-// Define some constants which describe the display properties
-constexpr size_t kDevKitDisplayWidth =
-    8;  // The total display width, just looking at pixels on the display
-constexpr size_t kDevKitDisplayHeight =
-    2;  // The total display height, just looking at pixels on the display
-
-constexpr size_t kDevKitLedBankWidth =
-    kDevKitDisplayWidth / 2;  // There are two LED banks, each is half the display width
-
-// Number of LEDs on each row of ONE BANK
-const size_t kDevKitLedsOnRow[kDevKitDisplayHeight] = {
-    4,  // Row 00 has 4 LEDs
-    4,  // Row 01 has 4 LEDs
-};
-
-// Start index of each row of ONE BANK
-const size_t kDevKitRowStartIndex[kDevKitDisplayHeight] = {
-    0,  // Row 00 starts at index 0
-    4,  // Row 01 starts at index 4
-};
-
-// Both rows on the devkit are right to left
-const bool kDevKitRowIsLeftToRight[kDevKitDisplayHeight] = {
-    true,  // Row 00: ->
-    true,  // Row 01: ->
-};
-
-const LedConfig kDevKitLedConfig = {kDevKitDisplayWidth,  kDevKitDisplayHeight,
-                                    kDevKitLedBankWidth,  kDevKitLedsOnRow,
-                                    kDevKitRowStartIndex, kDevKitRowIsLeftToRight};
-
-/**
  * @brief Constants for the Proto0 onboard status LEDs (2x WS2812 on led_strip_2)
  *
  * The two onboard LEDs are a single strip of 2 pixels treated as a 2×1 display.

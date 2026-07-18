@@ -802,8 +802,9 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
                 bt_conn_activity_note();
                 gov_submit_event(GOV_EVT_CONNECTED);
 #else
-                // Governor disabled (e.g. rgb_sunglasses_dk, flash budget):
-                // legacy issue-#41 behavior, one-shot fast request forever.
+                // Governor disabled (e.g. on the legacy DK board — dk-support
+                // branch, flash budget): legacy issue-#41 behavior, one-shot
+                // fast request forever.
                 int ret = bt_conn_le_param_update(ctx->conn, &fast_conn_param);
                 if (ret) {
                     LOG_WRN("Failed to request fast connection parameters: %d", ret);

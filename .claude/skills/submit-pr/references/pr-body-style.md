@@ -18,7 +18,6 @@ Fixes #<issue> <!-- if applicable -->
 
 ## Pre-PR checks
 - proto0 build: PASS (FLASH <X>%, RAM <Y>%)
-- DK build: PASS (FLASH <X>%, no overflow)
 - Twister tests: PASS (<passed>/<total> tests, <N> configurations)
 - Patch coverage: PASS (<X>% on changed files) <!-- or the waiver line below -->
 - Device/app verification: <what was exercised on real hardware + app, step by step>

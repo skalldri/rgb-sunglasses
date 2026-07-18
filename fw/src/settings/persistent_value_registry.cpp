@@ -4,8 +4,8 @@
 #include <sys/types.h>
 #include <zephyr/logging/log.h>
 
-// When the feature is disabled (e.g. CONFIG_APP_PERSIST_BT_CONFIG=n on
-// rgb_sunglasses_dk), compile out the registry (and the log module that reports failures
+// When the feature is disabled (CONFIG_APP_PERSIST_BT_CONFIG=n, as on the legacy DK
+// board on the dk-support branch), compile out the registry (and the log module that reports failures
 // touching it) entirely rather than just leaving it unreferenced - every call site that
 // registers an entry is itself gated by IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG), so these
 // stubs are never invoked there.

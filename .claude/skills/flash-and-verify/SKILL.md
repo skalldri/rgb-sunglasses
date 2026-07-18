@@ -22,10 +22,10 @@ If the poll fails, someone else holds it — report the holder and stop; don't s
 
 ## 2. Pre-flash gates (hardware iterations are slow — verify before flashing)
 
-1. Build first: `/build-proto0` (day-to-day) or `/build-dk` (legacy board).
+1. Build first: `/build-proto0`.
 2. If the change involves Kconfig, confirm it actually landed before flashing:
    ```bash
-   grep CONFIG_MY_SYMBOL fw/build/fw/zephyr/include/generated/zephyr/autoconf.h   # DK: fw/build-dk/...
+   grep CONFIG_MY_SYMBOL fw/build/fw/zephyr/include/generated/zephyr/autoconf.h
    ```
 3. Run `fw/scripts/fix-usb-dev-nodes.sh` (standard pre-flash step). The devcontainer has no udev, so re-enumeration leaves missing/bogus `/dev/bus/usb/*` nodes — symptoms are `JLinkExe` "Cannot connect to J-Link" or `nrfutil` "Failed to open connection" while `lsusb` shows `1366:0101` fine.
 
@@ -33,7 +33,7 @@ If the poll fails, someone else holds it — report the holder and stop; don't s
 
 ```bash
 fw/scripts/jlink-flash.sh                   # default: this worktree's fw/build (proto0)
-fw/scripts/jlink-flash.sh fw/build-dk       # explicit build dir (DK)
+fw/scripts/jlink-flash.sh /path/to/build    # explicit build dir
 fw/scripts/jlink-flash.sh -- --skip-rebuild # args after -- forward to west flash
 ```
 
@@ -61,7 +61,7 @@ It self-gates on the `board` lock (refuses without it), auto-detects the J-Link 
 fw/scripts/mcumgr-flash.sh                 # app-mode OTA (board still boots), proto0 fw/build
 fw/scripts/mcumgr-flash.sh --app-only      # skip the net-core image (faster)
 fw/scripts/mcumgr-flash.sh --recovery      # board is in MCUboot serial recovery (Left button held at reset)
-fw/scripts/mcumgr-flash.sh --build-dir fw/build-dk   # DK (no reset over mcumgr — reset manually)
+fw/scripts/mcumgr-flash.sh --build-dir <dir>  # override the build dir (default fw/build)
 ```
 
 It still needs the `board` lock when run by an agent (it self-gates on `CLAUDECODE`), and takes ~3-4 min for the app image. Runbook: `fw/docs/flashing-without-jlink.md`. To drive it by hand instead:

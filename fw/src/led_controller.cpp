@@ -193,7 +193,6 @@ int releaseBufferFromDisplay(const size_t buffer) {
 
 // Pick the default LED config
 const LedConfig *currentConfig = &kFrameLedConfig;
-// const LedConfig* currentConfig = &kDevKitLedConfig;
 
 const LedConfig *get_current_led_config() {
     return currentConfig;
@@ -622,9 +621,6 @@ static int cmd_led_config(const struct shell *shell, size_t argc, char **argv, v
     if (selection == 0) {
         // shell_print(shell, "Setting LED controller to frame config");
         currentConfig = &kFrameLedConfig;
-    } else if (selection == 1) {
-        // shell_print(shell, "Setting LED controller to devkit config");
-        currentConfig = &kDevKitLedConfig;
     } else {
         // shell_error(shell, "Unknown config value: %d", selection);
         return -ENOEXEC;
@@ -634,8 +630,7 @@ static int cmd_led_config(const struct shell *shell, size_t argc, char **argv, v
 }
 
 SHELL_SUBCMD_DICT_SET_CREATE(sub_led_config, cmd_led_config,
-                             (frame, 0, "Set LED controller into frames mode"),
-                             (devkit, 1, "Set LED controller into devkit mode"));
+                             (frame, 0, "Set LED controller into frames mode"));
 
 // Subcommands for "led"
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_led,

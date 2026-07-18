@@ -26,7 +26,8 @@ LOG_MODULE_REGISTER(ipc_radio, CONFIG_IPC_RADIO_LOG_LEVEL);
  * per-image fragment can silently fail to apply on an incremental build (see
  * fw/CLAUDE.md), which shipped a netcore that dropped every idle downgrade with
  * "Disconnected (reason 8)" (issues #188 / #199). Fail the proto0 netcore build instead.
- * Gated to proto0: the DK (legacy board, governor compiled out) has no such requirement.
+ * Gated to proto0: the legacy DK board (dk-support branch, governor compiled out) has
+ * no such requirement.
  */
 #if defined(CONFIG_BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUNET)
 BUILD_ASSERT(IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_500PPM),

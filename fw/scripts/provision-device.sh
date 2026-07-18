@@ -4,7 +4,7 @@
 #
 # Usage:
 #   provision-device.sh                          # generate + push assets (fw/build)
-#   provision-device.sh --build-dir fw/build-dk   # override the build dir (default fw/build)
+#   provision-device.sh --build-dir <dir>        # override the build dir (default fw/build)
 #
 # This script only does host-side, non-interactive work: locating and
 # mounting the board's USB mass-storage disk, generating .glim files,

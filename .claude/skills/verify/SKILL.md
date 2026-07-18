@@ -20,7 +20,7 @@ A change often matches several rows; do all of them.
 
 | Changed area | Minimum verification (no hardware) | Full verification (hardware, lock required) |
 | --- | --- | --- |
-| `fw/src/**`, `fw/Kconfig`, `fw/prj.conf`, `fw/conf/**`, `fw/boards/**` | `/build-proto0` **and** `/build-dk` (see note 1) + a targeted Twister run over the affected subsystem (note 2) | `/flash-and-verify` — flash and cross-check behavior via the serial shell (`board` lock) |
+| `fw/src/**`, `fw/Kconfig`, `fw/prj.conf`, `fw/conf/**`, `fw/boards/**` | `/build-proto0` (see note 1) + a targeted Twister run over the affected subsystem (note 2) | `/flash-and-verify` — flash and cross-check behavior via the serial shell (`board` lock) |
 | `fw/tests/**` | Run just the changed suite (`/test-fw` "Targeted runs" has the scoped `twister -T fw/tests/<area>/<name>` form) and confirm its **dotted scenario name** appears in the results (note 3) | n/a — the suites run on `native_sim` only |
 | `app/**` | `/validate-app` — jest + TypeScript + eslint (note 4) | Launch on the phone per `app/CLAUDE.md` (hold the `app` lock, use `app/scripts/launch-app.sh` — never raw `npx expo run:android`); verify writes/notifies against the firmware serial shell, not the app UI (`app/CLAUDE.md` "Verifying a write/notify round-trip") |
 | `fw/tools/**`, `fw/scripts/**` Python | `python3 -m pytest fw/tools/tests -v` from the repo root (note 5 says which command applies where) | n/a |
@@ -31,10 +31,9 @@ A change often matches several rows; do all of them.
 
 ## Notes
 
-1. **Always both boards.** proto0 is the day-to-day target, but DK flash
-   overflow is the classic silent failure: a change that fits proto0 can
-   overflow the DK, and you only find out at `/submit-pr` time (or in advisory
-   CI). For size analysis see `/rom-ram-budget`.
+1. **proto0 is the only board on main.** The legacy DK board's support and CI
+   live on the `dk-support` branch (issue #203) — no DK build is required or
+   possible here. For size analysis see `/rom-ram-budget`.
 2. If a changed `.c`/`.cpp` file is exercised by **no** suite, `/submit-pr`'s
    `lcov --extract` produces an empty tracefile, which it counts as **0% patch
    coverage** and stops the PR. Find or write the suite now (`/add-fw-test`),

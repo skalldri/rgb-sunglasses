@@ -1,6 +1,6 @@
 ---
 name: submit-pr
-description: Pre-PR validation gate for firmware — builds both boards, runs tests, checks patch coverage ≥ 50%, requires on-device + companion-app verification for any change touching device↔app communication, then creates the GitHub PR
+description: Pre-PR validation gate for firmware — builds proto0, runs tests, checks patch coverage ≥ 50%, requires on-device + companion-app verification for any change touching device↔app communication, then creates the GitHub PR
 allowed-tools: Bash, Read, Task, AskUserQuestion, mcp__serial, mcp__execbro
 ---
 
@@ -23,32 +23,30 @@ git log --oneline origin/main..HEAD
 - If still on `main`: a `PreToolUse` hook (`.claude/hooks/destructive-guard.sh`) denies
   `git commit` there — create a feature branch *first* (root CLAUDE.md "Git workflow").
 
-## 2. Build proto0, build DK, and run tests — in parallel
+## 2. Build proto0 and run tests — in parallel
 
-These three are independent (separate build dirs — `fw/build`, `fw/build-dk`,
-`fw/twister-out`; Twister's `native_sim` target uses the host toolchain, not the
-nRF cross-compiler), so launch all three as **concurrent background tasks**:
+These two are independent (separate build dirs — `fw/build`, `fw/twister-out`;
+Twister's `native_sim` target uses the host toolchain, not the nRF
+cross-compiler), so launch both as **concurrent background tasks**:
 
 ```bash
 # Proto0 (same as /build-proto0)
 west build --build-dir fw/build fw --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
 
-# DK (same as /build-dk)
-west build --build-dir fw/build-dk fw --board rgb_sunglasses_dk/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
-
 # Tests + coverage
 twister -T fw/tests -p native_sim --coverage --coverage-tool lcov --outdir fw/twister-out
 ```
 
-Start all three before waiting on any; wait for all three, then evaluate every gate
+Start both before waiting on either; wait for both, then evaluate every gate
 even if an earlier one failed — one report should cover everything wrong.
 
-**Gates** (evaluate all three, report every failure found — not just the first):
+(The legacy DK board is no longer built on main — its board support and CI live
+on the `dk-support` branch, issue #203.)
+
+**Gates** (evaluate both, report every failure found — not just the first):
 - proto0 build failed → stop. Do not proceed to later steps. Report the error clearly.
-- DK build failed → stop. Report the error, especially if it's a flash
-  overflow (the DK has a tight budget).
 - Any Twister test failed or errored → stop. List the failing suites.
-- Record proto0 and DK FLASH/RAM `%age Used` (the `Memory region` summary in each
+- Record proto0 FLASH/RAM `%age Used` (the `Memory region` summary in the
   build log) — required fields in the PR body (step 7).
 
 ## 3. If the diff touches `app/**`: run the /validate-app trio

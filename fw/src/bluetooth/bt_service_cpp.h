@@ -377,10 +377,10 @@ class BtGattServer {
     // getMetadataAttrsTuple()/kMetadataBlob below and MetadataBlobBuilder above.
     //
     // Gated by CONFIG_APP_BT_METADATA_CHARACTERISTIC (default y): the blob duplicates
-    // every characteristic's CUD description string as packed binary data, which doesn't
-    // fit in rgb_sunglasses_dk's internal-flash image slot (confirmed: imgtool "Image
-    // size ... exceeds requested size" with this enabled on that board) - see its board
-    // .conf. DK is legacy and doesn't get new features per fw/CLAUDE.md.
+    // every characteristic's CUD description string as packed binary data, which didn't
+    // fit in the legacy rgb_sunglasses_dk board's internal-flash image slot (confirmed:
+    // imgtool "Image size ... exceeds requested size" with this enabled on that board).
+    // That board now lives on the dk-support branch with this disabled in its .conf.
     static constexpr size_t kTotalAttrCount =
         kProviderAttrCount + (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC) ? 2 : 0);
 
