@@ -114,10 +114,20 @@ jobs:
           name: twister-out-ci
           path: ${{ github.workspace }}/fw/twister-out-ci
 
+      # Twister writes the lcov report to twister-out-ci/coverage.info (NOT
+      # coverage/coverage.info — the old path here only "worked" because the
+      # codecov CLI silently fell back to searching). Copy it out and delete
+      # the ~200 MB twister-out tree first: the codecov CLI walks the whole
+      # workspace regardless of --disable-search, which cost ~1m45s per run.
+      - name: Extract coverage report
+        run: |
+          cp "${{ github.workspace }}/fw/twister-out-ci/coverage.info" "${{ github.workspace }}/fw/coverage-zephyr.info"
+          sudo rm -rf "${{ github.workspace }}/fw/twister-out-ci"
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: ${{ github.workspace }}/fw/twister-out-ci/coverage/coverage.info
+          files: ${{ github.workspace }}/fw/coverage-zephyr.info
           disable_search: true
           flags: zephyr
           fail_ci_if_error: false
