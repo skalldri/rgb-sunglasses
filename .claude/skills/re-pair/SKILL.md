@@ -83,6 +83,22 @@ On any failure it **falls back to asking you to tap Forget** and polls `dumpsys
 bluetooth_manager` until the bond actually disappears (verify by state, not keypress).
 `--manual-forget` skips straight to that; `--no-forget` skips it entirely.
 
+### Gotcha: Unpair silently no-ops while a client is auto-connecting
+
+Observed 2026-07-17 (OxygenOS / OnePlus 9 Pro): with the companion app running, its
+BleManager keeps a **pending LE connection** to the board permanently armed (`dumpsys
+bluetooth_manager` shows the board under `devices attempting connection`). In that
+state, Settings' **Unpair tap silently does nothing** — the details page is correct,
+the tap lands, the UI navigates back, and the bond is still there. This is why the
+automated forget used to "succeed" into the manual fallback.
+
+The script now handles it itself: it **force-stops the app before the forget** (the
+relaunch happens in the pairing phase anyway), and if the unpair still doesn't stick it
+**cycles the Bluetooth stack (`svc bluetooth disable`/`enable`) and retries once**
+before falling back to manual. If you're forgetting the bond by hand instead: kill the
+app first, and if the bond survives an Unpair, toggle Bluetooth off/on and try again —
+don't keep tapping Unpair, it will never take while the pending connect exists.
+
 ## Success
 
 The script drives `bt_state` over the UART and requires `CONNECTED` + `Security level: L4`
