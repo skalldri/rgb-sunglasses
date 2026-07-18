@@ -44,7 +44,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # indicator-only states and are not settable directly.
 SETTABLE_ANIMATIONS = [
     "none", "zigzag", "text", "rainbow", "my_eyes", "beat", "fft_bars",
-    "glim_player", "matrix_code", "tilt",
+    "glim_player", "matrix_code", "tilt", "pulse",
 ]
 
 TOOLS = [

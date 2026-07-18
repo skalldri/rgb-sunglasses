@@ -113,6 +113,13 @@ config ANIMATION_TILT
 	  Maps lateral accelerometer tilt (accel_x) to a hue-shifted rainbow
 	  across the full display. Demonstrates the IMU animation pipeline.
 
+config ANIMATION_PULSE
+	bool "Enable Pulse animation"
+	help
+	  Breathes the whole panel through a single configurable color at a
+	  configurable period (period_ms), fading 0 -> full -> 0 in a repeating
+	  triangle-wave cycle.
+
 config APP_PERSIST_BT_CONFIG
 	bool "Persist BT-settable configuration via the Settings subsystem"
 	default y
