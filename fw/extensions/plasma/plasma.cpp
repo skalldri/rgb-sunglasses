@@ -25,11 +25,18 @@ class Plasma : public rgbx::Animation {
         const uint8_t cg = (color >> 8) & 0xFF;
         const uint8_t cb = color & 0xFF;
 
+        /* Invert flips the plasma's brightness gradient (light<->dark),
+         * effectively inverting the palette while keeping the same tint. */
+        const bool invert = paramBool(2);
+
         for (size_t y = 0; y < height(); y++) {
             for (size_t x = 0; x < width(); x++) {
                 uint32_t v = (wave8(x * 13 + t_ / 9) + wave8(y * 23 + t_ / 14) +
                               wave8((x + y) * 11 + t_ / 6)) /
                              3;
+                if (invert) {
+                    v = 255u - v;
+                }
                 setPixel(x, y, static_cast<uint8_t>(cr * v / 255),
                          static_cast<uint8_t>(cg * v / 255),
                          static_cast<uint8_t>(cb * v / 255));
@@ -54,4 +61,5 @@ class Plasma : public rgbx::Animation {
 }  // namespace
 
 RGBX_ANIMATION(Plasma, "Plasma", 40, 12, RGBX_PARAM("Speed", RGBX_PARAM_UINT32, 50),
-               RGBX_PARAM("Color", RGBX_PARAM_COLOR, 0x00FF40FF));
+               RGBX_PARAM("Color", RGBX_PARAM_COLOR, 0x00FF40FF),
+               RGBX_PARAM("Invert", RGBX_PARAM_BOOL, 0));
