@@ -225,6 +225,29 @@ There is currently **no iOS dev-variant** (the Android `.dev` side-by-side insta
     (iOS text keyboard, hardware keyboards) — without it one commit sends two BLE writes.
   Decided against an `InputAccessoryView` "Done" bar (rejected in review: extra chrome) and against
   `numbers-and-punctuation` keyboard (full keyboard for a number field).
+- **Core Bluetooth state restoration re-adoption (issue #190)**: when iOS jetsams the app while a
+  board is connected, Core Bluetooth relaunches it in the background on the next BLE event for that
+  peripheral. The restore callback (`restoreStateFunction` in [hooks/ble-manager.ts](hooks/ble-manager.ts))
+  is registered at module-import time but **delivered asynchronously** (a native bridge event that can
+  land before or after React mounts), so the handoff is a stash-or-deliver, deliver-once subscription
+  (`subscribeRestoredPeripheral`), not a read-once peek; `useBleRestorationAdopt`
+  ([hooks/use-ble-restoration.ts](hooks/use-ble-restoration.ts), mounted as `BleRestorationAdopter` in
+  the root layout inside `BluetoothProvider`) receives it whichever ordering wins and drives
+  the issue-#124 `startReconnectLoop` (once-only — a duplicate start would bump the reconnect
+  generation and tear down the restored link) — the iOS pending connect resolves immediately on the
+  still-connected peripheral, then the normal discovery/monitor/selection path runs (fast: iOS serves
+  it from its native GATT cache on a live link). Two deliberate limits: **restoration never fires
+  after a user force-quit** (App Switcher swipe) — iOS only relaunches after a *system* termination
+  (platform limitation, the user must reopen the app) — and **ordinary cold launches do not
+  auto-connect** (no last-device persistence; scope decision on #190, the restored-peripheral handoff
+  is the only cross-launch state). Hardware-verified 2026-07-18 (iPhone 15/iOS 26.5): SIGKILL of the
+  backgrounded app → relaunch within seconds on the board's next notify, restore→re-adopt→reconnected
+  on attempt 1, board never saw a disconnect (stayed CONNECTED/L4/MTU 293), background Metro bundle
+  fetch worked, app→device write round-trip confirmed via serial. One surprise to not misread during
+  future debugging: ~50 s **after a user force-quit**, iOS's SYSTEM stack briefly reconnected to the
+  bonded board (serial showed a bonded L4 connection with NO app process alive) and dropped it ~15 s
+  later — the iOS analog of OxygenOS's system-level auto-connect (see the Android note above). A
+  bonded L4 connection on serial does not by itself mean the app is running or was relaunched.
 
 ### Android Permissions
 

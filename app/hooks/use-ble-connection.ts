@@ -41,6 +41,12 @@ interface UseBleConnectionResult {
     // from the AppState foreground-verify hook (issue #124). No-op when this device
     // isn't the selected one or the link is healthy.
     verifyConnection: () => Promise<void>;
+    // Starts the issue-#124 auto-reconnect supervision loop directly. Exposed for
+    // the iOS state-restoration adopter (issue #190): on a background relaunch
+    // nothing is selected yet, so verifyConnection() can't drive re-adoption; the
+    // loop's pending connect resolves immediately on the peripheral iOS is still
+    // holding connected, then runs the normal discovery/monitor/selection path.
+    startReconnectLoop: () => Promise<void>;
 }
 
 // How the link-establishment step of a connect attempt behaves (issue #124):
@@ -756,5 +762,5 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         }
     }
 
-    return { isConnecting, connect, disconnect, cancelReconnect, verifyConnection };
+    return { isConnecting, connect, disconnect, cancelReconnect, verifyConnection, startReconnectLoop };
 }

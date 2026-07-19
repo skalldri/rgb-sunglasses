@@ -635,6 +635,26 @@ describe('useBleConnection', () => {
             expect(ctx.setSelectedDevice).toHaveBeenLastCalledWith(expect.objectContaining({ mac: 'AA:BB:CC' }));
         });
 
+        it('startReconnectLoop() drives cold-start re-adoption with nothing selected (iOS state restoration, issue #190)', async () => {
+            const deviceConn = makeDeviceConnection([]);
+            (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+            // Cold start: no prior connect(), selectedDevice is null - the loop is
+            // invoked directly via the hook's return, as the restoration adopter does.
+            const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+            await act(async () => { await result.current.startReconnectLoop(); });
+
+            // Pinned the "Reconnecting…" row for the UI/cancel affordance...
+            expect(ctx.setReconnectingDevice).toHaveBeenCalledWith({ mac: 'AA:BB:CC', name: 'Test Device' });
+            // ...connected with the pending-connect options (resolves immediately on a
+            // peripheral iOS is still holding connected)...
+            expect(BleHook.bleManager.connectToDevice).toHaveBeenCalledWith('AA:BB:CC', pendingConnectOptions);
+            // ...published the adopted device into context, and cleared the pin.
+            expect(ctx.setSelectedDevice).toHaveBeenLastCalledWith(expect.objectContaining({ mac: 'AA:BB:CC' }));
+            expect(ctx.reconnectingDevice).toBeNull();
+        });
+
         it('does NOT reconnect when the disconnect was user-initiated (structural guard: disconnect() removes the listener first)', async () => {
             const removeDisconnect = jest.fn();
             ctx.disconnectSubscription.current = { remove: removeDisconnect };

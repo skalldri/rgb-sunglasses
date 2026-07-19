@@ -6,6 +6,7 @@ import 'react-native-reanimated';
 import { Colors } from '@/constants/theme';
 import { BluetoothProvider } from '@/context/bluetooth-context';
 import { useBleAppStateVerify } from '@/hooks/use-ble-app-state';
+import { useBleRestorationAdopt } from '@/hooks/use-ble-restoration';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -43,6 +44,13 @@ function BleAppStateVerifier() {
   return null;
 }
 
+// Same INSIDE-BluetoothProvider constraint as above: the iOS state-restoration
+// adopter (issue #190) drives the reconnect machinery through the context.
+function BleRestorationAdopter() {
+  useBleRestorationAdopt();
+  return null;
+}
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const palette = colorScheme === 'dark' ? Colors.dark : Colors.light;
@@ -50,6 +58,7 @@ export default function RootLayout() {
   return (
     <BluetoothProvider>
       <BleAppStateVerifier />
+      <BleRestorationAdopter />
       <ThemeProvider value={colorScheme === 'dark' ? navDark : navLight}>
         <Stack
           screenOptions={{
