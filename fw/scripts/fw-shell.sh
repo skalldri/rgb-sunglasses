@@ -11,7 +11,7 @@
 # two readers race for the port and both see garbled data (see fw/CLAUDE.md).
 set -euo pipefail
 
-# shellcheck source=scripts/lib/serial-port.sh
+# shellcheck source=lib/serial-port.sh
 source "$(cd "$(dirname "$0")" && pwd)/lib/serial-port.sh"
 
 port=$(serial_find_shell_port) || {

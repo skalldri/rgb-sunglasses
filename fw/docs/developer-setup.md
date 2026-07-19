@@ -121,7 +121,7 @@ progress bar as it goes), and reboots the board into it. That's the whole loop:
 - **Only need the app core?** `fw/scripts/mcumgr-flash.sh --app-only` skips the
   network core.
 
-Confirm it worked over the serial shell — connect with `scripts/fw-shell.sh` and run
+Confirm it worked over the serial shell — connect with `fw/scripts/fw-shell.sh` and run
 `kernel version` / `kernel uptime`.
 
 ---

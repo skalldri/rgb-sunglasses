@@ -29,8 +29,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-# shellcheck source=scripts/lib/serial-port.sh
-source "$REPO_ROOT/scripts/lib/serial-port.sh"
+# shellcheck source=lib/serial-port.sh
+source "$REPO_ROOT/fw/scripts/lib/serial-port.sh"
 
 BAUD=115200
 MODE="app"
