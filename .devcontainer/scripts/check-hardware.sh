@@ -15,8 +15,8 @@ echo ""
 # SessionStart hook runs this script with the stock macOS bash.
 if [ "$(uname -s)" = "Darwin" ]; then
     REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-    # shellcheck source=../../scripts/lib/serial-port.sh
-    . "$REPO_ROOT/scripts/lib/serial-port.sh"
+    # shellcheck source=../../fw/scripts/lib/serial-port.sh
+    . "$REPO_ROOT/fw/scripts/lib/serial-port.sh"
 
     SHELL_PORT="$(serial_find_shell_port 2>/dev/null || true)"
     MCUMGR_PORT="$(serial_find_mcumgr_port 2>/dev/null || true)"
