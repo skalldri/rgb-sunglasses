@@ -50,6 +50,11 @@ async function displayConnectionNotification(body: string): Promise<void> {
             // text swap) must not re-alert.
             onlyAlertOnce: true,
             pressAction: { id: 'default' }, // tapping opens the app
+            // Without this, notifee defaults to the full-color, fully-opaque
+            // launcher icon ("ic_launcher"), which spec-compliant Android status-bar
+            // renderers (e.g. Pixel) mask to a solid white blob instead of a legible
+            // silhouette. This drawable is baked in by plugins/withNotificationIcon.js.
+            smallIcon: 'ic_stat_connection',
         },
     });
 }
