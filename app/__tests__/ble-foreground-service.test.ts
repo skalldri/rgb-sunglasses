@@ -44,6 +44,7 @@ describe('ble-foreground-service', () => {
                         asForegroundService: true,
                         ongoing: true,
                         onlyAlertOnce: true,
+                        smallIcon: 'ic_stat_connection',
                     }),
                 })
             );

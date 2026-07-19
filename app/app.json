@@ -39,6 +39,7 @@
     "plugins": [
       "./plugins/withDevVariant",
       "./plugins/withBleForegroundService",
+      "./plugins/withNotificationIcon",
       "expo-router",
       [
         "expo-splash-screen",
