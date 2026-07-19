@@ -13,6 +13,8 @@ Never write to `~/.claude/projects/` or any other `~/.claude/` path for persiste
 
 ## Working with hardware
 
+**Always check for device presence with the `/check-hardware` skill (`.devcontainer/scripts/check-hardware.sh`), never a bare `adb devices` / `lsusb`.** The skill applies USB device-node fixes (re-triggers enumeration/authorization) as part of the check, so a device that a raw `adb devices` reports as NOT CONNECTED can show up correctly once check-hardware runs. Do not conclude "no phone/board attached" from a bare `adb devices` — run check-hardware first (observed 2026-07-19: `adb devices` empty, check-hardware then reported the phone CONNECTED over USB).
+
 Hardware iterations are slow and mistakes can cause damage. Before flashing anything:
 
 - Read the relevant source code to confirm assumptions (Kconfig deps, handler logic, buffer sizes)

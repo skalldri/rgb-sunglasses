@@ -246,6 +246,90 @@ describe('BluetoothScreen', () => {
     }
   });
 
+  it('keeps the connected device after it stops advertising, still prunes others', async () => {
+    jest.useFakeTimers();
+    try {
+      // A connected board stops advertising the moment its LE link comes up, so its lastSeen
+      // freezes. selectedDevice pins it so the prune timer can't age it out - otherwise the
+      // connected row vanishes from the Connect list until a re-focus re-runs the
+      // connectedDevices() query (the bug). A different device that stops advertising still prunes.
+      jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+        isScanning: true,
+        setIsScanning: jest.fn(),
+        selectedDevice: { mac: 'connected', name: 'RGB Sunglasses Connected' },
+      } as any);
+      let focusCallback: (() => void | (() => void)) | null = null;
+      jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+        focusCallback = cb;
+        return undefined as any;
+      });
+      jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+      // Capture the scan callback without auto-reporting, so nothing is re-advertised on its own.
+      let scanCb: ((error: unknown, device: unknown) => void) | null = null;
+      (BleHook.bleManager.startDeviceScan as jest.Mock).mockImplementation((_f, _o, cb) => {
+        scanCb = cb;
+      });
+      (BleHook.bleManager.connectedDevices as jest.Mock).mockResolvedValue([]);
+
+      const { queryByText } = render(<BluetoothScreen />);
+      await act(async () => {
+        focusCallback?.();
+      });
+
+      // Both seen once at t=0 (their last advertisement); neither is re-reported after.
+      act(() => {
+        scanCb?.(null, { localName: 'RGB Sunglasses Connected', id: 'connected' });
+        scanCb?.(null, { localName: 'RGB Sunglasses Other', id: 'other' });
+      });
+      expect(queryByText('RGB Sunglasses Connected|connected')).toBeTruthy();
+      expect(queryByText('RGB Sunglasses Other|other')).toBeTruthy();
+
+      // Advance well past DEVICE_TTL_MS (25s) without re-advertising either.
+      act(() => {
+        jest.advanceTimersByTime(40000);
+      });
+
+      // The connected device is pinned and stays; the other one ages out normally.
+      expect(queryByText('RGB Sunglasses Connected|connected')).toBeTruthy();
+      expect(queryByText('RGB Sunglasses Other|other')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('renders the connected device even when it never appears in scan results', async () => {
+    // Cold-launch / async-restoration case: selectedDevice is set but the connected board is
+    // not advertising and the connectedDevices() OS query returns nothing for it, so it is
+    // absent from the scan-derived `devices`. The render-time union must still show its row.
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      isScanning: false,
+      setIsScanning: jest.fn(),
+      selectedDevice: { mac: 'connected', name: 'RGB Sunglasses Connected' },
+    } as any);
+
+    let focusCallback: (() => void | (() => void)) | null = null;
+    jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+      focusCallback = cb;
+      return undefined as any;
+    });
+
+    jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+    // Scan reports only an unrelated device; the connected board never advertises.
+    (BleHook.bleManager.startDeviceScan as jest.Mock).mockImplementation((_f, _o, cb) => {
+      cb(null, { localName: 'RGB Sunglasses Other', id: 'other' });
+    });
+    (BleHook.bleManager.connectedDevices as jest.Mock).mockResolvedValue([]);
+
+    const { findByText } = render(<BluetoothScreen />);
+    await act(async () => {
+      focusCallback?.();
+    });
+
+    // The connected row is present purely from the selectedDevice union.
+    expect(await findByText('RGB Sunglasses Connected|connected')).toBeTruthy();
+    expect(await findByText('RGB Sunglasses Other|other')).toBeTruthy();
+  });
+
   it('stops scanning on focus cleanup', async () => {
     const setIsScanning = jest.fn();
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
