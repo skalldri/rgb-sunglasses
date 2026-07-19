@@ -192,3 +192,9 @@ curated GitHub release notes are attached *after* CI finishes, so they never
 reach Play. Lightweight tags fall back to a generic "Bug fixes and
 improvements" line. See `.claude/skills/release/SKILL.md` for the full release
 process.
+
+This tag message is **Android-facing** — it is the only thing Google Play users
+read. It must describe only changes that reach Android users and must **never**
+mention iOS-only work (Core Bluetooth / iOS state restoration, TestFlight, the
+App Store, iOS-specific fixes); drop such items entirely. They still belong in
+the cross-platform GitHub notes, just not here.

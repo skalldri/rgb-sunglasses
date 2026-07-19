@@ -122,6 +122,22 @@ channel that reaches Play (500 chars is Play's hard limit; CI truncates). A
 lightweight (unannotated) app tag falls back to a generic "Bug fixes and
 improvements" line. Draft this summary alongside the notes and show both to the user.
 
+> [!IMPORTANT]
+> **The Play summary is Android-only. It is read by Android users on the Google
+> Play listing, so it must describe only changes that reach Android users — never
+> mention iOS-only work** (Core Bluetooth / iOS state restoration, TestFlight, the
+> App Store, iOS-specific fixes, etc.). Cross-platform changes are fine; when a
+> highlight is iOS-only, **drop it from the Play summary entirely** — it still
+> belongs in the curated cross-platform GitHub notes, just not here. Unlike those
+> GitHub notes (which serve both platforms), the Play summary has a single Android
+> audience.
+>
+> Concretely, a summary like *"Improved Bluetooth reliability on iOS with Core
+> Bluetooth state restoration, added connected-device highlighting in the Connect
+> tab, and fixed a notification icon glitch on Pixel phones"* is **wrong** for
+> Play: the Core Bluetooth clause is iOS-only and must be cut, leaving only the
+> connected-device-highlighting and Pixel-notification-icon items.
+
 Show the drafted notes to the user for review.
 
 ---
