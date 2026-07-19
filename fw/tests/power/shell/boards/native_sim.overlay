@@ -1,0 +1,26 @@
+/*
+ * Instantiate the TPS25750 + BQ25792 on native_sim's emulated I2C
+ * controller, same node shape as fw/tests/drivers/emul_tps25750's overlay -
+ * this suite drives fw/src/power.cpp's `power bq`/`power pd` shell commands
+ * against the same real-driver-plus-emulator stack that suite already
+ * proves out, rather than a second, divergent emulator setup.
+ */
+
+&i2c0 {
+	tps25750: tps25750@21 {
+		compatible = "ti,tps25750";
+		reg = <0x21>;
+		patch-address = <0x15>;
+		patch-chunk-size = <128>;
+		status = "okay";
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		bq25792: bq25792@6b {
+			compatible = "ti,bq25792";
+			reg = <0x6B>;
+			status = "okay";
+		};
+	};
+};
