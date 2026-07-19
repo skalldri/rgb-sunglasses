@@ -110,7 +110,12 @@ static void ensure_app_mode() {
     }
     const char *patch = nullptr;
     size_t patch_size = 0;
-    tps25750_get_patch(&patch, &patch_size);
+    /* A failure here (e.g. LZ4 decompression error) would otherwise leave
+     * `patch`/`patch_size` at nullptr/0, silently skip the PBMs step below,
+     * and leave MODE stuck at PTCH - surfacing as a confusing bridge-failure
+     * symptom in whichever test happens to run next instead of a clear,
+     * immediate diagnostic here. */
+    zassert_ok(tps25750_get_patch(&patch, &patch_size));
     (void)tps25750_download_patch(tps_dev, patch, patch_size);
 }
 
