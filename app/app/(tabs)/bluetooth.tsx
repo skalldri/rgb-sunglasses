@@ -1,5 +1,6 @@
 import BluetoothDeviceListItem from "@/components/bluetooth-device-list-item";
 import { ExternalLink } from "@/components/external-link";
+import { ReconnectingPulseCard } from "@/components/reconnecting-pulse-card";
 import { ThemedText } from "@/components/themed-text";
 import { AppButton } from "@/components/ui/app-button";
 import { Card } from "@/components/ui/card";
@@ -43,7 +44,7 @@ const PRUNE_INTERVAL_MS = 2_000;
 
 export default function BluetoothScreen() {
 
-    const { isScanning, setIsScanning, connectingDevice, reconnectingDevice } = useBluetooth();
+    const { isScanning, setIsScanning, connectingDevice, reconnectingDevice, selectedDevice } = useBluetooth();
     const [devices, setDevices] = useState<BleDevice[]>([]);
     const c = useThemeColors();
     const { info: appUpdate } = useAppUpdateCheck();
@@ -372,14 +373,37 @@ export default function BluetoothScreen() {
                 )
             ) : (
                 <View style={styles.list}>
-                    {devices.map(device => (
-                        <Card key={device.mac}>
+                    {devices.map(device => {
+                        const isConnected = selectedDevice?.mac === device.mac;
+                        const isReconnecting = reconnectingDevice?.mac === device.mac;
+                        const item = (
                             <BluetoothDeviceListItem
                                 deviceName={device.name}
                                 macAddress={device.mac}
                             />
-                        </Card>
-                    ))}
+                        );
+
+                        if (isReconnecting) {
+                            return (
+                                <ReconnectingPulseCard key={device.mac}>
+                                    {item}
+                                </ReconnectingPulseCard>
+                            );
+                        }
+
+                        return (
+                            <Card
+                                key={device.mac}
+                                style={isConnected ? {
+                                    borderWidth: 2,
+                                    borderColor: c.primary,
+                                    backgroundColor: c.primary + '14',
+                                } : undefined}
+                            >
+                                {item}
+                            </Card>
+                        );
+                    })}
                 </View>
             )}
 
