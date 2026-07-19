@@ -43,7 +43,7 @@ const PRUNE_INTERVAL_MS = 2_000;
 
 export default function BluetoothScreen() {
 
-    const { isScanning, setIsScanning, connectingDevice, reconnectingDevice } = useBluetooth();
+    const { isScanning, setIsScanning, connectingDevice, reconnectingDevice, selectedDevice } = useBluetooth();
     const [devices, setDevices] = useState<BleDevice[]>([]);
     const c = useThemeColors();
     const { info: appUpdate } = useAppUpdateCheck();
@@ -372,14 +372,24 @@ export default function BluetoothScreen() {
                 )
             ) : (
                 <View style={styles.list}>
-                    {devices.map(device => (
-                        <Card key={device.mac}>
-                            <BluetoothDeviceListItem
-                                deviceName={device.name}
-                                macAddress={device.mac}
-                            />
-                        </Card>
-                    ))}
+                    {devices.map(device => {
+                        const isConnected = selectedDevice?.mac === device.mac;
+                        return (
+                            <Card
+                                key={device.mac}
+                                style={isConnected ? {
+                                    borderWidth: 2,
+                                    borderColor: c.primary,
+                                    backgroundColor: c.primary + '14',
+                                } : undefined}
+                            >
+                                <BluetoothDeviceListItem
+                                    deviceName={device.name}
+                                    macAddress={device.mac}
+                                />
+                            </Card>
+                        );
+                    })}
                 </View>
             )}
 

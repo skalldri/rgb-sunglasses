@@ -311,4 +311,50 @@ describe('BluetoothScreen', () => {
     });
     expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
   });
+
+  it('highlights the connected device row, not other rows (issue #211)', async () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      isScanning: false,
+      setIsScanning: jest.fn(),
+      selectedDevice: { mac: 'id-1' },
+    } as any);
+
+    let focusCallback: (() => void | (() => void)) | null = null;
+    jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+      focusCallback = cb;
+      return undefined as any;
+    });
+
+    jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+    (BleHook.bleManager.startDeviceScan as jest.Mock).mockImplementation((_filters, _options, callback) => {
+      callback(null, { localName: 'RGB Sunglasses A', id: 'id-1' });
+      callback(null, { localName: 'RGB Sunglasses B', id: 'id-2' });
+    });
+    (BleHook.bleManager.connectedDevices as jest.Mock).mockResolvedValue([]);
+
+    const { findByText } = render(<BluetoothScreen />);
+    await act(async () => {
+      focusCallback?.();
+    });
+
+    // Walk up from the mocked list item's <Text> to the nearest ancestor whose
+    // style is an array - that's the wrapping <Card>'s <View>, since Card
+    // composes [styles.card, {...}, padded && styles.padded, style].
+    const findCardView = (textInstance: ReturnType<typeof findByText> extends Promise<infer T> ? T : never) => {
+      let cur = textInstance.parent;
+      while (cur && !Array.isArray(cur.props?.style)) {
+        cur = cur.parent;
+      }
+      return cur;
+    };
+
+    const connectedCardView = findCardView(await findByText('RGB Sunglasses A|id-1'));
+    const otherCardView = findCardView(await findByText('RGB Sunglasses B|id-2'));
+
+    const highlightMatcher = expect.arrayContaining([
+      expect.objectContaining({ borderWidth: 2 }),
+    ]);
+    expect(connectedCardView?.props.style).toEqual(highlightMatcher);
+    expect(otherCardView?.props.style).not.toEqual(highlightMatcher);
+  });
 });
