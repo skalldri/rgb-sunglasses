@@ -9,6 +9,7 @@ enum class Indicator {
     BtAdvertising,
     BtConnecting,
     BtPairing,
+    ExtensionsLoading,
 };
 
 int pattern_controller_request_indicator(Indicator ind);

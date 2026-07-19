@@ -18,6 +18,7 @@ enum class Animation {
     MatrixCode = 11,
     Tilt = 12,
     Pulse = 13,
+    BtExtensionsLoading = 14,
 
     // Sentinel: one past the last built-in animation. Not a real animation —
     // used by static_asserts (e.g. the extension animation-ID band must start

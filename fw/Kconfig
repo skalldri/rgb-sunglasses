@@ -469,6 +469,20 @@ config APP_EXT_TICK_DEADLINE_MS
 	  finish one tick before declaring it hung, aborting the host thread,
 	  and falling back (issue #85 recovery path).
 
+config APP_BOOT_GATE_TIMEOUT_MS
+	int "Boot gate timeout (ms)"
+	default 30000
+	help
+	  How long the BT thread waits, before its first BLE advertising start,
+	  for pre-advertising boot-time work (extension discovery/registration)
+	  to finish (issue #208) - so a central connecting right after
+	  advertising starts never reads stale/unpopulated GATT state. Not
+	  gated on APP_EXTENSION_HOST: the gate always exists, since
+	  pattern_controller_thread_func() always signals it once its boot-time
+	  work is done, extensions or not. On timeout, a warning is logged and
+	  advertising starts anyway, so a stuck FAT read during extension
+	  discovery can't make the device permanently BLE-unreachable.
+
 config APP_COREDUMP_MANAGER
 	bool "Coredump manager: drain crash dumps from flash to the FAT disk"
 	depends on DEBUG_COREDUMP && FILE_SYSTEM
