@@ -415,10 +415,15 @@ ZTEST(extension_bt, test_param_characteristics) {
     zassert_equal(do_write(paramAttr[3], "hello", 5), 5);
     zassert_str_equal(extension_host::paramString(slot, 3), "hello");
     /* offset+len overflowing the string storage is rejected; a nonzero
-     * offset reports INVALID_OFFSET specifically. */
+     * offset reports INVALID_OFFSET specifically, and a zero offset with an
+     * overlong len alone reports INVALID_ATTRIBUTE_LEN instead. */
     char pad[5] = {'a', 'a', 'a', 'a', 'a'};
     zassert_equal(do_write(paramAttr[3], pad, sizeof(pad), 30),
                  BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET));
+    char longPad[RGBX_PARAM_STRING_MAX];
+    memset(longPad, 'a', sizeof(longPad));
+    zassert_equal(do_write(paramAttr[3], longPad, sizeof(longPad), 0),
+                 BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN));
 
     /* Defensive branch: paramInfo() unexpectedly returns nullptr for an
      * in-range index. */
