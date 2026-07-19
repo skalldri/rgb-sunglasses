@@ -50,7 +50,7 @@ for dev in /sys/bus/usb/devices/*; do
         rm -f "$node"
         mkdir -p "$(dirname "$node")"
         mknod "$node" c 189 "$minor"
-        chmod 664 "$node"
+        chmod 666 "$node"
         idv=$(cat "$dev/idVendor" 2>/dev/null || echo '????')
         idp=$(cat "$dev/idProduct" 2>/dev/null || echo '????')
         echo "created $node (c 189 $minor) for $idv:$idp"

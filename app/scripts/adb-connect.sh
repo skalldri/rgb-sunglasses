@@ -48,7 +48,17 @@ else
 fi
 
 echo "Connected devices:"
-adb devices
+# Tag each device line (USB)/(WiFi): a USB serial has no ":port" suffix, a
+# TCP/WiFi serial is "ip:port" (issue #202 follow-up — report connection kind,
+# not just presence).
+adb devices | tail -n +2 | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    serial=$(echo "$line" | awk '{print $1}')
+    case "$serial" in
+        *:*) echo "  $line (WiFi)" ;;
+        *) echo "  $line (USB)" ;;
+    esac
+done
 
 if ! adb get-state >/dev/null 2>&1; then
     echo "error: no device detected." >&2
