@@ -1,0 +1,16 @@
+/*
+ * RAM disk for glim_player_animation_bt.cpp's glim_registry dependency.
+ * Mounted at /NAND: to match glim_registry::kDirectory's hardcoded prefix -
+ * unused by this suite (glim_registry::init() is never called, see
+ * src/main.cpp's test_glim_player comment) but FatFS's Kconfig wants a
+ * matching disk node to be present at all, same as
+ * tests/animations/glim_player_animation_di.
+ */
+/ {
+	nand_ramdisk: ramdisk0 {
+		compatible = "zephyr,ram-disk";
+		disk-name = "NAND";
+		sector-size = <512>;
+		sector-count = <256>;
+	};
+};
