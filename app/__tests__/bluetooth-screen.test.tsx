@@ -357,4 +357,42 @@ describe('BluetoothScreen', () => {
     expect(connectedCardView?.props.style).toEqual(highlightMatcher);
     expect(otherCardView?.props.style).not.toEqual(highlightMatcher);
   });
+
+  it('shows the animated pulse card for the reconnecting device row', async () => {
+    // While a reconnect is pending, the focus effect pins just that device and
+    // skips scanning entirely (see the isReconnectPending branch in bluetooth.tsx) -
+    // so there's no "other row" to compare against here, unlike the connected case.
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      isScanning: false,
+      setIsScanning: jest.fn(),
+      reconnectingDevice: { mac: 'reconnect-mac', name: 'RGB Sunglasses Pairing' },
+    } as any);
+
+    let focusCallback: (() => void | (() => void)) | null = null;
+    jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+      focusCallback = cb;
+      return undefined as any;
+    });
+
+    jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+    (BleHook.bleManager.startDeviceScan as jest.Mock).mockImplementation(() => undefined);
+    (BleHook.bleManager.connectedDevices as jest.Mock).mockResolvedValue([]);
+
+    const { findByText, getAllByTestId, unmount } = render(<BluetoothScreen />);
+    await act(async () => {
+      focusCallback?.();
+    });
+
+    await findByText('RGB Sunglasses Pairing|reconnect-mac');
+
+    expect(getAllByTestId('reconnecting-pulse-card')).toHaveLength(1);
+    expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
+
+    // Deterministically stop ReconnectingPulseCard's Animated.loop()s (its cleanup
+    // runs on unmount) before the test ends, instead of letting RNTL's automatic
+    // afterEach cleanup race a queued animation timer outside any act() call.
+    await act(async () => {
+      unmount();
+    });
+  });
 });

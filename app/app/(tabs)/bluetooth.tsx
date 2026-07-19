@@ -1,5 +1,6 @@
 import BluetoothDeviceListItem from "@/components/bluetooth-device-list-item";
 import { ExternalLink } from "@/components/external-link";
+import { ReconnectingPulseCard } from "@/components/reconnecting-pulse-card";
 import { ThemedText } from "@/components/themed-text";
 import { AppButton } from "@/components/ui/app-button";
 import { Card } from "@/components/ui/card";
@@ -374,6 +375,22 @@ export default function BluetoothScreen() {
                 <View style={styles.list}>
                     {devices.map(device => {
                         const isConnected = selectedDevice?.mac === device.mac;
+                        const isReconnecting = reconnectingDevice?.mac === device.mac;
+                        const item = (
+                            <BluetoothDeviceListItem
+                                deviceName={device.name}
+                                macAddress={device.mac}
+                            />
+                        );
+
+                        if (isReconnecting) {
+                            return (
+                                <ReconnectingPulseCard key={device.mac}>
+                                    {item}
+                                </ReconnectingPulseCard>
+                            );
+                        }
+
                         return (
                             <Card
                                 key={device.mac}
@@ -383,10 +400,7 @@ export default function BluetoothScreen() {
                                     backgroundColor: c.primary + '14',
                                 } : undefined}
                             >
-                                <BluetoothDeviceListItem
-                                    deviceName={device.name}
-                                    macAddress={device.mac}
-                                />
+                                {item}
                             </Card>
                         );
                     })}
