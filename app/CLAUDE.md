@@ -237,7 +237,14 @@ There is currently **no iOS dev-variant** (the Android `.dev` side-by-side insta
   after a user force-quit** (App Switcher swipe) — iOS only relaunches after a *system* termination
   (platform limitation, the user must reopen the app) — and **ordinary cold launches do not
   auto-connect** (no last-device persistence; scope decision on #190, the restored-peripheral handoff
-  is the only cross-launch state).
+  is the only cross-launch state). Hardware-verified 2026-07-18 (iPhone 15/iOS 26.5): SIGKILL of the
+  backgrounded app → relaunch within seconds on the board's next notify, restore→re-adopt→reconnected
+  on attempt 1, board never saw a disconnect (stayed CONNECTED/L4/MTU 293), background Metro bundle
+  fetch worked, app→device write round-trip confirmed via serial. One surprise to not misread during
+  future debugging: ~50 s **after a user force-quit**, iOS's SYSTEM stack briefly reconnected to the
+  bonded board (serial showed a bonded L4 connection with NO app process alive) and dropped it ~15 s
+  later — the iOS analog of OxygenOS's system-level auto-connect (see the Android note above). A
+  bonded L4 connection on serial does not by itself mean the app is running or was relaunched.
 
 ### Android Permissions
 
