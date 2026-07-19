@@ -1,0 +1,15 @@
+/*
+ * RAM disk for glim_player_animation_bt.cpp's glim_registry dependency.
+ * Mounted at /NAND: to match glim_registry::kDirectory's hardcoded prefix -
+ * src/main.cpp's test_glim_player mounts it (fs_mkfs/fs_mount) and writes one
+ * real GLIM file to it in its "registry has files" phase, same node shape as
+ * tests/animations/glim_player_animation_di's overlay.
+ */
+/ {
+	nand_ramdisk: ramdisk0 {
+		compatible = "zephyr,ram-disk";
+		disk-name = "NAND";
+		sector-size = <512>;
+		sector-count = <256>;
+	};
+};
