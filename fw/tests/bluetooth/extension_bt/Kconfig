@@ -1,0 +1,10 @@
+source "Kconfig.zephyr"
+
+config APP_BT_METADATA_CHARACTERISTIC
+	bool "Append a bulk CUD/CPF metadata characteristic to every BtGattServer service"
+	default y
+	help
+	  Mirrors the symbol of the same name in fw/Kconfig - this test compiles
+	  extension_bt.cpp directly, outside the main fw application's Kconfig
+	  tree, so it needs its own definition to exercise the runtime bulk
+	  metadata characteristic path (issue #90 follow-up).
