@@ -70,6 +70,38 @@ void BtConnectingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLa
     }
 }
 
+void BtExtensionsLoadingAnimation::init() {
+    currentCycleTimeMs = 0;
+}
+
+void BtExtensionsLoadingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
+    // Same fade shape as BtAdvertisingAnimation, but violet instead of blue - a boot-only
+    // notification (issue #208) that must read as visually distinct from every other BLE
+    // indicator (all blue) and from the power LED (never blue or violet).
+    currentCycleTimeMs += timeSinceLastTickMs;
+
+    if (currentCycleTimeMs > kFadeTimeMs) {
+        currentCycleTimeMs = 0;
+    }
+
+    size_t currentBrightness = 0;
+
+    if (currentCycleTimeMs < kFadeHalfTimeMs) {
+        currentBrightness =
+            kMinFade + (kFadeDistance * ((float)currentCycleTimeMs) / ((float)kFadeHalfTimeMs));
+    } else {
+        currentBrightness =
+            kMaxFade - (kFadeDistance * ((float)(currentCycleTimeMs - kFadeHalfTimeMs)) /
+                        ((float)kFadeHalfTimeMs));
+    }
+
+    for (size_t x = 0; x < renderer.displayWidth(); x++) {
+        for (size_t y = 0; y < renderer.displayHeight(); y++) {
+            renderer.setPixel(x, y, currentBrightness, 0, currentBrightness);
+        }
+    }
+}
+
 void BtPairingAnimation::setPairingCode(unsigned int code) {
     pairingCode = code;
 }

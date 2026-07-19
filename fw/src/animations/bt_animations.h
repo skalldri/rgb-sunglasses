@@ -43,6 +43,26 @@ class BtConnectingAnimation
     size_t currentCycleTimeMs = 0;
 };
 
+class BtExtensionsLoadingAnimation
+    : public BaseAnimationTemplate<BtExtensionsLoadingAnimation, Animation::BtExtensionsLoading> {
+   public:
+    void init() override;
+    void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
+    void setActive(bool active) override{};
+
+   private:
+    static constexpr size_t kMinFade = 50;
+    static constexpr size_t kMaxFade = 255;
+    static constexpr size_t kFadeDistance = kMaxFade - kMinFade;
+
+    // The time required to fade up and then back down
+    static constexpr size_t kFadeTimeMs = 500;
+    static constexpr size_t kFadeHalfTimeMs = kFadeTimeMs / 2;
+
+    // Current cycle time within the animation cycle
+    size_t currentCycleTimeMs = 0;
+};
+
 class BtPairingAnimation : public BaseAnimationTemplate<BtPairingAnimation, Animation::BtPairing> {
    public:
     void init() override;

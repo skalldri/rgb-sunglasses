@@ -2,6 +2,7 @@
 #include <animations/animation_renderer.h>
 #include <animations/bt_animations.h>
 #include <animations/null_animation.h>
+#include <bluetooth/boot_gate.h>
 #include <bluetooth/bt_state_observer.h>
 #include <configuration_provider.h>
 #if defined(CONFIG_STATUS_LED)
@@ -151,6 +152,9 @@ BaseAnimation *getIndicator(Indicator indicator) {
         case Indicator::BtPairing:
             return BtPairingAnimation::getInstance();
 
+        case Indicator::ExtensionsLoading:
+            return BtExtensionsLoadingAnimation::getInstance();
+
         case Indicator::None:
             // Explicit fallthrough to get to the NULL animation
             break;
@@ -181,6 +185,18 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     BtAdvertisingAnimation::getInstance()->init();
     BtConnectingAnimation::getInstance()->init();
     BtPairingAnimation::getInstance()->init();
+    BtExtensionsLoadingAnimation::getInstance()->init();
+
+    // Boot notification (issue #208): show this on the BLE status LED while extension
+    // discovery/registration runs below, so it's visible for however long
+    // boot_gate_wait_ready() ends up blocking bt_thread's first advertising start.
+    // Distinct from every BtStateObserver-driven indicator (all blue) and from the power
+    // LED (never blue or violet) by using violet here instead.
+#if !defined(CONFIG_STATUS_LED)
+    pattern_controller_request_indicator(Indicator::ExtensionsLoading);
+#else
+    status_led_set(1, StatusIndication::FastBreathing, StatusColor::Violet);
+#endif
 
 #if defined(CONFIG_ANIMATION_GLIM_PLAYER)
     // Must run before animation_registry_register_defaults(), which seeds the Glim Player's
@@ -204,6 +220,11 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
 #endif
         animation_registry_init_registered();
     }
+
+    // Boot-time work that bt_thread's first advertising start is gated on (issue #208) is
+    // done - signal it unconditionally, including the ret-failure path above, so a
+    // registration failure here can't also permanently block BLE advertising.
+    boot_gate_notify_ready();
 
     // Resume whatever animation was active before the last power-cycle, if any was
     // persisted and is still registered (e.g. its CONFIG_ANIMATION_* might have been

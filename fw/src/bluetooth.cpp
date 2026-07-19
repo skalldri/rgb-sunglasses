@@ -1,3 +1,4 @@
+#include <bluetooth/boot_gate.h>
 #include <bluetooth/bt_conn_activity.h>
 #include <bluetooth/bt_state_observer.h>
 #include <bluetooth/conn_param_governor_core.h>
@@ -909,6 +910,16 @@ void bt_thread_func(void *a, void *b, void *c) {
     BtThreadContext ctx;
     ctx.state = BtThreadState::IDLE;
     ctx.conn = NULL;
+
+    // Don't start advertising until pattern_controller_thread_func() has finished its
+    // boot-time work (extension discovery/registration, issue #208) - otherwise a
+    // central that connects right after advertising starts can read stale/unpopulated
+    // extension GATT state. Bounded so a stuck FAT read during extension discovery
+    // can't make the device permanently BLE-unreachable.
+    if (!boot_gate_wait_ready(CONFIG_APP_BOOT_GATE_TIMEOUT_MS)) {
+        LOG_WRN("Boot gate timed out after %d ms; starting advertising anyway",
+                CONFIG_APP_BOOT_GATE_TIMEOUT_MS);
+    }
 
     int err = bt_state_change_to(&ctx, BtThreadState::ADVERTISING);
 
