@@ -9,7 +9,7 @@ import { Hero } from "@/components/ui/hero";
 import { Screen } from "@/components/ui/screen";
 import { Spacing } from "@/constants/theme";
 import { PRIVACY_POLICY_URL } from "@/constants/urls";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { useBluetooth } from "@/context/bluetooth-context";
@@ -64,6 +64,14 @@ export default function BluetoothScreen() {
     const reconnectingDeviceRef = useRef(reconnectingDevice);
     reconnectingDeviceRef.current = reconnectingDevice;
 
+    // And the same for the fully-connected device: once its LE link is up it stops
+    // advertising, so the scan callback never refreshes its lastSeen and the pruner
+    // would otherwise age it out after the TTL - dropping the connected board off the
+    // Connect list until a re-focus re-runs the connectedDevices() query (the bug this
+    // ref fixes). Kept in a ref so the long-lived prune timer reads the latest value.
+    const selectedDeviceRef = useRef(selectedDevice);
+    selectedDeviceRef.current = selectedDevice;
+
     // Per-invocation generation token that guards against orphaned scans.
     // startBluetoothScan() awaits requestPermissions() (several native round-
     // trips), so the screen can lose focus AND regain it (a fast tab flip) while
@@ -110,8 +118,10 @@ export default function BluetoothScreen() {
             // device being auto-reconnected (issue #124).
             const connectingMac = connectingDeviceRef.current?.mac;
             const reconnectingMac = reconnectingDeviceRef.current?.mac;
+            // The connected device stops advertising, so pin it too (see selectedDeviceRef).
+            const selectedMac = selectedDeviceRef.current?.mac;
             const fresh = prev.filter(d =>
-                d.mac === connectingMac || d.mac === reconnectingMac ||
+                d.mac === connectingMac || d.mac === reconnectingMac || d.mac === selectedMac ||
                 now - (lastSeenRef.current[d.mac] ?? 0) <= DEVICE_TTL_MS
             );
             return fresh.length === prev.length ? prev : fresh;
@@ -271,6 +281,20 @@ export default function BluetoothScreen() {
         setIsScanning(false);
     }
 
+    // The list actually rendered: the scan-derived `devices` plus the currently-connected
+    // device, which must always be shown even when it isn't in `devices` yet. A connected
+    // board doesn't advertise, so it can be absent from the scan results entirely - e.g. on a
+    // cold launch where `selectedDevice` is restored just after the first focus/scan, or in the
+    // window after the pruner has aged it out. Unioning it here guarantees its "Disconnect" row
+    // is visible the instant the app knows it's connected, independent of scan/prune timing. The
+    // `!devices.some` guard avoids a duplicate row once the scan/OS query does surface it.
+    const visibleDevices = useMemo(() => {
+        if (selectedDevice && !devices.some(d => d.mac === selectedDevice.mac)) {
+            return [...devices, { name: selectedDevice.name, mac: selectedDevice.mac }];
+        }
+        return devices;
+    }, [devices, selectedDevice]);
+
     // Whether an auto-reconnect loop is pending (issue #124). A dependency of the
     // focus effect below so scanning stops when a reconnect starts and resumes when
     // it settles (success, cancel, or user disconnect) while the screen stays focused.
@@ -361,7 +385,7 @@ export default function BluetoothScreen() {
                 {isScanning && <ActivityIndicator size="small" color={c.primary} />}
             </View>
 
-            {devices.length === 0 ? (
+            {visibleDevices.length === 0 ? (
                 isScanning ? (
                     <ThemedText type="caption">Scanning…</ThemedText>
                 ) : (
@@ -373,7 +397,7 @@ export default function BluetoothScreen() {
                 )
             ) : (
                 <View style={styles.list}>
-                    {devices.map(device => {
+                    {visibleDevices.map(device => {
                         const isConnected = selectedDevice?.mac === device.mac;
                         const isReconnecting = reconnectingDevice?.mac === device.mac;
                         const item = (
