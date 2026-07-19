@@ -1,19 +1,21 @@
 import {
     consumeRestoredPeripheral,
     handleRestoredState,
-    peekRestoredPeripheral,
+    RestoredPeripheral,
+    subscribeRestoredPeripheral,
 } from '@/hooks/ble-manager';
 
 // handleRestoredState is driven directly: the jest.setup.ts BleManager mock
 // ignores constructor options, so the restore callback never fires through
 // `new BleManager()` in tests. The stash is module-scope, so reset it between
-// tests via consumeRestoredPeripheral().
+// tests via consumeRestoredPeripheral(); subscribers are unsubscribed by each
+// test that registers one.
 
 function makeRestoredDevice(overrides: Record<string, unknown> = {}) {
     return { id: 'PERIPHERAL-UUID-1', localName: 'RGB Sunglasses A1B2', name: 'RGB Sunglasses A1B2', ...overrides };
 }
 
-describe('handleRestoredState (iOS CB state restoration stash, issue #190)', () => {
+describe('handleRestoredState / subscribeRestoredPeripheral (iOS CB state restoration, issue #190)', () => {
     beforeEach(() => {
         consumeRestoredPeripheral();
         jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -24,53 +26,120 @@ describe('handleRestoredState (iOS CB state restoration stash, issue #190)', () 
         jest.restoreAllMocks();
     });
 
-    it('null restored state (first construction) leaves the stash empty', () => {
+    it('null restored state (first construction) delivers nothing', () => {
         handleRestoredState(null);
-        expect(peekRestoredPeripheral()).toBeNull();
+        const subscriber = jest.fn();
+        const unsubscribe = subscribeRestoredPeripheral(subscriber);
+        expect(subscriber).not.toHaveBeenCalled();
+        unsubscribe();
     });
 
-    it('an empty connectedPeripherals list leaves the stash empty', () => {
+    it('an empty connectedPeripherals list delivers nothing', () => {
         handleRestoredState({ connectedPeripherals: [] } as any);
-        expect(peekRestoredPeripheral()).toBeNull();
+        const subscriber = jest.fn();
+        const unsubscribe = subscribeRestoredPeripheral(subscriber);
+        expect(subscriber).not.toHaveBeenCalled();
+        unsubscribe();
     });
 
-    it('stashes the restored peripheral as { mac: id, name: localName }', () => {
+    it('a missing connectedPeripherals array is a no-op, not a crash (runs outside any error boundary)', () => {
+        expect(() => handleRestoredState({} as any)).not.toThrow();
+        const subscriber = jest.fn();
+        const unsubscribe = subscribeRestoredPeripheral(subscriber);
+        expect(subscriber).not.toHaveBeenCalled();
+        unsubscribe();
+    });
+
+    it('callback-before-subscribe: the stashed peripheral is delivered immediately on subscribe', () => {
         handleRestoredState({ connectedPeripherals: [makeRestoredDevice()] } as any);
-        expect(peekRestoredPeripheral()).toEqual({
+        const subscriber = jest.fn();
+        subscribeRestoredPeripheral(subscriber);
+        expect(subscriber).toHaveBeenCalledWith({
             mac: 'PERIPHERAL-UUID-1',
             name: 'RGB Sunglasses A1B2',
         });
     });
 
-    it('peek is a pure read (repeatable); consume clears the stash', () => {
+    it('subscribe-before-callback: the peripheral is delivered when the async restore event lands', () => {
+        const subscriber = jest.fn();
+        const unsubscribe = subscribeRestoredPeripheral(subscriber);
+        expect(subscriber).not.toHaveBeenCalled();
+
         handleRestoredState({ connectedPeripherals: [makeRestoredDevice()] } as any);
-        const first = peekRestoredPeripheral();
-        expect(peekRestoredPeripheral()).toEqual(first);
-        consumeRestoredPeripheral();
-        expect(peekRestoredPeripheral()).toBeNull();
+        expect(subscriber).toHaveBeenCalledWith({
+            mac: 'PERIPHERAL-UUID-1',
+            name: 'RGB Sunglasses A1B2',
+        });
+        unsubscribe();
     });
 
-    it('falls back localName -> name -> "RGB Sunglasses" for the display name', () => {
-        handleRestoredState({
-            connectedPeripherals: [makeRestoredDevice({ localName: null, name: 'Fallback Name' })],
-        } as any);
-        expect(peekRestoredPeripheral()?.name).toBe('Fallback Name');
+    it('delivers exactly once: a later subscriber gets nothing', () => {
+        handleRestoredState({ connectedPeripherals: [makeRestoredDevice()] } as any);
+        const first = jest.fn();
+        subscribeRestoredPeripheral(first);
+        expect(first).toHaveBeenCalledTimes(1);
 
-        consumeRestoredPeripheral();
-        handleRestoredState({
-            connectedPeripherals: [makeRestoredDevice({ localName: null, name: null })],
-        } as any);
-        expect(peekRestoredPeripheral()?.name).toBe('RGB Sunglasses');
+        const second = jest.fn();
+        const unsubscribe = subscribeRestoredPeripheral(second);
+        expect(second).not.toHaveBeenCalled();
+        unsubscribe();
+    });
+
+    it('unsubscribe stops delivery; the peripheral is stashed for a later subscriber instead', () => {
+        const first = jest.fn();
+        const unsubscribeFirst = subscribeRestoredPeripheral(first);
+        unsubscribeFirst();
+
+        handleRestoredState({ connectedPeripherals: [makeRestoredDevice()] } as any);
+        expect(first).not.toHaveBeenCalled();
+
+        const second = jest.fn();
+        subscribeRestoredPeripheral(second);
+        expect(second).toHaveBeenCalledTimes(1);
+    });
+
+    it("a stale unsubscribe doesn't remove a newer subscriber", () => {
+        const first = jest.fn();
+        const unsubscribeFirst = subscribeRestoredPeripheral(first);
+        unsubscribeFirst();
+        const second = jest.fn();
+        subscribeRestoredPeripheral(second);
+        // Calling the FIRST unsubscribe again must not detach the second subscriber.
+        unsubscribeFirst();
+
+        handleRestoredState({ connectedPeripherals: [makeRestoredDevice()] } as any);
+        expect(second).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back localName -> name -> "RGB Sunglasses", treating EMPTY strings like null', () => {
+        const deliveries: RestoredPeripheral[] = [];
+        const unsubscribe = subscribeRestoredPeripheral(p => deliveries.push(p));
+
+        handleRestoredState({ connectedPeripherals: [makeRestoredDevice({ localName: null, name: 'Fallback Name' })] } as any);
+        handleRestoredState({ connectedPeripherals: [makeRestoredDevice({ localName: '', name: 'Fallback Name' })] } as any);
+        handleRestoredState({ connectedPeripherals: [makeRestoredDevice({ localName: null, name: null })] } as any);
+        handleRestoredState({ connectedPeripherals: [makeRestoredDevice({ localName: '', name: '' })] } as any);
+
+        expect(deliveries.map(d => d.name)).toEqual([
+            'Fallback Name',
+            'Fallback Name',
+            'RGB Sunglasses',
+            'RGB Sunglasses',
+        ]);
+        unsubscribe();
     });
 
     it('adopts only the FIRST peripheral when several were restored (and warns)', () => {
+        const subscriber = jest.fn();
+        const unsubscribe = subscribeRestoredPeripheral(subscriber);
         handleRestoredState({
             connectedPeripherals: [
                 makeRestoredDevice(),
                 makeRestoredDevice({ id: 'PERIPHERAL-UUID-2', localName: 'Other' }),
             ],
         } as any);
-        expect(peekRestoredPeripheral()?.mac).toBe('PERIPHERAL-UUID-1');
+        expect(subscriber).toHaveBeenCalledWith(expect.objectContaining({ mac: 'PERIPHERAL-UUID-1' }));
         expect(console.warn).toHaveBeenCalled();
+        unsubscribe();
     });
 });

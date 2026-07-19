@@ -227,11 +227,14 @@ There is currently **no iOS dev-variant** (the Android `.dev` side-by-side insta
   `numbers-and-punctuation` keyboard (full keyboard for a number field).
 - **Core Bluetooth state restoration re-adoption (issue #190)**: when iOS jetsams the app while a
   board is connected, Core Bluetooth relaunches it in the background on the next BLE event for that
-  peripheral. The restore callback (`restoreStateFunction` in [hooks/ble-manager.ts](hooks/ble-manager.ts),
-  fires at module-import time, before React) stashes the restored peripheral at module scope;
-  `useBleRestorationAdopt` ([hooks/use-ble-restoration.ts](hooks/use-ble-restoration.ts), mounted as
-  `BleRestorationAdopter` in the root layout inside `BluetoothProvider`) consumes it once and drives
-  the issue-#124 `startReconnectLoop` — the iOS pending connect resolves immediately on the
+  peripheral. The restore callback (`restoreStateFunction` in [hooks/ble-manager.ts](hooks/ble-manager.ts))
+  is registered at module-import time but **delivered asynchronously** (a native bridge event that can
+  land before or after React mounts), so the handoff is a stash-or-deliver, deliver-once subscription
+  (`subscribeRestoredPeripheral`), not a read-once peek; `useBleRestorationAdopt`
+  ([hooks/use-ble-restoration.ts](hooks/use-ble-restoration.ts), mounted as `BleRestorationAdopter` in
+  the root layout inside `BluetoothProvider`) receives it whichever ordering wins and drives
+  the issue-#124 `startReconnectLoop` (once-only — a duplicate start would bump the reconnect
+  generation and tear down the restored link) — the iOS pending connect resolves immediately on the
   still-connected peripheral, then the normal discovery/monitor/selection path runs (fast: iOS serves
   it from its native GATT cache on a live link). Two deliberate limits: **restoration never fires
   after a user force-quit** (App Switcher swipe) — iOS only relaunches after a *system* termination

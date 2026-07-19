@@ -1,78 +1,107 @@
-import { renderHook } from '@testing-library/react-native';
+import { act, renderHook } from '@testing-library/react-native';
 
 import * as BleHook from '@/hooks/ble-manager';
 import * as BleConnectionHook from '@/hooks/use-ble-connection';
 import { useBleRestorationAdopt } from '@/hooks/use-ble-restoration';
 
 jest.mock('@/hooks/ble-manager', () => ({
-    peekRestoredPeripheral: jest.fn(() => null),
-    consumeRestoredPeripheral: jest.fn(),
+    subscribeRestoredPeripheral: jest.fn(() => () => {}),
 }));
 
 jest.mock('@/hooks/use-ble-connection', () => ({
     useBleConnection: jest.fn(),
 }));
 
+const RESTORED = { mac: 'PERIPHERAL-UUID-1', name: 'RGB Sunglasses A1B2' };
+
 describe('useBleRestorationAdopt (issue #190)', () => {
     let startReconnectLoop: jest.Mock;
+    let unsubscribe: jest.Mock;
+    // The subscriber the hook registered, captured so tests can simulate the
+    // async restore event landing after mount.
+    let subscriber: ((p: typeof RESTORED) => void) | null;
 
     beforeEach(() => {
         jest.clearAllMocks();
         jest.spyOn(console, 'log').mockImplementation(() => {});
         startReconnectLoop = jest.fn(async () => undefined);
         (BleConnectionHook.useBleConnection as jest.Mock).mockReturnValue({ startReconnectLoop });
+        subscriber = null;
+        unsubscribe = jest.fn();
+        (BleHook.subscribeRestoredPeripheral as jest.Mock).mockImplementation((cb: any) => {
+            subscriber = cb;
+            return unsubscribe;
+        });
     });
 
     afterEach(() => {
         jest.restoreAllMocks();
     });
 
-    it('no restored peripheral: binds useBleConnection to empty args and never starts the loop', () => {
+    it('nothing delivered: binds useBleConnection to empty args and never starts the loop', () => {
         renderHook(() => useBleRestorationAdopt());
 
+        expect(BleHook.subscribeRestoredPeripheral).toHaveBeenCalledTimes(1);
         expect(BleConnectionHook.useBleConnection).toHaveBeenCalledWith('', '');
         expect(startReconnectLoop).not.toHaveBeenCalled();
-        expect(BleHook.consumeRestoredPeripheral).not.toHaveBeenCalled();
     });
 
-    it('restored peripheral: binds to it, consumes the stash, and starts the loop exactly once', () => {
-        (BleHook.peekRestoredPeripheral as jest.Mock).mockReturnValue({
-            mac: 'PERIPHERAL-UUID-1',
-            name: 'RGB Sunglasses A1B2',
+    it('delivery BEFORE mount (immediate callback from subscribe): binds and starts the loop once', () => {
+        (BleHook.subscribeRestoredPeripheral as jest.Mock).mockImplementation((cb: any) => {
+            cb(RESTORED);
+            return unsubscribe;
         });
 
-        const { rerender } = renderHook(() => useBleRestorationAdopt());
+        renderHook(() => useBleRestorationAdopt());
 
-        expect(BleConnectionHook.useBleConnection).toHaveBeenCalledWith('PERIPHERAL-UUID-1', 'RGB Sunglasses A1B2');
-        expect(BleHook.consumeRestoredPeripheral).toHaveBeenCalledTimes(1);
+        expect(BleConnectionHook.useBleConnection).toHaveBeenLastCalledWith(RESTORED.mac, RESTORED.name);
         expect(startReconnectLoop).toHaveBeenCalledTimes(1);
-        // Consumption happens before the loop starts, so a re-entrant mount
-        // during adoption peeks an already-empty stash.
-        expect((BleHook.consumeRestoredPeripheral as jest.Mock).mock.invocationCallOrder[0])
-            .toBeLessThan(startReconnectLoop.mock.invocationCallOrder[0]);
+    });
 
-        // Re-renders don't re-fire the mount effect.
+    it('delivery AFTER mount (async restore event lands later): binds and starts the loop once', () => {
+        renderHook(() => useBleRestorationAdopt());
+        expect(startReconnectLoop).not.toHaveBeenCalled();
+
+        act(() => { subscriber?.(RESTORED); });
+
+        expect(BleConnectionHook.useBleConnection).toHaveBeenLastCalledWith(RESTORED.mac, RESTORED.name);
+        expect(startReconnectLoop).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts the loop with the closure bound to the restored device, not the empty-args one', () => {
+        // The starter effect must use the render where useBleConnection was
+        // already re-bound to (mac, name) - assert via a per-args closure.
+        const loops: Record<string, jest.Mock> = {};
+        (BleConnectionHook.useBleConnection as jest.Mock).mockImplementation((mac: string) => {
+            loops[mac] = loops[mac] ?? jest.fn(async () => undefined);
+            return { startReconnectLoop: loops[mac] };
+        });
+
+        renderHook(() => useBleRestorationAdopt());
+        act(() => { subscriber?.(RESTORED); });
+
+        expect(loops[RESTORED.mac]).toHaveBeenCalledTimes(1);
+        expect(loops['']).not.toHaveBeenCalled();
+    });
+
+    it('one-shot: a duplicate delivery cannot start a second competing loop', () => {
+        renderHook(() => useBleRestorationAdopt());
+        act(() => { subscriber?.(RESTORED); });
+        act(() => { subscriber?.({ ...RESTORED }); });
+        expect(startReconnectLoop).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-renders do not restart the loop or resubscribe', () => {
+        const { rerender } = renderHook(() => useBleRestorationAdopt());
+        act(() => { subscriber?.(RESTORED); });
         rerender(undefined);
         expect(startReconnectLoop).toHaveBeenCalledTimes(1);
+        expect(BleHook.subscribeRestoredPeripheral).toHaveBeenCalledTimes(1);
     });
 
-    it('a remount after consumption does not start the loop again', () => {
-        (BleHook.peekRestoredPeripheral as jest.Mock).mockReturnValue({
-            mac: 'PERIPHERAL-UUID-1',
-            name: 'RGB Sunglasses A1B2',
-        });
-
+    it('unmount unsubscribes', () => {
         const { unmount } = renderHook(() => useBleRestorationAdopt());
-        expect(startReconnectLoop).toHaveBeenCalledTimes(1);
         unmount();
-
-        // The real consumeRestoredPeripheral() cleared the stash, so a later
-        // mount peeks null. (Modelled by flipping the mock's return, not a
-        // mockReturnValueOnce - React may invoke the useState initializer more
-        // than once per mount, which would burn extra "once" values.)
-        (BleHook.peekRestoredPeripheral as jest.Mock).mockReturnValue(null);
-        renderHook(() => useBleRestorationAdopt());
-        expect(BleConnectionHook.useBleConnection).toHaveBeenLastCalledWith('', '');
-        expect(startReconnectLoop).toHaveBeenCalledTimes(1);
+        expect(unsubscribe).toHaveBeenCalledTimes(1);
     });
 });

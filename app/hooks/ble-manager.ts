@@ -7,17 +7,21 @@ import { BleManager, BleManagerOptions, BleRestoredState } from "react-native-bl
 // peripheral UUID, not a real MAC address.
 export type RestoredPeripheral = { mac: string; name: string };
 
-// Module-scope, NOT React state: the restore callback fires inside the
-// `new BleManager()` call below, at module-import time - before React mounts.
-// The restoration adopter (hooks/use-ble-restoration.ts, issue #190) reads and
-// consumes it once BluetoothProvider is up. iOS-only in practice (Android
-// ignores restoreStateIdentifier).
+// Module-scope, NOT React state: ble-plx registers restoreStateFunction inside
+// the `new BleManager()` call below, at module-import time - before React
+// mounts. Delivery, however, is ASYNCHRONOUS: the native willRestoreState
+// result arrives as a bridge event on a later run-loop turn, so it can land
+// before OR after the restoration adopter (hooks/use-ble-restoration.ts,
+// issue #190) mounts. Hence the stash-or-deliver pair below rather than a
+// read-once peek, which would silently lose the callback-after-mount ordering.
+// iOS-only in practice (Android ignores restoreStateIdentifier).
 //
 // NOTE: iOS only relaunches the app for Core Bluetooth events after a SYSTEM
 // termination (jetsam). After a user force-quit (App Switcher swipe) the
 // restore callback never fires - platform limitation; the user must reopen
 // the app. See the matching note in app/CLAUDE.md.
 let restoredPeripheral: RestoredPeripheral | null = null;
+let restoredSubscriber: ((peripheral: RestoredPeripheral) => void) | null = null;
 
 // Exported (rather than inlined into bleManagerOptions) so unit tests can
 // drive it directly - the jest BleManager mock ignores constructor options.
@@ -27,10 +31,13 @@ export function handleRestoredState(bleRestoredState: BleRestoredState | null): 
         // BleManager was constructed for the first time.
         return;
     }
-    const peripherals = bleRestoredState.connectedPeripherals;
+    // Defensive: this runs in the native->JS restore callback, outside any
+    // error boundary - a missing peripherals array must degrade to a no-op,
+    // never throw at startup.
+    const peripherals = bleRestoredState.connectedPeripherals ?? [];
     console.log(
         `BleManager state restored with ${peripherals.length} peripheral(s): ` +
-        peripherals.map(d => `${d.localName ?? d.name ?? '?'} (${d.id})`).join(', ')
+        peripherals.map(d => `${d.localName || d.name || '?'} (${d.id})`).join(', ')
     );
     if (peripherals.length === 0) return;
     if (peripherals.length > 1) {
@@ -38,18 +45,45 @@ export function handleRestoredState(bleRestoredState: BleRestoredState | null): 
         console.warn(`Restored ${peripherals.length} peripherals; adopting only the first`);
     }
     const device = peripherals[0];
-    restoredPeripheral = {
+    // || not ??: a restored peripheral can carry an EMPTY-string name, which
+    // should fall through to the default just like null would.
+    const peripheral: RestoredPeripheral = {
         mac: device.id,
-        name: device.localName ?? device.name ?? 'RGB Sunglasses',
+        name: device.localName || device.name || 'RGB Sunglasses',
+    };
+    if (restoredSubscriber) {
+        restoredSubscriber(peripheral);
+    } else {
+        restoredPeripheral = peripheral;
+    }
+}
+
+// Deliver-once handoff to the restoration adopter: if the restore callback
+// already fired, the subscriber is called immediately (and the stash cleared);
+// otherwise it's called when/if the callback lands. Either way the peripheral
+// is delivered to exactly ONE subscriber exactly once - a remounted (or
+// duplicate) adopter subscribing later gets nothing, which is what makes a
+// double mount unable to start two competing reconnect loops for the same
+// restored link. Returns an unsubscribe fn (a later subscriber may then
+// receive a subsequently-stashed peripheral).
+export function subscribeRestoredPeripheral(
+    subscriber: (peripheral: RestoredPeripheral) => void
+): () => void {
+    if (restoredPeripheral) {
+        const peripheral = restoredPeripheral;
+        restoredPeripheral = null;
+        subscriber(peripheral);
+        return () => {};
+    }
+    restoredSubscriber = subscriber;
+    return () => {
+        if (restoredSubscriber === subscriber) {
+            restoredSubscriber = null;
+        }
     };
 }
 
-// Pure read - safe to call from a render/useState initializer.
-export function peekRestoredPeripheral(): RestoredPeripheral | null {
-    return restoredPeripheral;
-}
-
-// Consume-once clear, called from the adoption driver's mount effect.
+// Test-only reset of the stash (delivery makes consumption implicit in app code).
 export function consumeRestoredPeripheral(): void {
     restoredPeripheral = null;
 }
