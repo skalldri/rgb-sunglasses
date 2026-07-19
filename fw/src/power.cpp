@@ -46,13 +46,28 @@
 
 LOG_MODULE_REGISTER(power);
 
-#if !defined(CONFIG_ZTEST)
+/* Gated on node presence rather than !CONFIG_ZTEST: a native_sim test suite
+ * that provides its own tps25750/bq25792/flash_controller-labeled nodes
+ * (e.g. fw/tests/power/shell, against the emul_tps25750 emulator) gets real
+ * devices too, instead of every ztest build unconditionally getting nullptr
+ * regardless of what its devicetree actually provides. Proto0 always defines
+ * all three, so this is a no-op there; a ztest app that DOESN'T define a
+ * given node (e.g. tests/power/tps25750_patch_decompression, which links
+ * this file only for the patch-decompression logic) still safely falls back
+ * to nullptr for that one, same as before. */
+#if DT_NODE_EXISTS(DT_NODELABEL(tps25750))
 const struct device *pd = DEVICE_DT_GET(DT_NODELABEL(tps25750));
-const struct device *bq = DEVICE_DT_GET(DT_NODELABEL(bq25792));
-const struct device *flash = DEVICE_DT_GET(DT_NODELABEL(flash_controller));
 #else
 const struct device *pd = nullptr;
+#endif
+#if DT_NODE_EXISTS(DT_NODELABEL(bq25792))
+const struct device *bq = DEVICE_DT_GET(DT_NODELABEL(bq25792));
+#else
 const struct device *bq = nullptr;
+#endif
+#if DT_NODE_EXISTS(DT_NODELABEL(flash_controller))
+const struct device *flash = DEVICE_DT_GET(DT_NODELABEL(flash_controller));
+#else
 const struct device *flash = nullptr;
 #endif
 
@@ -235,7 +250,12 @@ static void charger_status_thread_func(void *, void *, void *) {
          * policy consumes. */
         struct bq25792_status bq_status = {};
         bool chg_ok      = (bq25792_get_status(bq, &bq_status) == 0);
-        uint8_t chg_stat = bq_status.chg_stat;
+        /* Only consumed under CONFIG_APP_BATTERY_MONITOR (BLE telemetry) and
+         * CONFIG_STATUS_LED (charge-status LED color) below - both off is a
+         * real, if unusual, config (e.g. a native_sim test exercising the
+         * charger-status thread without either), so mark it explicitly
+         * rather than letting -Werror=unused-variable block that build. */
+        [[maybe_unused]] uint8_t chg_stat = bq_status.chg_stat;
 
         /* Every getter propagates bridge failures (they used to swallow
          * them), so any read failing this tick is a real comm signal. The
@@ -759,6 +779,11 @@ static int cmd_power_pd_patch(const struct shell *shell, size_t argc, char **arg
     return 0;
 }
 
+/* NRF_UICR_S and the VREGHVOUT bitfields are nRF5340-specific (declared by
+ * the nrf5340_application*.h headers, only included under
+ * CONFIG_SOC_NRF5340_CPUAPP above) - these two commands don't build on any
+ * other SoC, native_sim included. */
+#if defined(CONFIG_SOC_NRF5340_CPUAPP)
 static int cmd_power_sys_vreghvout(const struct shell *shell, size_t argc, char **argv,
                                    void *data) {
     uint32_t currentVreghvout = (NRF_UICR_S->VREGHVOUT & UICR_VREGHVOUT_VREGHVOUT_Msk);
@@ -805,6 +830,7 @@ static int cmd_power_sys_boost(const struct shell *shell, size_t argc, char **ar
 
     return 0;
 }
+#endif /* CONFIG_SOC_NRF5340_CPUAPP */
 
 SHELL_SUBCMD_DICT_SET_CREATE(sub_patch, cmd_power_pd_patch, (low_region, 1, "low-region binary"),
                              (full_flash, 2, "full-flash binary"),
@@ -884,8 +910,10 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
     SHELL_CMD(policy, NULL, "Print charger policy state (gating, targets, reconcile stats)",
               cmd_power_policy),
 #endif
+#if defined(CONFIG_SOC_NRF5340_CPUAPP)
     SHELL_CMD(boost, NULL, "Increase NRF5340 VDD to 3.3v", cmd_power_sys_boost),
     SHELL_CMD(vreghvout, NULL, "Print current VREGHVOUT register value", cmd_power_sys_vreghvout),
+#endif
     SHELL_SUBCMD_SET_END);
 
 /* Creating root (level 0) command "power" */
