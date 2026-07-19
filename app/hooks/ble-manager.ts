@@ -2,17 +2,61 @@ import * as ExpoDevice from "expo-device";
 import { PermissionsAndroid, Platform } from "react-native";
 import { BleManager, BleManagerOptions, BleRestoredState } from "react-native-ble-plx";
 
+// Shaped like ConnectingDevice (context/bluetooth-context.tsx): `mac` is
+// ble-plx's device.id, which on iOS is an opaque per-phone CoreBluetooth
+// peripheral UUID, not a real MAC address.
+export type RestoredPeripheral = { mac: string; name: string };
+
+// Module-scope, NOT React state: the restore callback fires inside the
+// `new BleManager()` call below, at module-import time - before React mounts.
+// The restoration adopter (hooks/use-ble-restoration.ts, issue #190) reads and
+// consumes it once BluetoothProvider is up. iOS-only in practice (Android
+// ignores restoreStateIdentifier).
+//
+// NOTE: iOS only relaunches the app for Core Bluetooth events after a SYSTEM
+// termination (jetsam). After a user force-quit (App Switcher swipe) the
+// restore callback never fires - platform limitation; the user must reopen
+// the app. See the matching note in app/CLAUDE.md.
+let restoredPeripheral: RestoredPeripheral | null = null;
+
+// Exported (rather than inlined into bleManagerOptions) so unit tests can
+// drive it directly - the jest BleManager mock ignores constructor options.
+export function handleRestoredState(bleRestoredState: BleRestoredState | null): void {
+    if (bleRestoredState == null) {
+        console.log(`No restored state for BleManager`);
+        // BleManager was constructed for the first time.
+        return;
+    }
+    const peripherals = bleRestoredState.connectedPeripherals;
+    console.log(
+        `BleManager state restored with ${peripherals.length} peripheral(s): ` +
+        peripherals.map(d => `${d.localName ?? d.name ?? '?'} (${d.id})`).join(', ')
+    );
+    if (peripherals.length === 0) return;
+    if (peripherals.length > 1) {
+        // The app only ever manages one device; adopt the first and say so.
+        console.warn(`Restored ${peripherals.length} peripherals; adopting only the first`);
+    }
+    const device = peripherals[0];
+    restoredPeripheral = {
+        mac: device.id,
+        name: device.localName ?? device.name ?? 'RGB Sunglasses',
+    };
+}
+
+// Pure read - safe to call from a render/useState initializer.
+export function peekRestoredPeripheral(): RestoredPeripheral | null {
+    return restoredPeripheral;
+}
+
+// Consume-once clear, called from the adoption driver's mount effect.
+export function consumeRestoredPeripheral(): void {
+    restoredPeripheral = null;
+}
+
 const bleManagerOptions: BleManagerOptions = {
     restoreStateIdentifier: 'bleManagerRestoredState',
-    restoreStateFunction: (bleRestoredState: BleRestoredState | null) => {
-        if (bleRestoredState == null) {
-            console.log(`No restored state for BleManager`);
-            // BleManager was constructed for the first time.
-        } else {
-            console.log(`State was restored! ${JSON.stringify(bleRestoredState)}`);
-            // BleManager was restored. Check `bleRestoredState.connectedPeripherals` property.
-        }
-    },
+    restoreStateFunction: handleRestoredState,
 };
 
 // Re-running this module constructs a fresh BleManager, whose native side

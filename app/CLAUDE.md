@@ -225,6 +225,19 @@ There is currently **no iOS dev-variant** (the Android `.dev` side-by-side insta
     (iOS text keyboard, hardware keyboards) — without it one commit sends two BLE writes.
   Decided against an `InputAccessoryView` "Done" bar (rejected in review: extra chrome) and against
   `numbers-and-punctuation` keyboard (full keyboard for a number field).
+- **Core Bluetooth state restoration re-adoption (issue #190)**: when iOS jetsams the app while a
+  board is connected, Core Bluetooth relaunches it in the background on the next BLE event for that
+  peripheral. The restore callback (`restoreStateFunction` in [hooks/ble-manager.ts](hooks/ble-manager.ts),
+  fires at module-import time, before React) stashes the restored peripheral at module scope;
+  `useBleRestorationAdopt` ([hooks/use-ble-restoration.ts](hooks/use-ble-restoration.ts), mounted as
+  `BleRestorationAdopter` in the root layout inside `BluetoothProvider`) consumes it once and drives
+  the issue-#124 `startReconnectLoop` — the iOS pending connect resolves immediately on the
+  still-connected peripheral, then the normal discovery/monitor/selection path runs (fast: iOS serves
+  it from its native GATT cache on a live link). Two deliberate limits: **restoration never fires
+  after a user force-quit** (App Switcher swipe) — iOS only relaunches after a *system* termination
+  (platform limitation, the user must reopen the app) — and **ordinary cold launches do not
+  auto-connect** (no last-device persistence; scope decision on #190, the restored-peripheral handoff
+  is the only cross-launch state).
 
 ### Android Permissions
 
