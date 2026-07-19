@@ -330,7 +330,7 @@ Connect to any BLE device with custom services to test UI rendering logic. The a
 
 ### Device-Free Validation Loop
 
-For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) runs jest (plus a debug Android build) but neither tsc nor lint, so a green CI run does not mean the types are clean — run them yourself.
+For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) now gates all three — the `test` job runs jest, and a separate `typecheck-lint` job runs `tsc --noEmit` and `eslint --max-warnings 0` (added for issue #130, since a green CI used to mean only jest passed and tsc/lint debt drifted in undetected). Still run them locally before pushing so you're not waiting on CI to catch a type error or a new lint warning (any warning now fails CI).
 
 ### App-Update Modal Auto-Opens After Force-Stop + Relaunch
 

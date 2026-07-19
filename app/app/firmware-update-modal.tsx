@@ -132,7 +132,11 @@ export default function FirmwareUpdateModal() {
                 mcuMgrClient: client
             });
         }
-    }, [client, selectedDevice?.mac]); // Only update when client or device MAC changes
+        // Only re-run when the client or device MAC changes: depending on the full
+        // `selectedDevice` object would loop forever, since this effect itself calls
+        // setSelectedDevice with a new object. (setSelectedDevice is a stable context setter.)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [client, selectedDevice?.mac]);
 
     // Initialize (and tear down) the MCUboot updater BLE client alongside the MCUmgr client.
     useEffect(() => {
@@ -302,6 +306,10 @@ export default function FirmwareUpdateModal() {
         }
 
         checkForUpdates();
+        // updateCheckState is read only as a run-once idle guard, not to compute the
+        // result; it's deliberately not a dependency so the check fires once per
+        // board/image change rather than re-firing on its own state transitions.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [boardRevision, imageState]);
 
     // Check GitHub for the latest standalone MCUboot release. Proto0-only, like the bootloader
@@ -337,6 +345,10 @@ export default function FirmwareUpdateModal() {
         }
 
         checkForMcubootUpdates();
+        // mcubootUpdateCheckState is read only as a run-once idle guard, not to compute
+        // the result; it's deliberately not a dependency so the check fires once per
+        // board/version change rather than re-firing on its own state transitions.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [boardRevision, currentMcubootVersion]);
 
     async function handleSelectFirmwarePackage() {

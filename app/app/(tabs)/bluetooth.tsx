@@ -339,6 +339,12 @@ export default function BluetoothScreen() {
                 }
                 stopBluetoothScan();
             };
+            // The scan helpers (startBluetoothScan/stopBluetoothScan/pruneStaleDevices/
+            // registerScanCallback) are plain declarations recreated every render; listing
+            // them would re-run this focus effect on every render and restart the scan,
+            // defeating the generation-token lifecycle above. isReconnectPending is the only
+            // value whose change must re-run the effect. (setIsScanning is a stable setter.)
+            // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [isReconnectPending])
     );
 

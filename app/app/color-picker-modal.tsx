@@ -78,8 +78,9 @@ export default function ColorPickerModal() {
     const initialG = params.g ? parseInt(params.g as string, 10) : 0;
     const initialB = params.b ? parseInt(params.b as string, 10) : 0;
 
-    // Convert initial RGB to HSV
-    const [initialHue, initialSaturation, initialBrightness] = rgbToHsv(initialR, initialG, initialB);
+    // Convert initial RGB to HSV (brightness is intentionally discarded — it's
+    // fixed at full below, so only hue/saturation seed the picker's state).
+    const [initialHue, initialSaturation] = rgbToHsv(initialR, initialG, initialB);
 
     const [hue, setHue] = useState(initialHue);
     const [saturation, setSaturation] = useState(initialSaturation);
