@@ -47,6 +47,31 @@ jobs:
       - name: Run tests
         run: npm test -- --ci
 
+  # tsc + eslint are NOT run by the `test` job (jest only), so type errors and lint
+  # warnings used to drift in undetected (issue #130). This job gates them. It is
+  # deliberately separate/lightweight (no Android build) so it fails fast. eslint runs
+  # with --max-warnings 0 so a new warning is a hard failure, not silently accumulated.
+  typecheck-lint:
+    name: Typecheck & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: Lint (eslint, zero warnings)
+        run: npx expo lint -- --max-warnings 0
+
   build-android:
     name: Build Android (debug)
     # Deliberately NOT `needs: test`: jest takes ~40 s, the Gradle build ~16 min,
