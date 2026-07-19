@@ -177,10 +177,32 @@ fi
 
 echo ""
 
+# WSL2/udev sometimes fails to create /dev/bus/usb nodes for a device even though it
+# appears in sysfs (same class of problem as the ttyACM fixup above, but for any USB
+# device — this hits phones too, not just the board/J-Link). Run the generalized
+# fixup before probing for a phone below so a phone that's on the bus but has no
+# node isn't misreported as "not connected" (issue #202).
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+"$REPO_ROOT/fw/scripts/fix-usb-dev-nodes.sh" >/dev/null 2>&1 || true
+
+# The running adb server caches its device list from whenever it last enumerated
+# /dev/bus/usb — a node created by the fixup above still won't show up in
+# `adb devices` until the server restarts (experimentally confirmed: the fixup
+# alone is silently ineffective without this). `adb kill-server` is enough; the
+# next adb invocation below auto-restarts the server and re-scans.
+adb kill-server >/dev/null 2>&1 || true
+
 # ── Android (ADB) ──────────────────────────────────────────────────────────
-# The phone stays on port 5555 permanently (set once via `adb tcpip 5555`).
-# If it's seen on a different port (e.g. after a fresh wireless-debug pairing),
-# switch it to 5555 immediately so all future sessions connect the same way.
+# A device seen over TCP/WiFi stays on port 5555 permanently (set once via
+# `adb tcpip 5555`). If it's seen on a different TCP port (e.g. after a fresh
+# wireless-debug pairing), switch it to 5555 immediately so all future sessions
+# connect the same way.
+#
+# NEVER run `adb tcpip` against a USB-attached device: it restarts the phone's
+# adbd in TCP-only mode, which kills USB debugging outright and needs the
+# phone's IP (or a phone-side toggle) to recover (issue #202). A USB-attached
+# device's serial has no ":port" suffix — only switch a device that's already
+# on TCP but on the wrong port.
 ADB_STABLE_PORT=5555
 
 _adb_serial() {
@@ -191,22 +213,35 @@ _device_ip() {
     echo "$1" | cut -d: -f1
 }
 
+_is_tcp_serial() {
+    case "$1" in
+        *:*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 SERIAL=$(_adb_serial)
 
 if [ -n "$SERIAL" ]; then
-    DEVICE_IP=$(_device_ip "$SERIAL")
-    DEVICE_PORT=$(echo "$SERIAL" | cut -d: -f2)
+    if _is_tcp_serial "$SERIAL"; then
+        DEVICE_IP=$(_device_ip "$SERIAL")
+        DEVICE_PORT=$(echo "$SERIAL" | cut -d: -f2)
 
-    # Not on the stable port — switch it now (one-time per pairing session).
-    if [ "$DEVICE_PORT" != "$ADB_STABLE_PORT" ]; then
-        adb -s "$SERIAL" tcpip "$ADB_STABLE_PORT" >/dev/null 2>&1 || true
-        sleep 1
-        adb connect "${DEVICE_IP}:${ADB_STABLE_PORT}" >/dev/null 2>&1 || true
-        SERIAL=$(_adb_serial)
+        # Not on the stable port — switch it now (one-time per pairing session).
+        if [ "$DEVICE_PORT" != "$ADB_STABLE_PORT" ]; then
+            adb -s "$SERIAL" tcpip "$ADB_STABLE_PORT" >/dev/null 2>&1 || true
+            sleep 1
+            adb connect "${DEVICE_IP}:${ADB_STABLE_PORT}" >/dev/null 2>&1 || true
+            SERIAL=$(_adb_serial)
+        fi
     fi
 
     if [ -n "$SERIAL" ]; then
-        echo "Android (ADB): CONNECTED — $SERIAL"
+        if _is_tcp_serial "$SERIAL"; then
+            echo "Android (ADB): CONNECTED (WiFi) — $SERIAL"
+        else
+            echo "Android (ADB): CONNECTED (USB) — $SERIAL"
+        fi
     else
         echo "Android (ADB): WARN — found device but failed to switch to port $ADB_STABLE_PORT"
         echo "  Try manually: adb connect ${DEVICE_IP}:${ADB_STABLE_PORT}"
