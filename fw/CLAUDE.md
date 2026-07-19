@@ -83,13 +83,11 @@ A clean proto0 sysbuild still emits these warnings; all are accepted — do not
   — deliberate coredump backend choice.
 - `usbd_cdc_acm.c: #warning "USBD_CDC_ACM_LOG_LEVEL forced to LOG_LEVEL_NONE"`
   — upstream NCS code, not ours to change.
-- `Deprecated symbol TINYCRYPT is enabled` (ipc_radio image) — our
-  `netcore_version.c` still uses TinyCrypt SHA-256; migrating to PSA/mbedTLS
-  on the flash-tight netcore is a tracked follow-up to issue #164 (see the
-  comment in `fw/sysbuild/ipc_radio/prj.conf`).
 
 (The old `-Wcomment` note that used to live here referred to
-`src/bluetooth/bt_service.h`, which no longer exists.)
+`src/bluetooth/bt_service.h`, which no longer exists. The old `Deprecated
+symbol TINYCRYPT is enabled` note also no longer applies: `netcore_version.c`
+was migrated to stock Zephyr mbedTLS SHA-256, issue #181.)
 
 ## Commenting rules
 

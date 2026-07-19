@@ -12,7 +12,7 @@
 #include <zephyr/logging/log.h>
 #include <fw_info_bare.h>
 #include <pm_config.h>
-#include <tinycrypt/sha256.h>
+#include <mbedtls/sha256.h>
 #include <app_version.h>
 #include "netcore_version_protocol.h"
 
@@ -55,7 +55,7 @@ static struct ipc_ept ver_ept;
 static void compute_sha256(uint8_t sha256[32])
 {
 	const struct fw_info *finfo;
-	struct tc_sha256_state_struct sha_state;
+	int err;
 
 	/*
 	 * fw_info_find() searches for the fw_info magic at the allowed offsets
@@ -75,9 +75,11 @@ static void compute_sha256(uint8_t sha256[32])
 
 	LOG_DBG("Computing SHA-256 over %u bytes at 0x%08x", finfo->size, PM_IPC_RADIO_ADDRESS);
 
-	tc_sha256_init(&sha_state);
-	tc_sha256_update(&sha_state, (const uint8_t *)PM_IPC_RADIO_ADDRESS, finfo->size);
-	tc_sha256_final(sha256, &sha_state);
+	err = mbedtls_sha256((const uint8_t *)PM_IPC_RADIO_ADDRESS, finfo->size, sha256, 0);
+	if (err != 0) {
+		LOG_WRN("mbedtls_sha256() failed: %d, hash unavailable", err);
+		return;
+	}
 
 	LOG_DBG("SHA-256 computed successfully");
 }

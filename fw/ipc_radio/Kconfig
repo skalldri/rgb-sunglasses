@@ -69,7 +69,7 @@ endif # IPC_RADIO_BT
 
 config NETCORE_VERSION_IPC
 	bool "IPC netcore version reporting"
-	depends on IPC_SERVICE && TINYCRYPT_SHA256
+	depends on IPC_SERVICE && MBEDTLS_SHA256
 	help
 	  Registers an IPC endpoint ("NETCORE_VER") that reads the running
 	  image version from the embedded fw_info struct and computes the
