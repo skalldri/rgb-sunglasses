@@ -163,12 +163,18 @@ size_t GlimSelectionCharacteristic::sSelectedIndex = 0;
 
 GlimSelectionCharacteristic glimSelection;
 
+// Notify=true (like GlimSelectionCharacteristic above): after onWrite() reorders storage to the
+// canonical selected-first list, the change-detecting notify pushes it to the app. The companion
+// app's dropdown writes the bare option text with skipOptimisticUpdate and relies ENTIRELY on this
+// notification to update its UI (components/characteristic-dropdown.tsx) — without it the write
+// still takes effect on-device but the picker never reflects the new mode. Don't set this back to
+// false.
 class GlimLoopModeCharacteristic
-    : public BtGattAutoCharacteristicExt<GlimLoopModeCharacteristic, "Loop Mode", false, false,
+    : public BtGattAutoCharacteristicExt<GlimLoopModeCharacteristic, "Loop Mode", true, false,
                                          BtGattDropdownList<kGlimLoopModeMaxLen>,
                                          BtGattDropdownList<kGlimLoopModeMaxLen>{}> {
    public:
-    using Base = BtGattAutoCharacteristicExt<GlimLoopModeCharacteristic, "Loop Mode", false, false,
+    using Base = BtGattAutoCharacteristicExt<GlimLoopModeCharacteristic, "Loop Mode", true, false,
                                              BtGattDropdownList<kGlimLoopModeMaxLen>,
                                              BtGattDropdownList<kGlimLoopModeMaxLen>{}>;
     using Base::operator=;
