@@ -25,6 +25,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Needed by the firmware size-impact comment step on pull_request runs.
+      # Fork PRs get a read-only token, so that step is best-effort (see below).
+      pull-requests: write
     steps:
       # Canary for disk exhaustion: runners currently have ~90 GB free, the
       # devcontainer image needs ~25 GB, so no "free up space" purge is needed.
@@ -51,7 +54,79 @@ jobs:
           # filter (+ default eventFilterForPush: push) = only push events — i.e.
           # merges to main — refresh :latest; PR jobs must never overwrite it.
           push: filter
-          runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw" && west build --build-dir /workspaces/rgb-sunglasses/fw/build --domain fw -t llext-edk && /workspaces/rgb-sunglasses/fw/extensions/build.sh /workspaces/rgb-sunglasses/fw/build
+          # Tee the pristine build so a host-side step can read the linker's
+          # "--print-memory-usage" table (fw/build.log). bash + pipefail so a
+          # failed `west build` still fails the step despite the `| tee`.
+          runCmd: >-
+            bash -euo pipefail -c "west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT=/workspaces/rgb-sunglasses/fw 2>&1 | tee /workspaces/rgb-sunglasses/fw/build.log && west build --build-dir /workspaces/rgb-sunglasses/fw/build --domain fw -t llext-edk && /workspaces/rgb-sunglasses/fw/extensions/build.sh /workspaces/rgb-sunglasses/fw/build"
+
+      # --- Firmware ROM/RAM impact report (proto0 appcore) ---
+      # Parse runs on every trigger; the build log is root-owned (created inside
+      # the devcontainer), so we only READ it and write the JSON to fw/ (which
+      # the runner owns) rather than the root-owned fw/build/.
+      - name: Parse firmware size
+        run: python3 fw/scripts/fw_size_report.py parse --log fw/build.log --out fw/size.json
+
+      # On push-to-main, stash this build's numbers as the baseline future PRs
+      # diff against. Unique key per run (caches are immutable); PRs fetch the
+      # newest via the restore-keys prefix below.
+      - name: Save size baseline (main)
+        if: github.event_name == 'push'
+        run: cp fw/size.json fw/baseline-size.json
+      - name: Cache size baseline (main)
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: fw/baseline-size.json
+          key: fw-size-baseline-main-${{ github.run_id }}
+
+      # On a PR, restore the newest main baseline. Default-branch caches are
+      # readable from PR runs. A miss (first rollout / expiry) is fine — the
+      # diff step then reports absolute numbers only.
+      - name: Restore size baseline (PR)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: fw/baseline-size.json
+          key: fw-size-baseline-main-${{ github.run_id }}
+          restore-keys: |
+            fw-size-baseline-main-
+
+      - name: Render size comment (PR)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: python3 fw/scripts/fw_size_report.py diff --base fw/baseline-size.json --head fw/size.json --out fw/size-comment.md
+
+      # Sticky comment: upsert the one carrying our marker. Best-effort — a
+      # fork PR's read-only token makes the write fail, which must not red CI
+      # (warn-but-don't-fail).
+      - name: Post size comment (PR)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- fw-size-report -->';
+            let body;
+            try {
+              body = fs.readFileSync('fw/size-comment.md', 'utf8');
+            } catch (e) {
+              core.info('No size comment to post (no baseline/head?).');
+              return;
+            }
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(
+              github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment(
+                { owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment(
+                { owner, repo, issue_number, body });
+            }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -151,9 +226,10 @@ jobs:
 
       - name: Run Python tests
         run: |
-          pytest tools/tests/ -v \
+          pytest tools/tests/ scripts/tests/ -v \
             --cov=tools/convert_bad_apple \
             --cov=tools/convert_gif_to_glim \
+            --cov=scripts/fw_size_report \
             --cov-report=xml:coverage-python.xml \
             --cov-report=term-missing
 
