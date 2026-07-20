@@ -13,10 +13,15 @@ public:
 
     enum class FrameFormat : uint8_t {
         Raw               = 1, // 1 bit/px, MSB-first bitpacked, ceil(w*h/8) bytes/frame
-        Lz4PerFrame       = 2, // LZ4-compressed Raw, per-frame index table (not yet implemented)
+        Lz4PerFrame       = 2, // LZ4-compressed Raw, per-frame index table (decode shares readLz4Frame; no encoder tool)
         Rgb24             = 3, // 3 bytes/px (R,G,B), row-major, w*h*3 bytes/frame
-        Lz4PerFrameRgb24  = 4, // LZ4-compressed Rgb24, per-frame index table (not yet implemented)
+        Lz4PerFrameRgb24  = 4, // LZ4-compressed Rgb24, per-frame index table
     };
+
+    // Largest decompressed frame the LZ4 path supports, in bytes. Sized for the
+    // 40x12 RGB24 panel (the only GLIM consumer). Bounds the internal compressed
+    // scratch buffer; open() rejects an LZ4 file whose frame exceeds this.
+    static constexpr size_t kMaxLz4FrameBytes = 40u * 12u * 3u; // 1440
 
     struct Header {
         uint8_t     version;
@@ -61,11 +66,24 @@ private:
     static constexpr uint8_t  kMinHeaderSize  = 24u;
     static constexpr uint32_t kHeaderMagic    = 0x474C494Du; // Little-endian 'GLIM'
 
+    // Bare LZ4 block never exceeds LZ4_COMPRESSBOUND(input); compute it here so the
+    // scratch buffer is sized without pulling in lz4.h. Mirrors the macro:
+    // isize + isize/255 + 16.
+    static constexpr size_t kMaxCompressedFrameBytes =
+        kMaxLz4FrameBytes + kMaxLz4FrameBytes / 255u + 16u;
+
     struct fs_file_t file_;
     bool     fileOpen_        = false;
     Header   header_          = {};
     uint32_t frameDataOffset_ = 0;
+    uint32_t indexTableOffset_ = 0; // start of the uint32 index table (LZ4 formats only)
     size_t   frameBytes_      = 0; // bytes per frame: ceil(w*h/8) for Raw, w*h*3 for Rgb24
 
+    // Scratch for one compressed frame record's payload (LZ4 formats). Only the
+    // active file's decoder instance holds this; the sole consumer is the
+    // single-instance GlimPlayerAnimation.
+    uint8_t  lz4Scratch_[kMaxCompressedFrameBytes];
+
     int readRawFrame(uint32_t index, uint8_t *buf, size_t bufSize);
+    int readLz4Frame(uint32_t index, uint8_t *buf, size_t bufSize);
 };

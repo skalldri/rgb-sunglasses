@@ -416,6 +416,8 @@ to generate one.
 ```bash
 python3 fw/tools/generate_nyan_cat_glim.py --output fw/nyan_cat.glim
 python3 fw/tools/convert_bad_apple.py --output fw/bad_apple.glim   # downloads from YouTube, ~1 min
+# 4096 "greatest hits" (issue #96) — canonical LZ4-compressed GLIM (format 4):
+python3 fw/tools/convert_video_to_glim.py --url "https://youtu.be/e9DfSCk-6Ko" --output fw/4096.glim --fps 24 --lz4
 ```
 
 Then copy both into `/NAND:/glim/` on the board and reset. If the NAND disk on a new board is unformatted (FAT read errors in dmesg), it needs `mkfs.vfat -F 12 -s 8 -S 4096 /dev/sdX` before mounting — ask the user to run this as it is destructive.

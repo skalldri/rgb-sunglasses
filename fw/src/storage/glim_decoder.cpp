@@ -1,6 +1,7 @@
 #include <storage/glim_decoder.h>
 #include <zephyr/logging/log.h>
 #include <cstring>
+#include <lz4.h> // LZ4_decompress_safe (CONFIG_LZ4); same lib the TPS25750 patch uses
 
 LOG_MODULE_REGISTER(glim_decoder, LOG_LEVEL_INF);
 
@@ -115,6 +116,20 @@ int GlimDecoder::open(const char *path)
         frameBytes_ = ((size_t)width * (size_t)height + 7u) / 8u;
     }
 
+    // LZ4 formats carry a uint32 per-frame index table starting right after the
+    // header (GLIM_FORMAT.md §4); each entry is the absolute offset of that
+    // frame's [uint16 size][LZ4 block] record. The decompress scratch is fixed,
+    // so reject any file whose frame decompresses beyond that bound.
+    if ((FrameFormat)formatByte == FrameFormat::Lz4PerFrame ||
+        (FrameFormat)formatByte == FrameFormat::Lz4PerFrameRgb24) {
+        if (frameBytes_ > kMaxLz4FrameBytes) {
+            LOG_ERR("LZ4 frame too large: %zu > %zu", frameBytes_, kMaxLz4FrameBytes);
+            fs_close(&file_);
+            return -EBADF;
+        }
+        indexTableOffset_ = headerSize;
+    }
+
     fileOpen_ = true;
     LOG_INF("GLIM opened: %ux%u, %u frames @ %u fps, format %u",
             width, height, frameCount, fps, (uint8_t)header_.format);
@@ -151,10 +166,69 @@ int GlimDecoder::readFrame(uint32_t index, uint8_t *buf, size_t bufSize)
         // Both Raw and Rgb24 are contiguous byte sequences with O(1) seek.
         return readRawFrame(index, buf, bufSize);
     } else {
-        // Lz4PerFrame and Lz4PerFrameRgb24 require per-frame index tables — not yet implemented.
-        LOG_ERR("LZ4 format not yet supported");
-        return -ENOTSUP;
+        // Lz4PerFrame / Lz4PerFrameRgb24: index-table lookup + per-frame decompress.
+        return readLz4Frame(index, buf, bufSize);
     }
+}
+
+int GlimDecoder::readLz4Frame(uint32_t index, uint8_t *buf, size_t bufSize)
+{
+    // 1. Read this frame's record offset from the index table.
+    off_t idxPos = (off_t)(indexTableOffset_ + (size_t)index * sizeof(uint32_t));
+    int rc = fs_seek(&file_, idxPos, FS_SEEK_SET);
+    if (rc < 0) {
+        LOG_ERR("fs_seek (index) failed: %d", rc);
+        return rc;
+    }
+
+    uint32_t recordOffset = 0;
+    ssize_t nread = fs_read(&file_, &recordOffset, sizeof(recordOffset));
+    if (nread != (ssize_t)sizeof(recordOffset)) {
+        LOG_ERR("index read failed: expected %zu, got %d", sizeof(recordOffset), (int)nread);
+        return (nread < 0) ? (int)nread : -EIO;
+    }
+
+    // 2. Seek to the record and read the uint16 compressed length.
+    rc = fs_seek(&file_, (off_t)recordOffset, FS_SEEK_SET);
+    if (rc < 0) {
+        LOG_ERR("fs_seek (record) failed: %d", rc);
+        return rc;
+    }
+
+    uint16_t compressedSize = 0;
+    nread = fs_read(&file_, &compressedSize, sizeof(compressedSize));
+    if (nread != (ssize_t)sizeof(compressedSize)) {
+        LOG_ERR("compressed-size read failed: expected %zu, got %d",
+                sizeof(compressedSize), (int)nread);
+        return (nread < 0) ? (int)nread : -EIO;
+    }
+
+    if (compressedSize == 0u || compressedSize > sizeof(lz4Scratch_)) {
+        LOG_ERR("bad compressed size: %u (scratch %zu)", compressedSize, sizeof(lz4Scratch_));
+        return -EBADF;
+    }
+
+    // 3. Read the compressed payload into scratch.
+    nread = fs_read(&file_, lz4Scratch_, compressedSize);
+    if (nread != (ssize_t)compressedSize) {
+        LOG_ERR("compressed read failed: expected %u, got %d", compressedSize, (int)nread);
+        return (nread < 0) ? (int)nread : -EIO;
+    }
+
+    // 4. Decompress straight into the caller's frame buffer. bufSize was already
+    //    checked >= frameBytes_ by readFrame().
+    int decoded = LZ4_decompress_safe((const char *)lz4Scratch_, (char *)buf,
+                                      (int)compressedSize, (int)bufSize);
+    if (decoded < 0) {
+        LOG_ERR("LZ4 decompress failed for frame %u: %d", index, decoded);
+        return -EIO;
+    }
+    if ((size_t)decoded != frameBytes_) {
+        LOG_ERR("LZ4 frame %u decoded %d bytes, expected %zu", index, decoded, frameBytes_);
+        return -EIO;
+    }
+
+    return 0;
 }
 
 int GlimDecoder::readRawFrame(uint32_t index, uint8_t *buf, size_t bufSize)

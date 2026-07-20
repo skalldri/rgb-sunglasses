@@ -573,30 +573,192 @@ ZTEST(glim_decoder_io, test_readframe_rgb24_pixel_data)
     dec.close();
 }
 
-/* Lz4PerFrame format returns -ENOTSUP (not implemented) */
-ZTEST(glim_decoder_io, test_readframe_lz4_returns_enotsup)
+// ---------------------------------------------------------------------------
+// Lz4PerFrameRgb24 (format 4) — real compressed round-trips
+// ---------------------------------------------------------------------------
+
+extern "C" {
+#include <lz4.h>
+}
+
+/*
+ * Write a complete Lz4PerFrameRgb24 (format 4) GLIM to path. The caller supplies
+ * `nframes` already-populated uncompressed RGB24 frames (each w*h*3 bytes); this
+ * LZ4-compresses each, writes the uint32 index table and the [uint16 size][block]
+ * records exactly as GLIM_FORMAT.md §4 / convert_video_to_glim.py --lz4 do.
+ */
+static void write_lz4_rgb24_glim(const char *path, uint16_t w, uint16_t h,
+                                  uint32_t nframes, uint8_t fps,
+                                  const uint8_t *const *frames)
 {
-    /* Write header with format=2 (Lz4PerFrame) — no real LZ4 data needed
-     * because readFrame() returns -ENOTSUP before touching frame data. */
-    /* Magic 0x474C494D stored little-endian → bytes {0x4D, 0x49, 0x4C, 0x47} */
+    uint32_t frame_bytes = (uint32_t)w * h * 3u;
+    uint32_t index_off   = 24u;
+    uint32_t data_off    = index_off + nframes * 4u; // frame_data_offset
+
     uint8_t hdr[24] = {
-        0x4D, 0x49, 0x4C, 0x47, 1, 24, 2, 24,  // magic (LE), fmt=Lz4PerFrame
-        40, 0, 12, 0,
-        1, 0, 0, 0,   // 1 frame
-        24, 0, 0, 0,  // frame_data_offset
-        0, 0, 0, 0,
+        0x4D, 0x49, 0x4C, 0x47,            // magic (LE 0x474C494D)
+        1, 24, 4, fps,                     // version, header_size, fmt=Lz4PerFrameRgb24, fps
+        (uint8_t)(w), (uint8_t)(w >> 8),
+        (uint8_t)(h), (uint8_t)(h >> 8),
+        (uint8_t)(nframes), (uint8_t)(nframes >> 8),
+        (uint8_t)(nframes >> 16), (uint8_t)(nframes >> 24),
+        (uint8_t)(data_off), (uint8_t)(data_off >> 8),
+        (uint8_t)(data_off >> 16), (uint8_t)(data_off >> 24),
+        0, 0, 0, 0,                        // mono_color (ignored), reserved
     };
+
+    /* Compress every frame up front so we can lay out the index table. */
+    int bound = LZ4_compressBound((int)frame_bytes);
+    uint8_t *comp = (uint8_t *)k_malloc((size_t)bound * nframes);
+    zassert_not_null(comp, "k_malloc comp");
+    uint16_t *csize = (uint16_t *)k_malloc(sizeof(uint16_t) * nframes);
+    zassert_not_null(csize, "k_malloc csize");
+
+    for (uint32_t i = 0; i < nframes; i++) {
+        int n = LZ4_compress_default((const char *)frames[i],
+                                     (char *)(comp + (size_t)i * bound),
+                                     (int)frame_bytes, bound);
+        zassert_true(n > 0, "LZ4_compress_default frame %u failed", i);
+        csize[i] = (uint16_t)n;
+    }
+
     struct fs_file_t f;
     fs_file_t_init(&f);
-    zassert_ok(fs_open(&f, "/TEST:/lz4.glim", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
-    fs_write(&f, hdr, 24);
-    uint8_t dummy[60] = {};
-    fs_write(&f, dummy, 60);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    zassert_equal(fs_write(&f, hdr, 24), (ssize_t)24);
+
+    /* Index table: absolute offset of each record. */
+    uint32_t pos = data_off;
+    for (uint32_t i = 0; i < nframes; i++) {
+        uint8_t off_le[4] = {
+            (uint8_t)(pos), (uint8_t)(pos >> 8), (uint8_t)(pos >> 16), (uint8_t)(pos >> 24)
+        };
+        zassert_equal(fs_write(&f, off_le, 4), (ssize_t)4);
+        pos += 2u + csize[i];
+    }
+
+    /* Records: [uint16 size][compressed block]. */
+    for (uint32_t i = 0; i < nframes; i++) {
+        uint8_t sz_le[2] = { (uint8_t)(csize[i]), (uint8_t)(csize[i] >> 8) };
+        zassert_equal(fs_write(&f, sz_le, 2), (ssize_t)2);
+        zassert_equal(fs_write(&f, comp + (size_t)i * bound, csize[i]), (ssize_t)csize[i]);
+    }
+
+    k_free(csize);
+    k_free(comp);
+    fs_close(&f);
+}
+
+/* Fill a frame buffer with a uniform RGB colour. */
+static void fill_rgb(uint8_t *frame, uint32_t frame_bytes, uint8_t r, uint8_t g, uint8_t b)
+{
+    for (uint32_t i = 0; i < frame_bytes; i += 3) {
+        frame[i] = r; frame[i + 1] = g; frame[i + 2] = b;
+    }
+}
+
+/* open() succeeds and reports format 4 for an Lz4PerFrameRgb24 file */
+ZTEST(glim_decoder_io, test_open_lz4_rgb24_success)
+{
+    const uint32_t fb = 40u * 12u * 3u;
+    uint8_t *f0 = (uint8_t *)k_malloc(fb);
+    zassert_not_null(f0, "k_malloc");
+    fill_rgb(f0, fb, 10, 20, 30);
+    const uint8_t *frames[1] = { f0 };
+
+    write_lz4_rgb24_glim("/TEST:/lz4_open.glim", 40, 12, 1, 24, frames);
+    GlimDecoder dec;
+    zassert_ok(dec.open("/TEST:/lz4_open.glim"));
+    zassert_true(dec.isOpen());
+    zassert_equal((uint8_t)dec.header().format, 4u);
+    zassert_equal(dec.header().frameCount, 1u);
+    dec.close();
+    k_free(f0);
+}
+
+/* readFrame() decompresses each frame back to its exact original bytes */
+ZTEST(glim_decoder_io, test_readframe_lz4_rgb24_roundtrip)
+{
+    const uint32_t fb = 40u * 12u * 3u;
+    uint8_t *f0 = (uint8_t *)k_malloc(fb);
+    uint8_t *f1 = (uint8_t *)k_malloc(fb);
+    uint8_t *f2 = (uint8_t *)k_malloc(fb);
+    zassert_not_null(f0, "k_malloc"); zassert_not_null(f1, "k_malloc");
+    zassert_not_null(f2, "k_malloc");
+    fill_rgb(f0, fb, 255, 0, 0);
+    fill_rgb(f1, fb, 0, 255, 0);
+    /* A non-uniform frame so we exercise a less-compressible payload. */
+    for (uint32_t i = 0; i < fb; i++) { f2[i] = (uint8_t)(i * 37u + 11u); }
+    const uint8_t *frames[3] = { f0, f1, f2 };
+
+    write_lz4_rgb24_glim("/TEST:/lz4_rt.glim", 40, 12, 3, 24, frames);
+    GlimDecoder dec;
+    zassert_ok(dec.open("/TEST:/lz4_rt.glim"));
+
+    uint8_t *buf = (uint8_t *)k_malloc(fb);
+    zassert_not_null(buf, "k_malloc");
+
+    zassert_ok(dec.readFrame(0, buf, fb));
+    zassert_mem_equal(buf, f0, fb, "frame 0 mismatch");
+    zassert_ok(dec.readFrame(1, buf, fb));
+    zassert_mem_equal(buf, f1, fb, "frame 1 mismatch");
+    zassert_ok(dec.readFrame(2, buf, fb));
+    zassert_mem_equal(buf, f2, fb, "frame 2 (non-uniform) mismatch");
+
+    /* Seek back to a random earlier frame — index table must still resolve. */
+    zassert_ok(dec.readFrame(0, buf, fb));
+    zassert_mem_equal(buf, f0, fb, "frame 0 re-read mismatch");
+
+    k_free(buf); k_free(f2); k_free(f1); k_free(f0);
+    dec.close();
+}
+
+/* readFrame() with a buffer smaller than the decompressed frame is rejected */
+ZTEST(glim_decoder_io, test_readframe_lz4_buffer_too_small)
+{
+    const uint32_t fb = 40u * 12u * 3u;
+    uint8_t *f0 = (uint8_t *)k_malloc(fb);
+    zassert_not_null(f0, "k_malloc");
+    fill_rgb(f0, fb, 1, 2, 3);
+    const uint8_t *frames[1] = { f0 };
+
+    write_lz4_rgb24_glim("/TEST:/lz4_small.glim", 40, 12, 1, 24, frames);
+    GlimDecoder dec;
+    zassert_ok(dec.open("/TEST:/lz4_small.glim"));
+    uint8_t small[10];
+    zassert_equal(dec.readFrame(0, small, sizeof(small)), -ENOBUFS);
+    dec.close();
+    k_free(f0);
+}
+
+/* A corrupt compressed record (bad LZ4 stream) is reported, not silently accepted */
+ZTEST(glim_decoder_io, test_readframe_lz4_corrupt_record)
+{
+    const uint32_t fb = 40u * 12u * 3u;
+    uint8_t *f0 = (uint8_t *)k_malloc(fb);
+    zassert_not_null(f0, "k_malloc");
+    fill_rgb(f0, fb, 5, 6, 7);
+    const uint8_t *frames[1] = { f0 };
+
+    write_lz4_rgb24_glim("/TEST:/lz4_corrupt.glim", 40, 12, 1, 24, frames);
+
+    /* Corrupt the first record's payload (record starts at frame_data_offset =
+     * 24 + 1*4 = 28; +2 skips the uint16 size). LZ4_decompress_safe must fail or
+     * produce the wrong length — either way readFrame returns an error. */
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/TEST:/lz4_corrupt.glim", FS_O_RDWR));
+    zassert_ok(fs_seek(&f, 30, FS_SEEK_SET));
+    uint8_t garbage[8] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF };
+    fs_write(&f, garbage, sizeof(garbage));
     fs_close(&f);
 
     GlimDecoder dec;
-    zassert_ok(dec.open("/TEST:/lz4.glim"));
-    uint8_t buf[60];
-    zassert_equal(dec.readFrame(0, buf, sizeof(buf)), -ENOTSUP);
+    zassert_ok(dec.open("/TEST:/lz4_corrupt.glim"));
+    uint8_t *buf = (uint8_t *)k_malloc(fb);
+    zassert_not_null(buf, "k_malloc");
+    zassert_true(dec.readFrame(0, buf, fb) < 0, "corrupt LZ4 record must be rejected");
+    k_free(buf);
     dec.close();
+    k_free(f0);
 }

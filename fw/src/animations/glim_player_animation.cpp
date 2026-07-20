@@ -173,7 +173,15 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
     const size_t frameWidth = decoder_.header().width;
     const size_t frameHeight = decoder_.header().height;
 
-    if (decoder_.header().format == GlimDecoder::FrameFormat::Rgb24) {
+    // Both Rgb24 and Lz4PerFrameRgb24 hand back RGB24 pixels (readFrame() already
+    // decompressed the LZ4 variant into frameBuf_), so both render through
+    // getPixelRgb. The mono branch below covers Raw and Lz4PerFrame (1-bit). Missing
+    // Lz4PerFrameRgb24 here reinterprets colour bytes as a bitpacked mono bitmap —
+    // the panel then shows bright structured noise.
+    const GlimDecoder::FrameFormat fmt = decoder_.header().format;
+    const bool isRgb = (fmt == GlimDecoder::FrameFormat::Rgb24 ||
+                        fmt == GlimDecoder::FrameFormat::Lz4PerFrameRgb24);
+    if (isRgb) {
         for (size_t y = 0; y < renderer.displayHeight(); y++) {
             for (size_t x = 0; x < renderer.displayWidth(); x++) {
                 if (x < frameWidth && y < frameHeight) {
@@ -186,7 +194,7 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
             }
         }
     } else {
-        // FrameFormat::Raw: unpack bitpacked pixels using the color declared in the header.
+        // FrameFormat::Raw / Lz4PerFrame: unpack bitpacked pixels using the color declared in the header.
         const uint8_t cr = decoder_.header().monoColorR;
         const uint8_t cg = decoder_.header().monoColorG;
         const uint8_t cb = decoder_.header().monoColorB;

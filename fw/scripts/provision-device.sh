@@ -92,6 +92,12 @@ python3 "$REPO_ROOT/fw/tools/generate_nyan_cat_glim.py" --output "$TMP_GLIM/nyan
 echo "[*] Generating bad_apple.glim (downloads source video, ~1 min)..."
 python3 "$REPO_ROOT/fw/tools/convert_bad_apple.py" --output "$TMP_GLIM/bad_apple.glim"
 
+# 4096 "greatest hits" (issue #96), and the canonical LZ4-compressed GLIM
+# (format 4, Lz4PerFrameRgb24) — the first asset exercising the LZ4 decode path.
+echo "[*] Generating 4096.glim (downloads source video, LZ4-compressed, ~1 min)..."
+python3 "$REPO_ROOT/fw/tools/convert_video_to_glim.py" \
+    --url "https://youtu.be/e9DfSCk-6Ko" --output "$TMP_GLIM/4096.glim" --fps 24 --lz4
+
 # 4. Build every extension under fw/extensions/*/.
 echo "[*] Building extensions..."
 "$REPO_ROOT/fw/extensions/build.sh" "$BUILD_DIR"
