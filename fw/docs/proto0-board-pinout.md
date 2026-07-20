@@ -10,6 +10,9 @@ P0.12 = BMI270 (SPI) Clock
 P0.10 = BMI270 (SPI) MISO
 P0.09 = BMI270 (SPI) MOSI
 
+For the BMI270's accelerometer/gyroscope axis orientation on the wearer's head,
+see [IMU Coordinate Frame](imu-coordinate-frame.md).
+
 P1.04 = BQ25792 Interrupt (N, active low?)
 
 P0.21 = Mic (PDM) Clock
