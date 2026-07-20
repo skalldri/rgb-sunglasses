@@ -6,14 +6,14 @@ This page describes nitty-gritty hardware details about the Proto0 hardware.
 
 ## Hardware Overview
 
-![Proto0 Hardware Developer Annotations](https://github.com/user-attachments/assets/c24e2110-3198-4fda-8c31-7a98edf080a5)
+![Proto0 Hardware Developer Annotations](images/proto0-hardware-hacker.jpg)
 
 1. (Red) JTAG connector. Compatible with [TagConnect TC2030-IDC-NL](https://www.tag-connect.com/product/tc2030-idc-nl).
 2. (Purple) UART connector. Available for emergency debugging / bootloader debugging but requires DeviceTree changes to enable. Currently disabled.
-3. (Blue) Charger programming jumper. Connects the appropriate resistance to configure the charger for 2S LiPo charging on power-up.
-4. (Green) Charger thermal-override jumper. Connects a dummy resistance to the battery charger to mimic a thermistor.
-5. (Yellow) Thermistor connector. Allows connecting an NTC thermistor to the battery charger.
-6. (Cyan) Wake button. Intended to wake the battery charger + MCU from sleep. Not working correctly on Proto0 for unknown reasons.
+3. (Blue) Charger programming jumper. Connects the appropriate resistance to configure the charger for 2S LiPo charging on power-up. **The jumper configuration is now standard across all Proto0 units** — do not remove it.
+4. (Green) Charger thermal-override jumper. Intended to connect a dummy resistance to the battery charger to mimic a thermistor. **This jumper is non-functional on most units.** The firmware works around this by overriding the charger's NTC thermal check in software at startup (`bq25792_temp_override()` in `src/power.cpp`; no thermistor is fitted on Proto0), so thermal management does not depend on this jumper.
+5. (Yellow) Thermistor connector. Allows connecting an NTC thermistor to the battery charger. Unused on Proto0 (see note 4).
+6. (Cyan) Wake button. Intended to wake the battery charger + MCU from sleep. **Non-functional on Proto0** — it is a known hardware defect (the WAKE_N line, shared with the charger's /QON, reads stuck-low and caused a GPIO interrupt storm), so the wake-button handler is disabled in firmware (`CONFIG_APP_WAKE_BUTTON=n`).
 
 ## JTAG
 

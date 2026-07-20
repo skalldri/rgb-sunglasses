@@ -14,6 +14,7 @@ The generated <out>/index.html files are git-ignored — regenerate them, never 
 them by hand (edits would be lost and drift from the Markdown source).
 """
 import os
+import shutil
 import sys
 
 try:
@@ -26,6 +27,12 @@ except ImportError:
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE_DIR = os.path.join(REPO_ROOT, "site")
+
+# Canonical image directory for the docs. Images live under fw/docs/images/ (so
+# the Markdown's `images/<file>` links resolve on github.com too) and are copied
+# into each generated page's own `images/` subdir here, so the same relative
+# links also resolve on the served site (page at /<out>/, image at /<out>/images/).
+IMAGES_SRC = os.path.join(REPO_ROOT, "fw", "docs", "images")
 
 # Nav links shared across generated pages (mirrors site/index.html's nav).
 # (href, label, external?)
@@ -48,6 +55,12 @@ DOCS = [
         "out": "proto0-user-guide",
         "title": "Proto0 User Guide",
         "desc": "Set up your Proto0 hardware: unboxing, Bluetooth pairing, the USB interface, and firmware updates.",
+    },
+    {
+        "src": "fw/docs/proto0-assembly-guide.md",
+        "out": "proto0-assembly-guide",
+        "title": "Proto0 Assembly Guide",
+        "desc": "Assemble your Proto0 glasses: mount the Compute Pack and battery pack on the head strap and connect everything up.",
     },
     {
         "src": "fw/docs/developer-setup.md",
@@ -74,7 +87,7 @@ DOCS_INDEX = {
     "out": "docs",
     "title": "Documentation",
     "desc": "Guides and references for the RGB Sunglasses firmware and companion app.",
-    "banner": "https://github.com/user-attachments/assets/2a60a693-4981-4d98-bf4b-878f46d55e0b",
+    "banner": "images/proto0-banner.jpg",
     "lead": "Setup and developer guides for RGB Sunglasses hardware. Just got hardware? Start with the Proto0 User Guide.",
 }
 
@@ -144,6 +157,15 @@ def render_docs_index():
     return "\n".join(parts)
 
 
+def copy_images(out_dir):
+    """Copy the shared docs images into <out_dir>/images/ so `images/<file>`
+    links in the rendered page resolve. No-op if there are no images."""
+    if not os.path.isdir(IMAGES_SRC):
+        return
+    dst = os.path.join(out_dir, "images")
+    shutil.copytree(IMAGES_SRC, dst, dirs_exist_ok=True)
+
+
 def build():
     # superfences (from pymdown-extensions) renders fenced code correctly even
     # when nested inside lists — plain fenced_code does not, which matters for
@@ -169,6 +191,7 @@ def build():
         out_path = os.path.join(out_dir, "index.html")
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html)
+        copy_images(out_dir)
         print(f"rendered {doc['src']} -> site/{doc['out']}/index.html ({len(html)} bytes)")
 
     # Docs landing page — generated from DOCS, so new docs appear automatically.
@@ -183,6 +206,7 @@ def build():
     os.makedirs(idx_dir, exist_ok=True)
     with open(os.path.join(idx_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(idx_html)
+    copy_images(idx_dir)
     print(f"rendered docs index -> site/{DOCS_INDEX['out']}/index.html ({len(idx_html)} bytes)")
 
 
