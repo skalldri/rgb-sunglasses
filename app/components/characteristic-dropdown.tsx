@@ -29,10 +29,16 @@ export function CharacteristicDropdown({ charUuid, charInfo }: Props) {
     async function selectOption(option: string) {
         setIsOpen(false);
         if (option === selected) return;
-        // The device reorders this into the canonical "selected\nother..." list and notifies
-        // it back, so the bare option text we just wrote is not the characteristic's final
-        // value — let the notification (already subscribed during connect) update local state.
-        await writeToCharacteristic(charUuid, encodeUtf8ToBase64(option), { skipOptimisticUpdate: true });
+        // We write the bare option, but the device stores the canonical "selected\nother..." list.
+        // Optimistically reorder the current options to that same selected-first form so the UI
+        // responds instantly instead of waiting for the write+notify round-trip (passing the bare
+        // written text as the optimistic value would collapse the list to a single option). The
+        // displayed value — options[0] — matches the device exactly; the notify then re-affirms the
+        // full canonical value (and reconciles the non-selected order, invisible while closed).
+        const optimistic = [option, ...options.filter(o => o !== option)].join('\n');
+        await writeToCharacteristic(charUuid, encodeUtf8ToBase64(option), {
+            optimisticValue: encodeUtf8ToBase64(optimistic),
+        });
     }
 
     return (

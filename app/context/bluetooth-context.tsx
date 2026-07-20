@@ -84,7 +84,7 @@ type BluetoothContextType = {
     writeToCharacteristic: (
         charUuid: string,
         newEncodedValue: string,
-        options?: { skipOptimisticUpdate?: boolean }
+        options?: { skipOptimisticUpdate?: boolean; optimisticValue?: string }
     ) => Promise<boolean>;
     getCharacteristicInfo: (charUuid: string) => CharacteristicInfo | null;
     updateCharValue: (charUuid: string, newValue: string) => void;
@@ -98,7 +98,7 @@ type BluetoothContextType = {
         serviceUuid: string,
         charUuid: string,
         newEncodedValue: string,
-        options?: { skipOptimisticUpdate?: boolean }
+        options?: { skipOptimisticUpdate?: boolean; optimisticValue?: string }
     ) => Promise<boolean>;
     // Monitor subscription management (persists across navigation)
     monitorSubscriptions: React.MutableRefObject<Subscription[]>;
@@ -222,10 +222,15 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     // "selected\nother\nother2" list and notifies that back) — applying the optimistic value
     // there clobbers the real device state with a single truncated option. Callers that know
     // their characteristic's write value isn't its canonical stored value should pass this.
+    //
+    // optimisticValue: the better option for that same case — instead of skipping optimism (and
+    // waiting a full write+notify round-trip for any UI feedback), pass the exact canonical value
+    // you know the device will store (e.g. the dropdown list locally reordered selected-first). The
+    // UI updates instantly and the eventual notify just re-affirms the identical value.
     const writeToCharacteristic = useCallback(async (
         charUuid: string,
         newEncodedValue: string,
-        options?: { skipOptimisticUpdate?: boolean }
+        options?: { skipOptimisticUpdate?: boolean; optimisticValue?: string }
     ): Promise<boolean> => {
         const charInfo = getCharacteristicInfo(charUuid);
         if (!charInfo) {
@@ -242,8 +247,14 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         // flight, which is what caused the on->off->on toggle flicker (issue #91). Reverted in the
         // catch below if the write is rejected.
         const previousValue = charInfo.value ?? '';
+        // The value shown optimistically is usually the bytes we're writing, but a caller whose
+        // written value differs from the characteristic's canonical stored value (a dropdown writes
+        // a bare option; the device stores the reordered "selected\nother..." list) can supply
+        // `optimisticValue` — the value it KNOWS the device will settle on — so the UI updates
+        // instantly without the truncation that made these skip optimism entirely.
+        const optimisticValue = options?.optimisticValue ?? newEncodedValue;
         if (!options?.skipOptimisticUpdate) {
-            updateCharValue(charUuid, newEncodedValue);
+            updateCharValue(charUuid, optimisticValue);
         }
 
         try {
@@ -255,7 +266,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             // write; blindly restoring previousValue would clobber that fresher state with a stale
             // one. The compare-and-swap runs inside the state updater so it sees the latest value.
             if (!options?.skipOptimisticUpdate) {
-                updateCharFields(charUuid, current => current.value === newEncodedValue ? { value: previousValue } : null);
+                updateCharFields(charUuid, current => current.value === optimisticValue ? { value: previousValue } : null);
             }
             console.log(`Error writing value to characteristic ${charUuid}: ${error}`);
             updateCharFields(charUuid, { lastWriteError: describeWriteError(error) });
@@ -334,7 +345,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         serviceUuid: string,
         charUuid: string,
         newEncodedValue: string,
-        options?: { skipOptimisticUpdate?: boolean }
+        options?: { skipOptimisticUpdate?: boolean; optimisticValue?: string }
     ): Promise<boolean> => {
         const charInfo = getServiceCharacteristicInfo(serviceUuid, charUuid);
         if (!charInfo) {
@@ -349,8 +360,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         // controlled "Is Active" Switch never flickers back to its old value mid-write (issue #91).
         // See the matching comment in writeToCharacteristic. Reverted on write rejection below.
         const previousValue = charInfo.value ?? '';
+        // See writeToCharacteristic: `optimisticValue` lets a caller whose written bytes differ from
+        // the device's canonical stored value (dropdown lists) still update instantly.
+        const optimisticValue = options?.optimisticValue ?? newEncodedValue;
         if (!options?.skipOptimisticUpdate) {
-            updateServiceCharacteristicValue(serviceUuid, charUuid, newEncodedValue);
+            updateServiceCharacteristicValue(serviceUuid, charUuid, optimisticValue);
         }
 
         try {
@@ -361,7 +375,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             // notification, an overlapping write) changed it while the write was in flight. Runs
             // inside the state updater so it sees the latest value. See writeToCharacteristic.
             if (!options?.skipOptimisticUpdate) {
-                updateServiceCharacteristicFields(serviceUuid, charUuid, current => current.value === newEncodedValue ? { value: previousValue } : null);
+                updateServiceCharacteristicFields(serviceUuid, charUuid, current => current.value === optimisticValue ? { value: previousValue } : null);
             }
             console.log(`Error writing value to characteristic ${charUuid} in service ${serviceUuid}: ${error}`);
             updateServiceCharacteristicFields(serviceUuid, charUuid, { lastWriteError: describeWriteError(error) });

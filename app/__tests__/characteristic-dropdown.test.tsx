@@ -63,7 +63,7 @@ describe('CharacteristicDropdown', () => {
     expect(getByText('Option C')).toBeTruthy();
   });
 
-  it('writes the bare option text with skipOptimisticUpdate and collapses on selection', async () => {
+  it('writes the bare option and optimistically reorders the list selected-first, then collapses', async () => {
     const writeToCharacteristic = jest.fn(async () => true);
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       writeToCharacteristic,
@@ -80,10 +80,13 @@ describe('CharacteristicDropdown', () => {
     fireEvent.press(getByText('Option A'));
 
     await waitFor(() => {
+      // Bare option is written; the optimistic value is the canonical selected-first list the
+      // device will settle on ("Option A\nOption B"), NOT the bare text (which would collapse the
+      // list to a single option). This is what makes the UI respond without a notify round-trip.
       expect(writeToCharacteristic).toHaveBeenCalledWith(
         'dropdown-char',
         encodeUtf8ToBase64('Option A'),
-        { skipOptimisticUpdate: true }
+        { optimisticValue: encodeUtf8ToBase64('Option A\nOption B') }
       );
     });
     // Collapsed again after picking.
