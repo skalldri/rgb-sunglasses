@@ -173,8 +173,14 @@ int GlimDecoder::readFrame(uint32_t index, uint8_t *buf, size_t bufSize)
 
 int GlimDecoder::readLz4Frame(uint32_t index, uint8_t *buf, size_t bufSize)
 {
+    // recordOffset (below) and compressedSize come straight from an untrusted file, as does
+    // header_.frameCount that bounds `index`. This stays memory-safe regardless of their values:
+    // an out-of-range seek/read fails cleanly (-EIO), the compressedSize check gates the fs_read
+    // into lz4Scratch_, and LZ4_decompress_safe() is capped by bufSize — a corrupt file yields an
+    // error or a wrong-but-bounded frame, never an out-of-bounds access. Compute the index-table
+    // position in 64-bit so `index * 4` can't wrap size_t on a 32-bit target for a huge frameCount.
     // 1. Read this frame's record offset from the index table.
-    off_t idxPos = (off_t)(indexTableOffset_ + (size_t)index * sizeof(uint32_t));
+    off_t idxPos = (off_t)((uint64_t)indexTableOffset_ + (uint64_t)index * sizeof(uint32_t));
     int rc = fs_seek(&file_, idxPos, FS_SEEK_SET);
     if (rc < 0) {
         LOG_ERR("fs_seek (index) failed: %d", rc);

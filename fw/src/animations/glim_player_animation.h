@@ -66,6 +66,13 @@ class GlimPlayerAnimation : public BaseAnimationTemplate<GlimPlayerAnimation, An
     // Upper bound across both hardware targets (40x12 frame display, RGB24 worst case).
     static constexpr size_t kMaxFrameBytes = kFrameDisplayWidth * kFrameDisplayHeight * 3u;
 
+    // readFrame() decompresses LZ4 frames into frameBuf_ and rejects, at open(), any LZ4 file
+    // whose frame exceeds GlimDecoder::kMaxLz4FrameBytes. Both derive from 40x12x3 but live in
+    // different files (led_config.h vs glim_decoder.h); tie them together so a display-geometry
+    // change here can't silently make the decoder reject valid full-size LZ4 frames.
+    static_assert(GlimDecoder::kMaxLz4FrameBytes >= kMaxFrameBytes,
+                  "GlimDecoder's LZ4 frame bound is smaller than the player's frame buffer");
+
     // 1 pixel per 50 ms, matching TextAnimation's default scroll rate.
     static constexpr uint32_t kErrorScrollStepMs = 50u;
 
@@ -75,6 +82,11 @@ class GlimPlayerAnimation : public BaseAnimationTemplate<GlimPlayerAnimation, An
     GlimDecoder decoder_;
     size_t openIndex_ = kInvalidIndex;
     uint32_t currentFrame_ = 0;
+    // Which frame index currently sits in frameBuf_ (-1 = none loaded). tick() runs faster than
+    // the clip's fps, so without this it would re-read+re-decode the same frame several times per
+    // displayed frame — cheap for Raw/Rgb24, but a wasted ~1.4 KB LZ4 decompress per render tick
+    // for Lz4PerFrameRgb24. Gating readFrame() on advance decodes once per displayed frame.
+    int64_t loadedFrame_ = -1;
     uint32_t accumulatedMs_ = 0;
     uint8_t frameBuf_[kMaxFrameBytes];
 

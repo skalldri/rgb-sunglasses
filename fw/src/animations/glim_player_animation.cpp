@@ -39,6 +39,7 @@ void GlimPlayerAnimation::setActive(bool active) {
 
 void GlimPlayerAnimation::openCurrentFile(size_t index) {
     currentFrame_ = 0;
+    loadedFrame_ = -1;  // frameBuf_ still holds the previous file's frame — force a re-read.
     accumulatedMs_ = 0;
     finishedOnce_ = false;
 
@@ -157,12 +158,18 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
         }
     }
 
-    int rc = decoder_.readFrame(currentFrame_, frameBuf_, sizeof(frameBuf_));
-    if (rc < 0) {
-        LOG_ERR("Failed to read frame %u: %d", currentFrame_, rc);
-        inErrorState_ = true;
-        renderError(renderer, timeSinceLastTickMs);
-        return;
+    // Only (re)decode when the displayed frame actually advances; otherwise re-render the frame
+    // already in frameBuf_. This keeps a format-4 (LZ4) frame decompressed once per displayed
+    // frame rather than once per (faster) render tick.
+    if (static_cast<int64_t>(currentFrame_) != loadedFrame_) {
+        int rc = decoder_.readFrame(currentFrame_, frameBuf_, sizeof(frameBuf_));
+        if (rc < 0) {
+            LOG_ERR("Failed to read frame %u: %d", currentFrame_, rc);
+            inErrorState_ = true;
+            renderError(renderer, timeSinceLastTickMs);
+            return;
+        }
+        loadedFrame_ = currentFrame_;
     }
 
     // The file's own width/height (already verified above to be <= the display's) are the
