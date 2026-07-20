@@ -95,6 +95,25 @@ static const bt_gatt_attr *nth_char_value(const bt_gatt_service_static *svc, siz
     return nullptr;
 }
 
+/* The characteristic-declaration (CHRC) attr sits immediately before its value attr in the
+ * static table; returns it so callers can inspect the bt_gatt_chrc properties (e.g. NOTIFY). */
+static const bt_gatt_attr *chrc_decl_for(const bt_gatt_service_static *svc,
+                                         const bt_gatt_attr *valueAttr) {
+    for (size_t i = 1; i < svc->attr_count; i++) {
+        if (&svc->attrs[i] == valueAttr) {
+            const bt_gatt_attr *prev = &svc->attrs[i - 1];
+            return (prev->uuid && bt_uuid_cmp(prev->uuid, BT_UUID_GATT_CHRC) == 0) ? prev : nullptr;
+        }
+    }
+    return nullptr;
+}
+
+static bool chrc_has_notify(const bt_gatt_service_static *svc, const bt_gatt_attr *valueAttr) {
+    const bt_gatt_attr *chrc = chrc_decl_for(svc, valueAttr);
+    return chrc != nullptr &&
+           (static_cast<const bt_gatt_chrc *>(chrc->user_data)->properties & BT_GATT_CHRC_NOTIFY);
+}
+
 static ssize_t do_read(const bt_gatt_attr *attr, void *buf, size_t bufLen) {
     return attr->read(nullptr, attr, buf, bufLen, 0);
 }
@@ -422,6 +441,14 @@ ZTEST(animation_adapters, test_glim_player) {
     const bt_gatt_attr *loopModeAttr = nth_char_value(svc, 1);
     zassert_not_null(loopModeAttr);
     zassert_true(read_str(loopModeAttr, buf, sizeof(buf)) == "");
+
+    /* Regression: the app's Loop Mode dropdown writes with skipOptimisticUpdate and relies
+     * ENTIRELY on the notify to update its UI, so this characteristic MUST be notifiable. It
+     * previously wasn't (Notify=false) — the write took effect on-device but the picker never
+     * moved. GlimSelection has always been notifiable; assert both, so a regression to false
+     * on either is caught here. */
+    zassert_true(chrc_has_notify(svc, loopModeAttr), "Loop Mode characteristic must expose NOTIFY");
+    zassert_true(chrc_has_notify(svc, selectionAttr), "Glim Selection must expose NOTIFY");
 
     const bt_gatt_attr *isActiveAttr = nth_char_value(svc, 2);
     zassert_not_null(isActiveAttr);
