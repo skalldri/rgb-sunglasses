@@ -17,8 +17,10 @@ on:
       - 'scripts/build-site.py'
       - 'fw/docs/flashing-without-jlink.md'
       - 'fw/docs/proto0-user-guide.md'
+      - 'fw/docs/proto0-assembly-guide.md'
       - 'fw/docs/proto0-hardware-guide.md'
       - 'fw/docs/developer-setup.md'
+      - 'fw/docs/images/**'
   workflow_dispatch:
 
 permissions:

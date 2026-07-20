@@ -21,5 +21,6 @@ __pycache__/
 site/docs/
 site/recovery/
 site/proto0-user-guide/
+site/proto0-assembly-guide/
 site/proto0-hardware-guide/
 site/developer-setup/

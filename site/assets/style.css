@@ -377,3 +377,63 @@ footer a {
 footer a:hover {
     color: var(--fg);
 }
+
+/* ---- Caution / safety callout ("caution tape" styling) ---- */
+/* High-visibility box for safety-critical warnings in the docs (e.g. battery
+   safety). Uses its own fixed colors (not theme vars) so it stays loud in both
+   light and dark mode. */
+.caution {
+    margin: 2rem 0;
+    border: 3px solid #e0a800;
+    border-radius: 10px;
+    background: #fff8e1;
+    color: #3a2f00;
+    overflow: hidden;
+}
+
+.caution__tape {
+    height: 18px;
+    background: repeating-linear-gradient(
+        45deg,
+        #f5c400 0 18px,
+        #1a1a1a 18px 36px
+    );
+}
+
+.caution__body {
+    padding: 1rem 1.5rem 1.25rem;
+}
+
+.caution__body h3 {
+    margin: 0.25rem 0 0.75rem;
+    font-size: 1.25rem;
+    color: #8a5a00;
+    text-align: center;
+    letter-spacing: 0.01em;
+}
+
+.caution__body strong {
+    color: #b00020;
+}
+
+.caution__body a {
+    color: #8a5a00;
+    text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+    .caution {
+        background: #2a2100;
+        color: #f6e7b0;
+        border-color: #f5c400;
+    }
+    .caution__body h3 {
+        color: #ffd84d;
+    }
+    .caution__body strong {
+        color: #ff8a8a;
+    }
+    .caution__body a {
+        color: #ffd84d;
+    }
+}
