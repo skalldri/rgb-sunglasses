@@ -14,7 +14,13 @@ class TiltAnimation : public BaseAnimationTemplate<TiltAnimation, Animation::Til
 
    private:
     AnimationImuSource *imuSource_ = nullptr;
-    size_t tiltOffset_ = 0;
+
+    /* Gyro-integrated state (see tilt_animation.cpp for the model). Gyro-only for
+     * now — no bias correction or smoothing, so these slowly drift; a filter is a
+     * planned follow-up. */
+    float scrollX_ = 0.0f;  /* horizontal scroll (px), integrated from yaw (gyro +X) */
+    float scrollY_ = 0.0f;  /* vertical scroll (px), integrated from pitch (gyro +Y) */
+    float angleRad_ = 0.0f; /* rainbow-axis rotation (rad), integrated from roll (gyro +Z) */
 };
 
 void tilt_animation_bind_default_imu_dependencies();
