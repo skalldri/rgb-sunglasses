@@ -12,6 +12,7 @@
 
 extern "C" {
 #include <ff.h>
+#include <lz4.h> // LZ4_compress_default for building format-4 fixtures
 }
 
 namespace {
@@ -141,6 +142,65 @@ void writeRgb24Glim(const char *name, const uint8_t (*colors)[3], uint32_t frame
     }
     k_free(frame);
     fs_close(&f);
+}
+
+/* Writes an Lz4PerFrameRgb24 (format 4) GLIM: uint32 index table + per-frame
+ * [uint16 size][LZ4 block], one uniform-color frame per `colors` entry. Mirrors
+ * convert_video_to_glim.py --lz4 so the player is exercised on real compressed
+ * frames (regression for rendering colour frames as a 1-bit mono bitmap). */
+void writeLz4Rgb24Glim(const char *name, const uint8_t (*colors)[3], uint32_t frameCount,
+                       uint8_t fps = 24) {
+    char path[64];
+    snprintf(path, sizeof(path), "%s/%s", glim_registry::kDirectory, name);
+
+    static constexpr size_t kFrameBytes = kWidth * kHeight * 3u;
+    const int bound = LZ4_compressBound((int)kFrameBytes);
+    uint8_t *frame = (uint8_t *)k_malloc(kFrameBytes);
+    uint8_t *comp = (uint8_t *)k_malloc((size_t)bound * frameCount);
+    uint16_t *csize = (uint16_t *)k_malloc(sizeof(uint16_t) * frameCount);
+    zassert_not_null(frame, "k_malloc"); zassert_not_null(comp, "k_malloc");
+    zassert_not_null(csize, "k_malloc");
+
+    for (uint32_t fi = 0; fi < frameCount; fi++) {
+        for (size_t i = 0; i < kFrameBytes; i += 3) {
+            frame[i] = colors[fi][0]; frame[i + 1] = colors[fi][1]; frame[i + 2] = colors[fi][2];
+        }
+        int n = LZ4_compress_default((const char *)frame, (char *)(comp + (size_t)fi * bound),
+                                     (int)kFrameBytes, bound);
+        zassert_true(n > 0, "LZ4_compress_default frame %u", fi);
+        csize[fi] = (uint16_t)n;
+    }
+
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC), "setup: create %s", path);
+
+    const uint32_t dataOff = 24u + frameCount * 4u;
+    uint8_t hdr[24] = {
+        0x4D, 0x49, 0x4C, 0x47, 1, 24, 4 /* Lz4PerFrameRgb24 */, fps,
+        (uint8_t)(kWidth & 0xFF), (uint8_t)(kWidth >> 8),
+        (uint8_t)(kHeight & 0xFF), (uint8_t)(kHeight >> 8),
+        (uint8_t)(frameCount & 0xFF), (uint8_t)((frameCount >> 8) & 0xFF),
+        (uint8_t)((frameCount >> 16) & 0xFF), (uint8_t)((frameCount >> 24) & 0xFF),
+        (uint8_t)(dataOff & 0xFF), (uint8_t)((dataOff >> 8) & 0xFF),
+        (uint8_t)((dataOff >> 16) & 0xFF), (uint8_t)((dataOff >> 24) & 0xFF),
+        0, 0, 0, 0,
+    };
+    zassert_equal(fs_write(&f, hdr, 24), (ssize_t)24);
+
+    uint32_t pos = dataOff;
+    for (uint32_t fi = 0; fi < frameCount; fi++) {
+        uint8_t off_le[4] = { (uint8_t)pos, (uint8_t)(pos >> 8), (uint8_t)(pos >> 16), (uint8_t)(pos >> 24) };
+        zassert_equal(fs_write(&f, off_le, 4), (ssize_t)4);
+        pos += 2u + csize[fi];
+    }
+    for (uint32_t fi = 0; fi < frameCount; fi++) {
+        uint8_t sz_le[2] = { (uint8_t)csize[fi], (uint8_t)(csize[fi] >> 8) };
+        zassert_equal(fs_write(&f, sz_le, 2), (ssize_t)2);
+        zassert_equal(fs_write(&f, comp + (size_t)fi * bound, csize[fi]), (ssize_t)csize[fi]);
+    }
+    fs_close(&f);
+    k_free(csize); k_free(comp); k_free(frame);
 }
 
 /* Writes an RGB24 GLIM smaller than the test renderer's 40x12 display, with one uniform-color
@@ -300,6 +360,35 @@ ZTEST(glim_player_animation_di_io, test_opens_selected_file_and_renders_rgb24) {
     zassert_false(anim->inErrorState_, "Must not be in error state when file is present");
     zassert_true(anim->decoder_.isOpen());
     zassert_true(allPixelsMatch(10, 20, 30), "All pixels should equal frame 0's color");
+    anim->setActive(false);
+}
+
+/* Regression: an Lz4PerFrameRgb24 (format 4) file must render as COLOUR, not be
+ * reinterpreted as a 1-bit mono bitmap. The old render switch only took the RGB
+ * path for format 3, so format 4 fell through to the mono branch and the panel
+ * showed bright structured noise. Assert the decoded colour reaches every pixel. */
+ZTEST(glim_player_animation_di_io, test_renders_lz4_rgb24_as_color) {
+    reset_nand();
+    const uint8_t colors[2][3] = {{10, 20, 30}, {40, 50, 60}};
+    writeLz4Rgb24Glim("lz4.glim", colors, 2, 12);
+    glim_registry::init();
+    zassert_equal(glim_registry::count(), 1u);
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = 0;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    resetPixels();
+    anim->tick(renderer, 10);  // 12 fps -> 83 ms/frame; 10 ms stays on frame 0
+    zassert_false(anim->inErrorState_, "Must not be in error state for a valid LZ4 file");
+    zassert_true(anim->decoder_.isOpen());
+    zassert_equal((uint8_t)anim->decoder_.header().format,
+                  (uint8_t)GlimDecoder::FrameFormat::Lz4PerFrameRgb24);
+    zassert_true(allPixelsMatch(10, 20, 30), "LZ4 frame 0 must render as its true RGB colour");
     anim->setActive(false);
 }
 
@@ -577,6 +666,36 @@ ZTEST(glim_player_animation_di_io, test_oversized_dimensions_enters_error_state)
     anim->tick(renderer, 10);
     zassert_true(anim->inErrorState_,
                 "Dimensions exceeding the display must be treated as an open failure");
+    anim->setActive(false);
+}
+
+/* A file that opens cleanly (valid header, in-range dimensions) but has no frame data makes
+ * readFrame() fail on the first tick -> the player enters the error state. Covers the
+ * decode-failure branch of the decode-on-advance path in tick(). */
+ZTEST(glim_player_animation_di_io, test_frame_read_failure_enters_error_state) {
+    reset_nand();
+    /* Header claims one 40x12 Rgb24 frame, but no frame bytes follow it. */
+    char path[64];
+    snprintf(path, sizeof(path), "%s/%s", glim_registry::kDirectory, "hdronly.glim");
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    writeHeader(&f, 3 /* Rgb24 */, 24, kWidth, kHeight, 1, 0, 0, 0);
+    fs_close(&f);
+    glim_registry::init();
+    size_t idx = indexOfName("hdronly.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    resetPixels();
+    anim->tick(renderer, 10);
+    zassert_true(anim->inErrorState_, "A frame read failure must enter the error state");
     anim->setActive(false);
 }
 

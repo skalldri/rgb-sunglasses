@@ -7,7 +7,7 @@ can be reached with a single O(1) seek rather than scanning the file.
 **Extension:** `.glim`  
 **Byte order:** little-endian throughout.  
 **Reference implementation:** `glim_decoder.{h,cpp}` (this directory).  
-**Conversion tools:** `tools/convert_bad_apple.py` (video → mono), `tools/convert_video_to_glim.py` (video → RGB24), `tools/convert_gif_to_glim.py` (GIF → mono or RGB24), `tools/generate_nyan_cat_glim.py` (procedural RGB24).
+**Conversion tools:** `tools/convert_bad_apple.py` (video → mono), `tools/convert_video_to_glim.py` (video → RGB24, or LZ4-compressed RGB24 with `--lz4`), `tools/convert_gif_to_glim.py` (GIF → mono or RGB24), `tools/generate_nyan_cat_glim.py` (procedural RGB24).
 
 ---
 
@@ -97,9 +97,9 @@ All frames in a single file use the same format.
 | Value | Name               | Pixels/byte | Bytes per frame          | Status |
 |-------|--------------------|-------------|--------------------------|--------|
 | `1`   | `Raw`              | 8 (1-bit)   | `⌈width × height / 8⌉`  | Implemented |
-| `2`   | `Lz4PerFrame`      | 8 (1-bit)   | variable (LZ4)           | Reserved |
+| `2`   | `Lz4PerFrame`      | 8 (1-bit)   | variable (LZ4)           | Decode implemented (no encoder tool) |
 | `3`   | `Rgb24`            | ⅓ (24-bit)  | `width × height × 3`     | Implemented |
-| `4`   | `Lz4PerFrameRgb24` | ⅓ (24-bit)  | variable (LZ4)           | Reserved |
+| `4`   | `Lz4PerFrameRgb24` | ⅓ (24-bit)  | variable (LZ4)           | Implemented |
 
 Values `0` and `5`–`255` are undefined. Parsers must reject them.
 
@@ -129,11 +129,13 @@ Bit 7  Bit 6  Bit 5  Bit 4  Bit 3  Bit 2  Bit 1  Bit 0
 (0,0)  (1,0)  (2,0)  (3,0)  (4,0)  (5,0)  (6,0)  (7,0)
 ```
 
-### 3.2 Lz4PerFrame (format = 2) — reserved
+### 3.2 Lz4PerFrame (format = 2)
 
 Each frame is independently compressed with LZ4. A per-frame index table
-(see §4) provides O(1) seek. **Not yet implemented** in the reference decoder;
-`readFrame()` returns `-ENOTSUP`.
+(see §4) provides O(1) seek. The reference decoder handles this format via the
+same code path as §3.4 (`readFrame()` → `readLz4Frame()` → `LZ4_decompress_safe`),
+so a well-formed file decodes correctly; there is currently **no encoder tool**
+that emits it (the converters produce mono Raw or `Lz4PerFrameRgb24`).
 
 ### 3.3 Rgb24 (format = 3)
 
@@ -156,16 +158,20 @@ seeking arithmetic to Raw.
 
 The mono colour header field (§2.3) is **ignored** for this format.
 
-### 3.4 Lz4PerFrameRgb24 (format = 4) — reserved
+### 3.4 Lz4PerFrameRgb24 (format = 4)
 
-LZ4-compressed Rgb24 with a per-frame index table (see §4). **Not yet
-implemented**; `readFrame()` returns `-ENOTSUP`.
+LZ4-compressed Rgb24 with a per-frame index table (see §4). Each frame is
+decompressed on read into the caller's uncompressed frame buffer. Produced by
+`tools/convert_video_to_glim.py --lz4`. The decoder bounds the decompressed
+frame at 40 × 12 × 3 = 1440 bytes (the panel geometry); an LZ4 file whose frame
+exceeds that is rejected at `open()`.
 
 ---
 
 ## 4. LZ4 Index Table (formats 2 and 4)
 
-> **Status:** designed, not yet implemented.
+> **Status:** implemented (`glim_decoder.cpp::readLz4Frame`, encoder in
+> `convert_video_to_glim.py --lz4`).
 
 For compressed formats, a contiguous table of `frame_count` unsigned 32-bit
 integers sits between the header and the frame data:

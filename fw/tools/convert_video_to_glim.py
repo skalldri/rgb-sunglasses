@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Convert a video (local file or URL) to RGB24 GLIM format for the LED sunglasses display.
+Convert a video (local file or URL) to GLIM format for the LED sunglasses display.
 
-Unlike convert_bad_apple.py (monochrome only), this writes full-colour Rgb24
-frames — see fw/src/storage/GLIM_FORMAT.md section 3.3.
+Unlike convert_bad_apple.py (monochrome only), this writes full-colour frames.
+By default it emits uncompressed Rgb24 (format 3, see fw/src/storage/GLIM_FORMAT.md
+section 3.3). Pass --lz4 to emit Lz4PerFrameRgb24 (format 4, section 3.4/§4): each
+frame is independently LZ4-compressed and preceded by a uint32 index table for
+O(1) seeks — much smaller on disk for long clips.
 
 Usage:
   python convert_video_to_glim.py --url "https://..." --output animation.glim
   python convert_video_to_glim.py --input video.mp4 --output animation.glim --fps 24
+  python convert_video_to_glim.py --input video.mp4 --output animation.glim --lz4
 """
 
 import argparse
@@ -28,25 +32,79 @@ GLIM_MAGIC = 0x474C494D  # 'GLIM'
 GLIM_VERSION = 1
 GLIM_HEADER_SIZE = 24
 GLIM_FRAME_FORMAT_RGB24 = 3
+GLIM_FRAME_FORMAT_LZ4_RGB24 = 4
 
 
-def write_glim_header(f, frame_count: int, fps: int) -> None:
-    """Write a 24-byte GLIM v1 Rgb24 header to a file object."""
+def write_glim_header(f, frame_count: int, fps: int, frame_format: int,
+                      frame_data_offset: int) -> None:
+    """Write a 24-byte GLIM v1 header to a file object."""
     header = (
         struct.pack('<I', GLIM_MAGIC) +
         struct.pack('<B', GLIM_VERSION) +
         struct.pack('<B', GLIM_HEADER_SIZE) +
-        struct.pack('<B', GLIM_FRAME_FORMAT_RGB24) +
+        struct.pack('<B', frame_format) +
         struct.pack('<B', fps) +
         struct.pack('<H', TARGET_W) +
         struct.pack('<H', TARGET_H) +
         struct.pack('<I', frame_count) +
-        struct.pack('<I', GLIM_HEADER_SIZE) +  # frame_data_offset
+        struct.pack('<I', frame_data_offset) +
         struct.pack('<BBB', 0, 0, 0) +          # mono colour fields, ignored for Rgb24
         struct.pack('<B', 0)                    # reserved
     )
     assert len(header) == GLIM_HEADER_SIZE, f"Header size mismatch: {len(header)} != {GLIM_HEADER_SIZE}"
     f.write(header)
+
+
+def compress_frame_lz4(frame_data: bytes) -> bytes:
+    """LZ4-compress one raw frame into a bare LZ4 block (no 4-byte size prefix).
+
+    store_size=False matches the firmware decoder, which reads the compressed
+    length from the index/record header and calls LZ4_decompress_safe() with an
+    explicit uncompressed capacity — so the stream must NOT carry lz4's own
+    size prefix. See GLIM_FORMAT.md §4.
+    """
+    try:
+        import lz4.block
+    except ImportError:
+        raise RuntimeError("python lz4 not found. Install with: pip install lz4")
+    return lz4.block.compress(frame_data, mode='default', store_size=False)
+
+
+def write_glim_lz4(f, frames, fps: int) -> int:
+    """Write a full Lz4PerFrameRgb24 (format 4) file. Returns bytes written.
+
+    Layout (GLIM_FORMAT.md §4):
+      [24-byte header][index table: frame_count * uint32][per-frame records]
+    Each record is [uint16 compressed_size][compressed_size bytes of LZ4 block].
+    index[N] is the absolute file offset of frame N's record.
+    """
+    frame_count = len(frames)
+    compressed = [compress_frame_lz4(fr) for fr in frames]
+
+    for i, comp in enumerate(compressed):
+        if len(comp) > 0xFFFF:
+            raise RuntimeError(
+                f"Frame {i} compressed to {len(comp)} bytes, exceeds uint16 record size")
+
+    # Index table sits between the header and the first record.
+    frame_data_offset = GLIM_HEADER_SIZE + frame_count * 4
+
+    # Compute absolute offset of each record; a record is 2 bytes (uint16 size)
+    # plus its compressed payload.
+    offsets = []
+    pos = frame_data_offset
+    for comp in compressed:
+        offsets.append(pos)
+        pos += 2 + len(comp)
+
+    write_glim_header(f, frame_count, fps, GLIM_FRAME_FORMAT_LZ4_RGB24, frame_data_offset)
+    for off in offsets:
+        f.write(struct.pack('<I', off))
+    for comp in compressed:
+        f.write(struct.pack('<H', len(comp)))
+        f.write(comp)
+
+    return pos  # total bytes written
 
 
 def download_video(url: str, output_path: Path) -> None:
@@ -103,6 +161,8 @@ def main():
     parser.add_argument("--url", help="Video URL to download via yt-dlp")
     parser.add_argument("--output", "-o", default="output.glim", help="Output .glim file")
     parser.add_argument("--fps", type=int, default=24, help="Target playback fps (default: 24)")
+    parser.add_argument("--lz4", action="store_true",
+                        help="Emit LZ4-compressed frames (format 4, Lz4PerFrameRgb24)")
 
     args = parser.parse_args()
 
@@ -142,13 +202,22 @@ def main():
         frame_count = len(frames)
         print(f"\nTotal frames: {frame_count}")
 
-        file_size = GLIM_HEADER_SIZE + frame_count * FRAME_BYTES
-        print(f"Output size:  {file_size} bytes ({file_size / 1024:.1f} KB)")
+        uncompressed_size = GLIM_HEADER_SIZE + frame_count * FRAME_BYTES
 
-        with open(output_path, 'wb') as f:
-            write_glim_header(f, frame_count, args.fps)
-            for frame_data in frames:
-                f.write(frame_data)
+        if args.lz4:
+            with open(output_path, 'wb') as f:
+                file_size = write_glim_lz4(f, frames, args.fps)
+            ratio = (uncompressed_size / file_size) if file_size else 0.0
+            print(f"Output size:  {file_size} bytes ({file_size / 1024:.1f} KB), "
+                  f"LZ4 format 4 — {ratio:.2f}x smaller than "
+                  f"{uncompressed_size / 1024:.1f} KB uncompressed")
+        else:
+            print(f"Output size:  {uncompressed_size} bytes ({uncompressed_size / 1024:.1f} KB)")
+            with open(output_path, 'wb') as f:
+                write_glim_header(f, frame_count, args.fps, GLIM_FRAME_FORMAT_RGB24,
+                                  GLIM_HEADER_SIZE)
+                for frame_data in frames:
+                    f.write(frame_data)
 
         print(f"Written to {output_path}")
     finally:

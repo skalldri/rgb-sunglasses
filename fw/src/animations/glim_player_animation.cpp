@@ -39,6 +39,7 @@ void GlimPlayerAnimation::setActive(bool active) {
 
 void GlimPlayerAnimation::openCurrentFile(size_t index) {
     currentFrame_ = 0;
+    loadedFrame_ = -1;  // frameBuf_ still holds the previous file's frame — force a re-read.
     accumulatedMs_ = 0;
     finishedOnce_ = false;
 
@@ -157,12 +158,18 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
         }
     }
 
-    int rc = decoder_.readFrame(currentFrame_, frameBuf_, sizeof(frameBuf_));
-    if (rc < 0) {
-        LOG_ERR("Failed to read frame %u: %d", currentFrame_, rc);
-        inErrorState_ = true;
-        renderError(renderer, timeSinceLastTickMs);
-        return;
+    // Only (re)decode when the displayed frame actually advances; otherwise re-render the frame
+    // already in frameBuf_. This keeps a format-4 (LZ4) frame decompressed once per displayed
+    // frame rather than once per (faster) render tick.
+    if (static_cast<int64_t>(currentFrame_) != loadedFrame_) {
+        int rc = decoder_.readFrame(currentFrame_, frameBuf_, sizeof(frameBuf_));
+        if (rc < 0) {
+            LOG_ERR("Failed to read frame %u: %d", currentFrame_, rc);
+            inErrorState_ = true;
+            renderError(renderer, timeSinceLastTickMs);
+            return;
+        }
+        loadedFrame_ = currentFrame_;
     }
 
     // The file's own width/height (already verified above to be <= the display's) are the
@@ -173,7 +180,15 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
     const size_t frameWidth = decoder_.header().width;
     const size_t frameHeight = decoder_.header().height;
 
-    if (decoder_.header().format == GlimDecoder::FrameFormat::Rgb24) {
+    // Both Rgb24 and Lz4PerFrameRgb24 hand back RGB24 pixels (readFrame() already
+    // decompressed the LZ4 variant into frameBuf_), so both render through
+    // getPixelRgb. The mono branch below covers Raw and Lz4PerFrame (1-bit). Missing
+    // Lz4PerFrameRgb24 here reinterprets colour bytes as a bitpacked mono bitmap —
+    // the panel then shows bright structured noise.
+    const GlimDecoder::FrameFormat fmt = decoder_.header().format;
+    const bool isRgb = (fmt == GlimDecoder::FrameFormat::Rgb24 ||
+                        fmt == GlimDecoder::FrameFormat::Lz4PerFrameRgb24);
+    if (isRgb) {
         for (size_t y = 0; y < renderer.displayHeight(); y++) {
             for (size_t x = 0; x < renderer.displayWidth(); x++) {
                 if (x < frameWidth && y < frameHeight) {
@@ -186,7 +201,7 @@ void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
             }
         }
     } else {
-        // FrameFormat::Raw: unpack bitpacked pixels using the color declared in the header.
+        // FrameFormat::Raw / Lz4PerFrame: unpack bitpacked pixels using the color declared in the header.
         const uint8_t cr = decoder_.header().monoColorR;
         const uint8_t cg = decoder_.header().monoColorG;
         const uint8_t cb = decoder_.header().monoColorB;
