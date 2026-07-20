@@ -762,3 +762,196 @@ ZTEST(glim_decoder_io, test_readframe_lz4_corrupt_record)
     dec.close();
     k_free(f0);
 }
+
+// ---------------------------------------------------------------------------
+// Lz4PerFrameRgb24 — malformed-file error paths (bounds/truncation handling)
+// ---------------------------------------------------------------------------
+
+/* Write a 24-byte Lz4PerFrameRgb24 header (frame_data_offset = 24 + nframes*4). */
+static void write_lz4_header(struct fs_file_t *f, uint16_t w, uint16_t h, uint32_t nframes) {
+    uint32_t data_off = 24u + nframes * 4u;
+    uint8_t hdr[24] = {
+        0x4D, 0x49, 0x4C, 0x47, 1, 24, 4, 24,
+        (uint8_t)(w), (uint8_t)(w >> 8), (uint8_t)(h), (uint8_t)(h >> 8),
+        (uint8_t)(nframes), (uint8_t)(nframes >> 8),
+        (uint8_t)(nframes >> 16), (uint8_t)(nframes >> 24),
+        (uint8_t)(data_off), (uint8_t)(data_off >> 8),
+        (uint8_t)(data_off >> 16), (uint8_t)(data_off >> 24),
+        0, 0, 0, 0,
+    };
+    zassert_equal(fs_write(f, hdr, 24), (ssize_t)24);
+}
+
+static void write_u32(struct fs_file_t *f, uint32_t v) {
+    uint8_t b[4] = { (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24) };
+    zassert_equal(fs_write(f, b, 4), (ssize_t)4);
+}
+
+static void write_u16(struct fs_file_t *f, uint16_t v) {
+    uint8_t b[2] = { (uint8_t)v, (uint8_t)(v >> 8) };
+    zassert_equal(fs_write(f, b, 2), (ssize_t)2);
+}
+
+/* open() rejects an LZ4 file whose declared frame exceeds the 40x12 panel bound. */
+ZTEST(glim_decoder_io, test_open_lz4_frame_too_large_rejected)
+{
+    /* 41x12x3 = 1476 > kMaxLz4FrameBytes (1440). */
+    const uint32_t fb = 41u * 12u * 3u;
+    uint8_t *f0 = (uint8_t *)k_malloc(fb);
+    zassert_not_null(f0, "k_malloc");
+    fill_rgb(f0, fb, 9, 9, 9);
+    const uint8_t *frames[1] = { f0 };
+
+    write_lz4_rgb24_glim("/TEST:/lz4_big.glim", 41, 12, 1, 24, frames);
+    GlimDecoder dec;
+    zassert_true(dec.open("/TEST:/lz4_big.glim") < 0, "oversized LZ4 frame must be rejected");
+    zassert_false(dec.isOpen());
+    k_free(f0);
+}
+
+/* A record whose compressed_size is 0 or exceeds the scratch buffer is rejected. */
+ZTEST(glim_decoder_io, test_readframe_lz4_bad_compressed_size)
+{
+    const uint32_t fb = 40u * 12u * 3u;
+    uint8_t *buf = (uint8_t *)k_malloc(fb);
+    zassert_not_null(buf, "k_malloc");
+
+    /* compressed_size = 0 */
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/TEST:/lz4_sz0.glim", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    write_lz4_header(&f, 40, 12, 1);
+    write_u32(&f, 28);   // index[0] -> record at offset 28
+    write_u16(&f, 0);    // compressed_size = 0
+    fs_close(&f);
+    GlimDecoder d0;
+    zassert_ok(d0.open("/TEST:/lz4_sz0.glim"));
+    zassert_equal(d0.readFrame(0, buf, fb), -EBADF);
+    d0.close();
+
+    /* compressed_size > scratch bound (0xFFFF) */
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/TEST:/lz4_szbig.glim", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    write_lz4_header(&f, 40, 12, 1);
+    write_u32(&f, 28);
+    write_u16(&f, 0xFFFF);
+    fs_close(&f);
+    GlimDecoder d1;
+    zassert_ok(d1.open("/TEST:/lz4_szbig.glim"));
+    zassert_equal(d1.readFrame(0, buf, fb), -EBADF);
+    d1.close();
+
+    k_free(buf);
+}
+
+/* frameCount claims more frames than the index table actually holds -> the index read
+ * for the missing entry hits EOF and is reported, not read out of bounds. */
+ZTEST(glim_decoder_io, test_readframe_lz4_truncated_index)
+{
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/TEST:/lz4_tidx.glim", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    write_lz4_header(&f, 40, 12, 2);   // says 2 frames (index table should be 8 bytes)
+    write_u32(&f, 32);                 // only index[0]; file ends here (index[1] missing)
+    fs_close(&f);
+
+    GlimDecoder dec;
+    zassert_ok(dec.open("/TEST:/lz4_tidx.glim"));
+    const uint32_t fb = 40u * 12u * 3u;
+    uint8_t *buf = (uint8_t *)k_malloc(fb);
+    zassert_not_null(buf, "k_malloc");
+    zassert_true(dec.readFrame(1, buf, fb) < 0, "missing index entry must fail");
+    k_free(buf);
+    dec.close();
+}
+
+/* A bad record offset can't yield the uint16 size field. Two flavours: an offset well
+ * past EOF (the seek itself fails) and one landing exactly at EOF (the seek succeeds but
+ * the 2-byte read comes up empty). */
+ZTEST(glim_decoder_io, test_readframe_lz4_truncated_size_field)
+{
+    const uint32_t fb = 40u * 12u * 3u;
+    uint8_t *buf = (uint8_t *)k_malloc(fb);
+    zassert_not_null(buf, "k_malloc");
+
+    /* index[0] far past the (28-byte) file: fs_seek fails. */
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/TEST:/lz4_tsz.glim", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    write_lz4_header(&f, 40, 12, 1);
+    write_u32(&f, 1000);
+    fs_close(&f);
+    GlimDecoder d0;
+    zassert_ok(d0.open("/TEST:/lz4_tsz.glim"));
+    zassert_true(d0.readFrame(0, buf, fb) < 0, "record offset past EOF must fail");
+    d0.close();
+
+    /* index[0] == 28 == file size: seek to EOF succeeds, but the size read gets 0 bytes. */
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/TEST:/lz4_tsz2.glim", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    write_lz4_header(&f, 40, 12, 1);
+    write_u32(&f, 28);   // points at its own end (file is exactly 28 bytes)
+    fs_close(&f);
+    GlimDecoder d1;
+    zassert_ok(d1.open("/TEST:/lz4_tsz2.glim"));
+    zassert_true(d1.readFrame(0, buf, fb) < 0, "size field at EOF must fail");
+    d1.close();
+
+    k_free(buf);
+}
+
+/* A record whose declared compressed_size runs past EOF fails the payload read. */
+ZTEST(glim_decoder_io, test_readframe_lz4_truncated_payload)
+{
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/TEST:/lz4_tpay.glim", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    write_lz4_header(&f, 40, 12, 1);
+    write_u32(&f, 28);         // index[0] -> record at 28
+    write_u16(&f, 500);        // says 500 compressed bytes...
+    uint8_t partial[10] = {};
+    fs_write(&f, partial, sizeof(partial));  // ...but only 10 are present
+    fs_close(&f);
+
+    GlimDecoder dec;
+    zassert_ok(dec.open("/TEST:/lz4_tpay.glim"));
+    const uint32_t fb = 40u * 12u * 3u;
+    uint8_t *buf = (uint8_t *)k_malloc(fb);
+    zassert_not_null(buf, "k_malloc");
+    zassert_true(dec.readFrame(0, buf, fb) < 0, "truncated payload must fail");
+    k_free(buf);
+    dec.close();
+}
+
+/* A valid LZ4 block that decompresses to fewer bytes than one full frame is rejected
+ * (the decoder requires the decoded length to equal frameBytes_). */
+ZTEST(glim_decoder_io, test_readframe_lz4_wrong_decoded_length)
+{
+    const uint32_t fb = 40u * 12u * 3u;   // expected 1440
+    /* Compress a deliberately short (100-byte) payload; it decodes to 100, not 1440. */
+    uint8_t small[100];
+    memset(small, 0x5A, sizeof(small));
+    int bound = LZ4_compressBound((int)sizeof(small));
+    uint8_t *comp = (uint8_t *)k_malloc(bound);
+    zassert_not_null(comp, "k_malloc");
+    int n = LZ4_compress_default((const char *)small, (char *)comp, (int)sizeof(small), bound);
+    zassert_true(n > 0, "compress");
+
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/TEST:/lz4_short.glim", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    write_lz4_header(&f, 40, 12, 1);
+    write_u32(&f, 28);
+    write_u16(&f, (uint16_t)n);
+    zassert_equal(fs_write(&f, comp, n), (ssize_t)n);
+    fs_close(&f);
+
+    GlimDecoder dec;
+    zassert_ok(dec.open("/TEST:/lz4_short.glim"));
+    uint8_t *buf = (uint8_t *)k_malloc(fb);
+    zassert_not_null(buf, "k_malloc");
+    zassert_true(dec.readFrame(0, buf, fb) < 0, "short decode must be rejected");
+    k_free(buf);
+    k_free(comp);
+    dec.close();
+}

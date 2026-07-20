@@ -669,6 +669,36 @@ ZTEST(glim_player_animation_di_io, test_oversized_dimensions_enters_error_state)
     anim->setActive(false);
 }
 
+/* A file that opens cleanly (valid header, in-range dimensions) but has no frame data makes
+ * readFrame() fail on the first tick -> the player enters the error state. Covers the
+ * decode-failure branch of the decode-on-advance path in tick(). */
+ZTEST(glim_player_animation_di_io, test_frame_read_failure_enters_error_state) {
+    reset_nand();
+    /* Header claims one 40x12 Rgb24 frame, but no frame bytes follow it. */
+    char path[64];
+    snprintf(path, sizeof(path), "%s/%s", glim_registry::kDirectory, "hdronly.glim");
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    writeHeader(&f, 3 /* Rgb24 */, 24, kWidth, kHeight, 1, 0, 0, 0);
+    fs_close(&f);
+    glim_registry::init();
+    size_t idx = indexOfName("hdronly.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    resetPixels();
+    anim->tick(renderer, 10);
+    zassert_true(anim->inErrorState_, "A frame read failure must enter the error state");
+    anim->setActive(false);
+}
+
 ZTEST(glim_player_animation_di_io, test_setactive_false_closes_decoder) {
     reset_nand();
     const uint8_t colors[1][3] = {{5, 5, 5}};
