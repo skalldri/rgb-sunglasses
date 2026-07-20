@@ -1,2 +1,7 @@
 build*/
 twister-out*/
+# CI firmware size-report artifacts (fw_size_report.py / build.yaml)
+build.log
+size.json
+baseline-size.json
+size-comment.md
