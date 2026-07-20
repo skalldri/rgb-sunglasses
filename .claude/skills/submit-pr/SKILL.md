@@ -1,6 +1,6 @@
 ---
 name: submit-pr
-description: Pre-PR validation gate for firmware — builds proto0, runs tests, checks patch coverage ≥ 50%, requires on-device + companion-app verification for any change touching device↔app communication, then creates the GitHub PR
+description: Pre-PR validation gate for firmware — builds proto0, runs tests, checks changed-line (patch) coverage > 70%, requires on-device + companion-app verification for any change touching device↔app communication, then creates the GitHub PR
 allowed-tools: Bash, Read, Task, AskUserQuestion, mcp__serial, mcp__execbro
 ---
 
@@ -66,7 +66,7 @@ cd app && npm run lint
 ```
 **Gate**: any of the three failing → stop; report all failures found.
 
-## 4. Check patch coverage ≥ 50%
+## 4. Check patch coverage > 70% (changed lines, not whole files)
 
 ```bash
 git diff --name-only origin/main...HEAD -- 'fw/src/**' | grep -E '\.(c|cpp)$'
@@ -74,13 +74,20 @@ git diff --name-only origin/main...HEAD -- 'fw/src/**' | grep -E '\.(c|cpp)$'
 
 If that prints nothing (header-only or non-source changes), skip this step. Otherwise run
 the pipeline in [references/patch-coverage.md](references/patch-coverage.md) against step
-2's `fw/twister-out/coverage.info` and read the `lines......:` percentage. **Gates**:
-- Below 50% → stop. Report which files are under-covered and do not submit the PR;
-  the user must add tests before proceeding.
-- Empty extracted tracefile → the changed files are not compiled into any test at
-  all: that counts as **0% coverage**, stop and report. The fix is a new suite
-  covering those files: `/add-fw-test`. Waiving this gate requires *explicit user
-  approval* AND a follow-up issue tracking the missing tests, recorded in the PR body
+2's `fw/twister-out/coverage.info`. It measures **changed-line (patch) coverage** — the
+fraction of the lines this branch *added/modified* that a test executes, the same metric
+Codecov's `codecov/patch` check enforces — and **exits non-zero when it is ≤ 70%**.
+Do NOT substitute whole-file `lcov --summary` coverage: it ignores which lines are new and
+gives a false pass (a PR read 87.7% whole-file while Codecov's patch coverage was 40.7%
+and failing). **Gates**:
+- Script exits non-zero (patch coverage ≤ 70%) → stop. It prints the exact uncovered
+  line numbers per file; add tests for those branches (`/add-fw-test`), re-run step 2, and
+  re-check. Do not submit the PR until it passes.
+- No executable added lines (`tot == 0`, script passes) is fine — the change is
+  comments/headers/declarations only. But a **new source file not compiled into any test**
+  shows up as all-lines-missing = 0% and fails. The fix is a suite covering it:
+  `/add-fw-test`. Waiving this gate requires *explicit user approval* AND a follow-up issue
+  tracking the missing tests, recorded in the PR body
   (precedent: PR #82's override, tracked by issue #83) — never waive silently.
 
 ## 5. On-device + companion-app verification (REQUIRED for anything touching device↔app communication)
