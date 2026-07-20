@@ -664,8 +664,12 @@ class RePair:
 def main():
     p = argparse.ArgumentParser(description="Fast, safe automated BLE re-pairing.")
     p.add_argument("--serial", help="adb serial (default: sole connected device)")
-    p.add_argument("--device-name", default="RGB Sunglasses Proto0 8996",
-                   help="EXACT full advertised name of the target board (never a prefix)")
+    p.add_argument("--device-name", required=True,
+                   help="EXACT full advertised name of the target board (never a prefix). "
+                        "Required — a wrong/defaulted name forgets another board's bond and then "
+                        "waits forever for a board that never advertises. Get it from the board's "
+                        "'bt_state' shell / boot log, or 'adb shell dumpsys bluetooth_manager | "
+                        "grep \"RGB Sunglasses\"'.")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--no-forget", dest="forget_mode", action="store_const", const="none")
     g.add_argument("--forget-only", dest="forget_mode", action="store_const", const="only")

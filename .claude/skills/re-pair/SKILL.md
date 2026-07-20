@@ -41,8 +41,16 @@ No firmware change — random passkey and full L4/authenticated security are unc
 
 ## Run
 
+**ALWAYS pass `--device-name "<exact advertised name>"`.** Never rely on the script's
+default — a wrong name makes it forget some *other* board's bond and then wait for a
+board that never advertises (every attempt times out). Get the exact name first from the
+board's own shell (`bt_state` / the boot `BT device name:` log) or the phone's bond list
+(`adb shell dumpsys bluetooth_manager | grep "RGB Sunglasses"`), e.g. `RGB Sunglasses
+Proto0 94E0`. The suffix is per-board (derived from its BT identity), so it differs
+between physical boards.
+
 ```bash
-scripts/re-pair.sh
+scripts/re-pair.sh --device-name "RGB Sunglasses Proto0 94E0"
 ```
 
 Flags:
