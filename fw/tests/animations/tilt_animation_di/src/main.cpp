@@ -5,31 +5,34 @@
 
 namespace {
 
+/* Gyro-driven mock IMU source. Accel is unused by the gyro-based Tilt animation
+ * but the interface still requires the accessors, so they return zero. */
 class MutableImuSource : public AnimationImuSource {
    public:
     void update() override {}
 
-    float getAccelX() const override { return accel_x_; }
-    float getAccelY() const override { return accel_y_; }
-    float getAccelZ() const override { return accel_z_; }
-    float getGyroX() const override { return 0.0f; }
-    float getGyroY() const override { return 0.0f; }
-    float getGyroZ() const override { return 0.0f; }
+    float getAccelX() const override { return 0.0f; }
+    float getAccelY() const override { return 0.0f; }
+    float getAccelZ() const override { return 0.0f; }
+    float getGyroX() const override { return gyro_x_; }
+    float getGyroY() const override { return gyro_y_; }
+    float getGyroZ() const override { return gyro_z_; }
 
-    void setAccel(float x, float y, float z) {
-        accel_x_ = x;
-        accel_y_ = y;
-        accel_z_ = z;
+    void setGyro(float x, float y, float z) {
+        gyro_x_ = x;
+        gyro_y_ = y;
+        gyro_z_ = z;
     }
 
    private:
-    float accel_x_ = 0.0f;
-    float accel_y_ = 0.0f;
-    float accel_z_ = -9.81f;
+    float gyro_x_ = 0.0f;
+    float gyro_y_ = 0.0f;
+    float gyro_z_ = 0.0f;
 };
 
 static constexpr size_t kTestWidth = 40;
 static constexpr size_t kTestHeight = 12;
+static constexpr size_t kTickMs = 16;
 
 struct PixelColor {
     uint8_t r = 0, g = 0, b = 0;
@@ -77,6 +80,12 @@ bool allPixelsNonBlack() {
     return true;
 }
 
+void copyCapture(PixelColor dst[kTestWidth][kTestHeight]) {
+    for (size_t x = 0; x < kTestWidth; x++)
+        for (size_t y = 0; y < kTestHeight; y++)
+            dst[x][y] = sPixels[x][y];
+}
+
 /* Compare two captured frames — returns true if they differ in at least one pixel. */
 bool framesAreDifferent(PixelColor other[kTestWidth][kTestHeight]) {
     for (size_t x = 0; x < kTestWidth; x++) {
@@ -88,6 +97,21 @@ bool framesAreDifferent(PixelColor other[kTestWidth][kTestHeight]) {
         }
     }
     return false;
+}
+
+/* Reset the animation, apply a constant gyro rate, tick `ticks` times, and leave
+ * the final frame in sPixels. */
+void renderMotion(TiltAnimation *anim, MutableImuSource &imu, float gx, float gy, float gz,
+                  size_t ticks) {
+    imu.setGyro(gx, gy, gz);
+    anim->setImuSource(&imu);
+    anim->init();
+
+    CapturingTestRenderer renderer;
+    resetCapture();
+    for (size_t i = 0; i < ticks; i++) {
+        anim->tick(renderer, kTickMs);
+    }
 }
 }  // namespace
 
@@ -101,68 +125,70 @@ ZTEST(tilt_animation_di_tests, test_no_source_renders_black) {
 
     CapturingTestRenderer renderer;
     resetCapture();
-    anim->tick(renderer, 16);
+    anim->tick(renderer, kTickMs);
 
     zassert_true(allPixelsDark(), "Display should be all black with no IMU source injected");
 }
 
-/* With a flat IMU (accel_x=0, accel_z=-9.81) the display fills with rainbow colors. */
-ZTEST(tilt_animation_di_tests, test_flat_renders_rainbow) {
+/* Stationary (all gyro rates zero) still fills the display with rainbow colors. */
+ZTEST(tilt_animation_di_tests, test_stationary_renders_rainbow) {
     MutableImuSource imu;
-    imu.setAccel(0.0f, 0.0f, -9.81f);  /* flat / level */
-
     TiltAnimation *anim = TiltAnimation::getInstance();
-    anim->setImuSource(&imu);
-    anim->init();
 
-    CapturingTestRenderer renderer;
-    resetCapture();
-    anim->tick(renderer, 16);
+    renderMotion(anim, imu, 0.0f, 0.0f, 0.0f, /*ticks=*/1);
 
-    zassert_true(allPixelsNonBlack(), "Flat tilt should produce a fully-lit rainbow display");
+    zassert_true(allPixelsNonBlack(), "Stationary Tilt should produce a fully-lit rainbow display");
 }
 
-/* Tilting left (accel_x < 0) vs right (accel_x > 0) shifts the displayed hues. */
-ZTEST(tilt_animation_di_tests, test_tilt_changes_output) {
+/* Yaw rate (gyro about +X) scrolls the rainbow — output differs from stationary. */
+ZTEST(tilt_animation_di_tests, test_yaw_scrolls_output) {
     MutableImuSource imu;
     TiltAnimation *anim = TiltAnimation::getInstance();
-    anim->setImuSource(&imu);
-    anim->init();
 
-    CapturingTestRenderer renderer;
+    renderMotion(anim, imu, 0.0f, 0.0f, 0.0f, 1);
+    PixelColor stationary[kTestWidth][kTestHeight];
+    copyCapture(stationary);
 
-    /* Capture left-tilt frame. */
-    imu.setAccel(-9.81f, 0.0f, 0.0f);
-    resetCapture();
-    anim->tick(renderer, 16);
+    renderMotion(anim, imu, 5.0f, 0.0f, 0.0f, 1);
 
-    PixelColor left[kTestWidth][kTestHeight];
-    for (size_t x = 0; x < kTestWidth; x++)
-        for (size_t y = 0; y < kTestHeight; y++)
-            left[x][y] = sPixels[x][y];
-
-    /* Capture right-tilt frame. */
-    imu.setAccel(+9.81f, 0.0f, 0.0f);
-    resetCapture();
-    anim->tick(renderer, 16);
-
-    zassert_true(framesAreDifferent(left),
-                 "Left-tilt and right-tilt should produce different pixel colors");
+    zassert_true(framesAreDifferent(stationary), "Yaw motion should scroll the rainbow");
 }
 
-/* Clamping: accel_x far outside ±1g must not crash or produce black pixels. */
-ZTEST(tilt_animation_di_tests, test_extreme_accel_clamped) {
+/* Pitch rate (gyro about +Y) scrolls the rainbow — output differs from stationary. */
+ZTEST(tilt_animation_di_tests, test_pitch_scrolls_output) {
     MutableImuSource imu;
-    imu.setAccel(100.0f, 0.0f, 0.0f);  /* way beyond ±9.81 */
-
     TiltAnimation *anim = TiltAnimation::getInstance();
-    anim->setImuSource(&imu);
-    anim->init();
 
-    CapturingTestRenderer renderer;
-    resetCapture();
-    anim->tick(renderer, 16);
+    renderMotion(anim, imu, 0.0f, 0.0f, 0.0f, 1);
+    PixelColor stationary[kTestWidth][kTestHeight];
+    copyCapture(stationary);
 
-    zassert_true(allPixelsNonBlack(),
-                 "Extreme accel should be clamped, not produce a black display");
+    renderMotion(anim, imu, 0.0f, 5.0f, 0.0f, 1);
+
+    zassert_true(framesAreDifferent(stationary), "Pitch motion should scroll the rainbow");
+}
+
+/* Roll rate (gyro about +Z) rotates the rainbow axis — output differs from stationary. */
+ZTEST(tilt_animation_di_tests, test_roll_rotates_output) {
+    MutableImuSource imu;
+    TiltAnimation *anim = TiltAnimation::getInstance();
+
+    renderMotion(anim, imu, 0.0f, 0.0f, 0.0f, 1);
+    PixelColor stationary[kTestWidth][kTestHeight];
+    copyCapture(stationary);
+
+    /* A few ticks of roll to accumulate a clear rotation. */
+    renderMotion(anim, imu, 0.0f, 0.0f, 5.0f, 3);
+
+    zassert_true(framesAreDifferent(stationary), "Roll motion should rotate the rainbow axis");
+}
+
+/* Large gyro rates must not crash or produce black pixels (fmodf wrap handles it). */
+ZTEST(tilt_animation_di_tests, test_large_gyro_stays_lit) {
+    MutableImuSource imu;
+    TiltAnimation *anim = TiltAnimation::getInstance();
+
+    renderMotion(anim, imu, 1000.0f, -1000.0f, 1000.0f, 5);
+
+    zassert_true(allPixelsNonBlack(), "Extreme gyro rates should stay lit, not produce black");
 }
