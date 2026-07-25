@@ -215,6 +215,29 @@ void rgbx_tick(void);
 #define RGBX_SYM_INIT "rgbx_init"
 #define RGBX_SYM_TICK "rgbx_tick"
 
+/*
+ * === Optional exports ======================================================
+ * Optional capabilities are negotiated by SYMBOL PRESENCE, not by the ABI
+ * version: the host resolves each of these with a nullptr-tolerant
+ * llext_find_sym() and applies a documented default when the symbol is
+ * absent. This keeps RGBX_ABI_VERSION reserved for breaking layout changes —
+ * an extension built before an optional export existed keeps loading and
+ * running unchanged (decided on issue #121; a version bump would have
+ * rejected every already-provisioned .llext for a purely advisory signal).
+ * An optional export that IS present is still bounds-checked like the
+ * required ones; a present-but-invalid symbol rejects the extension.
+ */
+
+/** @brief OPTIONAL. If exported, the extension sets it during rgbx_tick():
+ *  nonzero means the frame just rendered ended at a natural switch boundary
+ *  (end of a scroll/clip/cycle), so shuffle mode (issue #121) may switch to
+ *  another animation without visual jarring. Absent symbol = every frame is
+ *  a good moment (the same default built-in animations get). Must be a
+ *  writable global (extension .data/.bss, not .rodata). */
+extern uint8_t rgbx_good_moment;
+
+#define RGBX_SYM_GOOD_MOMENT "rgbx_good_moment"
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

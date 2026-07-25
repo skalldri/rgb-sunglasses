@@ -16,6 +16,14 @@ BaseAnimation *animation_registry_get(Animation id);
 
 size_t animation_registry_count();
 
+/**
+ * @brief Registered animation id at `index` (registration order), or Animation::None if
+ * index >= animation_registry_count(). Note index 0 is normally the real None entry
+ * (registered first by animation_registry_register_defaults()) — callers filtering out
+ * None, like the shuffle pool, are unaffected by the sentinel overloading.
+ */
+Animation animation_registry_id_at(size_t index);
+
 void animation_registry_init_registered();
 
 void animation_registry_set_is_active(Animation id, bool active);

@@ -20,6 +20,7 @@ void GlimPlayerAnimation::init() {
     accumulatedMs_ = 0;
     inErrorState_ = false;
     finishedOnce_ = false;
+    atGoodSwitchPoint_ = false;
     errorScrollOffset_ = 0;
     errorScrollAccumMs_ = 0;
 }
@@ -65,6 +66,10 @@ void GlimPlayerAnimation::openCurrentFile(size_t index) {
 }
 
 void GlimPlayerAnimation::onClipFinished() {
+    // End of file is a good switch point regardless of loop mode (issue #121) — this fires
+    // before the mode-specific branch decides whether to replay, advance, or freeze.
+    atGoodSwitchPoint_ = true;
+
     switch (deps_->loopModeSource.get()) {
         case GlimLoopMode::LoopOne:
             currentFrame_ = 0;
@@ -92,6 +97,9 @@ void GlimPlayerAnimation::onClipFinished() {
 }
 
 void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
+    // Only a tick that reaches onClipFinished() below is a good switch point.
+    atGoodSwitchPoint_ = false;
+
     if (!deps_) {
         for (size_t x = 0; x < renderer.displayWidth(); x++) {
             for (size_t y = 0; y < renderer.displayHeight(); y++) {

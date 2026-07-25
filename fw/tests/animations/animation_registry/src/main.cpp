@@ -128,3 +128,26 @@ ZTEST(animation_registry_tests, test_init_registered_before_any_registration_is_
     // Should not crash with zero registrations
     animation_registry_init_registered();
 }
+
+ZTEST(animation_registry_tests, test_id_at_returns_ids_in_registration_order) {
+    reset_test_state();
+    animation_registry_register(Animation::Text, first_factory);
+    animation_registry_register(Animation::Rainbow, second_factory);
+
+    zassert_equal((int)animation_registry_id_at(0), (int)Animation::Text,
+                  "Index 0 must be the first-registered id");
+    zassert_equal((int)animation_registry_id_at(1), (int)Animation::Rainbow,
+                  "Index 1 must be the second-registered id");
+}
+
+ZTEST(animation_registry_tests, test_id_at_out_of_range_returns_none) {
+    reset_test_state();
+    zassert_equal((int)animation_registry_id_at(0), (int)Animation::None,
+                  "Empty registry must return None for any index");
+
+    animation_registry_register(Animation::Text, first_factory);
+    zassert_equal((int)animation_registry_id_at(1), (int)Animation::None,
+                  "Index == count must return None");
+    zassert_equal((int)animation_registry_id_at(9999), (int)Animation::None,
+                  "Far out-of-range index must return None");
+}

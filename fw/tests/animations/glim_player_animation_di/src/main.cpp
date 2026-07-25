@@ -559,6 +559,62 @@ ZTEST(glim_player_animation_di_io, test_stopafterone_freezes_last_frame) {
     anim->setActive(false);
 }
 
+ZTEST(glim_player_animation_di_io, test_good_switch_point_pulses_at_clip_end) {
+    reset_nand();
+    const uint8_t colors[1][3] = {{10, 20, 30}};
+    writeRgb24Glim("good_a.glim", colors, 1, 24);  // 41 ms/frame, single frame
+    glim_registry::init();
+    size_t idx = indexOfName("good_a.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+    zassert_false(anim->isAtGoodSwitchPoint(), "must not be a switch point before any tick");
+
+    CapturingRenderer renderer;
+    anim->tick(renderer, 10);  // opens file, frame 0 — mid-clip
+    zassert_false(anim->isAtGoodSwitchPoint(), "mid-clip must not be a switch point");
+
+    anim->tick(renderer, 50);  // crosses the 41 ms boundary -> onClipFinished (LoopOne wrap)
+    zassert_true(anim->isAtGoodSwitchPoint(),
+                 "the clip-end tick must be a good switch point even when looping");
+
+    anim->tick(renderer, 10);  // wrapped, playing again — the pulse must clear
+    zassert_false(anim->isAtGoodSwitchPoint(),
+                  "switch point must be a one-tick pulse while the clip replays");
+    anim->setActive(false);
+}
+
+ZTEST(glim_player_animation_di_io, test_good_switch_point_latched_after_stopafterone) {
+    reset_nand();
+    const uint8_t colors[1][3] = {{1, 2, 3}};
+    writeRgb24Glim("good_b.glim", colors, 1, 24);
+    glim_registry::init();
+    size_t idx = indexOfName("good_b.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::StopAfterOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    anim->tick(renderer, 10);
+    anim->tick(renderer, 50);  // clip finishes -> finishedOnce_ latches
+    zassert_true(anim->finishedOnce_);
+
+    // Frozen on the last frame: permanently a good switch point (shuffle must be able
+    // to leave a finished clip at any time, not just on the finishing tick).
+    anim->tick(renderer, 1000);
+    zassert_true(anim->isAtGoodSwitchPoint(),
+                 "a StopAfterOne-frozen clip must stay a good switch point");
+    anim->setActive(false);
+}
+
 ZTEST(glim_player_animation_di_io, test_button_press_advances_selection) {
     reset_nand();
     const uint8_t colorsA[1][3] = {{1, 1, 1}};

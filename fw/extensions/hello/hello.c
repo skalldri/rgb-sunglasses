@@ -37,6 +37,9 @@
 
 struct rgbx_inputs rgbx_inputs;
 uint8_t rgbx_framebuffer[WIDTH * HEIGHT * 3u];
+/* OPTIONAL export (see rgbx_api.h "Optional exports"): demos the flat-C path for the
+ * shuffle good-switch-point signal — set each tick at the scan-head wrap below. */
+uint8_t rgbx_good_moment;
 
 static const struct rgbx_param_desc params[] = {
 	RGBX_PARAM("Speed", RGBX_PARAM_UINT32, 50),
@@ -132,6 +135,10 @@ void rgbx_tick(void)
 		set_px(x, headY, cr, cg, cb);
 	}
 
+	/* Shuffle's good-moment signal (issue #121): the scan-head wrapping back to
+	 * column 0 is this animation's natural cycle boundary. */
+	rgbx_good_moment = (base == 0u) ? 1u : 0u;
+
 	/* --- audio: bottom row = 20-bucket spectrum, top row = beat flash --- */
 	for (uint32_t bkt = 0; bkt < RGBX_AUDIO_NUM_DISPLAY_BUCKETS; bkt++) {
 		float e = rgbx_inputs.audio_display_bucket[bkt];
@@ -172,3 +179,4 @@ EXPORT_SYMBOL(rgbx_inputs);
 EXPORT_SYMBOL(rgbx_framebuffer);
 EXPORT_SYMBOL(rgbx_init);
 EXPORT_SYMBOL(rgbx_tick);
+EXPORT_SYMBOL(rgbx_good_moment);

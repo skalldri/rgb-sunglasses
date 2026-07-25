@@ -193,3 +193,41 @@ ZTEST(text_animation_di_tests, test_empty_slot_does_not_advance_every_tick) {
     zassert_equal(upNextSource.index, indexAfterInit + 1,
                   "Empty slot should advance exactly once after the dwell floor elapses");
 }
+
+ZTEST(text_animation_di_tests, test_good_switch_point_only_at_end_of_scroll) {
+    ConstUint32Source stepTimeMs(1);  // scroll 1 px per tick (dt below always exceeds this)
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+    zassert_false(animation->isAtGoodSwitchPoint(), "must not be a switch point after init");
+
+    const size_t indexAfterInit = upNextSource.index;
+    NullTestRenderer renderer;
+
+    // Scroll until the message finishes; every tick before the finishing one must NOT
+    // be a good switch point, and the finishing tick (the one that consumes the next
+    // slot) must be.
+    bool sawGood = false;
+    for (int i = 0; i < 5000; i++) {
+        animation->tick(renderer, 20);
+        if (animation->isAtGoodSwitchPoint()) {
+            sawGood = true;
+            break;
+        }
+        zassert_equal(upNextSource.index, indexAfterInit,
+                      "advanced to the next message without signalling a switch point");
+    }
+    zassert_true(sawGood, "end of scroll never became a good switch point");
+    zassert_equal(upNextSource.index, indexAfterInit + 1,
+                  "the good-switch-point tick must be the message-advance tick");
+
+    // The next tick starts the new message: the pulse must clear.
+    animation->tick(renderer, 20);
+    zassert_false(animation->isAtGoodSwitchPoint(),
+                  "switch point must be a one-tick pulse, not a latched state");
+}

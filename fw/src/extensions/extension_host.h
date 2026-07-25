@@ -58,6 +58,15 @@ bool isLoaded(size_t slot);
  *  not been reset via clearFault(). */
 bool isFaulted(size_t slot);
 
+/**
+ * @brief Shuffle mode's good-switch-point signal for a slot (issue #121): the value the
+ * extension's optional rgbx_good_moment export held after its most recent completed
+ * tick. True when the slot is invalid, faulted, not yet loaded, or its extension does
+ * not export the symbol (absent symbol = every frame is a good moment) — so shuffle can
+ * always escape a fault banner or a never-loading extension.
+ */
+bool atGoodSwitchPoint(size_t slot);
+
 /** @brief Display name copied out of the manifest, or nullptr. */
 const char *name(size_t slot);
 

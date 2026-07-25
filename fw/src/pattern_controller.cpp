@@ -20,6 +20,11 @@
 #endif
 #if defined(CONFIG_APP_EXTENSION_HOST)
 #include <extensions/extension_host.h>
+#include <extensions/extension_limits.h>
+#endif
+#if defined(CONFIG_APP_SHUFFLE)
+#include <animations/shuffle_controller.h>
+#include <zephyr/random/random.h>
 #endif
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -138,6 +143,45 @@ struct LastActiveAnimationRegistrar {
     }
 };
 [[maybe_unused]] LastActiveAnimationRegistrar sLastActiveAnimationRegistrar;
+
+#if defined(CONFIG_APP_SHUFFLE)
+
+// Production adapters for the ShuffleController seams (issue #121): the pool is the
+// animation registry (which already contains extension slots), the config is the Core
+// Config service's shuffle characteristics.
+class RegistryShufflePool : public ShuffleAnimationPool {
+   public:
+    size_t count() override { return animation_registry_count(); }
+    Animation idAt(size_t index) override { return animation_registry_id_at(index); }
+    bool isEligible(Animation id) override {
+        if (id == Animation::None) {
+            return false;  // "all LEDs off" is not a show entry
+        }
+#if defined(CONFIG_APP_EXTENSION_HOST)
+        const uint32_t v = static_cast<uint32_t>(id);
+        if (v >= extension_host::kAnimationIdBase &&
+            extension_host::isFaulted(v - extension_host::kAnimationIdBase)) {
+            return false;  // never shuffle INTO a faulted extension (escape is separate)
+        }
+#endif
+        return true;
+    }
+};
+
+class CoreConfigShuffleSource : public ShuffleConfigSource {
+   public:
+    bool enabled() override { return CoreConfig::getInstance().getShuffleEnabled(); }
+    uint32_t minDurationS() override { return CoreConfig::getInstance().getShuffleMinDurationS(); }
+    uint32_t maxDurationS() override { return CoreConfig::getInstance().getShuffleMaxDurationS(); }
+};
+
+RegistryShufflePool sShufflePool;
+CoreConfigShuffleSource sShuffleConfigSource;
+// sys_rand32_get is entropy-seeded on proto0 (same source matrix_code_animation uses).
+ShuffleController sShuffleController(sShufflePool, sShuffleConfigSource, sys_rand32_get,
+                                     static_cast<uint64_t>(CONFIG_APP_SHUFFLE_GRACE_S) * 1000u);
+
+#endif  // CONFIG_APP_SHUFFLE
 
 }  // namespace
 
@@ -283,6 +327,25 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
             if (ret) {
                 LOG_ERR("Failed to release render buffer!");
             }
+
+#if defined(CONFIG_APP_SHUFFLE)
+            // Shuffle step (issue #121): runs on this thread only — the one context
+            // where change_to_animation + a lazy extension load are already done from
+            // (see the boot restore below the loop head). Skipped while an indicator
+            // overlay is active, since the indicator is what's actually ticking then and
+            // the selected animation's good-moment flag would be stale.
+            if (currentIndicator == Indicator::None) {
+                BaseAnimation *shuffleCur = anim;  // == getAnimation(currentAnimation) here
+                const ShuffleController::Decision d = sShuffleController.onFrame(
+                    currentAnimation, static_cast<uint32_t>(kTargetRenderIntervalMs),
+                    shuffleCur ? shuffleCur->isAtGoodSwitchPoint() : true);
+                if (d.switchNow) {
+                    // persist=false: shuffle hops must not churn settings flash — the
+                    // last MANUALLY chosen animation stays the persisted boot animation.
+                    pattern_controller_change_to_animation(d.next, false);
+                }
+            }
+#endif
         }
 
         int64_t endTicks = k_uptime_ticks();
@@ -486,10 +549,54 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
               cmd_anim_indicator_clear),
     SHELL_SUBCMD_SET_END);
 
+#if defined(CONFIG_APP_SHUFFLE)
+
+static int cmd_anim_shuffle_status(const struct shell *shell, size_t argc, char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    CoreConfig &cfg = CoreConfig::getInstance();
+    shell_print(shell, "shuffle: %s, min: %u s, max: %u s, grace: %u s",
+                cfg.getShuffleEnabled() ? "on" : "off", cfg.getShuffleMinDurationS(),
+                cfg.getShuffleMaxDurationS(), CONFIG_APP_SHUFFLE_GRACE_S);
+    return 0;
+}
+
+static int cmd_anim_shuffle_on(const struct shell *shell, size_t argc, char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    CoreConfig::getInstance().setShuffleEnabled(true);
+    shell_print(shell, "shuffle on");
+    return 0;
+}
+
+static int cmd_anim_shuffle_off(const struct shell *shell, size_t argc, char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    CoreConfig::getInstance().setShuffleEnabled(false);
+    shell_print(shell, "shuffle off");
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(
+    sub_anim_shuffle,
+    SHELL_CMD(status, NULL, "Print shuffle enable/min/max/grace", cmd_anim_shuffle_status),
+    SHELL_CMD(on, NULL, "Enable shuffle mode", cmd_anim_shuffle_on),
+    SHELL_CMD(off, NULL, "Disable shuffle mode", cmd_anim_shuffle_off), SHELL_SUBCMD_SET_END);
+
+#define ANIM_SHUFFLE_SHELL_CMD \
+    SHELL_CMD(shuffle, &sub_anim_shuffle, "Shuffle mode commands (issue #121)", NULL),
+#else
+#define ANIM_SHUFFLE_SHELL_CMD
+#endif
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_anim, SHELL_CMD(set, &sub_anim_set, "Switch to a named animation", NULL),
     SHELL_CMD(get, NULL, "Print the current animation name", cmd_anim_get),
-    SHELL_CMD(indicator, &sub_anim_indicator, "Indicator commands", NULL), SHELL_SUBCMD_SET_END);
+    SHELL_CMD(indicator, &sub_anim_indicator, "Indicator commands", NULL),
+    ANIM_SHUFFLE_SHELL_CMD SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(anim, &sub_anim, "Animation commands", NULL);
 

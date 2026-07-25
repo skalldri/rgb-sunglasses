@@ -43,6 +43,7 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
 
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
+    bool isAtGoodSwitchPoint() const override { return atGoodSwitchPoint_; }
 
    private:
     const char *getStringFromSlot(size_t slot);
@@ -64,6 +65,10 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
     size_t currentMessageDwellMs = 0;
 
     int32_t currentTextOffset = 0;
+
+    // True only for the tick on which the current message finished scrolling (the frame
+    // the next slot is loaded) — the natural boundary shuffle mode waits for.
+    bool atGoodSwitchPoint_ = false;
 };
 
 void text_animation_bind_default_dependencies();

@@ -13,6 +13,8 @@ Never write to `~/.claude/projects/` or any other `~/.claude/` path for persiste
 
 ## Working with hardware
 
+**Never run `/check-hardware` (or anything else that calls `adb kill-server`) while an app deploy/install is in flight.** The skill restarts the adb server as part of its phone probe, which kills any in-progress `adb install` — observed 2026-07-25: an `expo run:android` install failed with a bare exit-1 because check-hardware was run right after a firmware flash while the install was streaming. Board-side re-enumeration checks after a flash can use `lsusb | grep 2fe3` + `fix-usb-dev-nodes.sh` directly when Metro/expo is mid-deploy.
+
 **Always check for device presence with the `/check-hardware` skill (`.devcontainer/scripts/check-hardware.sh`), never a bare `adb devices` / `lsusb`.** The skill applies USB device-node fixes (re-triggers enumeration/authorization) as part of the check, so a device that a raw `adb devices` reports as NOT CONNECTED can show up correctly once check-hardware runs. Do not conclude "no phone/board attached" from a bare `adb devices` — run check-hardware first (observed 2026-07-19: `adb devices` empty, check-hardware then reported the phone CONNECTED over USB).
 
 Hardware iterations are slow and mistakes can cause damage. Before flashing anything:

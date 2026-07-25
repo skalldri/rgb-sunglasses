@@ -56,6 +56,10 @@ class ExtensionAnimationProxy : public BaseAnimation {
         animation_registry_set_is_active(extension_host::animationId(slot_), running);
     }
 
+    bool isAtGoodSwitchPoint() const override {
+        return extension_host::atGoodSwitchPoint(slot_);
+    }
+
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override {
         if (extension_host::tick(slot_, timeSinceLastTickMs, renderer)) {
             return;

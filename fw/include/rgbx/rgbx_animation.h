@@ -63,6 +63,14 @@ class Animation {
      *  setPixel()/fill(). @param dt_ms nominal ms since the previous tick. */
     virtual void tick(uint32_t dt_ms) = 0;
 
+    /** @brief Queried after every tick(): return true when the frame just rendered
+     *  ended at a natural switch boundary (end of a scroll/clip/cycle), so shuffle
+     *  mode (issue #121) may switch away without visual jarring. Default: every
+     *  frame is a good moment — matching built-in animations with no override.
+     *  Backed by the optional rgbx_good_moment export, which RGBX_ANIMATION()
+     *  always emits for wrapper-based extensions. */
+    virtual bool goodMoment() const { return true; }
+
    protected:
     /* Non-virtual on purpose: instances are static and never deleted
      * polymorphically, and a virtual destructor would drag in operator
@@ -209,12 +217,17 @@ class Animation {
         NULL __VA_OPT__(? NULL : rgbx_wrapper_params_),                                         \
     };                                                                                          \
     static ClassName rgbx_wrapper_instance_;                                                    \
+    uint8_t rgbx_good_moment;                                                                   \
     void rgbx_init(void) { rgbx_wrapper_instance_.init(); }                                     \
-    void rgbx_tick(void) { rgbx_wrapper_instance_.tick(rgbx_inputs.dt_ms); }                    \
+    void rgbx_tick(void) {                                                                      \
+        rgbx_wrapper_instance_.tick(rgbx_inputs.dt_ms);                                         \
+        rgbx_good_moment = rgbx_wrapper_instance_.goodMoment() ? 1u : 0u;                       \
+    }                                                                                           \
     EXPORT_SYMBOL(rgbx_manifest);                                                               \
     EXPORT_SYMBOL(rgbx_inputs);                                                                 \
     EXPORT_SYMBOL(rgbx_framebuffer);                                                            \
     EXPORT_SYMBOL(rgbx_init);                                                                   \
-    EXPORT_SYMBOL(rgbx_tick)
+    EXPORT_SYMBOL(rgbx_tick);                                                                   \
+    EXPORT_SYMBOL(rgbx_good_moment)
 
 #endif /* RGBX_ANIMATION_H_ */
