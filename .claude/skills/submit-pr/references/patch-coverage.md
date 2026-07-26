@@ -19,7 +19,9 @@ python3 - fw/twister-out/coverage.info <<'PY'
 import re, subprocess, sys, collections
 info = sys.argv[1]
 
-# 1. Added executable lines per changed C/C++ source file, from the diff vs main.
+# 1. Added executable lines per changed C/C++ file, from the diff vs main.
+#    Headers INCLUDED: inline/template code in a .h compiled into a test app is
+#    lcov-instrumented, and codecov/patch counts it (issue #245 / PR #244).
 diff = subprocess.run(
     ["git", "diff", "--unified=0", "origin/main...HEAD", "--", "fw/src"],
     capture_output=True, text=True).stdout
@@ -31,7 +33,7 @@ for l in diff.splitlines():
     elif l.startswith("@@"):
         newln = int(re.search(r'\+(\d+)', l).group(1))
     elif l.startswith("+") and not l.startswith("+++"):
-        if cur and cur.endswith((".c", ".cpp")):
+        if cur and cur.endswith((".c", ".cpp", ".h", ".hpp")):
             added[cur].add(newln)
         newln += 1
     elif not l.startswith("-"):
@@ -73,11 +75,13 @@ gate on its exit status directly.
 
 Notes:
 
-- **`tot == 0` (no executable added lines)** — the change is comments, headers,
+- **`tot == 0` (no executable added lines)** — the change is comments,
   declarations, or non-`fw/src` files only. The script passes (exit 0); there is
-  nothing to cover. (A change that adds a whole new *file* never compiled into a
-  test still shows up here as its executable lines all MISSING — that is the
-  0%-coverage case, and it fails.)
+  nothing to cover. Do NOT read "it's only a header" as tot==0 territory:
+  inline/template code in a `.h` that any test app compiles IS instrumented and
+  counted — by this script and by Codecov alike (issue #245). (A change that
+  adds a whole new *file* never compiled into a test still shows up here as its
+  executable lines all MISSING — that is the 0%-coverage case, and it fails.)
 - The uncovered line numbers it prints are the actionable output: add tests that
   exercise those branches (`/add-fw-test`), re-run step 2, re-run this.
 - Waiving the gate needs explicit user approval **and** a follow-up issue, both

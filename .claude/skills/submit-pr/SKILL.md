@@ -69,10 +69,14 @@ cd app && npm run lint
 ## 4. Check patch coverage > 70% (changed lines, not whole files)
 
 ```bash
-git diff --name-only origin/main...HEAD -- 'fw/src/**' | grep -E '\.(c|cpp)$'
+git diff --name-only origin/main...HEAD -- 'fw/src/**' | grep -E '\.(c|cpp|h|hpp)$'
 ```
 
-If that prints nothing (header-only or non-source changes), skip this step. Otherwise run
+Headers count: template/inline code in a `.h` compiled into a test app is
+lcov-instrumented, and Codecov's `codecov/patch` counts it (issue #245 — PR #244
+passed a `.c/.cpp`-only local gate, then failed CI at 0% on one changed
+`bt_service_cpp.h` line). If the command prints nothing (non-source changes
+only), skip this step. Otherwise run
 the pipeline in [references/patch-coverage.md](references/patch-coverage.md) against step
 2's `fw/twister-out/coverage.info`. It measures **changed-line (patch) coverage** — the
 fraction of the lines this branch *added/modified* that a test executes, the same metric
