@@ -57,6 +57,14 @@ void pattern_controller_thread_func(void *a, void *b, void *c);
 K_KERNEL_THREAD_DEFINE(pattern_controller_thread, 4096, pattern_controller_thread_func, NULL, NULL,
                        NULL, 6, 0, 0);
 
+// Intentionally unsynchronized: written from the BT thread (via
+// PatternControllerBtObserver), the shell thread (`anim indicator ...`) and this file's
+// own thread, and read every render tick. Each access is a single aligned enum store or
+// load, and every interleaving lands on a valid Indicator value — the worst outcome is
+// one frame rendering the previous overlay. The observer's read-then-clear
+// (pattern_controller_bt_observer.cpp) is a check-then-act on this variable for the same
+// reason: converging on None/BtAdvertising either way is benign. Don't add a lock here
+// without checking the render path's timing budget.
 Indicator currentIndicator = Indicator::None;
 Animation currentAnimation = Animation::None;
 
