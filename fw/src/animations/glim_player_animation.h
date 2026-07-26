@@ -54,6 +54,14 @@ class GlimPlayerAnimation : public BaseAnimationTemplate<GlimPlayerAnimation, An
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
     void setActive(bool active) override;
 
+    // End-of-clip is the natural boundary (issue #121) — reported for every loop mode via
+    // atGoodSwitchPoint_ (set in onClipFinished()). finishedOnce_ (StopAfterOne frozen on
+    // the last frame) and inErrorState_ (nothing meaningful playing) count as permanently
+    // good so shuffle mode can always switch away from those states.
+    bool isAtGoodSwitchPoint() const override {
+        return atGoodSwitchPoint_ || finishedOnce_ || inErrorState_;
+    }
+
    private:
     // Physical button layout is a directional grid (see fw/CLAUDE.md): 0=Up, 1=Left, 2=Right,
     // 3=Down. Up cycles to the next GLIM file (mirroring PlayAll's auto-advance); Down cycles to
@@ -92,6 +100,8 @@ class GlimPlayerAnimation : public BaseAnimationTemplate<GlimPlayerAnimation, An
 
     bool inErrorState_ = false;
     bool finishedOnce_ = false;  // Latched once StopAfterOne reaches the last frame.
+    // True only for the tick on which the clip's last frame elapsed (any loop mode).
+    bool atGoodSwitchPoint_ = false;
 
     int32_t errorScrollOffset_ = 0;
     uint32_t errorScrollAccumMs_ = 0;

@@ -34,6 +34,25 @@ table), a writable `rgbx_inputs` block the host fills before each tick, a
 and never calls into the firmware. See `hello/hello.c` for a complete raw-C
 extension exercising the full surface.
 
+### Optional exports
+
+Optional capabilities are negotiated by **symbol presence**, not by the ABI
+version: the host looks each one up with a nullptr-tolerant `llext_find_sym()`
+and applies a documented default when the symbol is absent, so extensions
+built before an optional export existed keep loading and running unchanged.
+A present-but-invalid optional export (outside extension memory) rejects the
+extension, same as the required ones.
+
+| Symbol | Default when absent | Meaning |
+| ------ | ------------------- | ------- |
+| `rgbx_good_moment` (`uint8_t`) | every frame is a good moment | Set during `rgbx_tick()`: nonzero means the frame just rendered ended at a natural switch boundary (end of a scroll/clip/cycle), so the firmware's shuffle mode (issue #121) can switch animations without visual jarring. |
+
+Raw-C extensions define + `EXPORT_SYMBOL` it themselves (see `hello/hello.c`,
+which signals on its scan-head wrap). C++ wrapper extensions get it for free:
+`RGBX_ANIMATION()` always emits the symbol, driven by the `rgbx::Animation::goodMoment()`
+virtual (default `true` — override it to signal real boundaries; `plasma.cpp`
+doesn't and needs no changes).
+
 ### Parameters
 
 Up to `RGBX_MAX_PARAMS` (16) parameters, each surfaced as a BLE

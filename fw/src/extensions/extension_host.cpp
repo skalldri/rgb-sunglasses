@@ -100,6 +100,11 @@ struct Slot {
     uint32_t tickMaxCyc = 0;
     uint64_t tickSumCyc = 0;
     uint32_t tickCount = 0;
+    /* Shuffle's good-switch-point signal (issue #121), cached from the extension's
+     * optional rgbx_good_moment export after each completed tick. Defaults to true
+     * (and stays true when the extension doesn't export the symbol) so shuffle mode
+     * treats it exactly like a built-in animation with no override. */
+    bool goodMoment = true;
 };
 
 Slot sSlots[kMaxExtensions];
@@ -113,6 +118,8 @@ struct {
     uint8_t *framebuffer = nullptr;
     void (*initFn)() = nullptr;
     void (*tickFn)() = nullptr;
+    /* Optional export — nullptr when the extension predates / doesn't use it. */
+    uint8_t *goodMoment = nullptr;
 } sResident;
 
 K_THREAD_STACK_DEFINE(sSandboxStack, CONFIG_APP_EXT_HOST_STACK_SIZE);
@@ -324,13 +331,14 @@ bool in_region_thunk(void *ctx, const void *ptr, size_t len) {
     return in_ext_memory(static_cast<const struct llext *>(ctx), ptr, len);
 }
 
-/* Resolved required exports of a loaded extension. */
+/* Resolved required exports of a loaded extension (+ nullable optional ones). */
 struct Exports {
     const struct rgbx_manifest *manifest;
     struct rgbx_inputs *inputs;
     uint8_t *framebuffer;
     void (*initFn)();
     void (*tickFn)();
+    uint8_t *goodMoment; /* optional (issue #121); nullptr = absent */
 };
 
 /* Resolves the five required symbols and bounds-checks the exported data
@@ -347,6 +355,12 @@ bool resolve_exports(struct llext *ext, const char *path, Exports &out) {
         const_cast<void *>(llext_find_sym(&ext->exp_tab, RGBX_SYM_FRAMEBUFFER)));
     out.initFn = reinterpret_cast<void (*)()>(llext_find_sym(&ext->exp_tab, RGBX_SYM_INIT));
     out.tickFn = reinterpret_cast<void (*)()>(llext_find_sym(&ext->exp_tab, RGBX_SYM_TICK));
+
+    /* Optional exports: nullptr is a valid outcome (capability negotiation by symbol
+     * presence — see the "Optional exports" section of rgbx_api.h), so this lookup is
+     * deliberately excluded from the missing-required check below. */
+    out.goodMoment = static_cast<uint8_t *>(
+        const_cast<void *>(llext_find_sym(&ext->exp_tab, RGBX_SYM_GOOD_MOMENT)));
 
     if (!out.manifest || !out.inputs || !out.framebuffer || !out.initFn || !out.tickFn) {
         LOG_ERR("%s: missing required rgbx exports", path);
@@ -376,6 +390,14 @@ bool validate_loaded(struct llext *ext, const char *path, const Exports &exports
     if (!in_ext_memory(ext, exports.inputs, sizeof(struct rgbx_inputs)) ||
         !in_ext_memory(ext, exports.framebuffer, (size_t)meta.width * meta.height * 3)) {
         LOG_ERR("%s: inputs/framebuffer exports too small or outside extension memory", path);
+        return false;
+    }
+
+    /* An ABSENT optional export is fine; a PRESENT one is bounds-checked exactly like
+     * the required data exports (untrusted-pointer rule — the kernel reads it). */
+    if (exports.goodMoment != nullptr &&
+        !in_ext_memory(ext, exports.goodMoment, sizeof(uint8_t))) {
+        LOG_ERR("%s: rgbx_good_moment export outside extension memory", path);
         return false;
     }
     return true;
@@ -582,6 +604,7 @@ bool runtime_load(size_t slotIndex) {
     sResident.framebuffer = exports.framebuffer;
     sResident.initFn = exports.initFn;
     sResident.tickFn = exports.tickFn;
+    sResident.goodMoment = exports.goodMoment;
 
     /* Wait for the extension's rgbx_init() to finish (same deadline as a
      * tick — init runs sandboxed too, and a hang there must not stall the
@@ -596,6 +619,7 @@ bool runtime_load(size_t slotIndex) {
     slot.tickMaxCyc = 0;
     slot.tickSumCyc = 0;
     slot.tickCount = 0;
+    slot.goodMoment = true;
 
     LOG_INF("extension '%s' loaded and activated (%zu bytes heap)", slot.meta.displayName,
             ext->alloc_size);
@@ -679,6 +703,16 @@ bool isLoaded(size_t slot) {
 
 bool isFaulted(size_t slot) {
     return slot < sSlotCount && sSlots[slot].faulted;
+}
+
+bool atGoodSwitchPoint(size_t slot) {
+    /* Anything not actively rendering (invalid slot, faulted, mid-lazy-load) reports
+     * true so shuffle mode can always switch away from a fault banner and can never be
+     * pinned by an extension that never finishes loading. */
+    if (slot >= sSlotCount || sSlots[slot].faulted) {
+        return true;
+    }
+    return sSlots[slot].goodMoment;
 }
 
 const char *name(size_t slot) {
@@ -892,6 +926,11 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
     }
     s.tickSumCyc += tickCyc;
     s.tickCount++;
+
+    /* The sandbox is quiescent between the done-semaphore and the next request, so this
+     * is the one safe point to read the extension's per-tick outputs. Absent symbol =
+     * always a good moment (same default as built-in animations). */
+    s.goodMoment = (sResident.goodMoment == nullptr) || (*sResident.goodMoment != 0);
 
     /* Copy the extension's finished frame out to the real renderer. */
     for (uint32_t y = 0; y < s.meta.height; y++) {

@@ -38,11 +38,15 @@ void TextAnimation::init() {
     currentCycleTimeMs = 0;
     currentMessageDwellMs = 0;
     currentTextOffset = 0;
+    atGoodSwitchPoint_ = false;
     strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
 }
 
 void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
     __ASSERT(deps_, "TextAnimation::tick before setDependencies");
+
+    // Only the tick that finishes the current message (below) is a good switch point.
+    atGoodSwitchPoint_ = false;
 
     // Turn off all LEDs
     for (size_t x = 0; x < renderer.displayWidth(); x++) {
@@ -124,6 +128,10 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     if (firstChar >= currentMessageLen && currentMessageDwellMs >= kMinMessageDwellMs) {
         currentTextOffset = 0;
         currentMessageDwellMs = 0;
+        // End of scroll: the frame the message finished is the natural boundary shuffle
+        // waits for. (The kMinMessageDwellMs floor above already bounds how often the
+        // all-empty-slots case can reach here — at most ~2/s.)
+        atGoodSwitchPoint_ = true;
         strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
         return;
     }

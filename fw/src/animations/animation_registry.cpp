@@ -83,6 +83,14 @@ size_t animation_registry_count() {
     return sRegistryCount;
 }
 
+Animation animation_registry_id_at(size_t index) {
+    if (index >= sRegistryCount) {
+        return Animation::None;
+    }
+
+    return sRegistry[index].id;
+}
+
 void animation_registry_init_registered() {
     for (size_t i = 0; i < sRegistryCount; i++) {
         BaseAnimation *animation = sRegistry[i].factory();

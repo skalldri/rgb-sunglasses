@@ -483,6 +483,30 @@ config APP_BOOT_GATE_TIMEOUT_MS
 	  advertising starts anyway, so a stuck FAT read during extension
 	  discovery can't make the device permanently BLE-unreachable.
 
+config APP_SHUFFLE
+	bool "Animation shuffle mode"
+	default y
+	help
+	  Randomly cycles through the registered animations (issue #121). Each
+	  animation plays for a random duration between the Core Config shuffle
+	  min/max characteristics (seconds), then shuffle waits for the
+	  animation to signal a natural switch boundary (end of text scroll,
+	  end of GLIM clip; most animations signal every frame) before
+	  switching. Configured over BLE via the Core Config service (the
+	  characteristics exist regardless of this symbol - only the behavior
+	  is gated); shuffle is off by default at runtime.
+
+config APP_SHUFFLE_GRACE_S
+	int "Shuffle good-moment grace cap (seconds)"
+	default 30
+	depends on APP_SHUFFLE
+	help
+	  After a shuffled animation's picked duration elapses, shuffle waits
+	  for its good-switch-point signal at most this long before forcing
+	  the switch, so a misbehaving (e.g. extension) animation can never
+	  pin shuffle on itself forever. 30 s comfortably covers the slowest
+	  legitimate signal (a long text message scroll).
+
 config APP_COREDUMP_MANAGER
 	bool "Coredump manager: drain crash dumps from flash to the FAT disk"
 	depends on DEBUG_COREDUMP && FILE_SYSTEM

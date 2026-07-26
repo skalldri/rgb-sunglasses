@@ -88,6 +88,7 @@ target_sources_ifdef(CONFIG_ANIMATION_MATRIX_CODE app PRIVATE src/animations/mat
 target_sources_ifdef(CONFIG_IMU app PRIVATE src/imu/imu.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_TILT app PRIVATE src/animations/tilt_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_PULSE app PRIVATE src/animations/pulse_animation.cpp)
+target_sources_ifdef(CONFIG_APP_SHUFFLE app PRIVATE src/animations/shuffle_controller.cpp)
 
 # The extension host also binds these adapter sources (rgbx_inputs audio/IMU
 # snapshots), so they must compile whenever it is enabled with the matching
