@@ -385,6 +385,25 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     }
     s_active_conn = bt_conn_ref(conn);
 
+    // Request L4 security immediately, from the connection callback itself (issue #232).
+    // Waiting for the BT thread to do this (NEW_CONNECTION handler below) loses a race
+    // against the central's first ATT read: Android hits an access-gated characteristic
+    // while required_sec_level is still L1, self-initiates an unauthenticated Just Works
+    // pairing (consent-only dialog), and only afterwards does our L4 demand force a second,
+    // passkey pairing - the "two pairing prompts" symptom. Requesting here puts the SMP
+    // Security Request (Bonding|SC|MITM) on the air before the first ATT PDU, so the
+    // central's first pairing attempt is already the passkey one. Same pattern as Zephyr's
+    // samples/bluetooth/peripheral_sc_only. The BT thread's own set_security call remains
+    // as a retry/no-op safety net.
+    int sec_ret = bt_conn_set_security(conn, REQUIRED_BT_SECURITY_LEVEL);
+    if (sec_ret) {
+        // On any error Zephyr rolls required_sec_level back (conn.c resets it to
+        // sec_level), so the L4 demand is NOT yet recorded - the BT thread's retry
+        // below is what re-establishes it. -EBUSY means the peer started pairing
+        // first; with CONFIG_BT_SMP_SC_ONLY that attempt is held to L4 anyway.
+        LOG_WRN("Early L4 security request failed: %d", sec_ret);
+    }
+
     // Send an event to the BT thread
     BtThreadCommand cmd;
     cmd.event = BtThreadEvent::NEW_CONNECTION;
@@ -817,11 +836,15 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
                 LOG_ERR("Failed to reach required security level %d, got %d instead",
                         REQUIRED_BT_SECURITY_LEVEL, cmd->level);
 
-                // Disconnect from the peer
-                // int ret = bt_conn_disconnect(ctx->conn, BT_HCI_ERR_AUTH_FAIL);
-                // if (ret) {
-                //     LOG_ERR("Failed to disconnect remote connection! %d", ret);
-                // }
+                // Disconnect from the peer (re-enabled for issue #232). With
+                // CONFIG_BT_SMP_SC_ONLY a below-L4 pairing can no longer *succeed*,
+                // so landing here means a genuine failure - parking the peer at L1
+                // indefinitely just produces the "connected but nothing works"
+                // split-brain UX.
+                int ret = bt_conn_disconnect(ctx->conn, BT_HCI_ERR_AUTH_FAIL);
+                if (ret) {
+                    LOG_ERR("Failed to disconnect remote connection! %d", ret);
+                }
             }
             break;
 
