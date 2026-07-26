@@ -3,7 +3,6 @@
 #include <animations/bt_animations.h>
 #include <animations/null_animation.h>
 #include <bluetooth/boot_gate.h>
-#include <bluetooth/bt_state_observer.h>
 #include <configuration_provider.h>
 #if defined(CONFIG_STATUS_LED)
 #include <status_led/status_led.h>
@@ -13,7 +12,6 @@
 #include <pattern_controller.h>
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
-#include <zephyr/init.h>
 
 #if defined(CONFIG_FAT_FILESYSTEM_ELM)
 #include <storage/glim_registry.h>
@@ -47,45 +45,9 @@ static ConfigurationProvider &getPatternConfig() {
     return *sConfigProvider;
 }
 
-class PatternControllerBtObserver : public BtStateObserver {
-   public:
-    void onAdvertisingStarted() override {
-#if !defined(CONFIG_STATUS_LED)
-        pattern_controller_request_indicator(Indicator::BtAdvertising);
-#else
-        status_led_set(1, StatusIndication::Breathing, StatusColor::Blue);
-#endif
-    }
-    void onConnectingStarted() override {
-#if !defined(CONFIG_STATUS_LED)
-        pattern_controller_request_indicator(Indicator::BtConnecting);
-#else
-        status_led_set(1, StatusIndication::Blinking, StatusColor::Blue);
-#endif
-    }
-    void onConnected() override {
-        pattern_controller_reset_indicator();
-#if defined(CONFIG_STATUS_LED)
-        status_led_set(1, StatusIndication::Solid, StatusColor::Blue);
-#endif
-    }
-    void onPairingCodeRequired(unsigned int pairingCode) override {
-        BtPairingAnimation::getInstance()->init();
-        BtPairingAnimation::getInstance()->setPairingCode(pairingCode);
-        pattern_controller_request_indicator(Indicator::BtPairing);
-#if defined(CONFIG_STATUS_LED)
-        status_led_set(1, StatusIndication::Blinking, StatusColor::Blue);
-#endif
-    }
-};
-
-static PatternControllerBtObserver sPatternControllerBtObserver;
-
-static int pattern_controller_register_bt_observer(void) {
-    bluetooth_register_state_observer(&sPatternControllerBtObserver);
-    return 0;
-}
-SYS_INIT(pattern_controller_register_bt_observer, APPLICATION, 0);
+// PatternControllerBtObserver (the BtStateObserver driving the indicator overlay and
+// status LED) lives in src/pattern_controller_bt_observer.cpp so it can be unit-tested
+// without linking this TU's render thread / LED controller / FAT / extension host.
 
 void pattern_controller_thread_func(void *a, void *b, void *c);
 
@@ -95,6 +57,14 @@ void pattern_controller_thread_func(void *a, void *b, void *c);
 K_KERNEL_THREAD_DEFINE(pattern_controller_thread, 4096, pattern_controller_thread_func, NULL, NULL,
                        NULL, 6, 0, 0);
 
+// Intentionally unsynchronized: written from the BT thread (via
+// PatternControllerBtObserver), the shell thread (`anim indicator ...`) and this file's
+// own thread, and read every render tick. Each access is a single aligned enum store or
+// load, and every interleaving lands on a valid Indicator value — the worst outcome is
+// one frame rendering the previous overlay. The observer's read-then-clear
+// (pattern_controller_bt_observer.cpp) is a check-then-act on this variable for the same
+// reason: converging on None/BtAdvertising either way is benign. Don't add a lock here
+// without checking the render path's timing budget.
 Indicator currentIndicator = Indicator::None;
 Animation currentAnimation = Animation::None;
 
@@ -373,6 +343,10 @@ int pattern_controller_reset_indicator() {
     return 0;
 }
 
+Indicator pattern_controller_get_current_indicator(void) {
+    return currentIndicator;
+}
+
 Animation pattern_controller_get_current_animation(void) {
     return currentAnimation;
 }
@@ -543,10 +517,42 @@ static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char
     return 0;
 }
 
+static int cmd_anim_indicator_get(const struct shell *shell, size_t argc, char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    const char *name;
+    switch (pattern_controller_get_current_indicator()) {
+        case Indicator::None:
+            name = "none";
+            break;
+        case Indicator::BtAdvertising:
+            name = "bt_advertising";
+            break;
+        case Indicator::BtConnecting:
+            name = "bt_connecting";
+            break;
+        case Indicator::BtPairing:
+            name = "bt_pairing";
+            break;
+        case Indicator::ExtensionsLoading:
+            name = "extensions_loading";
+            break;
+        default:
+            name = "unknown";
+            break;
+    }
+
+    shell_print(shell, "%s", name);
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_anim_indicator,
     SHELL_CMD(clear, NULL, "Clear the active indicator and return to the current animation",
               cmd_anim_indicator_clear),
+    SHELL_CMD(get, NULL, "Print the active indicator overlay (none if the animation is visible)",
+              cmd_anim_indicator_get),
     SHELL_SUBCMD_SET_END);
 
 #if defined(CONFIG_APP_SHUFFLE)

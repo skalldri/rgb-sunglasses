@@ -16,6 +16,18 @@ int pattern_controller_request_indicator(Indicator ind);
 
 int pattern_controller_reset_indicator();
 
+/**
+ * @brief Get the indicator overlay currently rendered over the active animation.
+ *
+ * @return The active Indicator, or Indicator::None when the animation is visible.
+ *
+ * Lets a caller clear only its own overlay instead of blindly resetting whatever is up
+ * (see PatternControllerBtObserver's stale-pairing clear, issue #242). Also exposed on
+ * the shell as `anim indicator get` — `anim get` reports the underlying animation and
+ * cannot see the overlay.
+ */
+Indicator pattern_controller_get_current_indicator(void);
+
 int pattern_controller_change_to_animation(Animation animation, bool persist = true);
 
 Animation pattern_controller_get_current_animation(void);

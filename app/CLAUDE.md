@@ -406,6 +406,32 @@ A fresh worktree (`.claude/worktrees/<name>/app`) has **no `node_modules` and no
 
 In short: in a worktree, **`npm ci`, then hold `app` via `Monitor`, then `app/scripts/launch-app.sh` as a background task.** No symlinks, no manual daemonizing, no `expo start` deep-link dance. Eat the full build cost — it is cheaper than every workaround.
 
+#### After a FRESH install, the app sits at Android's runtime-permission dialog — grant it before any BLE automation
+
+A first launch on a newly-installed APK (fresh device, or after `pm uninstall`/"kill the app +
+re-deploy") blocks on Android's **nearby-devices permission dialog** ("Allow RGB Sunglasses (Dev)
+to find, connect to, and determine the relative position of nearby devices?"). Until it's granted
+the app can scan nothing, so every BLE automation downstream fails in a way that does **not**
+mention permissions and looks like a hardware/firmware problem instead — observed 2026-07-26:
+`scripts/re-pair.sh` reported `WARN: board 'RGB Sunglasses Proto0 94E0' not listed / Connect not
+tappable within 25s` and gave up, purely because the dialog was still up. A screenshot is the fast
+way to tell (`mcp__execbro__android_screenshot`); the dialog belongs to
+`com.android.permissioncontroller`, not the app, so app-level component queries won't surface it.
+
+Grant it either way:
+
+```bash
+# Pre-grant before launching, so no dialog ever appears (preferred for unattended runs)
+adb shell pm grant com.autom8ed.rgbsunglassesapp.dev android.permission.BLUETOOTH_SCAN
+adb shell pm grant com.autom8ed.rgbsunglassesapp.dev android.permission.BLUETOOTH_CONNECT
+adb shell pm grant com.autom8ed.rgbsunglassesapp.dev android.permission.ACCESS_FINE_LOCATION
+```
+
+or tap it: `tap(testID="com.android.permissioncontroller:id/permission_allow_button")`. Note
+`pm uninstall` also **revokes** previously-granted permissions, so a reinstall always re-arms this
+— budget for it whenever you redeploy, and don't interpret the resulting "device not listed" as a
+BLE fault before ruling it out.
+
 **Root cause of `CommandError: No development build (com.autom8ed.rgbsunglassesapp) for this project is installed`, and the real fix (not a workaround)**: this project's `plugins/withDevVariant.js` config plugin intentionally injects `applicationIdSuffix ".dev"` into the debug build type (`android/app/build.gradle`) so the debug and release APKs can be installed side-by-side with distinct icons/schemes — the actual installed runtime package id is `com.autom8ed.rgbsunglassesapp.dev`, not the bare `applicationId`. Expo CLI's package-id resolver (`@expo/config-plugins`'s `Package.getApplicationIdAsync()`, called from `AndroidAppIdResolver`) only regexes the literal `applicationId '...'` line out of `build.gradle` — it has no knowledge of per-buildType `applicationIdSuffix`. So `expo run:android` always computes the unsuffixed id, checks whether _that_ is installed (`PlatformManager.openProjectInCustomRuntimeAsync` → `isAppInstalledAndIfSoReturnContainerPathForIOSAsync`), finds it isn't (only the suffixed `.dev` one is), and throws — even immediately after its own build+install step succeeded. This will happen on every `expo run:android` invocation as long as `withDevVariant.js`'s suffix exists, build success or not.
 
 Expo CLI has a built-in flag for exactly this situation — `--app-id <appId>` — which makes it check/install/launch the given id instead of guessing one from `build.gradle`:

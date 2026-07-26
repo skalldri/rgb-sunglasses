@@ -1,0 +1,18 @@
+tests:
+  # proto0's configuration: advertising/connecting drive the onboard status LED,
+  # so BtPairing is the only panel indicator the observer ever requests and the
+  # issue #242 stale-overlay path only exists here.
+  pattern_controller.bt_observer.status_led:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_STATUS_LED=y
+  # No status LED: advertising/connecting use panel indicators instead. The
+  # stale-pairing clear must not disturb that ordering.
+  pattern_controller.bt_observer.panel_indicators:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

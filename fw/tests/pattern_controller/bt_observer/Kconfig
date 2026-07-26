@@ -1,0 +1,11 @@
+source "Kconfig.zephyr"
+
+# pattern_controller_bt_observer.cpp compiles two different bodies depending on
+# this symbol (panel indicators vs. onboard status LED). It's defined in
+# fw/Kconfig, which standalone Twister apps don't see — redeclared here with the
+# same name so both branches can be covered by two scenarios. The real symbol's
+# `depends on LED_STRIP && WS2812_STRIP_SPI` is intentionally dropped: this suite
+# fakes status_led_set() and never touches an LED driver.
+config STATUS_LED
+	bool "Onboard status LED module (test stand-in for fw/Kconfig's symbol)"
+	default n
