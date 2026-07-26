@@ -190,7 +190,22 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # `adb devices` until the server restarts (experimentally confirmed: the fixup
 # alone is silently ineffective without this). `adb kill-server` is enough; the
 # next adb invocation below auto-restarts the server and re-scans.
-adb kill-server >/dev/null 2>&1 || true
+#
+# But kill-server also DROPS every TCP/WiFi device: those connections live in
+# the server process itself, and the restarted server re-scans /dev/bus/usb but
+# never re-dials TCP peers (observed 2026-07-26: running check-hardware
+# disconnected the wireless-debugging phone). So: if any device is already in
+# "device" state the restart's only purpose — picking up freshly-created USB
+# nodes — is moot, skip it; otherwise remember the TCP serials (any state, e.g.
+# a stale "offline" entry is worth a re-dial) and reconnect them afterwards.
+CONNECTED_DEVICES=$(adb devices 2>/dev/null | tail -n +2 | grep 'device$' | awk '{print $1}' || true)
+if [ -z "$CONNECTED_DEVICES" ]; then
+    TCP_SERIALS=$(adb devices 2>/dev/null | tail -n +2 | awk '{print $1}' | grep ':' || true)
+    adb kill-server >/dev/null 2>&1 || true
+    for tcp_serial in $TCP_SERIALS; do
+        adb connect "$tcp_serial" >/dev/null 2>&1 || true
+    done
+fi
 
 # ── Android (ADB) ──────────────────────────────────────────────────────────
 # A device seen over TCP/WiFi stays on port 5555 permanently (set once via
