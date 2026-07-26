@@ -842,7 +842,10 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
                 // indefinitely just produces the "connected but nothing works"
                 // split-brain UX.
                 int ret = bt_conn_disconnect(ctx->conn, BT_HCI_ERR_AUTH_FAIL);
-                if (ret) {
+                if (ret && ret != -ENOTCONN) {
+                    // -ENOTCONN is the common benign race: the phone drops the link
+                    // itself on a pairing timeout/cancel before our disconnect lands
+                    // (hardware-observed during issue #232 verification).
                     LOG_ERR("Failed to disconnect remote connection! %d", ret);
                 }
             }
