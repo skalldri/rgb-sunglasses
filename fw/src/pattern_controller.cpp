@@ -3,7 +3,6 @@
 #include <animations/bt_animations.h>
 #include <animations/null_animation.h>
 #include <bluetooth/boot_gate.h>
-#include <bluetooth/bt_state_observer.h>
 #include <configuration_provider.h>
 #if defined(CONFIG_STATUS_LED)
 #include <status_led/status_led.h>
@@ -13,7 +12,6 @@
 #include <pattern_controller.h>
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
-#include <zephyr/init.h>
 
 #if defined(CONFIG_FAT_FILESYSTEM_ELM)
 #include <storage/glim_registry.h>
@@ -47,45 +45,9 @@ static ConfigurationProvider &getPatternConfig() {
     return *sConfigProvider;
 }
 
-class PatternControllerBtObserver : public BtStateObserver {
-   public:
-    void onAdvertisingStarted() override {
-#if !defined(CONFIG_STATUS_LED)
-        pattern_controller_request_indicator(Indicator::BtAdvertising);
-#else
-        status_led_set(1, StatusIndication::Breathing, StatusColor::Blue);
-#endif
-    }
-    void onConnectingStarted() override {
-#if !defined(CONFIG_STATUS_LED)
-        pattern_controller_request_indicator(Indicator::BtConnecting);
-#else
-        status_led_set(1, StatusIndication::Blinking, StatusColor::Blue);
-#endif
-    }
-    void onConnected() override {
-        pattern_controller_reset_indicator();
-#if defined(CONFIG_STATUS_LED)
-        status_led_set(1, StatusIndication::Solid, StatusColor::Blue);
-#endif
-    }
-    void onPairingCodeRequired(unsigned int pairingCode) override {
-        BtPairingAnimation::getInstance()->init();
-        BtPairingAnimation::getInstance()->setPairingCode(pairingCode);
-        pattern_controller_request_indicator(Indicator::BtPairing);
-#if defined(CONFIG_STATUS_LED)
-        status_led_set(1, StatusIndication::Blinking, StatusColor::Blue);
-#endif
-    }
-};
-
-static PatternControllerBtObserver sPatternControllerBtObserver;
-
-static int pattern_controller_register_bt_observer(void) {
-    bluetooth_register_state_observer(&sPatternControllerBtObserver);
-    return 0;
-}
-SYS_INIT(pattern_controller_register_bt_observer, APPLICATION, 0);
+// PatternControllerBtObserver (the BtStateObserver driving the indicator overlay and
+// status LED) lives in src/pattern_controller_bt_observer.cpp so it can be unit-tested
+// without linking this TU's render thread / LED controller / FAT / extension host.
 
 void pattern_controller_thread_func(void *a, void *b, void *c);
 

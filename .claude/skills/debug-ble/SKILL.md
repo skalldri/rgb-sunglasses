@@ -28,6 +28,7 @@ Bash) on that file when you don't hold a lock.
 | Discovery/connect takes many seconds | Too many sequential ATT ops — do NOT parallelize, do NOT blame the JS bridge (issue #41) | 6 |
 | Device vanished from scans after an app reload or a discovery throw | Orphaned native BLE link — force-stop the app | 7 |
 | Firmware log: `bt_att: No ATT channel for MTU N` + `Notify failed ... -12`; app silently keeps a stale value | Notify payload exceeds negotiated ATT MTU (`bt_gatt_notify` can't fragment) | 8 |
+| Panel keeps showing the pairing passkey (and shuffle is frozen) after a pairing that failed/timed out | Stale `BtPairing` indicator overlay — fixed in issue #242; on older firmware clear it with `anim indicator clear` | 9 |
 
 ## 1. Split-brain / stale Android GATT cache
 
@@ -135,6 +136,32 @@ stuck at the 23-byte default (§1 stale-cache family); `N` = 23 exactly → NOT 
 MTU-size problem but a teardown/bringup race (no usable ATT channel existed at the
 instant the notify fired) — don't chase `requestMTU`. Verify on the serial shell (e.g.
 `glim get_selected`), never from app UI alone. Full diagnostic: `references/notify-mtu.md`.
+
+## 9. Panel stuck on the pairing passkey after a failed pairing
+
+`onPairingCodeRequired()` raises the `BtPairing` panel overlay unconditionally (it has
+to — the passkey renders on the panel). Before issue #242, `onConnected()` was the only
+path that cleared it, so any pairing attempt that ended *without* reaching CONNECTED
+(passkey never entered, `bt_smp: SMP Timeout`, peer walked away → `Disconnected (reason
+19/22)`) left the overlay up indefinitely: the active animation stayed hidden and
+shuffle stayed frozen (shuffle only steps while no indicator overlays the panel) until
+the next successful connect or a manual `anim indicator clear`.
+
+Diagnose over serial — the panel isn't visible to an agent, and `anim get` reports the
+*underlying* animation, not the overlay, so the divergence is the tell:
+
+```
+bt_state            -> BT state machine: ADVERTISING / Active LE connection: none
+anim get            -> rainbow          (what SHOULD be on the panel)
+anim indicator get  -> bt_pairing       (what IS on the panel == the bug)
+```
+
+`anim indicator get` was added with the #242 fix; on firmware without it, compare the
+physical panel against `anim get`. The fix clears a `BtPairing` overlay on the
+CONNECTING → ADVERTISING transition, so on current firmware `anim indicator get` reads
+`none` within milliseconds of the disconnect. Note this covers the *disconnect* path
+only: a peer that fails L4 but never drops the link parks the state machine in
+CONNECTING with the overlay legitimately still up.
 
 ## Hardware-side verification (source of truth)
 

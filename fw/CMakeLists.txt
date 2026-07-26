@@ -19,6 +19,7 @@ target_sources(
     src/usb/usb_init.c
     src/led_controller.cpp
     src/pattern_controller.cpp
+    src/pattern_controller_bt_observer.cpp
     src/buttons.cpp
     src/buttons/animation_adapters/button_animation_source.cpp
     src/power.cpp
