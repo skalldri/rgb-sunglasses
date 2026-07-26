@@ -373,6 +373,10 @@ int pattern_controller_reset_indicator() {
     return 0;
 }
 
+Indicator pattern_controller_get_current_indicator(void) {
+    return currentIndicator;
+}
+
 Animation pattern_controller_get_current_animation(void) {
     return currentAnimation;
 }
@@ -543,10 +547,42 @@ static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char
     return 0;
 }
 
+static int cmd_anim_indicator_get(const struct shell *shell, size_t argc, char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    const char *name;
+    switch (pattern_controller_get_current_indicator()) {
+        case Indicator::None:
+            name = "none";
+            break;
+        case Indicator::BtAdvertising:
+            name = "bt_advertising";
+            break;
+        case Indicator::BtConnecting:
+            name = "bt_connecting";
+            break;
+        case Indicator::BtPairing:
+            name = "bt_pairing";
+            break;
+        case Indicator::ExtensionsLoading:
+            name = "extensions_loading";
+            break;
+        default:
+            name = "unknown";
+            break;
+    }
+
+    shell_print(shell, "%s", name);
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_anim_indicator,
     SHELL_CMD(clear, NULL, "Clear the active indicator and return to the current animation",
               cmd_anim_indicator_clear),
+    SHELL_CMD(get, NULL, "Print the active indicator overlay (none if the animation is visible)",
+              cmd_anim_indicator_get),
     SHELL_SUBCMD_SET_END);
 
 #if defined(CONFIG_APP_SHUFFLE)
