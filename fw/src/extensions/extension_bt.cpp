@@ -268,9 +268,11 @@ size_t append_characteristic(BtSlot *bs, size_t attrIdx, size_t chrcIdx, const b
         .write = write,
         .user_data = userData,
         .handle = 0,
+        // _AUTHEN to match bt_service_cpp.h's built-in characteristic perms: the
+        // security floor is L4 (CONFIG_BT_SMP_SC_ONLY, issue #232).
         .perm = static_cast<uint16_t>(
-            BT_GATT_PERM_READ_ENCRYPT |
-            (writable ? BT_GATT_PERM_WRITE_ENCRYPT | BT_GATT_PERM_PREPARE_WRITE : 0)),
+            BT_GATT_PERM_READ_AUTHEN |
+            (writable ? BT_GATT_PERM_WRITE_AUTHEN | BT_GATT_PERM_PREPARE_WRITE : 0)),
     };
     bs->attrs[attrIdx++] = {
         .uuid = BT_UUID_GATT_CUD,
@@ -454,7 +456,7 @@ int extension_bt_register(size_t slot) {
         .write = nullptr,
         .user_data = bs,
         .handle = 0,
-        .perm = BT_GATT_PERM_READ_ENCRYPT,
+        .perm = BT_GATT_PERM_READ_AUTHEN,
     };
 #endif
 

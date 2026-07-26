@@ -142,8 +142,8 @@ Pin-code pairing is required with the Proto0 board. Your phone will prompt you t
 pair with the new device.
 
 - **On Android**, this prompt can appear and disappear quickly. Check the swipe-down
-  system notification tray if you don't see it. You may receive two prompts to pair:
-  the first will not require a PIN code, and after it a PIN code will be required.
+  system notification tray if you don't see it. You should receive a single pairing
+  prompt asking for a PIN code.
 - **On iOS**, the pairing dialog appears as a system alert.
 
 When a PIN code is required, the Glasses LED panel will begin scrolling a **6-digit

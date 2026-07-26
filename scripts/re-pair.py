@@ -571,9 +571,26 @@ class RePair:
             if self.watch.scan_after(off, r"Pairing completed"):
                 log("pairing completed.")
                 return True
-            if self.watch.scan_after(off, r"Pairing failed|Pairing cancelled|Disconnected \(reason 19\)"):
-                warn("pairing failed/cancelled (UART).")
+            # Any disconnect during the attempt is fatal for THIS attempt: reason 19
+            # (remote user terminated - Android's dialog timed out or was cancelled)
+            # or the firmware's own AUTH_FAIL disconnect on a failed escalation
+            # (issue #232). The outer attempt loop relaunches and retries.
+            if self.watch.scan_after(off, r"Disconnected \(reason \d+\)"):
+                warn("disconnected mid-pairing (UART).")
                 return False
+            # A pairing failure WITHOUT a disconnect is no longer fatal (issue #232):
+            # with CONFIG_BT_SMP_SC_ONLY the firmware REJECTS a raced-in
+            # unauthenticated (Just Works) attempt with SMP error 0x03, and Android
+            # typically retries with a MITM passkey pairing on the same connection.
+            # Rebase the scan offset past the failure and keep answering; the fresh
+            # attempt prints a fresh passkey (never reuse the old one).
+            m = self.watch.scan_after(off, r"Pairing failed|Pairing cancelled")
+            if m:
+                log("pairing attempt rejected (UART) - awaiting the retry with MITM…")
+                off += m.end()
+                pk = None
+                time.sleep(0.5)
+                continue
             if not self.ui.dump():
                 time.sleep(0.5)
                 continue
@@ -585,8 +602,11 @@ class RePair:
                 self.enter_passkey(pk)
                 time.sleep(1.0)
                 continue
-            # 2. On-screen confirm dialog (OxygenOS shows a persistent
-            #    'Bluetooth pairing request' + Pair button).
+            # 2. On-screen confirm dialog. Since the issue #232 firmware fix
+            #    (SC_ONLY + early L4 request) a consent-ONLY Just Works dialog should
+            #    no longer appear; this tap remains as a harmless fallback for the
+            #    OxygenOS dialog chrome around the PIN field ('Bluetooth pairing
+            #    request' + Pair button).
             if self.ui.tap(r"^pair$|^ok$", 0.0, 1.0):
                 log("tapped Pair (confirm).")
                 time.sleep(0.8)

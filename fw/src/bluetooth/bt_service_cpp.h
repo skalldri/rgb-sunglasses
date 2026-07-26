@@ -15,8 +15,8 @@
 #include <type_traits>
 
 /**
- * @brief True if at least one connected LE peer meets the encryption level every
- * auto characteristic's perm bits require (BT_GATT_PERM_READ_ENCRYPT, set below).
+ * @brief True if at least one connected LE peer meets the security level every
+ * auto characteristic's perm bits require (BT_GATT_PERM_READ_AUTHEN, set below).
  *
  * bt_gatt_notify() runs this exact check internally (via the internal-only
  * bt_gatt_check_perm(), see gatt_internal.h - not something app code can call
@@ -34,7 +34,11 @@ inline bool bleAnyConnEncrypted() {
     bt_conn_foreach(
         BT_CONN_TYPE_LE,
         [](struct bt_conn *conn, void *data) {
-            if (bt_conn_get_security(conn) >= BT_SECURITY_L2) {
+            // L3 mirrors gatt.c's bt_gatt_check_perm() AUTHEN branch (an _AUTHEN
+            // attribute needs an authenticated link, >= L3). In practice the link is
+            // either unencrypted or L4 here: CONFIG_BT_SMP_SC_ONLY rejects any
+            // pairing below L4 (issue #232), so no L2/L3 steady state exists.
+            if (bt_conn_get_security(conn) >= BT_SECURITY_L3) {
                 *static_cast<bool *>(data) = true;
             }
         },
@@ -484,7 +488,7 @@ class BtGattServer {
                 .write = NULL,
                 .user_data = nullptr,
                 .handle = 0,
-                .perm = BT_GATT_PERM_READ_ENCRYPT,
+                .perm = BT_GATT_PERM_READ_AUTHEN,
             });
     }
 
@@ -709,8 +713,13 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
                 .write = ReadOnly ? nullptr : write,
                 .user_data = this,
                 .handle = 0,
-                .perm = BT_GATT_PERM_READ_ENCRYPT |
-                        (ReadOnly ? 0 : BT_GATT_PERM_WRITE_ENCRYPT | BT_GATT_PERM_PREPARE_WRITE),
+                // _AUTHEN (not _ENCRYPT): the firmware's security floor is L4
+                // (CONFIG_BT_SMP_SC_ONLY + the connected() L4 request, issue #232),
+                // so the GATT DB itself declares MITM-authenticated access - an
+                // unauthenticated bond, should one ever exist, gets ATT errors here
+                // instead of silently working at L2.
+                .perm = BT_GATT_PERM_READ_AUTHEN |
+                        (ReadOnly ? 0 : BT_GATT_PERM_WRITE_AUTHEN | BT_GATT_PERM_PREPARE_WRITE),
             },
             bt_gatt_attr{
                 .uuid = &kGattCudUuid.uuid,

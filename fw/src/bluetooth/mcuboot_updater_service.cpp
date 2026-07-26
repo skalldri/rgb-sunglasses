@@ -170,20 +170,23 @@ static ssize_t control_write_cb(struct bt_conn *conn, const struct bt_gatt_attr 
 BT_GATT_SERVICE_DEFINE(mcuboot_updater_svc,
     BT_GATT_PRIMARY_SERVICE(&kServiceUuid),
 
+    /* _AUTHEN (not _ENCRYPT): security floor is L4 (CONFIG_BT_SMP_SC_ONLY, issue
+     * #232); a bootloader-update surface especially must never be reachable from an
+     * unauthenticated bond. */
     BT_GATT_CHARACTERISTIC(&kStatusUuid.uuid,
         BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-        BT_GATT_PERM_READ_ENCRYPT,
+        BT_GATT_PERM_READ_AUTHEN,
         status_read_cb, NULL, NULL),
-    BT_GATT_CCC(ccc_cfg_changed, BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT),
+    BT_GATT_CCC(ccc_cfg_changed, BT_GATT_PERM_READ_AUTHEN | BT_GATT_PERM_WRITE_AUTHEN),
 
     BT_GATT_CHARACTERISTIC(&kDataUuid.uuid,
         BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-        BT_GATT_PERM_WRITE_ENCRYPT,
+        BT_GATT_PERM_WRITE_AUTHEN,
         NULL, data_write_cb, NULL),
 
     BT_GATT_CHARACTERISTIC(&kControlUuid.uuid,
         BT_GATT_CHRC_WRITE,
-        BT_GATT_PERM_WRITE_ENCRYPT,
+        BT_GATT_PERM_WRITE_AUTHEN,
         NULL, control_write_cb, NULL),
 );
 

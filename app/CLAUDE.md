@@ -195,6 +195,10 @@ There is currently **no iOS dev-variant** (the Android `.dev` side-by-side insta
   enters the board's passkey (bonded from then on), a **disconnect + reconnect** is needed for a
   clean, fully-named discovery pass; security elevates instantly on the bonded reconnect. Nothing is
   wrong firmware-side when this happens (`bt_state` shows L1 during the race, L4 after re-pair).
+  NEEDS RE-VERIFICATION after the issue #232 firmware fix: the firmware now sends its SMP Security
+  Request from the `connected()` callback (before the first ATT read), which may make iOS surface
+  the pairing dialog immediately instead of after the failed discovery pass — re-test on an iPhone
+  and update this bullet with what's observed.
 - **ATT MTU on iOS is 293** (iPhone 15/iOS 26) — iOS negotiates on its own; `requestMTU(247)` is a
   no-op there. Comfortable headroom over Android's 247; zero `bt_att: No ATT channel for MTU`
   warnings in a multi-hour session with all 35 monitors streaming.
@@ -349,8 +353,8 @@ split-brain (`/debug-ble`) and any re-pair.
 forget step). First-time pairing accepts Android system prompts that are timing-sensitive:
 
 1. After tapping CONNECT in the app, Android shows a **"Pairing request"** notification in the status bar shade.
-2. Swipe down → tap **"Pair & connect"** → tap **"Pair"** on the confirmation dialog, then enter the 6-digit code the board prints on serial (`Passkey for … : NNNNNN`).
-3. All of this must happen before Android times out waiting for user input and drops the connection (`BT_HCI_ERR_REMOTE_USER_TERM_CONN`, disconnect reason 19).
+2. Swipe down → tap the pairing notification, then enter the 6-digit code the board prints on serial (`Passkey for … : NNNNNN`) into the PIN dialog. Since the issue #232 firmware fix (`CONFIG_BT_SMP_SC_ONLY` + early L4 request) there is a **single, PIN-code prompt** — the old consent-only "Pair & connect" step no longer precedes it. If the firmware log shows `Pairing failed` without a disconnect, that's the firmware rejecting a raced-in unauthenticated attempt; Android retries with the PIN dialog on the same connection — keep going.
+3. All of this must happen before Android times out waiting for user input and drops the connection (`BT_HCI_ERR_REMOTE_USER_TERM_CONN`, disconnect reason 19). A failed/cancelled PIN entry now also gets a firmware-side disconnect (`BT_HCI_ERR_AUTH_FAIL`) instead of lingering at L1.
 
 If a device has never been paired and `/re-pair` isn't being used, ask the user to watch for and accept the Android pairing prompts themselves. Once paired, subsequent connections complete automatically without any prompts.
 
