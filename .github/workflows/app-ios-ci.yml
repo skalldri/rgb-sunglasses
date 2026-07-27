@@ -65,6 +65,14 @@ jobs:
       # The scheme/workspace names derive from the Expo project name
       # ("RGB Sunglasses" -> "RGBSunglasses"). CODE_SIGNING_ALLOWED=NO keeps the
       # simulator build unsigned, so it needs no Apple account or signing secrets.
+      #
+      # `-destination 'generic/platform=iOS Simulator'` resolves against the exact
+      # simulator runtime version matching Xcode's bundled SDK. That broke when the
+      # runner's installed runtime (iOS 26.3.1) drifted ahead of Xcode 26.2's bundled
+      # SDK (iphonesimulator26.2) via a background platform update, with no way to
+      # reinstall the older exact-match runtime (`xcodebuild -downloadPlatform iOS`
+      # only offers the current one). Naming a concrete device instead resolves
+      # against whatever runtime is actually installed, regardless of version drift.
       - name: Build for iOS Simulator (unsigned)
         run: |
           xcodebuild \
@@ -72,7 +80,7 @@ jobs:
             -scheme RGBSunglasses \
             -configuration Debug \
             -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath ios/build \
             CODE_SIGNING_ALLOWED=NO \
             build
