@@ -117,9 +117,12 @@ function withDebugResources(config) {
   ]);
 }
 
+const withDevVariantIos = require('./withDevVariantIos');
+
 module.exports = function withDevVariant(config) {
   config = withDebugAppIdSuffix(config);
   config = withDevSchemeInManifest(config);
   config = withDebugResources(config);
+  config = withDevVariantIos(config);
   return config;
 };
