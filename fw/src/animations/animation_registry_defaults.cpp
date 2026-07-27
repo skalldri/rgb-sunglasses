@@ -2,6 +2,7 @@
 #include <animations/animation_active_state_observer.h>
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_registry.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/my_eyes_animation.h>
 #include <animations/null_animation.h>
 #include <animations/rainbow_animation.h>
@@ -209,6 +210,12 @@ int animation_registry_register_defaults() {
         return ret;
     }
 
+    ret = animation_registry_register_shuffle_include(
+        Animation::Text, AnimationShuffleIncludeBinding<Animation::Text>::included);
+    if (ret) {
+        return ret;
+    }
+
     text_animation_bind_default_dependencies();
 
 #if defined(CONFIG_ANIMATION_ZIGZAG)
@@ -219,6 +226,12 @@ int animation_registry_register_defaults() {
 
     ret = animation_registry_register_is_active(Animation::ZigZag,
                                                 ZigZagAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_shuffle_include(
+        Animation::ZigZag, AnimationShuffleIncludeBinding<Animation::ZigZag>::included);
     if (ret) {
         return ret;
     }
@@ -238,6 +251,12 @@ int animation_registry_register_defaults() {
         return ret;
     }
 
+    ret = animation_registry_register_shuffle_include(
+        Animation::Rainbow, AnimationShuffleIncludeBinding<Animation::Rainbow>::included);
+    if (ret) {
+        return ret;
+    }
+
     rainbow_animation_bind_default_dependencies();
 #endif
 
@@ -253,6 +272,12 @@ int animation_registry_register_defaults() {
         return ret;
     }
 
+    ret = animation_registry_register_shuffle_include(
+        Animation::MyEyes, AnimationShuffleIncludeBinding<Animation::MyEyes>::included);
+    if (ret) {
+        return ret;
+    }
+
     my_eyes_animation_bind_default_dependencies();
 #endif
 
@@ -264,6 +289,12 @@ int animation_registry_register_defaults() {
 
     ret = animation_registry_register_is_active(Animation::Beat,
                                                 BeatAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_shuffle_include(
+        Animation::Beat, AnimationShuffleIncludeBinding<Animation::Beat>::included);
     if (ret) {
         return ret;
     }
@@ -284,6 +315,12 @@ int animation_registry_register_defaults() {
         return ret;
     }
 
+    ret = animation_registry_register_shuffle_include(
+        Animation::FftBars, AnimationShuffleIncludeBinding<Animation::FftBars>::included);
+    if (ret) {
+        return ret;
+    }
+
     fft_bars_animation_bind_default_sound_dependencies();
     fft_bars_animation_bind_default_bt_dependencies();
 #endif
@@ -296,6 +333,12 @@ int animation_registry_register_defaults() {
 
     ret = animation_registry_register_is_active(Animation::GlimPlayer,
                                                 GlimPlayerAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_shuffle_include(
+        Animation::GlimPlayer, AnimationShuffleIncludeBinding<Animation::GlimPlayer>::included);
     if (ret) {
         return ret;
     }
@@ -316,6 +359,12 @@ int animation_registry_register_defaults() {
         return ret;
     }
 
+    ret = animation_registry_register_shuffle_include(
+        Animation::MatrixCode, AnimationShuffleIncludeBinding<Animation::MatrixCode>::included);
+    if (ret) {
+        return ret;
+    }
+
     matrix_code_animation_bind_default_dependencies();
 #endif
 
@@ -327,6 +376,12 @@ int animation_registry_register_defaults() {
 
     ret = animation_registry_register_is_active(Animation::Tilt,
                                                 TiltAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_shuffle_include(
+        Animation::Tilt, AnimationShuffleIncludeBinding<Animation::Tilt>::included);
     if (ret) {
         return ret;
     }
@@ -343,6 +398,12 @@ int animation_registry_register_defaults() {
 
     ret = animation_registry_register_is_active(Animation::Pulse,
                                                 PulseAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_shuffle_include(
+        Animation::Pulse, AnimationShuffleIncludeBinding<Animation::Pulse>::included);
     if (ret) {
         return ret;
     }

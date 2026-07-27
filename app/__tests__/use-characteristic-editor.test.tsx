@@ -3,9 +3,9 @@ import { fireEvent, render } from '@testing-library/react-native';
 import { Animated } from 'react-native';
 
 import DeviceStateDetailScreen from '@/app/(tabs)/device-state/[serviceUuid]';
-import { BLE_GATT_CPF_FORMAT_UINT32 } from '@/constants/bluetooth';
+import { BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_UINT32, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
-import { encodeUint32ToBase64 } from '@/services/ble-value-codec';
+import { encodeBooleanToBase64, encodeUint32ToBase64 } from '@/services/ble-value-codec';
 import * as ExpoRouter from 'expo-router';
 
 jest.mock('@react-navigation/bottom-tabs', () => ({
@@ -118,5 +118,38 @@ describe('useCharacteristicEditor notification sync', () => {
     rerender(<DeviceStateDetailScreen />);
 
     expect(getByDisplayValue('99')).toBeTruthy();
+  });
+
+  it('routes a shuffle-include write through writeServiceCharacteristic, never the flat map (issue #243)', async () => {
+    // The dddd UUID is reused across every animation service, so discovery keeps it
+    // OUT of the flat characteristics map — the detail page's auto-rendered switch
+    // must therefore write via the service-aware helper or the write silently fails.
+    const selectedDevice = buildSelectedDevice([
+      {
+        uuid: UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
+        cpfFormat: BLE_GATT_CPF_FORMAT_BOOLEAN,
+        value: encodeBooleanToBase64(true),
+        name: 'Include in Shuffle',
+      },
+    ]);
+    delete selectedDevice.characteristics[UUID_SHUFFLE_INCLUDE_CHARACTERISTIC];
+
+    const writeToCharacteristic = jest.fn(async () => true);
+    const writeServiceCharacteristic = jest.fn(async () => true);
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeToCharacteristic,
+      writeServiceCharacteristic,
+    } as any);
+
+    const { getByRole } = render(<DeviceStateDetailScreen />);
+    fireEvent(getByRole('switch'), 'valueChange', false);
+
+    expect(writeServiceCharacteristic).toHaveBeenCalledWith(
+      SERVICE_UUID,
+      UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
+      encodeBooleanToBase64(false)
+    );
+    expect(writeToCharacteristic).not.toHaveBeenCalled();
   });
 });

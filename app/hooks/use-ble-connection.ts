@@ -9,6 +9,7 @@ import {
     UUID_CUD_DESCRIPTOR,
     UUID_IS_ACTIVE_CHARACTERISTIC,
     UUID_METADATA_CHARACTERISTIC,
+    UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { bleManager } from "@/hooks/ble-manager";
@@ -433,10 +434,11 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                     console.log(`Could not decode animation name for service ${service.uuid}:`, error);
                                 }
                             }
-                        } else if (characteristic.uuid === UUID_IS_ACTIVE_CHARACTERISTIC) {
+                        } else if (characteristic.uuid === UUID_IS_ACTIVE_CHARACTERISTIC ||
+                                   characteristic.uuid === UUID_SHUFFLE_INCLUDE_CHARACTERISTIC) {
                             // Also reused identically across every animation service (see
-                            // constants/bluetooth.ts) - same collision risk as Animation Name, so it's
-                            // excluded from the flat maps too. Unlike Animation Name it stays
+                            // constants/bluetooth.ts) - same collision risk as Animation Name, so
+                            // they're excluded from the flat maps too. Unlike Animation Name they stay
                             // read/write/notifiable per-service, addressed via
                             // characteristicsByService[serviceUuid][charUuid] and the service-aware
                             // getServiceCharacteristicInfo/writeServiceCharacteristic context helpers.
@@ -519,10 +521,11 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                             if (read.value) updateCharValue(charUuid, read.value);
                                         })
                                         .catch(err => console.log(`Failed to re-read ${charName} after notification:`, err));
-                                } else if (charUuid === UUID_IS_ACTIVE_CHARACTERISTIC) {
-                                    // Reused identically across every animation service, so it's
+                                } else if (charUuid === UUID_IS_ACTIVE_CHARACTERISTIC ||
+                                           charUuid === UUID_SHUFFLE_INCLUDE_CHARACTERISTIC) {
+                                    // Reused identically across every animation service, so they're
                                     // excluded from the flat characteristics map (see the
-                                    // discovery loop above) - update it via the service-aware
+                                    // discovery loop above) - update via the service-aware
                                     // path, keyed by this specific service, instead.
                                     updateServiceCharacteristicValue(serviceUuid, charUuid, characteristic.value);
                                 } else {

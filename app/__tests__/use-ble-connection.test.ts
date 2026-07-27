@@ -8,6 +8,7 @@ import {
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
     UUID_IS_ACTIVE_CHARACTERISTIC,
+    UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
 } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import * as BleHook from '@/hooks/ble-manager';
@@ -420,6 +421,28 @@ describe('useBleConnection', () => {
 
         expect(ctx.updateServiceCharacteristicValue).toHaveBeenCalledWith('svc-1', UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x01'));
         expect(ctx.updateCharValue).not.toHaveBeenCalledWith(UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x01'));
+    });
+
+    it('excludes UUID_SHUFFLE_INCLUDE_CHARACTERISTIC from the flat map and routes its notifications through updateServiceCharacteristicValue (issue #243)', async () => {
+        const shuffleChar = makeCharacteristic(UUID_SHUFFLE_INCLUDE_CHARACTERISTIC, { notifiable: true, readValue: btoa('\x01') });
+        const service = makeService('svc-1', [shuffleChar]);
+        const deviceConn = makeDeviceConnection([service]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        const payload = ctx.setSelectedDevice.mock.calls[0][0];
+        expect(payload.characteristics[UUID_SHUFFLE_INCLUDE_CHARACTERISTIC]).toBeUndefined();
+        expect(payload.serviceCharacteristics['svc-1']).toEqual([]);
+        expect(payload.characteristicsByService['svc-1'][UUID_SHUFFLE_INCLUDE_CHARACTERISTIC]).toBeDefined();
+
+        const monitorCallback = shuffleChar.monitor.mock.calls[0][0];
+        act(() => { monitorCallback(null, { value: btoa('\x00') }); });
+
+        expect(ctx.updateServiceCharacteristicValue).toHaveBeenCalledWith('svc-1', UUID_SHUFFLE_INCLUDE_CHARACTERISTIC, btoa('\x00'));
+        expect(ctx.updateCharValue).not.toHaveBeenCalledWith(UUID_SHUFFLE_INCLUDE_CHARACTERISTIC, btoa('\x00'));
     });
 
     it('connect() registers a disconnect listener', async () => {

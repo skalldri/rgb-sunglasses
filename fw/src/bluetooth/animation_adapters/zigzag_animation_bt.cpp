@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/zigzag_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
+#include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
 
@@ -22,8 +24,12 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
                              kZigZagAnimationName>
     zigzagAnimationName;
 
+// APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
+// positions don't shift either way — but bonded phones cache handles per table).
+ShuffleIncludeCharacteristic<"zigzag/shuffle"> zigzagShuffleInclude;
+
 BtGattServer zigzagConfigServer(zigzagPrimaryService, zigzagStepTimeMs, zigzagColor,
-                                zigzagIsActive, zigzagAnimationName);
+                                zigzagIsActive, zigzagAnimationName, zigzagShuffleInclude);
 BT_GATT_SERVER_REGISTER(zigzagConfigServerStatic, zigzagConfigServer);
 
 namespace {
@@ -48,9 +54,14 @@ static void zigzag_set_is_active(bool active) {
     zigzagIsActive.setActive(active);
 }
 
+static bool zigzag_shuffle_included() {
+    return zigzagShuffleInclude.value();
+}
+
 struct ZigZagIsActiveBindingRegistrar {
     ZigZagIsActiveBindingRegistrar() {
         ZigZagAnimationIsActive::registerSetter(zigzag_set_is_active);
+        AnimationShuffleIncludeBinding<Animation::ZigZag>::registerGetter(zigzag_shuffle_included);
     }
 };
 

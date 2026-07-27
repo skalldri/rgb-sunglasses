@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/tilt_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
+#include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 
 constexpr bt_uuid_128 kTiltConfigServiceUuid =
@@ -21,7 +23,12 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
                              kTiltAnimationName>
     tiltAnimationName;
 
-BtGattServer tiltConfigServer(tiltPrimaryService, tiltIsActive, tiltAnimationName);
+// APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
+// positions don't shift either way — but bonded phones cache handles per table).
+ShuffleIncludeCharacteristic<"tilt/shuffle"> tiltShuffleInclude;
+
+BtGattServer tiltConfigServer(tiltPrimaryService, tiltIsActive, tiltAnimationName,
+                              tiltShuffleInclude);
 BT_GATT_SERVER_REGISTER(tiltConfigServerStatic, tiltConfigServer);
 
 using TiltAnimationIsActive = AnimationIsActiveBinding<Animation::Tilt>;
@@ -30,9 +37,14 @@ static void tilt_set_is_active(bool active) {
     tiltIsActive.setActive(active);
 }
 
+static bool tilt_shuffle_included() {
+    return tiltShuffleInclude.value();
+}
+
 struct TiltIsActiveBindingRegistrar {
     TiltIsActiveBindingRegistrar() {
         TiltAnimationIsActive::registerSetter(tilt_set_is_active);
+        AnimationShuffleIncludeBinding<Animation::Tilt>::registerGetter(tilt_shuffle_included);
     }
 };
 

@@ -41,3 +41,11 @@ void extension_bt_unregister(size_t slot);
  * @return 0 on success, negative errno otherwise.
  */
 int extension_bt_bind_is_active(size_t slot);
+
+/**
+ * @brief Notifies the slot's current "Include in Shuffle" value (issue #243) to
+ * subscribed BLE clients. For device-side changes only (the `ext shuffle` shell
+ * command) — remote writes don't notify, matching the built-ins. No-op if the
+ * slot's service isn't registered.
+ */
+void extension_bt_notify_shuffle_include(size_t slot);

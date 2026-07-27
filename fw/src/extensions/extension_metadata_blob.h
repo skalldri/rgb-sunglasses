@@ -25,8 +25,9 @@ namespace extension_metadata_blob {
  *  METADATA_BLOB_VERSION in app/constants/bluetooth.ts. */
 inline constexpr uint8_t kVersion = 1;
 
-/** @brief Animation Name + Is Active + up to RGBX_MAX_PARAMS param characteristics. */
-inline constexpr size_t kMaxEntries = 2 + RGBX_MAX_PARAMS;
+/** @brief Animation Name + Is Active + Include in Shuffle (issue #243) + up to
+ *  RGBX_MAX_PARAMS param characteristics. */
+inline constexpr size_t kMaxEntries = 3 + RGBX_MAX_PARAMS;
 
 /** @brief [cpf_format:1][name_len:1][name bytes: up to kMaxParamNameLen-1]. */
 inline constexpr size_t kMaxNameLen = extension_host::kMaxParamNameLen - 1;

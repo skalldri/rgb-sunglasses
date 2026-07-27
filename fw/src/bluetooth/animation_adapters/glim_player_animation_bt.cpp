@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/glim_player_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
+#include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
@@ -274,8 +276,13 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
                              kGlimPlayerAnimationName>
     glimPlayerAnimationName;
 
+// APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
+// positions don't shift either way — but bonded phones cache handles per table).
+ShuffleIncludeCharacteristic<"glim_player/shuffle"> glimPlayerShuffleInclude;
+
 BtGattServer glimPlayerConfigServer(glimPlayerPrimaryService, glimSelection, glimLoopMode,
-                                    glimPlayerIsActive, glimPlayerAnimationName);
+                                    glimPlayerIsActive, glimPlayerAnimationName,
+                                    glimPlayerShuffleInclude);
 BT_GATT_SERVER_REGISTER(glimPlayerConfigServerStatic, glimPlayerConfigServer);
 
 namespace {
@@ -329,9 +336,15 @@ static void glim_player_set_is_active(bool active) {
     glimPlayerIsActive.setActive(active);
 }
 
+static bool glim_player_shuffle_included() {
+    return glimPlayerShuffleInclude.value();
+}
+
 struct GlimPlayerIsActiveBindingRegistrar {
     GlimPlayerIsActiveBindingRegistrar() {
         GlimPlayerAnimationIsActive::registerSetter(glim_player_set_is_active);
+        AnimationShuffleIncludeBinding<Animation::GlimPlayer>::registerGetter(
+            glim_player_shuffle_included);
     }
 };
 

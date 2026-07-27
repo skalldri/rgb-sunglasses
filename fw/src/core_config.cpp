@@ -20,24 +20,14 @@ BtGattPersistentCharacteristic<"core/render_thread_rate_ms", "Render Thread Rate
 BtGattPersistentCharacteristic<"core/status_led_brightness", "Status LED Brightness (0-1000)",
                                 true, uint32_t, 20>
     coreStatusLedBrightness;
-// Shuffle mode (issue #121). Appended AFTER every existing characteristic and always
-// compiled in, even when CONFIG_APP_SHUFFLE=n (only the behavior is gated): the
-// BtGattServer pack below assigns characteristic UUIDs positionally, so conditional
-// membership would shift the UUIDs of anything declared later between builds.
-// min > max is a tolerated state (swapped at pick time by ShuffleController) — the two
-// durations are written one at a time over BLE, so no write is ever rejected here.
-BtGattPersistentCharacteristic<"core/shuffle_enabled", "Shuffle Enabled", true, bool, false>
-    coreShuffleEnabled;
-BtGattPersistentCharacteristic<"core/shuffle_min_s", "Shuffle Min Duration (s)", true, uint32_t,
-                                30>
-    coreShuffleMinS;
-BtGattPersistentCharacteristic<"core/shuffle_max_s", "Shuffle Max Duration (s)", true, uint32_t,
-                                120>
-    coreShuffleMaxS;
+// The issue-#121 shuffle characteristics (positions 4-6) moved to the dedicated Shuffle
+// service (issue #243, src/bluetooth/shuffle_service.cpp). They were this table's LAST
+// three entries, so the remaining positional UUIDs above are unchanged — but bonded
+// phones cache GATT handles per table, so this restructure still needs a forget+re-pair
+// on stacks that ignore Service Changed (the OxygenOS caveat, issue #115).
 
 BtGattServer coreConfigServer(coreConfigPrimaryService, coreBrightness, coreDisplayThreadRateMs,
-                              coreRenderThreadRateMs, coreStatusLedBrightness,
-                              coreShuffleEnabled, coreShuffleMinS, coreShuffleMaxS);
+                              coreRenderThreadRateMs, coreStatusLedBrightness);
 BT_GATT_SERVER_REGISTER(coreConfigServerStatic, coreConfigServer);
 
 float CoreConfig::getBrightnessFactor() {
@@ -72,31 +62,4 @@ float CoreConfig::getStatusLedBrightnessFactor() {
     }
 
     return ((float)brightnessUint) / 1000.0f;
-}
-
-bool CoreConfig::getShuffleEnabled() {
-    bool enabled = coreShuffleEnabled;
-    return enabled;
-}
-
-// No validation on the duration pair: min > max is a legitimate transient/persistent
-// state (see the characteristic declarations above); ShuffleController swaps at pick time.
-uint32_t CoreConfig::getShuffleMinDurationS() {
-    uint32_t minS = coreShuffleMinS;
-    return minS;
-}
-
-uint32_t CoreConfig::getShuffleMaxDurationS() {
-    uint32_t maxS = coreShuffleMaxS;
-    return maxS;
-}
-
-void CoreConfig::setShuffleEnabled(bool enabled) {
-    // operator= notifies subscribers but bypasses onWrite (that hook is remote-write
-    // only), so persist explicitly — mark_dirty() exists for exactly this shell path.
-    coreShuffleEnabled = enabled;
-    coreShuffleEnabled.mark_dirty();
-    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-        persistent_value_store::request_save();
-    }
 }

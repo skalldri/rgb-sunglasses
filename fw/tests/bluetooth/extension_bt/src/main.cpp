@@ -53,6 +53,8 @@ struct FakeSlot {
      * that IS within paramCount - the defensive branch read_param/write_param
      * take when info lookup fails despite a valid-looking ParamCtx. */
     bool hideParamInfo[RGBX_MAX_PARAMS] = {};
+    /* Include-in-shuffle flag (issue #243), default true like the real host's. */
+    bool shuffleInclude = true;
 };
 
 FakeSlot sFakeSlots[extension_host::kMaxExtensions];
@@ -129,6 +131,16 @@ bool writeParamString(size_t slot, size_t index, size_t offset, const void *data
 
 Animation animationId(size_t slot) {
     return sFakeSlots[slot].animId;
+}
+
+bool shuffleIncluded(size_t slot) {
+    return slot < kMaxExtensions && sFakeSlots[slot].shuffleInclude;
+}
+
+void setShuffleInclude(size_t slot, bool include) {
+    if (slot < kMaxExtensions) {
+        sFakeSlots[slot].shuffleInclude = include;
+    }
 }
 
 }  // namespace extension_host
@@ -293,8 +305,8 @@ ZTEST(extension_bt, test_register_uuid_and_is_active_lifecycle) {
     zassert_equal(do_read(isActiveAttr, &isActive, sizeof(isActive)), sizeof(isActive));
     zassert_equal(isActive, 0);
 
-    /* Bulk metadata characteristic (issue #90): Animation Name + Is Active,
-     * no params on this slot => 2 entries. */
+    /* Bulk metadata characteristic (issue #90): Animation Name + Is Active +
+     * Include in Shuffle (issue #243), no params on this slot => 3 entries. */
     const bt_gatt_attr *metaAttr =
         find_char_value(svcAttr->handle, &kMetadataCharacteristicUuid.uuid);
     zassert_not_null(metaAttr);
@@ -303,7 +315,32 @@ ZTEST(extension_bt, test_register_uuid_and_is_active_lifecycle) {
     zassert_true(metaLen >= 2);
     zassert_equal(metaBuf[0], extension_metadata_blob::kVersion);
     zassert_equal(metaBuf[0], kMetadataBlobVersion);
-    zassert_equal(metaBuf[1], 2, "expected Animation Name + Is Active metadata entries");
+    zassert_equal(metaBuf[1], 3,
+                  "expected Animation Name + Is Active + Include in Shuffle metadata entries");
+
+    /* Include in Shuffle (issue #243): fixed UUID, default true, write round trip
+     * into the host flag, invalid length rejected. */
+    const bt_gatt_attr *shuffleAttr =
+        find_char_value(svcAttr->handle, &kShuffleIncludeCharacteristicUuid.uuid);
+    zassert_not_null(shuffleAttr, "missing Include in Shuffle characteristic");
+    uint8_t shuffleVal = 0xFF;
+    zassert_equal(do_read(shuffleAttr, &shuffleVal, sizeof(shuffleVal)), sizeof(shuffleVal));
+    zassert_equal(shuffleVal, 1, "Include in Shuffle must default to true");
+    uint8_t excl = 0;
+    zassert_equal(do_write(shuffleAttr, &excl, sizeof(excl)), sizeof(excl));
+    zassert_false(extension_host::shuffleIncluded(slot), "write must reach the host flag");
+    zassert_equal(do_read(shuffleAttr, &shuffleVal, sizeof(shuffleVal)), sizeof(shuffleVal));
+    zassert_equal(shuffleVal, 0);
+    uint8_t twoBytes[2] = {1, 1};
+    zassert_equal(do_write(shuffleAttr, twoBytes, sizeof(twoBytes)),
+                 BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN));
+    uint8_t incl = 1;
+    zassert_equal(do_write(shuffleAttr, &incl, sizeof(incl)), sizeof(incl));
+    zassert_true(extension_host::shuffleIncluded(slot));
+    /* Device-side notify path: no subscribers here, must simply not crash
+     * (registered slot, unregistered slot, out-of-range slot). */
+    extension_bt_notify_shuffle_include(slot);
+    extension_bt_notify_shuffle_include(extension_host::kMaxExtensions);
 
     /* Wire the is-active mirror into the registry, same order the real boot
      * path uses (proxy registration before the bind call). */

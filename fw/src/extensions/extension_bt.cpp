@@ -43,13 +43,14 @@ namespace {
 
 using extension_host::kMaxExtensions;
 
-/* Characteristics per service: Animation Name + Is Active + params. */
-constexpr size_t kMaxChars = 2 + RGBX_MAX_PARAMS;
-/* Attrs per characteristic: declaration + value + CUD + CPF; +1 for the CCC
- * on Is Active (the only notifying characteristic); +2 for the bulk metadata
- * characteristic (declaration + value), gated the same way BtGattServer's
- * compile-time equivalent is (issue #90). */
-constexpr size_t kMaxAttrs = 1 /* primary service */ + 4 * kMaxChars + 1 +
+/* Characteristics per service: Animation Name + Is Active + Include in Shuffle
+ * (issue #243) + params. */
+constexpr size_t kMaxChars = 3 + RGBX_MAX_PARAMS;
+/* Attrs per characteristic: declaration + value + CUD + CPF; +2 for the CCCs
+ * on Is Active and Include in Shuffle (the two notifying characteristics);
+ * +2 for the bulk metadata characteristic (declaration + value), gated the
+ * same way BtGattServer's compile-time equivalent is (issue #90). */
+constexpr size_t kMaxAttrs = 1 /* primary service */ + 4 * kMaxChars + 2 +
                              (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC) ? 2 : 0);
 
 constexpr bt_gatt_cpf kCpfUtf8 = {.format = BLE_GATT_CPF_FORMAT_UTF8S};
@@ -74,6 +75,8 @@ struct BtSlot {
     bt_gatt_attr attrs[kMaxAttrs] = {};
     bt_gatt_ccc_managed_user_data isActiveCcc = {};
     const bt_gatt_attr *isActiveValueAttr = nullptr;  // notify target
+    bt_gatt_ccc_managed_user_data shuffleCcc = {};
+    const bt_gatt_attr *shuffleValueAttr = nullptr;  // notify target (issue #243)
     bt_gatt_service svc = {};
 #if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
     /* Bulk metadata blob (issue #90), built once per extension_bt_register()
@@ -121,6 +124,31 @@ ssize_t read_is_active(struct bt_conn *conn, const struct bt_gatt_attr *attr, vo
     bt_conn_activity_note();
     const auto *bs = static_cast<const BtSlot *>(attr->user_data);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &bs->isActive, sizeof(bs->isActive));
+}
+
+/* Include in Shuffle (issue #243): the value lives host-side (extension_host's Slot,
+ * where it persists) rather than mirrored here like isActive — read it through. */
+ssize_t read_shuffle_include(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+                             uint16_t len, uint16_t offset) {
+    bt_conn_activity_note();
+    const auto *bs = static_cast<const BtSlot *>(attr->user_data);
+    const uint8_t value = extension_host::shuffleIncluded(bs->slot) ? 1 : 0;
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &value, sizeof(value));
+}
+
+/* Storing a bool has no fallible side effect, so unlike write_is_active there is no
+ * rejection path; and like the built-ins' remote-write path, no notify — the writing
+ * app already knows the value (device-side changes notify via
+ * extension_bt_notify_shuffle_include()). */
+ssize_t write_shuffle_include(struct bt_conn *, const struct bt_gatt_attr *attr, const void *buf,
+                              uint16_t len, uint16_t offset, uint8_t) {
+    bt_conn_activity_note();
+    if (offset != 0 || len != 1) {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+    auto *bs = static_cast<BtSlot *>(attr->user_data);
+    extension_host::setShuffleInclude(bs->slot, *static_cast<const uint8_t *>(buf) != 0);
+    return len;
 }
 
 #if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
@@ -400,6 +428,35 @@ int extension_bt_register(size_t slot) {
         .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
     };
 
+    /* Include in Shuffle (issue #243) — fixed UUID, read/write/notify, mirroring the
+     * built-in adapters' ShuffleIncludeCharacteristic so the app lifts it onto the
+     * Controls row identically for extensions. Same CCC-after-CPF shape as Is Active.
+     * Positioned with the other fixed-UUID standard characteristics (Name, Is Active)
+     * BEFORE the param loop — unlike the built-in adapters, which append it last under
+     * the append-only rule. That rule protects bonded phones' cached handles in STATIC
+     * tables; these runtime tables' handles already shift with the installed .llext
+     * file set, param characteristic UUIDs are derived from each param's manifest
+     * index (p + 1 below), never from table position, and the app addresses
+     * everything by UUID + the metadata blob (fed in handle order by
+     * append_characteristic), so mid-table position is safe here. */
+    const size_t shuffleChrc = chrcIdx;
+    attrIdx = append_characteristic(
+        bs, attrIdx, chrcIdx++,
+        reinterpret_cast<const bt_uuid *>(&kShuffleIncludeCharacteristicUuid),
+        /*writable=*/true, read_shuffle_include, write_shuffle_include, bs, "Include in Shuffle",
+        &kCpfBool);
+    bs->chrcs[shuffleChrc].properties |= BT_GATT_CHRC_NOTIFY;
+    bs->shuffleValueAttr = &bs->attrs[attrIdx - 3];  // value attr of the 4 just appended
+    bs->shuffleCcc = BT_GATT_CCC_MANAGED_USER_DATA_INIT(nullptr, nullptr, nullptr);
+    bs->attrs[attrIdx++] = {
+        .uuid = BT_UUID_GATT_CCC,
+        .read = bt_gatt_attr_read_ccc,
+        .write = bt_gatt_attr_write_ccc,
+        .user_data = &bs->shuffleCcc,
+        .handle = 0,
+        .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+    };
+
     /* One characteristic per manifest parameter, auto-UUID'd with the same
      * compose scheme BtGattServer uses (characteristic id in the UUID's low
      * bytes; ids start at 1 to keep 0 == the service UUID itself). */
@@ -473,6 +530,17 @@ int extension_bt_register(size_t slot) {
     LOG_INF("registered BLE service for extension '%s' (%zu attrs)",
             extension_host::name(slot), attrIdx);
     return 0;
+}
+
+void extension_bt_notify_shuffle_include(size_t slot) {
+    if (slot >= kMaxExtensions) {
+        return;
+    }
+    BtSlot *bs = &sBtSlots[slot];
+    if (bs->registered && bs->shuffleValueAttr != nullptr) {
+        const uint8_t value = extension_host::shuffleIncluded(slot) ? 1 : 0;
+        (void)bt_gatt_notify(nullptr, bs->shuffleValueAttr, &value, sizeof(value));
+    }
 }
 
 int extension_bt_bind_is_active(size_t slot) {

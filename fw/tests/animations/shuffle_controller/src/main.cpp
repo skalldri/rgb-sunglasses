@@ -285,6 +285,75 @@ ZTEST(shuffle_controller, test_pick_skips_ineligible) {
     zassert_equal((int)d.next, (int)kC, "ineligible id must never be picked");
 }
 
+ZTEST(shuffle_controller, test_all_ineligible_no_switch) {
+    // Issue #243: every candidate opted out of shuffle ("include in shuffle" false on
+    // all of them) — like pool-of-one, shuffle must idle rather than switch or crash.
+    FakePool pool;
+    default_pool(pool);
+    pool.ineligible[0] = kB;
+    pool.ineligible[1] = kC;
+    pool.nIneligible = 2;
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 0);
+
+    ctrl.onFrame(kA, 1000, true);  // arm
+    for (int i = 0; i < 100; i++) {
+        const auto d = ctrl.onFrame(kA, 1000, true);
+        zassert_false(d.switchNow, "all-ineligible pool must never switch (frame %d)", i);
+    }
+}
+
+ZTEST(shuffle_controller, test_eligibility_flips_midrun) {
+    // Issue #243: the include flag is PULLED at pick time, so a BLE toggle between
+    // hops must take effect on the very next pick with no re-arm needed.
+    FakePool pool;
+    default_pool(pool);
+    pool.ineligible[0] = kB;  // user excluded B
+    pool.nIneligible = 1;
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 0);
+
+    auto d = ctrl.onFrame(kA, 1000, true);  // arm
+    d = ctrl.onFrame(kA, 1000, true);
+    zassert_true(d.switchNow, "expected a switch at the 1 s target");
+    zassert_equal((int)d.next, (int)kC, "excluded id must never be picked");
+
+    // User re-includes B mid-run. The controller already tracked its own switch
+    // (lastSeen_ = C) and re-armed a fresh 1 s target, so the next frame on C
+    // reaches that target and picks again: candidates from C are now {A, B} and the
+    // scripted pick rng 1 must land on B (proving the flag was re-read at pick time).
+    pool.nIneligible = 0;
+    const uint32_t script[] = {1u, 0u, 0u};
+    rng_script(script, 3);
+    d = ctrl.onFrame(kC, 1000, true);
+    zassert_true(d.switchNow, "expected a switch at the re-armed 1 s target");
+    zassert_equal((int)d.next, (int)kB, "re-included id must be pickable again");
+}
+
+ZTEST(shuffle_controller, test_current_becomes_ineligible) {
+    // Issue #243: excluding the CURRENTLY-PLAYING animation must not pin shuffle on
+    // it — the dwell still expires and shuffle hops away to an eligible candidate.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = 2;
+    cfg.maxS = 2;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 0);
+
+    auto d = ctrl.onFrame(kA, 1000, true);  // arm
+    pool.ineligible[0] = kA;                // user excludes A while it is playing
+    pool.nIneligible = 1;
+    d = ctrl.onFrame(kA, 1000, true);  // dwell 1000
+    zassert_false(d.switchNow, "must not switch before the target");
+    d = ctrl.onFrame(kA, 1000, true);  // dwell 2000 = target
+    zassert_true(d.switchNow, "must still switch away from a newly-excluded current");
+    zassert_true(d.next == kB || d.next == kC, "next must be an eligible non-current id");
+}
+
 ZTEST(shuffle_controller, test_pool_of_one_no_switch) {
     FakePool pool;
     const Animation ids[] = {Animation::None, kA};

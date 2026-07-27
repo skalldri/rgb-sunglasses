@@ -9,6 +9,7 @@ import {
     BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
     BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S,
     UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_IS_ACTIVE_CHARACTERISTIC,
+    UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { useThemeColors } from "@/hooks/use-theme-color";
@@ -173,14 +174,17 @@ export function useCharacteristicEditor() {
     }
 
     // Helper to write characteristic value to BLE with UI feedback. serviceUuid is required so
-    // UUID_IS_ACTIVE_CHARACTERISTIC (reused across services) can be routed through the
-    // service-aware write path instead of the ambiguous flat-map one.
+    // the UUIDs reused across services (UUID_IS_ACTIVE_CHARACTERISTIC,
+    // UUID_SHUFFLE_INCLUDE_CHARACTERISTIC) can be routed through the service-aware write path
+    // instead of the ambiguous flat-map one.
     async function writeCharValue(serviceUuid: string, charUuid: string, newEncodedValue: string, previousEncodedValue: string) {
-        const success = charUuid === UUID_IS_ACTIVE_CHARACTERISTIC
+        const isServiceScoped = charUuid === UUID_IS_ACTIVE_CHARACTERISTIC ||
+            charUuid === UUID_SHUFFLE_INCLUDE_CHARACTERISTIC;
+        const success = isServiceScoped
             ? await writeServiceCharacteristic(serviceUuid, charUuid, newEncodedValue)
             : await writeToCharacteristic(charUuid, newEncodedValue);
 
-        const charInfo = charUuid === UUID_IS_ACTIVE_CHARACTERISTIC
+        const charInfo = isServiceScoped
             ? selectedDevice?.characteristicsByService?.[serviceUuid]?.[charUuid] ?? null
             : selectedDevice?.characteristics?.[charUuid] ?? null;
 

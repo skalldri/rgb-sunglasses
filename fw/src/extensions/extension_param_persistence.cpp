@@ -21,6 +21,19 @@ void build_settings_key(char *out, size_t outLen, const char *displayName) {
     out[pos] = '\0';
 }
 
+void build_shuffle_settings_key(char *out, size_t outLen, const char *displayName) {
+    build_settings_key(out, outLen, displayName);
+
+    size_t pos = strnlen(out, outLen);
+    static constexpr char kSuffix[] = "/shuffle";
+    for (size_t i = 0; kSuffix[i] != '\0' && pos + 1 < outLen; i++) {
+        out[pos++] = kSuffix[i];
+    }
+    if (pos < outLen) {
+        out[pos] = '\0';
+    }
+}
+
 uint32_t manifest_fingerprint(const extension_manifest::Metadata &meta) {
     // FNV-1a over the parameter shape. Order-sensitive by construction (each
     // param folds in its type, then its name bytes, then a 0 separator so

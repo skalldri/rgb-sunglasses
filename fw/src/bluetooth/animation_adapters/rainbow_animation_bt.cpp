@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/rainbow_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
+#include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
 
@@ -21,8 +23,12 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
                              kRainbowAnimationName>
     rainbowAnimationName;
 
+// APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
+// positions don't shift either way — but bonded phones cache handles per table).
+ShuffleIncludeCharacteristic<"rainbow/shuffle"> rainbowShuffleInclude;
+
 BtGattServer rainbowConfigServer(rainbowPrimaryService, rainbowStepTimeMs, rainbowWidthPix,
-                                 rainbowIsActive, rainbowAnimationName);
+                                 rainbowIsActive, rainbowAnimationName, rainbowShuffleInclude);
 BT_GATT_SERVER_REGISTER(rainbowConfigServerStatic, rainbowConfigServer);
 
 namespace {
@@ -47,9 +53,15 @@ static void rainbow_set_is_active(bool active) {
     rainbowIsActive.setActive(active);
 }
 
+static bool rainbow_shuffle_included() {
+    return rainbowShuffleInclude.value();
+}
+
 struct RainbowIsActiveBindingRegistrar {
     RainbowIsActiveBindingRegistrar() {
         RainbowAnimationIsActive::registerSetter(rainbow_set_is_active);
+        AnimationShuffleIncludeBinding<Animation::Rainbow>::registerGetter(
+            rainbow_shuffle_included);
     }
 };
 

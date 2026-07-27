@@ -21,6 +21,8 @@ FakeAnimation sFirstAnimation;
 FakeAnimation sSecondAnimation;
 bool sLastActiveState = false;
 size_t sSetActiveCallCount = 0;
+bool sShuffleIncluded = true;
+size_t sShuffleGetterCallCount = 0;
 
 BaseAnimation *first_factory() {
     return &sFirstAnimation;
@@ -35,12 +37,19 @@ void record_active_state(bool active) {
     sSetActiveCallCount++;
 }
 
+bool report_shuffle_included(void) {
+    sShuffleGetterCallCount++;
+    return sShuffleIncluded;
+}
+
 void reset_test_state(void) {
     animation_registry_reset();
     sFirstAnimation.initCount = 0;
     sSecondAnimation.initCount = 0;
     sLastActiveState = false;
     sSetActiveCallCount = 0;
+    sShuffleIncluded = true;
+    sShuffleGetterCallCount = 0;
 }
 }  // namespace
 
@@ -108,6 +117,56 @@ ZTEST(animation_registry_tests, test_register_is_active_requires_animation_regis
     reset_test_state();
     int ret = animation_registry_register_is_active(Animation::Text, record_active_state);
     zassert_equal(ret, -ENOENT, "Expected -ENOENT for unregistered animation, got %d", ret);
+}
+
+ZTEST(animation_registry_tests, test_register_shuffle_include_requires_animation_registration) {
+    reset_test_state();
+    // Same -ENOENT contract as register_is_active (issue #243) — an ignored failure
+    // here would silently leave the animation permanently included (PR #89 class).
+    int ret = animation_registry_register_shuffle_include(Animation::Text,
+                                                          report_shuffle_included);
+    zassert_equal(ret, -ENOENT, "Expected -ENOENT for unregistered animation, got %d", ret);
+
+    ret = animation_registry_register(Animation::Text, first_factory);
+    zassert_equal(ret, 0, "Failed to register animation: %d", ret);
+    ret = animation_registry_register_shuffle_include(Animation::Text,
+                                                      report_shuffle_included);
+    zassert_equal(ret, 0, "Expected registration to succeed after register(): %d", ret);
+}
+
+ZTEST(animation_registry_tests, test_register_shuffle_include_rejects_null_getter) {
+    reset_test_state();
+    animation_registry_register(Animation::Text, first_factory);
+    int ret = animation_registry_register_shuffle_include(Animation::Text, NULL);
+    zassert_equal(ret, -EINVAL, "Expected -EINVAL for a NULL getter, got %d", ret);
+}
+
+ZTEST(animation_registry_tests, test_shuffle_included_defaults_true) {
+    reset_test_state();
+    // Unknown id: default included.
+    zassert_true(animation_registry_shuffle_included(Animation::Text),
+                 "Unknown id must default to included");
+    // Registered id with no getter: still default included.
+    animation_registry_register(Animation::Text, first_factory);
+    zassert_true(animation_registry_shuffle_included(Animation::Text),
+                 "Registered id with no getter must default to included");
+    zassert_equal(sShuffleGetterCallCount, 0, "No getter should have been consulted");
+}
+
+ZTEST(animation_registry_tests, test_shuffle_included_consults_getter) {
+    reset_test_state();
+    animation_registry_register(Animation::Text, first_factory);
+    int ret = animation_registry_register_shuffle_include(Animation::Text,
+                                                          report_shuffle_included);
+    zassert_equal(ret, 0, "Failed to register shuffle-include getter: %d", ret);
+
+    sShuffleIncluded = true;
+    zassert_true(animation_registry_shuffle_included(Animation::Text),
+                 "Expected getter's true to be returned");
+    sShuffleIncluded = false;
+    zassert_false(animation_registry_shuffle_included(Animation::Text),
+                  "Expected getter's false to be returned (pulled per call, not cached)");
+    zassert_equal(sShuffleGetterCallCount, 2, "Expected the getter consulted once per query");
 }
 
 ZTEST(animation_registry_tests, test_reset_after_registration_clears_entries) {

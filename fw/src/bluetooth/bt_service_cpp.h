@@ -118,6 +118,18 @@ constexpr bt_uuid_128 kIsActiveCharacteristicUuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0xbbbb, 0x56789abd0000));
 
 /**
+ * @brief Fixed UUID for the "Include in Shuffle" characteristic (issue #243), reused
+ * identically across every animation's BtGattServer, mirroring kIsActiveCharacteristicUuid
+ * above. Group 0xdddd is chosen to never collide with any anim_id<<8 used by
+ * BT_ANIMATION_SERVICE_UUID (anim_id only ranges 0-11 today, extensions use 0x40+slot),
+ * nor with groups 0xaaaa (Animation Name), 0xbbbb (Is Active), or 0xcccc (bulk metadata).
+ * The fixed UUID lets the app lift the toggle onto each animation's Controls row without
+ * depending on that animation's declaration order, exactly like "Is Active".
+ */
+constexpr bt_uuid_128 kShuffleIncludeCharacteristicUuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0xdddd, 0x56789abd0000));
+
+/**
  * @brief Fixed UUID for the auto-synthesized "bulk metadata" characteristic that
  * @ref BtGattServer appends to every service it assembles (issue #41 follow-up).
  * Group 0xcccc is chosen to never collide with kAnimationNameCharacteristicUuid's 0xaaaa,
