@@ -35,6 +35,12 @@ name: App Release
 # `workflow_dispatch`, both of which require write access to this repo and
 # always run THIS repo's trusted copy of the workflow, so fork code can never
 # reach the runner.
+#
+# The runner service itself runs under a dedicated `ci-runner` macOS account
+# (not a developer's own login), so this job's throwaway signing keychain
+# (see "Set up signing keychain" below) never shares a keychain search list
+# with anyone's interactive session — see app/README.md's "Runs under a
+# dedicated ci-runner account" section for the account setup.
 on:
   push:
     tags:

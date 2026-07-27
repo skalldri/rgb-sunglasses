@@ -94,7 +94,10 @@ iOS, and `requestPermissions()` returns `true` on iOS (BLE permission strings co
 **TestFlight releases**: the `ios-testflight` job in `.github/workflows/app-release.yml` builds a
 signed Release archive and uploads it to TestFlight. The job is gated on the
 `TESTFLIGHT_PUBLISH_ENABLED` repo variable — it must be `true` or the job is skipped (a pause
-switch that avoids editing the workflow). It runs on the same self-hosted Mac runner,
+switch that avoids editing the workflow). It runs on the same self-hosted Mac runner — which runs
+under a dedicated `ci-runner` macOS account with Automatic Login, not a developer's own login
+session, so the job's throwaway signing keychain never shares a search list with anyone's
+interactive session (see `app/README.md`'s "Runs under a dedicated ci-runner account" section) —
 triggered by `app-vX.Y.Z` tags (in parallel with the Android release job — neither gates the other)
 or by `workflow_dispatch` with explicit `version` + `build_number` inputs (iOS-only; the Android
 job is skipped — used for the first upload and pipeline validation). Signing: automatic signing +
