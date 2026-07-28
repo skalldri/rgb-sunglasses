@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/my_eyes_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
+#include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
 
@@ -87,12 +89,17 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
                              kMyEyesAnimationName>
     myEyesAnimationName;
 
+// APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
+// positions don't shift either way — but bonded phones cache handles per table).
+ShuffleIncludeCharacteristic<"my_eyes/shuffle"> myEyesShuffleInclude;
+
 BtGattServer myEyesConfigServer(myEyesPrimaryService, myEyesBlinkSpeedMs, myEyesColor, myEyesUpNext,
                                 myEyesSlot0, myEyesSlot1, myEyesSlot2, myEyesSlot3, myEyesSlot4,
                                 myEyesSlot5, myEyesSlot6, myEyesSlot7, myEyesSlot8, myEyesSlot9,
                                 myEyesSlot10, myEyesSlot11, myEyesSlot12, myEyesSlot13,
                                 myEyesSlot14, myEyesSlot15, myEyesSlot16, myEyesSlot17,
-                                myEyesSlot18, myEyesSlot19, myEyesIsActive, myEyesAnimationName);
+                                myEyesSlot18, myEyesSlot19, myEyesIsActive, myEyesAnimationName,
+                                myEyesShuffleInclude);
 BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
 using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes>;
@@ -101,9 +108,15 @@ static void my_eyes_set_is_active(bool active) {
     myEyesIsActive.setActive(active);
 }
 
+static bool my_eyes_shuffle_included() {
+    return myEyesShuffleInclude.value();
+}
+
 struct MyEyesIsActiveBindingRegistrar {
     MyEyesIsActiveBindingRegistrar() {
         MyEyesAnimationIsActive::registerSetter(my_eyes_set_is_active);
+        AnimationShuffleIncludeBinding<Animation::MyEyes>::registerGetter(
+            my_eyes_shuffle_included);
     }
 };
 

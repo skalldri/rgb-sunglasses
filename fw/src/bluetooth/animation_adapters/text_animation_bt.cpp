@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/text_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
+#include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
 
@@ -88,12 +90,16 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
 
 BtGattAutoReadNotifyCharacteristic<"Now Playing", uint32_t, 0> nowPlayingCharacteristic;
 
+// APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
+// positions don't shift either way — but bonded phones cache handles per table).
+ShuffleIncludeCharacteristic<"text/shuffle"> textShuffleInclude;
+
 BtGattServer textConfigServer(textPrimaryService, textStepTimeMs, textColor, textUpNext, textSlot0,
                               textSlot1, textSlot2, textSlot3, textSlot4, textSlot5, textSlot6,
                               textSlot7, textSlot8, textSlot9, textSlot10, textSlot11, textSlot12,
                               textSlot13, textSlot14, textSlot15, textSlot16, textSlot17,
                               textSlot18, textSlot19, textIsActive, textAnimationName,
-                              nowPlayingCharacteristic);
+                              nowPlayingCharacteristic, textShuffleInclude);
 BT_GATT_SERVER_REGISTER(textConfigServerStatic, textConfigServer);
 
 namespace {
@@ -114,8 +120,15 @@ static void text_set_is_active(bool active) {
     textIsActive.setActive(active);
 }
 
+static bool text_shuffle_included() {
+    return textShuffleInclude.value();
+}
+
 struct TextIsActiveBindingRegistrar {
-    TextIsActiveBindingRegistrar() { TextAnimationIsActive::registerSetter(text_set_is_active); }
+    TextIsActiveBindingRegistrar() {
+        TextAnimationIsActive::registerSetter(text_set_is_active);
+        AnimationShuffleIncludeBinding<Animation::Text>::registerGetter(text_shuffle_included);
+    }
 };
 
 [[maybe_unused]] TextIsActiveBindingRegistrar sTextIsActiveBindingRegistrar;

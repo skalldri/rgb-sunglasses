@@ -1,6 +1,8 @@
 import { BatteryCard } from "@/components/battery-card";
 import { CharacteristicBoolean } from "@/components/characteristic-boolean";
 import { WriteErrorIndicator } from "@/components/characteristic-write-error";
+import { ShuffleButton } from "@/components/shuffle-button";
+import { ShuffleToggle } from "@/components/shuffle-toggle";
 import { ThemedText } from "@/components/themed-text";
 import { AppButton } from "@/components/ui/app-button";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +11,7 @@ import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { Section } from "@/components/ui/section";
-import { getServiceName, UUID_BATTERY_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE } from "@/constants/bluetooth";
+import { getServiceName, UUID_BATTERY_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useThemeColors } from "@/hooks/use-theme-color";
@@ -96,23 +98,40 @@ export default function DeviceStateMenuScreen() {
                 <ScrollView contentContainerStyle={styles.scrollContent}>
                     {animationServices.length > 0 && (
                         <Card style={styles.card}>
-                            <Section title="Animations">
+                            {/* The header shuffle button is hard-coded to the Shuffle service's
+                                Enabled characteristic and self-hides on firmware without it. */}
+                            <Section title="Animations" right={<ShuffleButton />}>
                                 {animationServices.map((service, index) => {
                                     const isActiveInfo = selectedDevice.characteristicsByService[service.uuid]?.[UUID_IS_ACTIVE_CHARACTERISTIC] ?? null;
+                                    const shuffleInfo = selectedDevice.characteristicsByService[service.uuid]?.[UUID_SHUFFLE_INCLUDE_CHARACTERISTIC] ?? null;
                                     return (
                                         <React.Fragment key={service.uuid}>
                                             {index > 0 && <Divider />}
                                             <MenuRow
                                                 label={selectedDevice.serviceDisplayNames?.[service.uuid] ?? getServiceName(service.uuid)}
                                                 href={`/(tabs)/device-state/${service.uuid}`}
-                                                rightSlot={isActiveInfo && (
+                                                rightSlot={(isActiveInfo || shuffleInfo) && (
                                                     <>
-                                                        <WriteErrorIndicator charInfo={isActiveInfo} />
-                                                        <CharacteristicBoolean
-                                                            charUuid={UUID_IS_ACTIVE_CHARACTERISTIC}
-                                                            charInfo={isActiveInfo}
-                                                            onWrite={(charUuid, encoded) => writeServiceCharacteristic(service.uuid, charUuid, encoded)}
-                                                        />
+                                                        {shuffleInfo && (
+                                                            <>
+                                                                <WriteErrorIndicator charInfo={shuffleInfo} />
+                                                                <ShuffleToggle
+                                                                    charUuid={UUID_SHUFFLE_INCLUDE_CHARACTERISTIC}
+                                                                    charInfo={shuffleInfo}
+                                                                    onWrite={(charUuid, encoded) => writeServiceCharacteristic(service.uuid, charUuid, encoded)}
+                                                                />
+                                                            </>
+                                                        )}
+                                                        {isActiveInfo && (
+                                                            <>
+                                                                <WriteErrorIndicator charInfo={isActiveInfo} />
+                                                                <CharacteristicBoolean
+                                                                    charUuid={UUID_IS_ACTIVE_CHARACTERISTIC}
+                                                                    charInfo={isActiveInfo}
+                                                                    onWrite={(charUuid, encoded) => writeServiceCharacteristic(service.uuid, charUuid, encoded)}
+                                                                />
+                                                            </>
+                                                        )}
                                                     </>
                                                 )}
                                             />

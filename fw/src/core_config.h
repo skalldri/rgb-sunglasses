@@ -26,20 +26,6 @@ class CoreConfig : public Singleton<CoreConfig>, public ConfigurationProvider {
      */
     float getStatusLedBrightnessFactor();
 
-    // Shuffle mode (issue #121). Deliberately NOT part of ConfigurationProvider: shuffle
-    // logic consumes these through its own ShuffleConfigSource seam, so widening the
-    // interface would only force updates to its test fakes (same reasoning as
-    // getStatusLedBrightnessFactor() above). Non-const like every getter here — see the
-    // CoreConfig note in fw/CLAUDE.md.
-
-    /** @brief Whether shuffle mode is currently enabled (BLE-settable, persisted). */
-    bool getShuffleEnabled();
-    /** @brief Shuffle dwell lower bound in seconds. May exceed the max — tolerated;
-     *  ShuffleController swaps at pick time. */
-    uint32_t getShuffleMinDurationS();
-    /** @brief Shuffle dwell upper bound in seconds (see the min getter's swap note). */
-    uint32_t getShuffleMaxDurationS();
-    /** @brief Shell convenience (anim shuffle on|off): assigns the characteristic, which
-     *  notifies subscribers and persists like a BLE write. */
-    void setShuffleEnabled(bool enabled);
+    // The issue-#121 shuffle accessors moved with their characteristics to the dedicated
+    // Shuffle service (issue #243) — see src/bluetooth/shuffle_service.h.
 };

@@ -25,6 +25,7 @@ const MAPPING = {
   'arrow.clockwise': 'refresh',
   'magnifyingglass': 'search',
   'exclamationmark.triangle.fill': 'warning',
+  'shuffle': 'shuffle',
 } as IconMapping;
 
 /**

@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/matrix_code_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
+#include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
 
@@ -34,9 +36,14 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
                              kMatrixCodeAnimationName>
     matrixCodeAnimationName;
 
+// APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
+// positions don't shift either way — but bonded phones cache handles per table).
+ShuffleIncludeCharacteristic<"matrix_code/shuffle"> matrixCodeShuffleInclude;
+
 BtGattServer matrixCodeConfigServer(matrixCodePrimaryService, matrixCodeDropSpeedMs,
                                     matrixCodeFadeTimeMs, matrixCodeDensity, matrixCodeColor,
-                                    matrixCodeIsActive, matrixCodeAnimationName);
+                                    matrixCodeIsActive, matrixCodeAnimationName,
+                                    matrixCodeShuffleInclude);
 BT_GATT_SERVER_REGISTER(matrixCodeConfigServerStatic, matrixCodeConfigServer);
 
 namespace {
@@ -74,9 +81,15 @@ static void matrix_code_set_is_active(bool active) {
     matrixCodeIsActive.setActive(active);
 }
 
+static bool matrix_code_shuffle_included() {
+    return matrixCodeShuffleInclude.value();
+}
+
 struct MatrixCodeIsActiveBindingRegistrar {
     MatrixCodeIsActiveBindingRegistrar() {
         MatrixCodeAnimationIsActive::registerSetter(matrix_code_set_is_active);
+        AnimationShuffleIncludeBinding<Animation::MatrixCode>::registerGetter(
+            matrix_code_shuffle_included);
     }
 };
 

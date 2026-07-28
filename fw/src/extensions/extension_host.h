@@ -67,6 +67,23 @@ bool isFaulted(size_t slot);
  */
 bool atGoodSwitchPoint(size_t slot);
 
+/**
+ * @brief Whether shuffle may pick this slot's animation (issue #243) — the extension
+ * counterpart of the built-ins' "Include in Shuffle" characteristic, persisted under
+ * "ext/<sanitized displayName>/shuffle" (see extension_param_persistence.h). Defaults
+ * to true; false for invalid slots. Deliberately NOT cleared by a sandbox fault:
+ * unlike params, the flag can't have caused the crash, and fault exclusion is
+ * isFaulted()'s job (see the shuffle pool in pattern_controller.cpp).
+ */
+bool shuffleIncluded(size_t slot);
+
+/**
+ * @brief Sets the slot's "include in shuffle" flag and persists it (debounced).
+ * Device-side callers (the `ext shuffle` shell command) must also push the change to
+ * subscribed BLE clients via extension_bt_notify_shuffle_include().
+ */
+void setShuffleInclude(size_t slot, bool include);
+
 /** @brief Display name copied out of the manifest, or nullptr. */
 const char *name(size_t slot);
 

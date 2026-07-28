@@ -486,15 +486,19 @@ config APP_BOOT_GATE_TIMEOUT_MS
 config APP_SHUFFLE
 	bool "Animation shuffle mode"
 	default y
+	depends on BT
 	help
-	  Randomly cycles through the registered animations (issue #121). Each
-	  animation plays for a random duration between the Core Config shuffle
-	  min/max characteristics (seconds), then shuffle waits for the
-	  animation to signal a natural switch boundary (end of text scroll,
-	  end of GLIM clip; most animations signal every frame) before
-	  switching. Configured over BLE via the Core Config service (the
-	  characteristics exist regardless of this symbol - only the behavior
-	  is gated); shuffle is off by default at runtime.
+	  Randomly cycles through the registered animations (issue #121),
+	  skipping any the user excluded via the per-animation "Include in
+	  Shuffle" characteristics (issue #243). Each animation plays for a
+	  random duration between the Shuffle service's min/max
+	  characteristics (seconds), then shuffle waits for the animation to
+	  signal a natural switch boundary (end of text scroll, end of GLIM
+	  clip; most animations signal every frame) before switching.
+	  Configured over BLE via the dedicated Shuffle service
+	  (src/bluetooth/shuffle_service.cpp — its own GATT table, compiled
+	  only when this is enabled, hence the BT dependency); shuffle is off
+	  by default at runtime.
 
 config APP_SHUFFLE_GRACE_S
 	int "Shuffle good-moment grace cap (seconds)"

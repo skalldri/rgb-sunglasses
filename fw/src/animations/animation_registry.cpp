@@ -8,6 +8,7 @@ struct AnimationRegistryEntry {
     Animation id;
     AnimationInstanceFactory factory;
     AnimationIsActiveSetter activeSetter;
+    AnimationShuffleIncludeGetter shuffleIncludeGetter;
 };
 
 // Built-in Animation enum values + up to 16 runtime extension animations
@@ -47,6 +48,7 @@ int animation_registry_register(Animation id, AnimationInstanceFactory factory) 
         .id = id,
         .factory = factory,
         .activeSetter = NULL,
+        .shuffleIncludeGetter = NULL,
     };
     sRegistryCount++;
     return 0;
@@ -64,6 +66,31 @@ int animation_registry_register_is_active(Animation id, AnimationIsActiveSetter 
 
     sRegistry[idx].activeSetter = setter;
     return 0;
+}
+
+int animation_registry_register_shuffle_include(Animation id, AnimationShuffleIncludeGetter getter) {
+    if (!getter) {
+        return -EINVAL;
+    }
+
+    ssize_t idx = findRegistryIndex(id);
+    if (idx < 0) {
+        return -ENOENT;
+    }
+
+    sRegistry[idx].shuffleIncludeGetter = getter;
+    return 0;
+}
+
+bool animation_registry_shuffle_included(Animation id) {
+    ssize_t idx = findRegistryIndex(id);
+    if (idx < 0 || !sRegistry[idx].shuffleIncludeGetter) {
+        // Default to included: an animation only leaves the shuffle pool by
+        // explicit opt-out (see the header doc).
+        return true;
+    }
+
+    return sRegistry[idx].shuffleIncludeGetter();
 }
 
 void animation_registry_reset() {

@@ -5,10 +5,28 @@
 
 using AnimationInstanceFactory = BaseAnimation *(*)();
 using AnimationIsActiveSetter = void (*)(bool active);
+using AnimationShuffleIncludeGetter = bool (*)();
 
 int animation_registry_register(Animation id, AnimationInstanceFactory factory);
 
 int animation_registry_register_is_active(Animation id, AnimationIsActiveSetter setter);
+
+/**
+ * @brief Registers the per-animation "include in shuffle" getter (issue #243).
+ *
+ * Same contract as animation_registry_register_is_active(): returns -ENOENT unless
+ * animation_registry_register() already created the id's entry, and the return value
+ * must be checked — an ignored -ENOENT here silently exempts nothing and includes the
+ * animation forever (cf. the PR #89 is-active incident).
+ */
+int animation_registry_register_shuffle_include(Animation id, AnimationShuffleIncludeGetter getter);
+
+/**
+ * @brief Whether shuffle may pick this animation (issue #243). Pulled by the shuffle
+ * pool at pick time. Unknown ids and entries with no registered getter default to
+ * true — an animation only leaves the shuffle pool by explicit opt-out.
+ */
+bool animation_registry_shuffle_included(Animation id);
 
 void animation_registry_reset();
 

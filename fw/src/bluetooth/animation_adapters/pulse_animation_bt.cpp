@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/pulse_animation.h>
 #include <bluetooth/animation_is_active_characteristic.h>
+#include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
 
@@ -20,8 +22,12 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
                              kPulseAnimationName>
     pulseAnimationName;
 
+// APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
+// positions don't shift either way — but bonded phones cache handles per table).
+ShuffleIncludeCharacteristic<"pulse/shuffle"> pulseShuffleInclude;
+
 BtGattServer pulseConfigServer(pulsePrimaryService, pulseColor, pulsePeriodMs, pulseIsActive,
-                                pulseAnimationName);
+                                pulseAnimationName, pulseShuffleInclude);
 BT_GATT_SERVER_REGISTER(pulseConfigServerStatic, pulseConfigServer);
 
 namespace {
@@ -46,9 +52,14 @@ static void pulse_set_is_active(bool active) {
     pulseIsActive.setActive(active);
 }
 
+static bool pulse_shuffle_included() {
+    return pulseShuffleInclude.value();
+}
+
 struct PulseIsActiveBindingRegistrar {
     PulseIsActiveBindingRegistrar() {
         PulseAnimationIsActive::registerSetter(pulse_set_is_active);
+        AnimationShuffleIncludeBinding<Animation::Pulse>::registerGetter(pulse_shuffle_included);
     }
 };
 

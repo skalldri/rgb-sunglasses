@@ -12,6 +12,7 @@ export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0004-56789abc0000": "MCUboot Updater",
     "12345678-1234-5678-0005-56789abc0000": "Battery",
     "12345678-1234-5678-0006-56789abc0000": "Power Debug",
+    "12345678-1234-5678-0007-56789abc0000": "Shuffle",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
@@ -53,6 +54,16 @@ export const UUID_POWER_DEBUG_SERVICE    = "12345678-1234-5678-0006-56789abc0000
 export const UUID_POWER_FLAGS            = "12345678-1234-5678-0006-56789abc0001";
 export const UUID_PD_SOURCE_TYPE         = "12345678-1234-5678-0006-56789abc0002";
 
+// Shuffle service (service ID 7, issue #243) — the global shuffle settings moved out of
+// Core Config. Characteristic UUIDs are auto-assigned in firmware declaration order —
+// these must match the declaration order in fw/src/bluetooth/shuffle_service.cpp. The
+// Controls page's shuffle button is hard-coded to UUID_SHUFFLE_ENABLED (the first
+// characteristic, so its UUID equals the service UUID — expected, Battery precedent).
+export const UUID_SHUFFLE_SERVICE      = "12345678-1234-5678-0007-56789abc0000";
+export const UUID_SHUFFLE_ENABLED      = "12345678-1234-5678-0007-56789abc0000"; // boolean, read/write/notify
+export const UUID_SHUFFLE_MIN_DURATION = "12345678-1234-5678-0007-56789abc0001"; // uint32, seconds
+export const UUID_SHUFFLE_MAX_DURATION = "12345678-1234-5678-0007-56789abc0002"; // uint32, seconds
+
 // Fixed characteristic UUID, identical across every animation service, exposing that
 // animation's human-readable name. Must match kAnimationNameCharacteristicUuid in
 // fw/src/bluetooth/bt_service_cpp.h.
@@ -66,6 +77,15 @@ export const UUID_ANIMATION_NAME_CHARACTERISTIC = "12345678-1234-5678-aaaa-56789
 // into characteristicsByService, and written/read via the service-aware
 // writeServiceCharacteristic/getServiceCharacteristicInfo context helpers.
 export const UUID_IS_ACTIVE_CHARACTERISTIC = "12345678-1234-5678-bbbb-56789abd0000";
+
+// Fixed characteristic UUID, identical across every animation service (built-in AND
+// extension), exposing that animation's boolean "include in shuffle" flag (issue #243).
+// Must match kShuffleIncludeCharacteristicUuid in fw/src/bluetooth/bt_service_cpp.h.
+// Like UUID_IS_ACTIVE_CHARACTERISTIC, this UUID is intentionally reused across every
+// animation service, so it must never go into the flat characteristics/
+// serviceCharacteristics maps — only into characteristicsByService, and written via
+// writeServiceCharacteristic.
+export const UUID_SHUFFLE_INCLUDE_CHARACTERISTIC = "12345678-1234-5678-dddd-56789abd0000";
 
 // Fixed characteristic UUID, identical across every BtGattServer-assembled service (when
 // CONFIG_APP_BT_METADATA_CHARACTERISTIC is enabled - see fw/Kconfig), exposing every sibling

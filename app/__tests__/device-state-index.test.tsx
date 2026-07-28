@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import DeviceStateMenuScreen from '@/app/(tabs)/device-state/index';
-import { UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE } from '@/constants/bluetooth';
+import { UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_ENABLED, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import { encodeBooleanToBase64, encodeUtf8ToBase64 } from '@/services/ble-value-codec';
 import { SMP_SERVICE_UUID } from '@/services/mcumgr';
@@ -16,6 +16,27 @@ function isActiveInfo(active: boolean) {
     characteristic: {},
     value: encodeBooleanToBase64(active),
     name: 'Is Active',
+    cpfFormat: 0x01,
+    isUpdateInProgress: false,
+  };
+}
+
+function shuffleIncludeInfo(included: boolean, extra: object = {}) {
+  return {
+    characteristic: {},
+    value: encodeBooleanToBase64(included),
+    name: 'Include in Shuffle',
+    cpfFormat: 0x01,
+    isUpdateInProgress: false,
+    ...extra,
+  };
+}
+
+function shuffleEnabledInfo(enabled: boolean) {
+  return {
+    characteristic: {},
+    value: encodeBooleanToBase64(enabled),
+    name: 'Shuffle Enabled',
     cpfFormat: 0x01,
     isUpdateInProgress: false,
   };
@@ -122,6 +143,128 @@ describe('DeviceStateMenuScreen', () => {
     const { getAllByTestId } = render(<DeviceStateMenuScreen />);
     // Exactly one row lights up, not both (they share the ...-bbbb-...0000 Is Active UUID).
     expect(getAllByTestId('write-error-indicator')).toHaveLength(1);
+  });
+
+  it('renders a per-row shuffle toggle and writes it via writeServiceCharacteristic (issue #243)', async () => {
+    const writeServiceCharacteristic = jest.fn(async () => true);
+    const selectedDevice = {
+      name: 'RGB Sunglasses',
+      mac: 'AA:BB:CC',
+      device: {},
+      services: [{ uuid: 'anim-service-1' }],
+      characteristicsByService: {
+        'anim-service-1': {
+          [UUID_IS_ACTIVE_CHARACTERISTIC]: isActiveInfo(false),
+          [UUID_SHUFFLE_INCLUDE_CHARACTERISTIC]: shuffleIncludeInfo(true),
+        },
+      },
+      characteristics: {},
+      serviceCharacteristics: { 'anim-service-1': [] },
+      serviceDisplayNames: { 'anim-service-1': 'Rainbow' },
+    };
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeServiceCharacteristic,
+    } as any);
+
+    const { getByTestId } = render(<DeviceStateMenuScreen />);
+    // Included -> pressing writes the inverse (false).
+    fireEvent.press(getByTestId('shuffle-toggle'));
+
+    await waitFor(() => {
+      expect(writeServiceCharacteristic).toHaveBeenCalledWith(
+        'anim-service-1',
+        UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
+        encodeBooleanToBase64(false)
+      );
+    });
+  });
+
+  it('renders no shuffle toggle when the firmware lacks the characteristic (older firmware)', () => {
+    const selectedDevice = {
+      name: 'RGB Sunglasses',
+      mac: 'AA:BB:CC',
+      device: {},
+      services: [{ uuid: 'anim-service-1' }],
+      characteristicsByService: {
+        'anim-service-1': { [UUID_IS_ACTIVE_CHARACTERISTIC]: isActiveInfo(false) },
+      },
+      characteristics: {},
+      serviceCharacteristics: { 'anim-service-1': [] },
+      serviceDisplayNames: { 'anim-service-1': 'Rainbow' },
+    };
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { queryByTestId } = render(<DeviceStateMenuScreen />);
+    expect(queryByTestId('shuffle-toggle')).toBeNull();
+    expect(queryByTestId('shuffle-button')).toBeNull();
+  });
+
+  it('renders the header shuffle button from the hard-coded UUID and toggles it via writeToCharacteristic (issue #243)', async () => {
+    const writeToCharacteristic = jest.fn(async () => true);
+    const selectedDevice = {
+      name: 'RGB Sunglasses',
+      mac: 'AA:BB:CC',
+      device: {},
+      services: [{ uuid: 'anim-service-1' }],
+      characteristicsByService: {
+        'anim-service-1': { [UUID_IS_ACTIVE_CHARACTERISTIC]: isActiveInfo(false) },
+      },
+      characteristics: { [UUID_SHUFFLE_ENABLED]: shuffleEnabledInfo(false) },
+      serviceCharacteristics: { 'anim-service-1': [] },
+      serviceDisplayNames: { 'anim-service-1': 'Rainbow' },
+    };
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeServiceCharacteristic: jest.fn(async () => true),
+      writeToCharacteristic,
+    } as any);
+
+    const { getByTestId } = render(<DeviceStateMenuScreen />);
+    // Off -> pressing writes true.
+    fireEvent.press(getByTestId('shuffle-button'));
+
+    await waitFor(() => {
+      expect(writeToCharacteristic).toHaveBeenCalledWith(
+        UUID_SHUFFLE_ENABLED,
+        encodeBooleanToBase64(true)
+      );
+    });
+  });
+
+  it('disables the shuffle toggle while a write is in progress', () => {
+    const writeServiceCharacteristic = jest.fn(async () => true);
+    const selectedDevice = {
+      name: 'RGB Sunglasses',
+      mac: 'AA:BB:CC',
+      device: {},
+      services: [{ uuid: 'anim-service-1' }],
+      characteristicsByService: {
+        'anim-service-1': {
+          [UUID_SHUFFLE_INCLUDE_CHARACTERISTIC]: shuffleIncludeInfo(true, { isUpdateInProgress: true }),
+        },
+      },
+      characteristics: {},
+      serviceCharacteristics: { 'anim-service-1': [] },
+      serviceDisplayNames: { 'anim-service-1': 'Rainbow' },
+    };
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice,
+      writeServiceCharacteristic,
+    } as any);
+
+    const { getByTestId } = render(<DeviceStateMenuScreen />);
+    const toggle = getByTestId('shuffle-toggle');
+    expect(toggle.props.accessibilityState?.disabled).toBe(true);
+    fireEvent.press(toggle);
+    expect(writeServiceCharacteristic).not.toHaveBeenCalled();
   });
 
   it('shows a Firmware Update row for the McuMgr service', () => {

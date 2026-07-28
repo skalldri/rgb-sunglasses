@@ -20,6 +20,9 @@ namespace extension_param_persistence {
 /** @brief "ext/" prefix + sanitized display name, always NUL-terminated. */
 inline constexpr size_t kKeyMaxLen = 4 + extension_host::kMaxNameLen;
 
+/** @brief build_settings_key()'s output + the "/shuffle" suffix, always NUL-terminated. */
+inline constexpr size_t kShuffleKeyMaxLen = kKeyMaxLen + 8;
+
 /**
  * @brief Combined persisted payload for one extension: every scalar param
  * value plus every string param value.
@@ -61,6 +64,19 @@ uint32_t manifest_fingerprint(const extension_manifest::Metadata &meta);
  * @p out, truncating if displayName doesn't fit.
  */
 void build_settings_key(char *out, size_t outLen, const char *displayName);
+
+/**
+ * @brief Builds the persistent_value_registry key "ext/<sanitized displayName>/shuffle"
+ * for one extension's "include in shuffle" flag (issue #243).
+ *
+ * A separate key beside the param Blob, NOT a Blob field: the flag must survive
+ * sandbox_fault()'s param clear (a poisoned param may have caused the crash; the
+ * include flag cannot), and extending the Blob would bump its wire format for
+ * nothing. The extra path segment is safe for the settings layer: dispatch matches
+ * the whole key via settings_name_steq, so "ext/<name>" can never shadow this key.
+ * Same sanitization and truncation behavior as build_settings_key().
+ */
+void build_shuffle_settings_key(char *out, size_t outLen, const char *displayName);
 
 /**
  * @brief Copies paramValues/stringValues into a Blob ready to persist, stamping

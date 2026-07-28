@@ -95,6 +95,14 @@ struct Slot {
     /* Caller-owned registry record for this slot's param persistence (the registry links
      * it by pointer; the slot outlives the registration - see persistent_value_registry.h). */
     PersistentValueRegistryEntry persistEntry = {};
+    /* "Include in shuffle" flag (issue #243): its own settings key beside the param
+     * blob ("ext/<sanitized displayName>/shuffle") so sandbox_fault()'s param clear
+     * never touches it — the flag can't have caused a crash. Same ownership rules as
+     * settingsKey/persistRegistered above. */
+    bool shuffleInclude = true;
+    char shuffleKey[extension_param_persistence::kShuffleKeyMaxLen] = {};
+    bool shufflePersistRegistered = false;
+    PersistentValueRegistryEntry shufflePersistEntry = {};
     /* Tick-handshake profiling (cycles), reset on every activation. */
     uint32_t tickMinCyc = 0;
     uint32_t tickMaxCyc = 0;
@@ -249,7 +257,10 @@ void sandbox_fault(Slot &slot, const char *what, bool resetParams) {
      * inside that debounce window), so neither an `ext select` retry nor a future
      * boot can reproduce the same crash from the same poisoned value. Only touch
      * flash if THIS slot owns its persistence key (see persistRegistered) — else
-     * the write would land on another slot's key. */
+     * the write would land on another slot's key. The shuffle-include flag (issue
+     * #243) is deliberately NOT reset here: it is never handed to the extension, so
+     * it cannot have caused the crash, and the user's opt-out must survive the
+     * fault (fault exclusion from shuffle is isFaulted()'s job). */
     reset_params_to_defaults(slot);
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG) && slot.persistRegistered) {
         extension_param_persistence::Blob defaults;
@@ -435,6 +446,26 @@ void ext_params_do_save(void *target) {
     persistent_value_store::save_value(slot->settingsKey, &blob, sizeof(blob));
 }
 
+/* The shuffle-include flag's load/save callbacks (issue #243): a plain 1-byte bool
+ * under the slot's shuffleKey, loaded by the same settings_load_subtree("appcfg/ext")
+ * pass as the param blob (the key lives inside that subtree). */
+void ext_shuffle_do_load(void *target, const void *data, size_t len) {
+    if (len != sizeof(bool)) {
+        return;
+    }
+    auto *slot = static_cast<Slot *>(target);
+    bool loaded;
+    memcpy(&loaded, data, sizeof(loaded));
+    slot->shuffleInclude = loaded;
+}
+
+void ext_shuffle_do_save(void *target) {
+    auto *slot = static_cast<Slot *>(target);
+    /* A bool copy can't tear — no sHostLock needed (unlike the param blob above). */
+    bool current = slot->shuffleInclude;
+    persistent_value_store::save_value(slot->shuffleKey, &current, sizeof(current));
+}
+
 /* Registers slot `slotIndex`'s param blob with the persistent_value_registry.
  * Called from init() ONLY after the slot's BLE service has fully registered, so a
  * slot rolled back on a registration failure never leaves a dangling registry
@@ -455,6 +486,19 @@ void register_slot_persistence(size_t slotIndex) {
         slot.persistRegistered = true;
     } else {
         LOG_WRN("extension '%s': param persistence unavailable (%d) - values won't survive reboot",
+                slot.meta.displayName, ret);
+    }
+
+    /* Second registration for the shuffle-include flag (issue #243). Same -EEXIST
+     * semantics: a display-name collision leaves shufflePersistRegistered false so
+     * this slot never dirties the key the other slot owns. */
+    ret = persistent_value_registry_register(&slot.shufflePersistEntry, slot.shuffleKey, &slot,
+                                             ext_shuffle_do_load, ext_shuffle_do_save);
+    if (ret == 0) {
+        slot.shufflePersistRegistered = true;
+    } else {
+        LOG_WRN("extension '%s': shuffle-include persistence unavailable (%d) - flag won't survive "
+                "reboot",
                 slot.meta.displayName, ret);
     }
 }
@@ -503,7 +547,12 @@ bool scan_slot(size_t fileIndex, size_t slotIndex) {
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
         extension_param_persistence::build_settings_key(slot.settingsKey, sizeof(slot.settingsKey),
                                                         slot.meta.displayName);
+        extension_param_persistence::build_shuffle_settings_key(
+            slot.shuffleKey, sizeof(slot.shuffleKey), slot.meta.displayName);
     }
+    /* Include in shuffle until the user (persisted value, loaded later in init(), or a
+     * BLE/shell write) says otherwise. */
+    slot.shuffleInclude = true;
 
     const size_t heapBytes = ext->alloc_size;
     llext_unload(&ext);
@@ -713,6 +762,23 @@ bool atGoodSwitchPoint(size_t slot) {
         return true;
     }
     return sSlots[slot].goodMoment;
+}
+
+bool shuffleIncluded(size_t slot) {
+    return slot < sSlotCount && sSlots[slot].shuffleInclude;
+}
+
+void setShuffleInclude(size_t slot, bool include) {
+    if (slot >= sSlotCount) {
+        return;
+    }
+    sSlots[slot].shuffleInclude = include;
+    /* Only persist if this slot owns its key (see shufflePersistRegistered) — same
+     * duplicate-display-name rule as setParamValue() above. */
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG) && sSlots[slot].shufflePersistRegistered) {
+        persistent_value_registry_mark_dirty(sSlots[slot].shuffleKey);
+        persistent_value_store::request_save();
+    }
 }
 
 const char *name(size_t slot) {
@@ -1047,6 +1113,27 @@ int cmd_ext_select(const struct shell *sh, size_t argc, char **argv) {
     return ret;
 }
 
+int cmd_ext_shuffle(const struct shell *sh, size_t argc, char **argv) {
+    if (argc != 2 && argc != 3) {
+        shell_error(sh, "Usage: ext shuffle <slot> [0|1]");
+        return -EINVAL;
+    }
+    size_t slot = strtoul(argv[1], nullptr, 10);
+    if (!isLoaded(slot)) {
+        shell_error(sh, "no extension in slot %zu", slot);
+        return -ENOENT;
+    }
+    if (argc == 3) {
+        setShuffleInclude(slot, strtoul(argv[2], nullptr, 0) != 0);
+        /* Device-side change: push it to any subscribed BLE client (remote writes
+         * don't need this — the app already knows the value it wrote). */
+        extension_bt_notify_shuffle_include(slot);
+    }
+    shell_print(sh, "%s.shuffle_include = %u", sSlots[slot].meta.displayName,
+                shuffleIncluded(slot) ? 1 : 0);
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_ext, SHELL_CMD(list, NULL, "List loaded animation extensions", cmd_ext_list),
     SHELL_CMD(stats, NULL, "Per-extension tick-handshake timing (min/avg/max us)",
@@ -1056,6 +1143,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
     SHELL_CMD_ARG(select, NULL,
                   "Activate extension animation (clears a fault): ext select <slot>",
                   cmd_ext_select, 2, 0),
+    SHELL_CMD_ARG(shuffle, NULL,
+                  "Get/set include-in-shuffle (issue #243): ext shuffle <slot> [0|1]",
+                  cmd_ext_shuffle, 2, 1),
     SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(ext, &sub_ext, "Animation extension host", NULL);
 

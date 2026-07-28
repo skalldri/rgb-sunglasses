@@ -18,6 +18,7 @@ using extension_manifest::ParamInfo;
 using extension_param_persistence::apply_blob;
 using extension_param_persistence::Blob;
 using extension_param_persistence::build_settings_key;
+using extension_param_persistence::build_shuffle_settings_key;
 using extension_param_persistence::fill_blob;
 
 namespace {
@@ -64,6 +65,45 @@ ZTEST(extension_param_persistence_suite, test_build_settings_key_truncates_and_n
 ZTEST(extension_param_persistence_suite, test_build_settings_key_zero_length_buffer_is_noop) {
     char out[1] = {'x'};
     build_settings_key(out, 0, "whatever");
+    zassert_equal(out[0], 'x', "a zero-length buffer must not be touched at all");
+}
+
+ZTEST(extension_param_persistence_suite, test_build_shuffle_settings_key_normal_name) {
+    char out[extension_param_persistence::kShuffleKeyMaxLen];
+    build_shuffle_settings_key(out, sizeof(out), "MyExtension");
+    zassert_equal(strcmp(out, "ext/MyExtension/shuffle"), 0, "got '%s'", out);
+}
+
+ZTEST(extension_param_persistence_suite, test_build_shuffle_settings_key_sanitizes) {
+    char out[extension_param_persistence::kShuffleKeyMaxLen];
+    build_shuffle_settings_key(out, sizeof(out), "Foo/Bar=Baz");
+    zassert_equal(strcmp(out, "ext/Foo_Bar_Baz/shuffle"), 0, "got '%s'", out);
+}
+
+ZTEST(extension_param_persistence_suite, test_build_shuffle_settings_key_max_length_name_fits) {
+    // A display name at the full kMaxNameLen-1 length must still leave room for the
+    // "/shuffle" suffix in a kShuffleKeyMaxLen buffer — the constant's sizing contract.
+    char name[extension_host::kMaxNameLen];
+    memset(name, 'A', sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+
+    char out[extension_param_persistence::kShuffleKeyMaxLen];
+    build_shuffle_settings_key(out, sizeof(out), name);
+    const size_t len = strlen(out);
+    zassert_equal(strncmp(out, "ext/", 4), 0);
+    zassert_equal(strcmp(out + len - 8, "/shuffle"), 0,
+                  "suffix must survive a max-length name, got '%s'", out);
+}
+
+ZTEST(extension_param_persistence_suite, test_build_shuffle_settings_key_truncates_bounded) {
+    char out[10];  // too small: "ext/" + name eats it before the suffix fits
+    build_shuffle_settings_key(out, sizeof(out), "LongEnoughName");
+    zassert_equal(strlen(out), 9u, "must fill and NUL-terminate within the buffer, got '%s'", out);
+}
+
+ZTEST(extension_param_persistence_suite, test_build_shuffle_settings_key_zero_length_is_noop) {
+    char out[1] = {'x'};
+    build_shuffle_settings_key(out, 0, "whatever");
     zassert_equal(out[0], 'x', "a zero-length buffer must not be touched at all");
 }
 

@@ -22,6 +22,7 @@
 #endif
 #if defined(CONFIG_APP_SHUFFLE)
 #include <animations/shuffle_controller.h>
+#include <bluetooth/shuffle_service.h>
 #include <zephyr/random/random.h>
 #endif
 #include <zephyr/kernel.h>
@@ -117,8 +118,8 @@ struct LastActiveAnimationRegistrar {
 #if defined(CONFIG_APP_SHUFFLE)
 
 // Production adapters for the ShuffleController seams (issue #121): the pool is the
-// animation registry (which already contains extension slots), the config is the Core
-// Config service's shuffle characteristics.
+// animation registry (which already contains extension slots), the config is the
+// dedicated Shuffle service's characteristics (issue #243, previously Core Config).
 class RegistryShufflePool : public ShuffleAnimationPool {
    public:
     size_t count() override { return animation_registry_count(); }
@@ -129,24 +130,32 @@ class RegistryShufflePool : public ShuffleAnimationPool {
         }
 #if defined(CONFIG_APP_EXTENSION_HOST)
         const uint32_t v = static_cast<uint32_t>(id);
-        if (v >= extension_host::kAnimationIdBase &&
-            extension_host::isFaulted(v - extension_host::kAnimationIdBase)) {
-            return false;  // never shuffle INTO a faulted extension (escape is separate)
+        if (v >= extension_host::kAnimationIdBase) {
+            const size_t slot = v - extension_host::kAnimationIdBase;
+            if (extension_host::isFaulted(slot)) {
+                return false;  // never shuffle INTO a faulted extension (escape is separate)
+            }
+            // Extensions consult the host directly (same precedent as isFaulted) rather
+            // than a registry getter — avoids another post-proxy registration whose
+            // ignored failure would be the PR #89 silent-miss class.
+            return extension_host::shuffleIncluded(slot);
         }
 #endif
-        return true;
+        // Built-ins: the per-animation "Include in Shuffle" characteristic, pulled
+        // through the BT-free registry binding (issue #243). Default true.
+        return animation_registry_shuffle_included(id);
     }
 };
 
-class CoreConfigShuffleSource : public ShuffleConfigSource {
+class ShuffleServiceConfigSource : public ShuffleConfigSource {
    public:
-    bool enabled() override { return CoreConfig::getInstance().getShuffleEnabled(); }
-    uint32_t minDurationS() override { return CoreConfig::getInstance().getShuffleMinDurationS(); }
-    uint32_t maxDurationS() override { return CoreConfig::getInstance().getShuffleMaxDurationS(); }
+    bool enabled() override { return shuffle_service_get_enabled(); }
+    uint32_t minDurationS() override { return shuffle_service_get_min_duration_s(); }
+    uint32_t maxDurationS() override { return shuffle_service_get_max_duration_s(); }
 };
 
 RegistryShufflePool sShufflePool;
-CoreConfigShuffleSource sShuffleConfigSource;
+ShuffleServiceConfigSource sShuffleConfigSource;
 // sys_rand32_get is entropy-seeded on proto0 (same source matrix_code_animation uses).
 ShuffleController sShuffleController(sShufflePool, sShuffleConfigSource, sys_rand32_get,
                                      static_cast<uint64_t>(CONFIG_APP_SHUFFLE_GRACE_S) * 1000u);
@@ -561,10 +570,9 @@ static int cmd_anim_shuffle_status(const struct shell *shell, size_t argc, char 
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    CoreConfig &cfg = CoreConfig::getInstance();
     shell_print(shell, "shuffle: %s, min: %u s, max: %u s, grace: %u s",
-                cfg.getShuffleEnabled() ? "on" : "off", cfg.getShuffleMinDurationS(),
-                cfg.getShuffleMaxDurationS(), CONFIG_APP_SHUFFLE_GRACE_S);
+                shuffle_service_get_enabled() ? "on" : "off", shuffle_service_get_min_duration_s(),
+                shuffle_service_get_max_duration_s(), CONFIG_APP_SHUFFLE_GRACE_S);
     return 0;
 }
 
@@ -572,7 +580,7 @@ static int cmd_anim_shuffle_on(const struct shell *shell, size_t argc, char **ar
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    CoreConfig::getInstance().setShuffleEnabled(true);
+    shuffle_service_set_enabled(true);
     shell_print(shell, "shuffle on");
     return 0;
 }
@@ -581,7 +589,7 @@ static int cmd_anim_shuffle_off(const struct shell *shell, size_t argc, char **a
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    CoreConfig::getInstance().setShuffleEnabled(false);
+    shuffle_service_set_enabled(false);
     shell_print(shell, "shuffle off");
     return 0;
 }

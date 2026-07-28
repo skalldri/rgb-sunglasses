@@ -24,6 +24,7 @@
 
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_renderer.h>
+#include <animations/animation_shuffle_include_binding.h>
 #include <animations/beat_animation.h>
 #include <animations/glim_player_animation.h>
 #include <animations/matrix_code_animation.h>
@@ -206,6 +207,35 @@ static void exercise_tick(BaseAnimation *animation) {
     animation->tick(sRenderer, 16);
 }
 
+/* Issue #243: every adapter appends an "Include in Shuffle" characteristic (fixed
+ * kShuffleIncludeCharacteristicUuid, notify, default true) as its LAST provider, with
+ * an AnimationShuffleIncludeBinding getter registered by the adapter's registrar at
+ * static init. Verifies UUID + NOTIFY + default + write round trip + that the BT-free
+ * binding pulls the characteristic's live value; leaves the value back at 1. */
+template <Animation A>
+static void check_shuffle_include(const bt_uuid_128 &svcUuid, size_t index) {
+    const bt_gatt_service_static *svc = find_service(svcUuid);
+    zassert_not_null(svc);
+    const bt_gatt_attr *attr = nth_char_value(svc, index);
+    zassert_not_null(attr, "missing Include in Shuffle characteristic at index %zu", index);
+    zassert_equal(memcmp(BT_UUID_128(attr->uuid)->val, kShuffleIncludeCharacteristicUuid.val,
+                         sizeof(kShuffleIncludeCharacteristicUuid.val)),
+                  0, "Include in Shuffle must use the fixed 0xdddd-group UUID");
+    zassert_true(chrc_has_notify(svc, attr), "Include in Shuffle must expose NOTIFY");
+    zassert_equal(read_u8(attr), 1, "Include in Shuffle must default to true (included)");
+    zassert_true(AnimationShuffleIncludeBinding<A>::included());
+
+    uint8_t zero = 0;
+    zassert_equal(do_write(attr, &zero, sizeof(zero)), sizeof(zero));
+    zassert_equal(read_u8(attr), 0);
+    zassert_false(AnimationShuffleIncludeBinding<A>::included(),
+                  "binding must pull the characteristic's live value");
+
+    uint8_t one = 1;
+    zassert_equal(do_write(attr, &one, sizeof(one)), sizeof(one));
+    zassert_true(AnimationShuffleIncludeBinding<A>::included());
+}
+
 /* Mounts a FAT filesystem on the native_sim ram-disk (boards/native_sim.overlay)
  * and writes one minimal valid GLIM file, so test_glim_player can exercise
  * glim_player_animation_bt.cpp's "registry has files" branches
@@ -254,6 +284,7 @@ ZTEST(animation_adapters, test_zigzag) {
     constexpr bt_uuid_128 kSvcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::ZigZag));
     const uint32_t defaults[] = {200, 0xFFFFFFFF};
     check_simple_adapter(kSvcUuid, "ZigZag", 2, defaults);
+    check_shuffle_include<Animation::ZigZag>(kSvcUuid, 4);
     zigzag_animation_bind_default_dependencies();
     exercise_tick(ZigZagAnimation::getInstance());
     AnimationIsActiveBinding<Animation::ZigZag>::setLocalActiveState(true);
@@ -273,6 +304,7 @@ ZTEST(animation_adapters, test_tilt) {
     const bt_gatt_attr *nameAttr = nth_char_value(svc, 1);
     char nameBuf[32];
     zassert_true(read_str(nameAttr, nameBuf, sizeof(nameBuf)) == "Tilt");
+    check_shuffle_include<Animation::Tilt>(svcUuid, 2);
     /* Documented no-op (TiltAnimation has no BT-backed parameters) - just
      * confirm it doesn't crash. */
     tilt_animation_bind_default_bt_dependencies();
@@ -283,6 +315,7 @@ ZTEST(animation_adapters, test_beat) {
     constexpr bt_uuid_128 kSvcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Beat));
     const uint32_t defaults[] = {0xFFFFFFFF};
     check_simple_adapter(kSvcUuid, "Beat", 1, defaults);
+    check_shuffle_include<Animation::Beat>(kSvcUuid, 3);
     beat_animation_bind_default_bt_dependencies();
     /* No exercise_tick() here: BeatAnimation::tick() early-returns whenever
      * its audio source is unset (audioSource_ is only wired by the sound
@@ -295,6 +328,7 @@ ZTEST(animation_adapters, test_pulse) {
     constexpr bt_uuid_128 kSvcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Pulse));
     const uint32_t defaults[] = {0xFFFFFFFF, 2000};
     check_simple_adapter(kSvcUuid, "Pulse", 2, defaults);
+    check_shuffle_include<Animation::Pulse>(kSvcUuid, 4);
     pulse_animation_bind_default_dependencies();
     exercise_tick(PulseAnimation::getInstance());
     AnimationIsActiveBinding<Animation::Pulse>::setLocalActiveState(true);
@@ -304,6 +338,7 @@ ZTEST(animation_adapters, test_rainbow) {
     constexpr bt_uuid_128 kSvcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Rainbow));
     const uint32_t defaults[] = {100, 5};
     check_simple_adapter(kSvcUuid, "Rainbow", 2, defaults);
+    check_shuffle_include<Animation::Rainbow>(kSvcUuid, 4);
     rainbow_animation_bind_default_dependencies();
     exercise_tick(RainbowAnimation::getInstance());
     AnimationIsActiveBinding<Animation::Rainbow>::setLocalActiveState(true);
@@ -314,6 +349,7 @@ ZTEST(animation_adapters, test_matrix_code) {
         BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::MatrixCode));
     const uint32_t defaults[] = {80, 600, 40, 0x0000FF41};
     check_simple_adapter(kSvcUuid, "Matrix Code", 4, defaults);
+    check_shuffle_include<Animation::MatrixCode>(kSvcUuid, 6);
     matrix_code_animation_bind_default_dependencies();
     exercise_tick(MatrixCodeAnimation::getInstance());
     AnimationIsActiveBinding<Animation::MatrixCode>::setLocalActiveState(true);
@@ -368,6 +404,8 @@ ZTEST(animation_adapters, test_text) {
     zassert_not_null(nowPlayingAttr);
     zassert_equal(read_u32(nowPlayingAttr), 0);
 
+    check_shuffle_include<Animation::Text>(svcUuid, 3 + TextAnimation::kNumStringSlots + 3);
+
     text_animation_bind_default_dependencies();
     exercise_tick(TextAnimation::getInstance());
     AnimationIsActiveBinding<Animation::Text>::setLocalActiveState(true);
@@ -409,6 +447,8 @@ ZTEST(animation_adapters, test_my_eyes) {
     const bt_gatt_attr *nameAttr = nth_char_value(svc, 3 + MyEyesAnimation::kNumStringSlots + 1);
     char nameBuf[32];
     zassert_true(read_str(nameAttr, nameBuf, sizeof(nameBuf)) == "MyEyes");
+
+    check_shuffle_include<Animation::MyEyes>(svcUuid, 3 + MyEyesAnimation::kNumStringSlots + 2);
 
     my_eyes_animation_bind_default_dependencies();
     exercise_tick(MyEyesAnimation::getInstance());
@@ -456,6 +496,8 @@ ZTEST(animation_adapters, test_glim_player) {
 
     const bt_gatt_attr *nameAttr = nth_char_value(svc, 3);
     zassert_true(read_str(nameAttr, buf, sizeof(buf)) == "Glim Player");
+
+    check_shuffle_include<Animation::GlimPlayer>(svcUuid, 4);
 
     /* With an empty registry, bind_default_bt_dependencies() leaves the
      * selection characteristic alone (its "if (glim_registry::count() > 0)"
