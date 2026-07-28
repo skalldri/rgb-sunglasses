@@ -32,7 +32,14 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
         <View style={styles.outer}>
             <View style={styles.container}>
                 <View style={styles.info}>
-                    <ThemedText type="defaultSemiBold" numberOfLines={1}>{deviceName}</ThemedText>
+                    {/* Wraps to 2 lines (issue #231): the firmware name is
+                        "<CONFIG_BT_DEVICE_NAME> XXXX" with a per-board serial suffix
+                        (fw/src/bluetooth.cpp build_bt_device_name()), and at 16pt/600
+                        that is wider than the space left beside the button on a phone.
+                        On one line the serial ellipsised away - and since the caption
+                        below is hidden on iOS, the name is the ONLY thing telling two
+                        boards apart there. */}
+                    <ThemedText type="defaultSemiBold" numberOfLines={2}>{deviceName}</ThemedText>
                     {/* On iOS `device.id` is CoreBluetooth's opaque per-phone UUID (the real
                         MAC is never exposed there), which means nothing to a user — only
                         Android has a real MAC worth showing. */}

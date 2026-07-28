@@ -1,6 +1,6 @@
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 
 import BluetoothDeviceListItem from '@/components/bluetooth-device-list-item';
 import * as BluetoothContext from '@/context/bluetooth-context';
@@ -138,6 +138,40 @@ describe('BluetoothDeviceListItem', () => {
     const { UNSAFE_getByType } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
     const { ActivityIndicator } = require('react-native');
     expect(UNSAFE_getByType(ActivityIndicator)).toBeTruthy();
+  });
+
+  // Issue #231: the firmware advertises "<CONFIG_BT_DEVICE_NAME> XXXX" (a per-board
+  // serial suffix built in fw/src/bluetooth.cpp), so the name is long enough that a
+  // single-line row ellipsised the serial away. On iOS the mac caption is hidden, so
+  // the name is the ONLY thing distinguishing two boards - losing the suffix there
+  // makes them indistinguishable.
+  describe('long device names (issue #231)', () => {
+    const FULL_NAME = 'RGB Sunglasses Proto0 9412';
+
+    it('renders the full device name, serial suffix included', () => {
+      setupMocks();
+      const { getByText } = render(<BluetoothDeviceListItem deviceName={FULL_NAME} macAddress="AA:BB:CC" />);
+      expect(getByText(FULL_NAME)).toBeTruthy();
+    });
+
+    it('lets the name wrap instead of truncating it to one line', () => {
+      setupMocks();
+      const { getByText } = render(<BluetoothDeviceListItem deviceName={FULL_NAME} macAddress="AA:BB:CC" />);
+      expect(getByText(FULL_NAME).props.numberOfLines).toBeGreaterThanOrEqual(2);
+    });
+
+    it('keeps the name column shrinkable so the wrap can actually happen', () => {
+      // Without flexShrink the column keeps its full intrinsic width in the row and
+      // the extra line is never reached - the text overflows past the button instead.
+      setupMocks();
+      const { getByText } = render(<BluetoothDeviceListItem deviceName={FULL_NAME} macAddress="AA:BB:CC" />);
+      // Climb to the nearest ancestor host View rather than using .parent directly:
+      // RN wraps Text in a composite of the same name, so the column is not always
+      // exactly one level up.
+      let infoColumn = getByText(FULL_NAME).parent;
+      while (infoColumn && infoColumn.type !== 'View') infoColumn = infoColumn.parent;
+      expect(StyleSheet.flatten(infoColumn?.props.style).flexShrink).toBe(1);
+    });
   });
 
   it('shows a progress bar with current/total once discovery progress is known', () => {
