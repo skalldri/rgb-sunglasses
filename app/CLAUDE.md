@@ -158,8 +158,30 @@ stamps `extra.distribution = "play"` into `app.json` and strips `REQUEST_INSTALL
 (the CI keystore is the Play app signing key — never rotate it casually), and the one-time Play
 Console bootstrap.
 
-There is currently **no iOS dev-variant** (the Android `.dev` side-by-side install from
-`plugins/withDevVariant.js` is Android-only); the iOS dev build uses the production bundle id.
+**iOS has a dev-variant too** (`plugins/withDevVariantIos.js`, composed into `withDevVariant`
+alongside the Android-only steps): a Debug-configuration build gets bundle id
+`com.autom8ed.rgbsunglassesapp.dev`, home-screen label "RGB Sunglasses (Dev)", and the same dark
+`appicon-dev.png` art Android uses (regenerated into a second `AppIcon-Dev.appiconset` from the
+existing `AppIcon.appiconset`'s `Contents.json`, since `expo run:ios`'s Debug build and a
+TestFlight/Release build can then coexist on one test device). Unlike Android, this is done
+entirely via per-configuration Xcode build settings (`PRODUCT_BUNDLE_IDENTIFIER`,
+`APP_DISPLAY_NAME` referenced from `app.json`'s `ios.infoPlist.CFBundleDisplayName` as
+`$(APP_DISPLAY_NAME)`, `ASSETCATALOG_COMPILER_APPICON_NAME`) rather than a Gradle-style
+per-buildType resource overlay — iOS's Debug/Release are configurations of one target sharing one
+Info.plist, so there's no `src/debug` equivalent to overlay resources into. Only `Debug` gets the
+`.dev`-suffixed id/name/icon; `Release` (the TestFlight archive, `-configuration Release` only) is
+untouched.
+
+Deliberately **not mirrored**: Android's `rgbsunglassesapp` → `rgbsunglassesapp.dev` URL-scheme
+rewrite. That trick exists solely to avoid a chooser-dialog collision in `expo run:android`'s
+deep-link launch path and to disambiguate the Android-only self-update deep link
+(`services/app-update.ts`, gated by `APP_SELF_UPDATE_SUPPORTED` — no iOS equivalent exists).
+`expo run:ios --device` doesn't launch via a scheme-based deep link at all — it reads the actual
+`CFBundleIdentifier` out of the freshly-built `.app`'s Info.plist and installs/launches directly —
+so there's no iOS consumer this would need to disambiguate for.
+
+Because `.github/workflows/app-ios-ci.yml`'s simulator build uses `-configuration Debug`, its
+smoke-test step's `BUNDLE_ID` is `com.autom8ed.rgbsunglassesapp.dev`, not the production id.
 
 ### Physical-iPhone dev builds + BLE (verified 2026-07-11, iPhone 15 / iOS 26.5, Xcode 26.2)
 

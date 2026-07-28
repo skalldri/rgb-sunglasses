@@ -381,8 +381,15 @@ jobs:
 
           # Prepend our keychain to the user search list (keep the existing
           # entries so the Apple WWDR intermediate remains discoverable).
-          security list-keychains -d user -s "$KEYCHAIN" \
-            $(security list-keychains -d user | sed 's/[",]//g')
+          # This mutates the search list for the whole ci-runner user session,
+          # not just this job - save the pre-job list so cleanup can restore
+          # the exact prior state instead of guessing it was just
+          # login.keychain-db (belt-and-suspenders: ci-runner is a dedicated,
+          # non-interactive CI account, but don't bake that assumption in -
+          # a future job/keychain addition shouldn't get silently dropped).
+          ORIGINAL_KEYCHAINS="$(security list-keychains -d user | sed 's/[",]//g')"
+          echo "$ORIGINAL_KEYCHAINS" > "$RUNNER_TEMP/original-keychains.txt"
+          security list-keychains -d user -s "$KEYCHAIN" $ORIGINAL_KEYCHAINS
 
           echo "Signing identities available to the build:"
           security find-identity -v -p codesigning "$KEYCHAIN"
@@ -460,10 +467,18 @@ jobs:
           rm -f "$RUNNER_TEMP/appstore.mobileprovision" "$RUNNER_TEMP/profile.plist"
           rm -rf "$RUNNER_TEMP/RGBSunglasses.xcarchive" "$RUNNER_TEMP/DerivedData"
           rm -rf ios-export
-          # Remove the throwaway signing keychain and restore the search list.
+          # Remove the throwaway signing keychain and restore the search list
+          # to its exact pre-job state (not a hardcoded login.keychain-db
+          # guess, which would silently drop any other keychain present
+          # before this job ran).
           rm -f "$RUNNER_TEMP/dist_cert.p12" "$RUNNER_TEMP/dev_cert.p12"
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
-          security list-keychains -d user -s login.keychain-db 2>/dev/null || true
+          if [ -f "$RUNNER_TEMP/original-keychains.txt" ]; then
+            security list-keychains -d user -s $(cat "$RUNNER_TEMP/original-keychains.txt") 2>/dev/null || true
+            rm -f "$RUNNER_TEMP/original-keychains.txt"
+          else
+            security list-keychains -d user -s login.keychain-db 2>/dev/null || true
+          fi
 
   # Publishes an AAB to Google Play. The Play build is a distinct variant of
   # the Android app (self-update flow disabled, no REQUEST_INSTALL_PACKAGES —

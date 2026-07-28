@@ -92,7 +92,7 @@ jobs:
       - name: Smoke test in simulator (boot, install, launch)
         run: |
           set -euo pipefail
-          BUNDLE_ID=com.autom8ed.rgbsunglassesapp
+          BUNDLE_ID=com.autom8ed.rgbsunglassesapp.dev
           APP_PATH=ios/build/Build/Products/Debug-iphonesimulator/RGBSunglasses.app
           DEVICE_ID=$(xcrun simctl list devices available | grep -E "iPhone" | grep -oE "[0-9A-Fa-f-]{36}" | head -1)
           if [ -z "$DEVICE_ID" ]; then
