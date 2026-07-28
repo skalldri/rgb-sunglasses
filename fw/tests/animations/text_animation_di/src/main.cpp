@@ -1,5 +1,6 @@
 #include <animations/animation_parameter_source.h>
 #include <animations/animation_renderer.h>
+#include <fonts/FontAtlas.h>
 #include <zephyr/ztest.h>
 
 #define private public
@@ -230,4 +231,131 @@ ZTEST(text_animation_di_tests, test_good_switch_point_only_at_end_of_scroll) {
     animation->tick(renderer, 20);
     zassert_false(animation->isAtGoodSwitchPoint(),
                   "switch point must be a one-tick pulse, not a latched state");
+}
+
+// ---------------------------------------------------------------------------
+// goodSwitchPointGraceMs() — how long shuffle should wait for the end-of-scroll
+// signal. Without it, shuffle hard-cuts any message longer than its dwell target
+// plus CONFIG_APP_SHUFFLE_GRACE_S (30 s); a 255-char message scrolls for ~76 s.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Pixels the message must still scroll when currentTextOffset is 0 (i.e. right after
+// init): the whole rendered string, plus the display it has to cross, plus the one-char
+// edge buffer — mirroring text_animation.cpp's own completion test.
+size_t fullScrollPixels(const char *msg, size_t displayWidth) {
+    return strlen(msg) * FontAtlas::atlasPixelWidthPerChar + displayWidth +
+           FontAtlas::atlasPixelWidthPerChar;
+}
+
+}  // namespace
+
+ZTEST(text_animation_di_tests, test_grace_request_tracks_remaining_scroll) {
+    ConstUint32Source stepTimeMs(10);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;  // slot 0 -> "HELLO"
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 1);  // dt below the step time: no pixel moves yet
+
+    const size_t expected = fullScrollPixels("HELLO", renderer.displayWidth()) * 10u;
+    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)expected,
+                  "must ask for the whole remaining scroll (%zu ms)", expected);
+
+    // Scrolling shrinks the request; it must never grow while one message is playing.
+    uint32_t previous = animation->goodSwitchPointGraceMs();
+    for (int i = 0; i < 20; i++) {
+        animation->tick(renderer, 10);
+        const uint32_t now = animation->goodSwitchPointGraceMs();
+        zassert_true(now <= previous, "the request grew mid-message (%u -> %u)", previous, now);
+        previous = now;
+    }
+    zassert_true(previous < expected, "the request never shrank as the message scrolled");
+}
+
+ZTEST(text_animation_di_tests, test_grace_request_zero_at_end_of_scroll) {
+    ConstUint32Source stepTimeMs(1);  // scroll 1 px per tick (dt below always exceeds this)
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    bool sawGood = false;
+    for (int i = 0; i < 5000; i++) {
+        animation->tick(renderer, 20);
+        if (animation->isAtGoodSwitchPoint()) {
+            sawGood = true;
+            break;
+        }
+    }
+    zassert_true(sawGood, "end of scroll never became a good switch point");
+    zassert_equal(animation->goodSwitchPointGraceMs(), 0u,
+                  "at the boundary itself there is nothing left to wait for");
+}
+
+ZTEST(text_animation_di_tests, test_grace_request_floors_at_min_dwell) {
+    // An empty slot satisfies the "finished scrolling" test on every tick, so the only
+    // thing shuffle would ever wait for is the kMinMessageDwellMs floor — not a whole
+    // message's worth of scroll.
+    ConstUint32Source stepTimeMs(10);
+    ConstUint32Source color(0xFFFFFF);
+    EmptySlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 100);  // dwell 100 of the 500 ms floor
+    zassert_equal(animation->goodSwitchPointGraceMs(), 400u,
+                  "must ask only for the remaining dwell floor");
+
+    animation->tick(renderer, 300);  // dwell 400
+    zassert_equal(animation->goodSwitchPointGraceMs(), 100u, "floor must count down");
+
+    animation->tick(renderer, 200);  // crosses the floor -> advances, dwell resets
+    zassert_equal(animation->goodSwitchPointGraceMs(), 0u,
+                  "past the floor there is nothing left to wait for");
+}
+
+ZTEST(text_animation_di_tests, test_grace_request_zero_step_time) {
+    // A 0 step time scrolls one pixel per render tick, so the per-pixel cost is the frame
+    // interval, not 0 — the request must not collapse to nothing.
+    ConstUint32Source stepTimeMs(0);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;  // slot 0 -> "HELLO"
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    const size_t full = fullScrollPixels("HELLO", renderer.displayWidth());
+
+    // The request is a snapshot taken at the top of tick(), before that frame's pixel
+    // step — so the first tick still reports the full scroll, priced at 20 ms/px.
+    animation->tick(renderer, 20);
+    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)(full * 20u),
+                  "a 0 step time must price a pixel at one render tick, not 0 ms");
+
+    // The second tick sees the pixel the first one stepped: exactly one 20 ms frame less.
+    animation->tick(renderer, 20);
+    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)((full - 1u) * 20u),
+                  "each scrolled pixel must retire one render tick's worth of the request");
 }

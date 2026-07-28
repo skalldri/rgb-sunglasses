@@ -157,8 +157,10 @@ class ShuffleServiceConfigSource : public ShuffleConfigSource {
 RegistryShufflePool sShufflePool;
 ShuffleServiceConfigSource sShuffleConfigSource;
 // sys_rand32_get is entropy-seeded on proto0 (same source matrix_code_animation uses).
-ShuffleController sShuffleController(sShufflePool, sShuffleConfigSource, sys_rand32_get,
-                                     static_cast<uint64_t>(CONFIG_APP_SHUFFLE_GRACE_S) * 1000u);
+ShuffleController sShuffleController(
+    sShufflePool, sShuffleConfigSource, sys_rand32_get,
+    static_cast<uint64_t>(CONFIG_APP_SHUFFLE_GRACE_S) * 1000u,
+    static_cast<uint64_t>(CONFIG_APP_SHUFFLE_MAX_GRACE_S) * 1000u);
 
 #endif  // CONFIG_APP_SHUFFLE
 
@@ -315,9 +317,14 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
             // the selected animation's good-moment flag would be stale.
             if (currentIndicator == Indicator::None) {
                 BaseAnimation *shuffleCur = anim;  // == getAnimation(currentAnimation) here
+                // The animation was ticked with this same kTargetRenderIntervalMs, so its
+                // own pacing clock and the shuffle dwell advance in lockstep on nominal
+                // ms — a requested "time to my next boundary" is exact in the same units
+                // the deadline is compared against, even when the render loop overruns.
                 const ShuffleController::Decision d = sShuffleController.onFrame(
                     currentAnimation, static_cast<uint32_t>(kTargetRenderIntervalMs),
-                    shuffleCur ? shuffleCur->isAtGoodSwitchPoint() : true);
+                    shuffleCur ? shuffleCur->isAtGoodSwitchPoint() : true,
+                    shuffleCur ? shuffleCur->goodSwitchPointGraceMs() : 0u);
                 if (d.switchNow) {
                     // persist=false: shuffle hops must not churn settings flash — the
                     // last MANUALLY chosen animation stays the persisted boot animation.
@@ -570,9 +577,10 @@ static int cmd_anim_shuffle_status(const struct shell *shell, size_t argc, char 
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    shell_print(shell, "shuffle: %s, min: %u s, max: %u s, grace: %u s",
+    shell_print(shell, "shuffle: %s, min: %u s, max: %u s, grace: %u s (max %u s)",
                 shuffle_service_get_enabled() ? "on" : "off", shuffle_service_get_min_duration_s(),
-                shuffle_service_get_max_duration_s(), CONFIG_APP_SHUFFLE_GRACE_S);
+                shuffle_service_get_max_duration_s(), CONFIG_APP_SHUFFLE_GRACE_S,
+                CONFIG_APP_SHUFFLE_MAX_GRACE_S);
     return 0;
 }
 

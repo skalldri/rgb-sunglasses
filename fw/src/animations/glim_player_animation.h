@@ -62,6 +62,11 @@ class GlimPlayerAnimation : public BaseAnimationTemplate<GlimPlayerAnimation, An
         return atGoodSwitchPoint_ || finishedOnce_ || inErrorState_;
     }
 
+    // Shuffle's wait budget for that end-of-clip signal: exactly the open clip's remaining
+    // runtime, so a long clip (bad_apple.glim is ~3.5 min) plays out instead of being cut
+    // 30 s after shuffle's dwell target. Out-of-line — it reads the decoder header.
+    uint32_t goodSwitchPointGraceMs() const override;
+
    private:
     // Physical button layout is a directional grid (see fw/CLAUDE.md): 0=Up, 1=Left, 2=Right,
     // 3=Down. Up cycles to the next GLIM file (mirroring PlayAll's auto-advance); Down cycles to

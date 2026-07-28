@@ -501,15 +501,35 @@ config APP_SHUFFLE
 	  by default at runtime.
 
 config APP_SHUFFLE_GRACE_S
-	int "Shuffle good-moment grace cap (seconds)"
+	int "Shuffle good-moment grace floor (seconds)"
 	default 30
 	depends on APP_SHUFFLE
 	help
 	  After a shuffled animation's picked duration elapses, shuffle waits
-	  for its good-switch-point signal at most this long before forcing
+	  for its good-switch-point signal at least this long before forcing
 	  the switch, so a misbehaving (e.g. extension) animation can never
-	  pin shuffle on itself forever. 30 s comfortably covers the slowest
-	  legitimate signal (a long text message scroll).
+	  pin shuffle on itself forever. This is a FLOOR: an animation that
+	  knows exactly how far away its next natural boundary is can ask to
+	  wait longer, up to APP_SHUFFLE_MAX_GRACE_S below - but can never ask
+	  to wait less than this.
+
+config APP_SHUFFLE_MAX_GRACE_S
+	int "Shuffle animation-requested grace ceiling (seconds)"
+	default 600
+	depends on APP_SHUFFLE
+	help
+	  Ceiling on the extra wait an animation may REQUEST beyond
+	  APP_SHUFFLE_GRACE_S when it knows how far away its next natural
+	  boundary is (BaseAnimation::goodSwitchPointGraceMs()). The GLIM
+	  player requests its clip's remaining runtime and the text animation
+	  its remaining scroll, so a long clip (bad_apple.glim is ~3.5 min) or
+	  a 255-char message plays to the end instead of being hard-cut 30 s
+	  after the dwell target. Animations that do not ask - and every
+	  sandboxed extension, which has no rgbx hook for this - are still
+	  bounded by APP_SHUFFLE_GRACE_S alone, so the anti-hang guard still
+	  covers the misbehaving-animation case it was written for. 600 s
+	  covers any plausible clip; a longer one is still cut, just far
+	  later. 0 disables animation-requested grace entirely.
 
 config APP_COREDUMP_MANAGER
 	bool "Coredump manager: drain crash dumps from flash to the FAT disk"

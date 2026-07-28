@@ -4,6 +4,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/__assert.h>
 
+#include <cstdint>
 #include <cstring>
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
@@ -39,6 +40,7 @@ void TextAnimation::init() {
     currentMessageDwellMs = 0;
     currentTextOffset = 0;
     atGoodSwitchPoint_ = false;
+    remainingScrollMs_ = 0;
     strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
 }
 
@@ -119,6 +121,35 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // Accumulate how long the current message has been shown (every tick, including the
     // early-return path below) so an empty message still ages toward the dwell floor.
     currentMessageDwellMs += timeSinceLastTickMs;
+
+    // How much longer this message needs before it finishes scrolling — shuffle's grace
+    // request (see goodSwitchPointGraceMs()). Computed here rather than in that const
+    // getter because the completion test below depends on renderer.displayWidth(), which
+    // the getter has no access to. Without it, shuffle hard-cuts a long message the way it
+    // used to cut a long GLIM clip.
+    //
+    // A pixel step costs at least one render tick (currentCycleTimeMs only advances by
+    // timeSinceLastTickMs) and about one step-time, so max() of the two tracks the real
+    // scroll rate — including a step time of 0, which steps every tick.
+    const size_t stepMs = deps_->stepTimeMs.get();
+    const size_t msPerPixel = (stepMs > timeSinceLastTickMs) ? stepMs : timeSinceLastTickMs;
+    if (firstChar >= currentMessageLen) {
+        // Done scrolling; only the kMinMessageDwellMs floor below is left to wait out.
+        remainingScrollMs_ = (currentMessageDwellMs >= kMinMessageDwellMs)
+                                 ? 0u
+                                 : (uint32_t)(kMinMessageDwellMs - currentMessageDwellMs);
+    } else {
+        // firstChar >= currentMessageLen becomes true once currentTextOffset (<= 0, and
+        // decremented one pixel at a time below) reaches -(len * charWidth + displayWidth
+        // + displayEdgeBuffer) — invert that to get the pixels still to scroll.
+        const int64_t endOffset =
+            -(int64_t)(currentMessageLen * FontAtlas::atlasPixelWidthPerChar +
+                       renderer.displayWidth() + displayEdgeBuffer);
+        const int64_t pixelsRemaining = (int64_t)currentTextOffset - endOffset;
+        const uint64_t ms =
+            (pixelsRemaining > 0) ? (uint64_t)pixelsRemaining * msPerPixel : 0u;
+        remainingScrollMs_ = (ms > UINT32_MAX) ? UINT32_MAX : (uint32_t)ms;
+    }
 
     // If we have finished scrolling the current message, pick the next message - but not
     // before it has been shown for at least kMinMessageDwellMs. Without this floor an
