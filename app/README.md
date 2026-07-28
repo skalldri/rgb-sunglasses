@@ -231,6 +231,37 @@ needed. The runner must have Xcode + CocoaPods (the `macos-setup.sh` prerequisit
 stronger isolation, prefer an **ephemeral** runner (register with `./config.sh --ephemeral` so it
 de-registers after one job) and never store secrets or long-lived credentials on the runner host.
 
+#### Runs under a dedicated `ci-runner` account, not an interactive login
+
+The runner service is installed as a per-user **LaunchAgent** (`./svc.sh install`), which only runs
+while its owning account is logged into a GUI session. It runs under a **dedicated `ci-runner`
+macOS account** — created solely to host CI — rather than a developer's own login, so that:
+
+- The `ios-testflight` job's throwaway signing keychain (created/imported/torn down per run — see
+  the "TestFlight releases" section of `app/CLAUDE.md`) never shares a keychain search list with a
+  human's interactive session.
+- A developer can stay logged into their own account (different desktop, different unlock state)
+  without a CI job silently depending on that session.
+
+Setup, once the account exists:
+
+1. Create the account (`sysadminctl -addUser ci-runner ...`), then force-create its home directory
+   immediately rather than relying on lazy first-login creation (`sudo createhomedir -c -u ci-runner`)
+   — needed because the runner install step below writes into `~/actions-runner` as `ci-runner`
+   before any GUI login would otherwise trigger it.
+2. Fast User Switch into `ci-runner` and run `app/scripts/macos-setup.sh` /
+   `scripts/macos-setup.sh` there — Xcode CLT acceptance, Homebrew, and the NCS toolchain are
+   per-account and are **not** inherited from any other account on the same Mac.
+3. Register the runner (steps above) from inside the `ci-runner` session.
+4. Enable **Automatic Login** for `ci-runner` (System Settings → Users & Groups → Login Options) so
+   the LaunchAgent — and therefore the runner — comes back after every reboot without anyone present
+   to unlock the screen.
+
+Simulator runtimes (`/Library/Developer/CoreSimulator/`) and the installed Xcode.app itself are
+system-wide (under `/Library`, not `~/Library`), so they don't need to be reinstalled per account —
+only account-scoped state (CLT license acceptance, Homebrew, `npm`/CocoaPods caches, the runner's own
+`~/actions-runner`) needs the one-time `ci-runner`-session setup above.
+
 ## Key Files
 
 - `app/(tabs)/bluetooth.tsx`: scanning and device list
