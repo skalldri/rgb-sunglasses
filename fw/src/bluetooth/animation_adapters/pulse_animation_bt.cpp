@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_shuffle_include_binding.h>
+#include <animations/color_mode_source.h>
 #include <animations/pulse_animation.h>
+#include <zephyr/random/random.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
@@ -42,13 +44,21 @@ class PulsePeriodMsSource : public AnimationUint32ParameterSource {
 };
 
 PulseColorSource sDefaultColorSource;
+// Resolves the color value's mode byte (issue #259) so the animation always sees
+// an effective 0x00RRGGBB through the same interface.
+ColorModeSource sPulseColorMode(sDefaultColorSource, sys_rand32_get, k_uptime_get);
 PulsePeriodMsSource sDefaultPeriodMsSource;
-PulseAnimationDependencies sDefaultDeps(sDefaultColorSource, sDefaultPeriodMsSource);
+PulseAnimationDependencies sDefaultDeps(sPulseColorMode, sDefaultPeriodMsSource);
 }  // namespace
 
 using PulseAnimationIsActive = AnimationIsActiveBinding<Animation::Pulse>;
 
 static void pulse_set_is_active(bool active) {
+    if (active) {
+        // Fires for every activation source (BLE write, shell, boot restore,
+        // shuffle) — arms the RandomOnActivate re-roll / mode-state reset.
+        sPulseColorMode.notifyActivated();
+    }
     pulseIsActive.setActive(active);
 }
 

@@ -215,6 +215,43 @@ describe('DeviceStateDetailScreen', () => {
     expect(getByText('Pick Color')).toBeTruthy();
   });
 
+  it('renders a mode badge instead of a swatch for a non-static color value (issue #259)', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildSelectedDevice([
+        {
+          uuid: 'color-char',
+          cpfFormat: BLE_GATT_CPF_FORMAT_CUSTOM_COLOR,
+          // Spectrum Sweep, speed 200: wire bytes (0, 0, 200, 0x01).
+          value: btoa(String.fromCharCode(0, 0, 200, 0x01)),
+        },
+      ]),
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getByText } = render(<DeviceStateDetailScreen />);
+    expect(getByText('Spectrum Sweep')).toBeTruthy();
+    expect(getByText('Pick Color')).toBeTruthy();
+  });
+
+  it('renders as static (swatch, no badge) for the firmware 0xFF default color value', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildSelectedDevice([
+        {
+          uuid: 'color-char',
+          cpfFormat: BLE_GATT_CPF_FORMAT_CUSTOM_COLOR,
+          value: btoa(String.fromCharCode(255, 255, 255, 255)), // pre-#259 persisted default
+        },
+      ]),
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { getByText, queryByText } = render(<DeviceStateDetailScreen />);
+    expect(getByText('Pick Color')).toBeTruthy();
+    expect(queryByText('Spectrum Sweep')).toBeNull();
+  });
+
   it('renders an inline dropdown for drop-down list characteristics', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice: buildSelectedDevice([

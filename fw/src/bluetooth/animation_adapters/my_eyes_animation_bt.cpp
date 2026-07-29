@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_shuffle_include_binding.h>
+#include <animations/color_mode_source.h>
 #include <animations/my_eyes_animation.h>
+#include <zephyr/random/random.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
@@ -102,9 +104,26 @@ BtGattServer myEyesConfigServer(myEyesPrimaryService, myEyesBlinkSpeedMs, myEyes
                                 myEyesShuffleInclude);
 BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
+namespace {
+class MyEyesColorSource : public AnimationUint32ParameterSource {
+   public:
+    uint32_t get() const override { return static_cast<BtGattColor>(myEyesColor); }
+};
+
+MyEyesColorSource sDefaultColorSource;
+// Resolves the color value's mode byte (issue #259) so the animation always sees
+// an effective 0x00RRGGBB through the same interface.
+ColorModeSource sMyEyesColorMode(sDefaultColorSource, sys_rand32_get, k_uptime_get);
+}  // namespace
+
 using MyEyesAnimationIsActive = AnimationIsActiveBinding<Animation::MyEyes>;
 
 static void my_eyes_set_is_active(bool active) {
+    if (active) {
+        // Fires for every activation source (BLE write, shell, boot restore,
+        // shuffle) — arms the RandomOnActivate re-roll / mode-state reset.
+        sMyEyesColorMode.notifyActivated();
+    }
     myEyesIsActive.setActive(active);
 }
 
@@ -126,11 +145,6 @@ namespace {
 class MyEyesBlinkSpeedSource : public AnimationUint32ParameterSource {
    public:
     uint32_t get() const override { return myEyesBlinkSpeedMs; }
-};
-
-class MyEyesColorSource : public AnimationUint32ParameterSource {
-   public:
-    uint32_t get() const override { return static_cast<BtGattColor>(myEyesColor); }
 };
 }  // namespace
 
@@ -275,11 +289,10 @@ class MyEyesUpNextSource : public MyEyesAnimationUpNextSource {
 };
 
 MyEyesBlinkSpeedSource sDefaultBlinkSpeedSource;
-MyEyesColorSource sDefaultColorSource;
 MyEyesSlotSource sDefaultSlotSource;
 MyEyesUpNextSource sDefaultUpNextSource;
 
-MyEyesAnimationDependencies sDefaultMyEyesDeps(sDefaultBlinkSpeedSource, sDefaultColorSource,
+MyEyesAnimationDependencies sDefaultMyEyesDeps(sDefaultBlinkSpeedSource, sMyEyesColorMode,
                                                sDefaultSlotSource, sDefaultUpNextSource);
 
 struct MyEyesSlotInitializer {

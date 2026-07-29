@@ -169,6 +169,13 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
 
     int32_t charWindowPos = 0;
 
+    // Resolve the color ONCE per tick, not per pixel: the source may be a
+    // ColorModeSource (issue #259), whose get() is a stateful per-tick step that
+    // can drain the audio message queue (RandomOnBeat). Calling it per lit pixel
+    // put a kernel msgq drain in the inner render loop. Every other animation
+    // already reads its color once per tick — match them.
+    const uint32_t color = deps_->color.get();
+
     // This function gets called repeatedly to render to the display
     auto lambda = [&](size_t x, size_t y, bool filled) {
         int32_t realX = x + charWindowPos;
@@ -179,7 +186,6 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
         }
 
         if (filled) {
-            uint32_t color = deps_->color.get();
             uint8_t red = (color >> 16) & 0xFF;
             uint8_t green = (color >> 8) & 0xFF;
             uint8_t blue = (color >> 0) & 0xFF;

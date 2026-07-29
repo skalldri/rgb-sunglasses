@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_shuffle_include_binding.h>
+#include <animations/color_mode_source.h>
 #include <animations/matrix_code_animation.h>
+#include <zephyr/random/random.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
@@ -71,13 +73,21 @@ MatrixCodeDropSpeedSource sDefaultDropSpeedSource;
 MatrixCodeFadeTimeSource sDefaultFadeTimeSource;
 MatrixCodeDensitySource sDefaultDensitySource;
 MatrixCodeColorSource sDefaultColorSource;
+// Resolves the color value's mode byte (issue #259) so the animation always sees
+// an effective 0x00RRGGBB through the same interface.
+ColorModeSource sMatrixCodeColorMode(sDefaultColorSource, sys_rand32_get, k_uptime_get);
 MatrixCodeAnimationDependencies sDefaultDeps(sDefaultDropSpeedSource, sDefaultFadeTimeSource,
-                                             sDefaultDensitySource, sDefaultColorSource);
+                                             sDefaultDensitySource, sMatrixCodeColorMode);
 }  // namespace
 
 using MatrixCodeAnimationIsActive = AnimationIsActiveBinding<Animation::MatrixCode>;
 
 static void matrix_code_set_is_active(bool active) {
+    if (active) {
+        // Fires for every activation source (BLE write, shell, boot restore,
+        // shuffle) — arms the RandomOnActivate re-roll / mode-state reset.
+        sMatrixCodeColorMode.notifyActivated();
+    }
     matrixCodeIsActive.setActive(active);
 }
 

@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_shuffle_include_binding.h>
+#include <animations/color_mode_source.h>
 #include <animations/text_animation.h>
+#include <zephyr/random/random.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
@@ -112,11 +114,21 @@ class TextColorSource : public AnimationUint32ParameterSource {
    public:
     uint32_t get() const override { return static_cast<BtGattColor>(textColor); }
 };
+
+TextColorSource sDefaultColorSource;
+// Resolves the color value's mode byte (issue #259) so the animation always sees
+// an effective 0x00RRGGBB through the same interface.
+ColorModeSource sTextColorMode(sDefaultColorSource, sys_rand32_get, k_uptime_get);
 }  // namespace
 
 using TextAnimationIsActive = AnimationIsActiveBinding<Animation::Text>;
 
 static void text_set_is_active(bool active) {
+    if (active) {
+        // Fires for every activation source (BLE write, shell, boot restore,
+        // shuffle) — arms the RandomOnActivate re-roll / mode-state reset.
+        sTextColorMode.notifyActivated();
+    }
     textIsActive.setActive(active);
 }
 
@@ -294,10 +306,9 @@ class TextUpNextSource : public TextAnimationUpNextSource {
 };
 
 TextStepTimeSource sDefaultStepTimeSource;
-TextColorSource sDefaultColorSource;
 TextSlotSource sDefaultSlotSource;
 TextUpNextSource sDefaultUpNextSource;
-TextAnimationDependencies sDefaultTextDeps(sDefaultStepTimeSource, sDefaultColorSource,
+TextAnimationDependencies sDefaultTextDeps(sDefaultStepTimeSource, sTextColorMode,
                                            sDefaultSlotSource, sDefaultUpNextSource);
 
 struct TextSlotInitializer {

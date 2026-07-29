@@ -27,6 +27,7 @@
  */
 
 #include <animations/animation_registry.h>
+#include <animations/color_mode_source.h>
 #include <extensions/extension_animation_proxy.h>
 #include <extensions/extension_bt.h>
 #include <extensions/extension_host.h>
@@ -43,15 +44,18 @@
 #include <zephyr/llext/llext.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
+#include <zephyr/random/random.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/sys/libc-hooks.h>
 #include <zephyr/sys/reboot.h>
 
 #include <cmsis_core.h>
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #if defined(CONFIG_AUDIO)
 #include <sound/audio_dsp.h>
@@ -135,6 +139,48 @@ struct k_thread sSandboxThread;
 bool sSandboxAlive = false;
 int sActiveSlot = -1;       // slot the pattern controller should tick (-1 none)
 int sPendingLoadSlot = -1;  // slot awaiting its lazy first-tick load (-1 none)
+
+/* Color-mode resolution for extension COLOR params (issue #259): one resolver
+ * per param INDEX, shared across slots — only the active slot ever ticks, and
+ * activate() arms a state reset on every resolver, so cross-slot state can't
+ * leak. The raw source reads the host-owned authoritative value (which keeps
+ * carrying the mode byte through BLE reads and persistence); tick() copies the
+ * RESOLVED effective color into rgbx_inputs, so extensions keep seeing a plain
+ * 0x00RRGGBB through the unchanged ABI (rgbx paramColor() masks to 24 bits
+ * anyway). */
+class ActiveSlotParamSource : public AnimationUint32ParameterSource {
+   public:
+    constexpr explicit ActiveSlotParamSource(size_t index) : index_(index) {}
+    uint32_t get() const override {
+        return sActiveSlot >= 0 ? sSlots[sActiveSlot].paramValues[index_] : 0u;
+    }
+
+   private:
+    size_t index_;
+};
+
+struct ParamColorResolver {
+    explicit ParamColorResolver(size_t index)
+        : raw(index), mode(raw, sys_rand32_get, k_uptime_get) {}
+    ActiveSlotParamSource raw;
+    ColorModeSource mode;  // references `raw` — member order matters
+};
+
+/* One resolver per param slot, built from an index sequence so a change to
+ * RGBX_MAX_PARAMS scales automatically (same idiom as kFactories in
+ * extension_animation_proxy.cpp) rather than needing a hand-written element
+ * list. ColorModeSource is neither copyable nor movable (atomic member), so
+ * this relies on C++17 guaranteed elision constructing each element in place
+ * from its prvalue -- which is also why the elements are built here rather
+ * than assigned in a loop. */
+template <size_t... I>
+std::array<ParamColorResolver, sizeof...(I)> make_param_color_resolvers(
+    std::index_sequence<I...>) {
+    return {{ParamColorResolver(I)...}};
+}
+
+std::array<ParamColorResolver, RGBX_MAX_PARAMS> sParamColorResolvers =
+    make_param_color_resolvers(std::make_index_sequence<RGBX_MAX_PARAMS>{});
 
 /* One shared sandbox domain, re-initialized per activation. Safe because
  * k_mem_domain_init() fully resets the object and the sandbox thread is
@@ -890,6 +936,12 @@ bool activate(size_t slot) {
     unload_resident();
     sActiveSlot = static_cast<int>(slot);
     sPendingLoadSlot = static_cast<int>(slot);
+    /* Arm a color-mode state reset (fresh RandomOnActivate roll, restarted
+     * sweep phase) on every resolver — cheap, and covers slot switches where
+     * the same param index is a COLOR param in both slots. */
+    for (auto &resolver : sParamColorResolvers) {
+        resolver.mode.notifyActivated();
+    }
     LOG_INF("extension '%s' activation queued", s.meta.displayName);
     return true;
 }
@@ -938,6 +990,14 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
     in->dt_ms = dtMs;
     memcpy(in->params, s.paramValues, sizeof(in->params));
     memcpy(in->param_strings, s.stringValues, sizeof(in->param_strings));
+    /* Resolve color-mode metadata (issue #259): COLOR params reach the
+     * extension as the effective 0x00RRGGBB while paramValues stays the raw
+     * mode-carrying value (authoritative for BLE reads and persistence). */
+    for (size_t p = 0; p < s.meta.paramCount; p++) {
+        if (s.meta.params[p].type == RGBX_PARAM_COLOR) {
+            in->params[p] = sParamColorResolvers[p].mode.get();
+        }
+    }
     if (sImuSource != nullptr) {
         sImuSource->update();
         in->accel[0] = sImuSource->getAccelX();

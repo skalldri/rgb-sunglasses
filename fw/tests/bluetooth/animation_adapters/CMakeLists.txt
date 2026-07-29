@@ -45,6 +45,8 @@ endforeach()
 
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/animation_registry.cpp)
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/animation_base.cpp)
+# Color-mode resolver (issue #259): every adapter wraps its color characteristic in one.
+target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/color_mode_source.cpp)
 
 # text/my_eyes animations render via FontAtlas/FontShell; glim_player needs
 # the real GLIM decoder/registry (all three already proven native_sim-safe by
