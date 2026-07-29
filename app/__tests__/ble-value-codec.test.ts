@@ -1,7 +1,15 @@
-import { METADATA_BLOB_VERSION } from '@/constants/bluetooth';
+import {
+  COLOR_MODE_RANDOM_ON_ACTIVATE,
+  COLOR_MODE_RANDOM_ON_BEAT,
+  COLOR_MODE_RANDOM_TIMER_FADE,
+  COLOR_MODE_SPECTRUM_SWEEP,
+  COLOR_MODE_STATIC,
+  METADATA_BLOB_VERSION,
+} from '@/constants/bluetooth';
 import {
   decodeBooleanFromBase64,
   decodeColorFromBase64,
+  decodeColorValueFromBase64,
   decodeFloat32FromBase64,
   decodeSint32FromBase64,
   decodeUint32FromBase64,
@@ -9,6 +17,7 @@ import {
   decodeUtf8FromBase64,
   encodeBooleanToBase64,
   encodeColorToBase64,
+  encodeColorValueToBase64,
   encodeFloat32ToBase64,
   encodeUint32ToBase64,
   encodeUtf8ToBase64,
@@ -106,6 +115,60 @@ describe('ble-value-codec', () => {
 
   it('throws for invalid color payloads', () => {
     expect(() => decodeColorFromBase64(btoa('ab'))).toThrow('Invalid color payload length');
+  });
+
+  it('encodes color modes into byte 3 with speed in the r byte (issue #259)', () => {
+    // Wire bytes are little-endian (b, g, r, mode).
+    expect(
+      encodeColorValueToBase64({ mode: COLOR_MODE_SPECTRUM_SWEEP, rgb: { r: 9, g: 9, b: 9 }, speed: 200 })
+    ).toBe(btoa(String.fromCharCode(0, 0, 200, 0x01)));
+    expect(
+      encodeColorValueToBase64({ mode: COLOR_MODE_RANDOM_ON_BEAT, rgb: { r: 0, g: 0, b: 0 }, speed: 42 })
+    ).toBe(btoa(String.fromCharCode(0, 0, 42, 0x02)));
+    expect(
+      encodeColorValueToBase64({ mode: COLOR_MODE_RANDOM_ON_ACTIVATE, rgb: { r: 1, g: 2, b: 3 }, speed: 99 })
+    ).toBe(btoa(String.fromCharCode(0, 0, 0, 0x03)));
+    expect(
+      encodeColorValueToBase64({ mode: COLOR_MODE_RANDOM_TIMER_FADE, rgb: { r: 0, g: 0, b: 0 }, speed: 5 })
+    ).toBe(btoa(String.fromCharCode(0, 0, 5, 0x04)));
+  });
+
+  it('round-trips color mode values', () => {
+    const sweep = decodeColorValueFromBase64(
+      encodeColorValueToBase64({ mode: COLOR_MODE_SPECTRUM_SWEEP, rgb: { r: 0, g: 0, b: 0 }, speed: 200 })
+    );
+    expect(sweep.mode).toBe(COLOR_MODE_SPECTRUM_SWEEP);
+    expect(sweep.speed).toBe(200);
+
+    const staticValue = decodeColorValueFromBase64(encodeColorToBase64({ r: 10, g: 20, b: 30 }));
+    expect(staticValue).toEqual({ mode: COLOR_MODE_STATIC, rgb: { r: 10, g: 20, b: 30 }, speed: 10 });
+  });
+
+  it('treats unknown mode bytes as static (firmware 0xFF default)', () => {
+    const value = decodeColorValueFromBase64(btoa(String.fromCharCode(30, 20, 10, 0xff)));
+    expect(value.mode).toBe(COLOR_MODE_STATIC);
+    expect(value.rgb).toEqual({ r: 10, g: 20, b: 30 });
+
+    expect(decodeColorValueFromBase64(btoa(String.fromCharCode(0, 0, 0, 0x05))).mode).toBe(
+      COLOR_MODE_STATIC
+    );
+  });
+
+  it('decodes legacy 3-byte color payloads as static', () => {
+    const value = decodeColorValueFromBase64(btoa(String.fromCharCode(30, 20, 10)));
+    expect(value).toEqual({ mode: COLOR_MODE_STATIC, rgb: { r: 10, g: 20, b: 30 }, speed: 10 });
+  });
+
+  it('keeps the legacy color wrappers byte-identical to the mode-aware codec', () => {
+    expect(encodeColorToBase64({ r: 10, g: 20, b: 30 })).toBe(
+      encodeColorValueToBase64({ mode: COLOR_MODE_STATIC, rgb: { r: 10, g: 20, b: 30 }, speed: 0 })
+    );
+    expect(() => decodeColorValueFromBase64(btoa('ab'))).toThrow('Invalid color payload length');
+    expect(decodeColorValueFromBase64(undefined)).toEqual({
+      mode: COLOR_MODE_STATIC,
+      rgb: { r: 0, g: 0, b: 0 },
+      speed: 0,
+    });
   });
 
   it('decodes signed 32-bit values, little-endian', () => {

@@ -1,4 +1,12 @@
-import { METADATA_BLOB_VERSION } from '@/constants/bluetooth';
+import {
+  COLOR_MODE_RANDOM_ON_ACTIVATE,
+  COLOR_MODE_RANDOM_ON_BEAT,
+  COLOR_MODE_RANDOM_TIMER_FADE,
+  COLOR_MODE_SPECTRUM_SWEEP,
+  COLOR_MODE_STATIC,
+  ColorMode,
+  METADATA_BLOB_VERSION,
+} from '@/constants/bluetooth';
 
 export type RgbColor = {
   r: number;
@@ -115,13 +123,34 @@ export function formatFloat32(value: number): string {
   return String(parseFloat(value.toPrecision(7)));
 }
 
-export function encodeColorToBase64(color: RgbColor): string {
-  return btoa(String.fromCharCode(color.b & 0xff, color.g & 0xff, color.r & 0xff, 0));
+// Mode-aware view of the 4-byte color wire value (issue #259). Wire bytes are
+// little-endian (b, g, r, mode); in special modes the r byte carries the speed
+// property instead of a color channel — see COLOR_MODE_* in constants/bluetooth.ts.
+export type ColorValue = {
+  mode: ColorMode;
+  rgb: RgbColor; // meaningful for STATIC (and what unknown-mode payloads display as)
+  speed: number; // 0-255; meaningful for SWEEP / TIMER_FADE (r byte on the wire)
+};
+
+export function encodeColorValueToBase64(value: ColorValue): string {
+  switch (value.mode) {
+    case COLOR_MODE_SPECTRUM_SWEEP:
+    case COLOR_MODE_RANDOM_ON_BEAT:
+    case COLOR_MODE_RANDOM_TIMER_FADE:
+      // rgb is not a color in these modes: byte 2 (r) carries speed, g/b reserved.
+      return btoa(String.fromCharCode(0, 0, value.speed & 0xff, value.mode));
+    case COLOR_MODE_RANDOM_ON_ACTIVATE:
+      return btoa(String.fromCharCode(0, 0, 0, value.mode));
+    default:
+      return btoa(
+        String.fromCharCode(value.rgb.b & 0xff, value.rgb.g & 0xff, value.rgb.r & 0xff, 0)
+      );
+  }
 }
 
-export function decodeColorFromBase64(encodedValue?: string | null): RgbColor {
+export function decodeColorValueFromBase64(encodedValue?: string | null): ColorValue {
   if (!encodedValue) {
-    return { r: 0, g: 0, b: 0 };
+    return { mode: COLOR_MODE_STATIC, rgb: { r: 0, g: 0, b: 0 }, speed: 0 };
   }
 
   const decoded = atob(encodedValue);
@@ -129,11 +158,33 @@ export function decodeColorFromBase64(encodedValue?: string | null): RgbColor {
     throw new Error(`Invalid color payload length: ${decoded.length}`);
   }
 
-  return {
+  const rgb = {
     b: decoded.charCodeAt(0) & 0xff,
     g: decoded.charCodeAt(1) & 0xff,
     r: decoded.charCodeAt(2) & 0xff,
   };
+  // Legacy 3-byte payloads have no mode byte; unknown mode values (e.g. the
+  // firmware's 0xFF pre-feature default) must render as STATIC.
+  const modeByte = decoded.length >= 4 ? decoded.charCodeAt(3) & 0xff : COLOR_MODE_STATIC;
+  const mode: ColorMode =
+    modeByte === COLOR_MODE_SPECTRUM_SWEEP ||
+    modeByte === COLOR_MODE_RANDOM_ON_BEAT ||
+    modeByte === COLOR_MODE_RANDOM_ON_ACTIVATE ||
+    modeByte === COLOR_MODE_RANDOM_TIMER_FADE
+      ? modeByte
+      : COLOR_MODE_STATIC;
+
+  // speed always mirrors the r byte so mode UIs can seed without re-branching.
+  return { mode, rgb, speed: rgb.r };
+}
+
+export function encodeColorToBase64(color: RgbColor): string {
+  // Static-mode wrapper — byte-identical to the pre-#259 encoding (b, g, r, 0).
+  return encodeColorValueToBase64({ mode: COLOR_MODE_STATIC, rgb: color, speed: 0 });
+}
+
+export function decodeColorFromBase64(encodedValue?: string | null): RgbColor {
+  return decodeColorValueFromBase64(encodedValue).rgb;
 }
 
 export type MetadataBlobEntry = {

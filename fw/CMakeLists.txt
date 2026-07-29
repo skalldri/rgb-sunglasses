@@ -38,6 +38,9 @@ target_sources(
     src/animations/animation_registry.cpp
     src/animations/animation_registry_defaults.cpp
     src/animations/animation_base.cpp
+    # Color-mode resolver (issue #259): always-on because the Text animation's BT
+    # adapter (unconditionally compiled) instantiates one per color characteristic.
+    src/animations/color_mode_source.cpp
     src/fonts/FontAtlas.cpp
     src/fonts/FontShell.cpp
 )
@@ -94,8 +97,12 @@ target_sources_ifdef(CONFIG_APP_SHUFFLE app PRIVATE src/bluetooth/shuffle_servic
 
 # The extension host also binds these adapter sources (rgbx_inputs audio/IMU
 # snapshots), so they must compile whenever it is enabled with the matching
-# subsystem — not only when a built-in animation wants them.
-if(CONFIG_ANIMATION_BEAT OR CONFIG_ANIMATION_FFT_BARS OR (CONFIG_APP_EXTENSION_HOST AND CONFIG_AUDIO))
+# subsystem — not only when a built-in animation wants them. Since issue #259 the
+# sound adapter also provides the default AnimationBeatSource for RandomOnBeat
+# color mode, so it compiles whenever audio hardware exists at all (a strict
+# superset of the old BEAT/FFT_BARS/extension-host condition — both animation
+# symbols depend on AUDIO).
+if(CONFIG_AUDIO)
   target_sources(app PRIVATE src/sound/animation_adapters/audio_animations_sound.cpp)
 endif()
 

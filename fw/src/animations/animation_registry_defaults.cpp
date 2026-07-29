@@ -3,6 +3,7 @@
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_registry.h>
 #include <animations/animation_shuffle_include_binding.h>
+#include <animations/color_mode_source.h>
 #include <animations/my_eyes_animation.h>
 #include <animations/null_animation.h>
 #include <animations/rainbow_animation.h>
@@ -429,6 +430,14 @@ int animation_registry_register_defaults() {
 #if defined(CONFIG_APP_EXTENSION_HOST)
     // And the always-registered button source (buttons_pressed bitmask).
     extension_host_bind_default_button_dependencies();
+#endif
+
+#if defined(CONFIG_AUDIO)
+    // Beat feed for the RandomOnBeat color mode (issue #259) — every color
+    // characteristic's ColorModeSource resolver, built-in or extension, shares
+    // this default. When audio is disabled the bind never runs and RandomOnBeat
+    // degrades to RandomOnActivate (see color_mode_source.h).
+    color_mode_bind_default_beat_source();
 #endif
 
     return 0;

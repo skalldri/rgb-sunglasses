@@ -26,7 +26,7 @@ The app mirrors BLE GATT characteristics as UI controls. Each characteristic on 
 
 ### Custom Extensions
 
-- `BLE_GATT_CPF_FORMAT_CUSTOM_COLOR` (0xE0): Non-standard format for RGB color as uint32 (lower 24 bits)
+- `BLE_GATT_CPF_FORMAT_CUSTOM_COLOR` (0xE0): Non-standard format for RGB color as uint32 (lower 24 bits = color, byte 3 = color mode — see "Color Encoding" below)
 - Custom service UUIDs starting with `12345678-1234-5678-000X-` for different animation services
 
 ## Key Technologies
@@ -56,7 +56,7 @@ The patch's core fix: the library's Android native module (`BlePlxModule.java`) 
 
 - Tabs: [app/(tabs)/](<app/(tabs)/>) directory (bluetooth, device-state/ — itself a directory with `index.tsx` + `[serviceUuid].tsx`, index)
 - Modals: [color-picker-modal.tsx](app/color-picker-modal.tsx), [firmware-update-modal.tsx](app/firmware-update-modal.tsx)
-- Query params for modal communication: `charUuid`, `r`, `g`, `b`
+- Query params for modal communication: `charUuid`, `r`, `g`, `b`, `mode`, `speed` (color picker; `mode`/`speed` added for the issue #259 color modes)
 
 ## Development Workflow
 
@@ -316,7 +316,17 @@ charInfo.characteristic
 
 ### Color Encoding
 
-RGB colors are uint32 with lower 24 bits as 0xRRGGBB (little-endian, i.e. bytes `b,g,r,0`). Encoding/decoding lives in [services/ble-value-codec.ts](services/ble-value-codec.ts) (`encodeColorToBase64`/`decodeColorFromBase64`); HSV↔RGB conversion in [color-picker-modal.tsx](app/color-picker-modal.tsx).
+RGB colors are uint32, wire bytes little-endian `b,g,r,mode`. Byte 3 is the **color mode** (issue #259), mirroring the `ColorMode` enum in `fw/src/animations/color_mode_source.h`:
+
+| mode | meaning | bytes 0-2 |
+|---|---|---|
+| 0x00 | Static | `b,g,r` — the color, as before |
+| 0x01 | Spectrum Sweep | byte 2 (r) = speed 0-255, others 0 |
+| 0x02 | Random on Beat | reserved (0) |
+| 0x03 | Random on Activate | reserved (0) |
+| 0x04 | Random Timer Fade | byte 2 (r) = speed 0-255, others 0 |
+
+**Any unknown mode byte decodes as Static** — including 0xFF, the upper byte of the `0xFFFFFFFF` default persisted on pre-#259 devices. Mode-aware codec: `encodeColorValueToBase64`/`decodeColorValueFromBase64` (`ColorValue = {mode, rgb, speed}`); the legacy `encodeColorToBase64`/`decodeColorFromBase64` remain as byte-identical static-mode wrappers. All in [services/ble-value-codec.ts](services/ble-value-codec.ts); HSV↔RGB conversion in [color-picker-modal.tsx](app/color-picker-modal.tsx); mode constants + labels in [constants/bluetooth.ts](constants/bluetooth.ts).
 
 ## Known Issues & Quirks
 
@@ -586,7 +596,7 @@ Note: `BaseExpoRouterLink` children are not a bare string in the fiber props —
 - Animation enum values are in `fw/src/animations/animation_types.h`
 - **Extension animations** (`fw/src/extensions/`, ids `0x40 + slot`) → service groups `4000`, `4100`, … Their "Is Active" uses the FIXED shared UUID `...-bbbb-...0000` — the same literal UUID appears in every animation service, so **always disambiguate by `charInfo.characteristic.serviceUUID`, never by `charUuid` alone**. Their param characteristics use auto UUIDs `...-{group}-56789abd0001/0002/...` in manifest declaration order (ids start at 1).
 
-**Per-CPF fiber component names** (all take the same `onWrite(charUuid, encodedNewValue, encodedPreviousValue)` prop, so the CharacteristicBoolean recipe above works for every type): `CharacteristicBoolean`, `CharacteristicUint32` (4-byte LE, e.g. 50 = `MgAAAA==`), `CharacteristicColor` (4 bytes `b,g,r,0`), `CharacteristicUtf8` (write with `btoa("text")`). The fiber walk matches `fiber.type.displayName || fiber.type.name` — these components are named function exports (`components/characteristic-*.tsx`) with no explicit `displayName`, so it's the function *name* that matches; nothing automated enforces this, so keep those component function names stable as a convention (renaming one silently breaks these recipes). These fibers only exist while the screen that renders them is mounted — Is Active toggles live on the Controls list, per-param characteristics only on that animation's detail page (navigate there first or the walk returns "not found").
+**Per-CPF fiber component names** (all take the same `onWrite(charUuid, encodedNewValue, encodedPreviousValue)` prop, so the CharacteristicBoolean recipe above works for every type): `CharacteristicBoolean`, `CharacteristicUint32` (4-byte LE, e.g. 50 = `MgAAAA==`), `CharacteristicColor` (4 bytes `b,g,r,mode` — mode 0 = static, see Color Encoding), `CharacteristicUtf8` (write with `btoa("text")`). The fiber walk matches `fiber.type.displayName || fiber.type.name` — these components are named function exports (`components/characteristic-*.tsx`) with no explicit `displayName`, so it's the function *name* that matches; nothing automated enforces this, so keep those component function names stable as a convention (renaming one silently breaks these recipes). These fibers only exist while the screen that renders them is mounted — Is Active toggles live on the Controls list, per-param characteristics only on that animation's detail page (navigate there first or the walk returns "not found").
 
 ### BLE Optimistic UI and Notification Behaviour
 

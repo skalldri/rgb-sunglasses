@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_shuffle_include_binding.h>
 #include <animations/beat_animation.h>
+#include <animations/color_mode_source.h>
+#include <zephyr/random/random.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
@@ -36,11 +38,21 @@ class BeatColorSource : public AnimationUint32ParameterSource {
 };
 
 BeatColorSource sDefaultColorSource;
+// Resolves the color value's mode byte (issue #259) so the animation always sees
+// an effective 0x00RRGGBB through the same interface. RandomOnBeat shares the
+// drain-time beat latch with the Beat animation's own isBeat() flash logic (see
+// audio_animations_sound.cpp), so neither steals the other's beats.
+ColorModeSource sBeatColorMode(sDefaultColorSource, sys_rand32_get, k_uptime_get);
 }  // namespace
 
 using BeatAnimationIsActive = AnimationIsActiveBinding<Animation::Beat>;
 
 static void beat_set_is_active(bool active) {
+    if (active) {
+        // Fires for every activation source (BLE write, shell, boot restore,
+        // shuffle) — arms the RandomOnActivate re-roll / mode-state reset.
+        sBeatColorMode.notifyActivated();
+    }
     beatIsActive.setActive(active);
 }
 
@@ -58,5 +70,5 @@ struct BeatIsActiveBindingRegistrar {
 [[maybe_unused]] BeatIsActiveBindingRegistrar sBeatIsActiveBindingRegistrar;
 
 void beat_animation_bind_default_bt_dependencies() {
-    BeatAnimation::getInstance()->setColor(sDefaultColorSource);
+    BeatAnimation::getInstance()->setColor(sBeatColorMode);
 }

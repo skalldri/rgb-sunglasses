@@ -2,15 +2,41 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AppButton } from '@/components/ui/app-button';
 import { Card } from '@/components/ui/card';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import {
+    COLOR_MODE_LABELS,
+    COLOR_MODE_RANDOM_ON_ACTIVATE,
+    COLOR_MODE_RANDOM_ON_BEAT,
+    COLOR_MODE_RANDOM_TIMER_FADE,
+    COLOR_MODE_SPECTRUM_SWEEP,
+    COLOR_MODE_STATIC,
+    ColorMode,
+} from '@/constants/bluetooth';
 import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
 import { useThemeColors } from '@/hooks/use-theme-color';
-import { encodeColorToBase64 } from '@/services/ble-value-codec';
+import { encodeColorValueToBase64 } from '@/services/ble-value-codec';
 import { LinearGradient } from 'expo-linear-gradient';
 import Slider from '@react-native-community/slider';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
 import { GestureResponderEvent, StyleSheet, View } from 'react-native';
+
+// What the panel does in each special mode, shown in place of the wheel.
+const MODE_DESCRIPTIONS: Record<Exclude<ColorMode, typeof COLOR_MODE_STATIC>, string> = {
+    [COLOR_MODE_SPECTRUM_SWEEP]: 'Smoothly cycles through the color spectrum.',
+    [COLOR_MODE_RANDOM_ON_BEAT]: 'Picks a new random color on each detected beat.',
+    [COLOR_MODE_RANDOM_ON_ACTIVATE]: 'Picks a new random color each time this animation activates.',
+    [COLOR_MODE_RANDOM_TIMER_FADE]: 'Continuously fades to a new random color on a timer.',
+};
+
+// Modes whose speed byte the firmware actually reads (SWEEP/TIMER_FADE rate).
+// RANDOM_ON_BEAT's speed byte is reserved, so it gets no slider.
+const SPEED_MODES: ColorMode[] = [COLOR_MODE_SPECTRUM_SWEEP, COLOR_MODE_RANDOM_TIMER_FADE];
+
+const MODE_OPTIONS = (Object.entries(COLOR_MODE_LABELS) as unknown as [string, string][]).map(
+    ([value, label]) => ({ label, value: Number(value) as ColorMode })
+);
 
 // Convert RGB to HSV
 function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
@@ -73,14 +99,26 @@ export default function ColorPickerModal() {
     // Get the characteristic UUID from params
     const charUuid = params.charUuid as string;
 
-    // Parse RGB values from query parameters
-    const initialR = params.r ? parseInt(params.r as string, 10) : 255;
-    const initialG = params.g ? parseInt(params.g as string, 10) : 0;
-    const initialB = params.b ? parseInt(params.b as string, 10) : 0;
+    // Mode/speed from query parameters (issue #259); garbage or absent -> STATIC/128.
+    const parsedMode = params.mode ? parseInt(params.mode as string, 10) : COLOR_MODE_STATIC;
+    const initialMode: ColorMode = MODE_OPTIONS.some((o) => o.value === parsedMode)
+        ? (parsedMode as ColorMode)
+        : COLOR_MODE_STATIC;
+    const parsedSpeed = params.speed ? parseInt(params.speed as string, 10) : NaN;
+    const initialSpeed = Number.isFinite(parsedSpeed) ? Math.min(255, Math.max(0, parsedSpeed)) : 128;
+
+    // Parse RGB values from query parameters. In special modes the wire r/g/b
+    // bytes are mode properties, not a color — seed the wheel at default red.
+    const initialR = initialMode === COLOR_MODE_STATIC && params.r ? parseInt(params.r as string, 10) : 255;
+    const initialG = initialMode === COLOR_MODE_STATIC && params.g ? parseInt(params.g as string, 10) : 0;
+    const initialB = initialMode === COLOR_MODE_STATIC && params.b ? parseInt(params.b as string, 10) : 0;
 
     // Convert initial RGB to HSV (brightness is intentionally discarded — it's
     // fixed at full below, so only hue/saturation seed the picker's state).
     const [initialHue, initialSaturation] = rgbToHsv(initialR, initialG, initialB);
+
+    const [mode, setMode] = useState<ColorMode>(initialMode);
+    const [speed, setSpeed] = useState(initialSpeed);
 
     const [hue, setHue] = useState(initialHue);
     const [saturation, setSaturation] = useState(initialSaturation);
@@ -135,6 +173,34 @@ export default function ColorPickerModal() {
     return (
         <ThemedView style={styles.container}>
             <Card style={styles.card}>
+                <SegmentedControl options={MODE_OPTIONS} value={mode} onChange={setMode} />
+
+                {mode !== COLOR_MODE_STATIC && (
+                    <View style={styles.modeBody}>
+                        <ThemedText type="caption" style={styles.modeDescription}>
+                            {MODE_DESCRIPTIONS[mode]}
+                        </ThemedText>
+                        {SPEED_MODES.includes(mode) && (
+                            <View style={styles.sliderContainer}>
+                                <ThemedText type="caption" style={styles.sliderLabel}>Speed: {speed}</ThemedText>
+                                <Slider
+                                    testID="speed-slider"
+                                    style={styles.slider}
+                                    minimumValue={0}
+                                    maximumValue={255}
+                                    step={1}
+                                    value={speed}
+                                    onValueChange={setSpeed}
+                                    minimumTrackTintColor={c.primary}
+                                    maximumTrackTintColor={c.surfaceAlt}
+                                    thumbTintColor={c.primary}
+                                />
+                            </View>
+                        )}
+                    </View>
+                )}
+
+                {mode === COLOR_MODE_STATIC && (<>
                 {/* Hue Wheel */}
                 <View
                     ref={wheelRef}
@@ -180,6 +246,7 @@ export default function ColorPickerModal() {
                 <View style={styles.sliderContainer}>
                     <ThemedText type="caption" style={styles.sliderLabel}>Saturation: {Math.round(saturation * 100)}%</ThemedText>
                     <Slider
+                        testID="saturation-slider"
                         style={styles.slider}
                         minimumValue={0}
                         maximumValue={1}
@@ -191,6 +258,7 @@ export default function ColorPickerModal() {
                         thumbTintColor={colorHex}
                     />
                 </View>
+                </>)}
             </Card>
 
             <AppButton
@@ -199,7 +267,11 @@ export default function ColorPickerModal() {
                 style={styles.doneButton}
                 onPress={async () => {
                     if (charUuid) {
-                        const encoded = encodeColorToBase64({ r: rgb[0], g: rgb[1], b: rgb[2] });
+                        const encoded = encodeColorValueToBase64({
+                            mode,
+                            rgb: { r: rgb[0], g: rgb[1], b: rgb[2] },
+                            speed,
+                        });
                         await writeToCharacteristic(charUuid, encoded);
                     }
                     router.back();
@@ -220,6 +292,15 @@ const styles = StyleSheet.create({
     card: {
         alignItems: 'center',
         alignSelf: 'stretch',
+    },
+    modeBody: {
+        alignSelf: 'stretch',
+        alignItems: 'center',
+        marginVertical: Spacing.md,
+        gap: Spacing.sm,
+    },
+    modeDescription: {
+        textAlign: 'center',
     },
     wheelContainer: {
         width: WHEEL_SIZE,

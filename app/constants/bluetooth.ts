@@ -153,6 +153,26 @@ export const BLE_GATT_CPF_FORMAT_STRUCT = 0x1B;
 
 export const BLE_GATT_CPF_FORMAT_CUSTOM_COLOR = 0xE0; // Custom format for RGB color value (not standard)
 
+// Color mode byte (byte 3 of the CUSTOM_COLOR uint32 wire value, issue #259). Must match
+// the ColorMode enum in fw/src/animations/color_mode_source.h — the authoritative
+// definition. In special modes the r byte (wire byte 2) is reinterpreted as a speed
+// property (0 = slowest, 255 = fastest); g/b are reserved. Decoders must treat any
+// unknown value (including 0xFF, the firmware's persisted pre-feature default) as STATIC.
+export const COLOR_MODE_STATIC = 0x00;
+export const COLOR_MODE_SPECTRUM_SWEEP = 0x01;
+export const COLOR_MODE_RANDOM_ON_BEAT = 0x02;
+export const COLOR_MODE_RANDOM_ON_ACTIVATE = 0x03;
+export const COLOR_MODE_RANDOM_TIMER_FADE = 0x04;
+export type ColorMode = 0x00 | 0x01 | 0x02 | 0x03 | 0x04;
+
+export const COLOR_MODE_LABELS: Record<ColorMode, string> = {
+    [COLOR_MODE_STATIC]: 'Static',
+    [COLOR_MODE_SPECTRUM_SWEEP]: 'Spectrum Sweep',
+    [COLOR_MODE_RANDOM_ON_BEAT]: 'Random on Beat',
+    [COLOR_MODE_RANDOM_ON_ACTIVATE]: 'Random on Activate',
+    [COLOR_MODE_RANDOM_TIMER_FADE]: 'Timer Fade',
+};
+
 // Custom format for a drop-down selection list (not standard). Value is a \n-separated string
 // of valid options, with the currently-selected option listed first. Write the bare text of one
 // of the listed options (no separators) to select it. Must match BLE_GATT_CPF_FORMAT_DROPDOWN_LIST

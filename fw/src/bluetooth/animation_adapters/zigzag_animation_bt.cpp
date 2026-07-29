@@ -1,6 +1,8 @@
 #include <animations/animation_is_active_binding.h>
 #include <animations/animation_shuffle_include_binding.h>
+#include <animations/color_mode_source.h>
 #include <animations/zigzag_animation.h>
+#include <zephyr/random/random.h>
 #include <bluetooth/animation_is_active_characteristic.h>
 #include <bluetooth/animation_shuffle_include_characteristic.h>
 #include <bluetooth/bt_service_cpp.h>
@@ -45,12 +47,20 @@ class ZigZagColorSource : public AnimationUint32ParameterSource {
 
 ZigZagStepTimeSource sDefaultStepTimeSource;
 ZigZagColorSource sDefaultColorSource;
-ZigZagAnimationDependencies sDefaultDeps(sDefaultStepTimeSource, sDefaultColorSource);
+// Resolves the color value's mode byte (issue #259) so the animation always sees
+// an effective 0x00RRGGBB through the same interface.
+ColorModeSource sZigZagColorMode(sDefaultColorSource, sys_rand32_get, k_uptime_get);
+ZigZagAnimationDependencies sDefaultDeps(sDefaultStepTimeSource, sZigZagColorMode);
 }  // namespace
 
 using ZigZagAnimationIsActive = AnimationIsActiveBinding<Animation::ZigZag>;
 
 static void zigzag_set_is_active(bool active) {
+    if (active) {
+        // Fires for every activation source (BLE write, shell, boot restore,
+        // shuffle) — arms the RandomOnActivate re-roll / mode-state reset.
+        sZigZagColorMode.notifyActivated();
+    }
     zigzagIsActive.setActive(active);
 }
 

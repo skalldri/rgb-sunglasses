@@ -334,6 +334,40 @@ ZTEST(animation_adapters, test_pulse) {
     AnimationIsActiveBinding<Animation::Pulse>::setLocalActiveState(true);
 }
 
+/* Issue #259: the color characteristic's upper byte selects a color mode; the
+ * full 32 bits must survive the write/read round trip untouched (the adapter's
+ * ColorModeSource resolves the mode on the animation side, never mutating the
+ * stored value), and a tick with a special mode active must run the resolver
+ * path without faulting. Uses Pulse (color = characteristic index 0). */
+ZTEST(animation_adapters, test_pulse_color_mode_round_trip) {
+    constexpr bt_uuid_128 kSvcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Pulse));
+    const bt_gatt_service_static *svc = find_service(kSvcUuid);
+    zassert_not_null(svc);
+    const bt_gatt_attr *colorAttr = nth_char_value(svc, 0);
+    zassert_not_null(colorAttr);
+
+    pulse_animation_bind_default_dependencies();
+    AnimationIsActiveBinding<Animation::Pulse>::setLocalActiveState(true);
+
+    /* SpectrumSweep at full speed: mode byte + speed byte both preserved. */
+    uint32_t sweep = 0x01FF0000;
+    zassert_equal(do_write(colorAttr, &sweep, sizeof(sweep)), sizeof(sweep));
+    zassert_equal(read_u32(colorAttr), 0x01FF0000u);
+    exercise_tick(PulseAnimation::getInstance());
+
+    /* RandomOnActivate: resolver rolls via the real sys_rand32_get. */
+    uint32_t onActivate = 0x03000000;
+    zassert_equal(do_write(colorAttr, &onActivate, sizeof(onActivate)), sizeof(onActivate));
+    zassert_equal(read_u32(colorAttr), 0x03000000u);
+    exercise_tick(PulseAnimation::getInstance());
+
+    /* Back to a plain static color: unchanged legacy behavior. */
+    uint32_t staticColor = 0x00123456;
+    zassert_equal(do_write(colorAttr, &staticColor, sizeof(staticColor)), sizeof(staticColor));
+    zassert_equal(read_u32(colorAttr), 0x00123456u);
+    exercise_tick(PulseAnimation::getInstance());
+}
+
 ZTEST(animation_adapters, test_rainbow) {
     constexpr bt_uuid_128 kSvcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Rainbow));
     const uint32_t defaults[] = {100, 5};
