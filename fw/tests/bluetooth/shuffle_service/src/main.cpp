@@ -64,16 +64,36 @@ static ssize_t read_persisted_u32(void *cb_arg, void *data, size_t len) {
     return sizeof(uint32_t);
 }
 
-ZTEST_SUITE(shuffle_service, NULL, NULL, NULL, NULL, NULL);
+/* Snapshot of the constructed defaults, taken once before any case runs. */
+static bool sDefaultEnabled;
+static uint32_t sDefaultMinS;
+static uint32_t sDefaultMaxS;
 
-/* One ordered flow (defaults must be observed before anything mutates them —
- * same single-lifecycle-test structure the extension_bt suite uses). */
+/* The three characteristics are process-global statics, and nothing can restore
+ * their constructed defaults once a case has written them — so the pristine state
+ * is a once-per-process observation, not something a per-test `before` hook could
+ * re-establish (a hook would only be asserting the values it had just written).
+ * Capturing it in the suite setup, which ztest runs once ahead of every case,
+ * makes the defaults assertion below independent of execution order. Without this
+ * it passed only because ztest runs cases in name order and "test_defaults..."
+ * happens to sort ahead of "test_persisted..." — a future case sorting between
+ * them would have broken it. */
+static void *snapshot_defaults(void) {
+    sDefaultEnabled = shuffle_service_get_enabled();
+    sDefaultMinS = shuffle_service_get_min_duration_s();
+    sDefaultMaxS = shuffle_service_get_max_duration_s();
+    return NULL;
+}
+
+ZTEST_SUITE(shuffle_service, NULL, snapshot_defaults, NULL, NULL, NULL);
+
 ZTEST(shuffle_service, test_defaults_writes_and_shell_setter) {
     /* Defaults: disabled, 30 s .. 120 s (carried over from the Core Config
-     * originals, issue #121). */
-    zassert_false(shuffle_service_get_enabled(), "shuffle must default to off");
-    zassert_equal(shuffle_service_get_min_duration_s(), 30);
-    zassert_equal(shuffle_service_get_max_duration_s(), 120);
+     * originals, issue #121). Asserted against the suite-setup snapshot, so this
+     * holds no matter which case ztest runs first. */
+    zassert_false(sDefaultEnabled, "shuffle must default to off");
+    zassert_equal(sDefaultMinS, 30);
+    zassert_equal(sDefaultMaxS, 120);
 
     const struct bt_gatt_attr *enabledAttr = find_value_attr(0);
     const struct bt_gatt_attr *minAttr = find_value_attr(1);
