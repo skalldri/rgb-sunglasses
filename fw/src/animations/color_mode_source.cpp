@@ -15,16 +15,27 @@ constexpr uint32_t timer_interval_ms(uint8_t speed) {
     return 1000u + (255u - speed) * 114u;
 }
 
-// Per-channel integer lerp between two 0x00RRGGBB colors, t256 in [0, 256].
-uint32_t lerp_color(uint32_t a, uint32_t b, uint32_t t256) {
-    uint32_t out = 0;
-    for (int shift = 0; shift <= 16; shift += 8) {
-        const int32_t ca = static_cast<int32_t>((a >> shift) & 0xFFu);
-        const int32_t cb = static_cast<int32_t>((b >> shift) & 0xFFu);
-        const int32_t c = ca + (((cb - ca) * static_cast<int32_t>(t256)) / 256);
-        out |= static_cast<uint32_t>(c & 0xFF) << shift;
+// Interpolate along the hue wheel via the shorter arc, t256 in [0, 256].
+//
+// Deliberately NOT a per-channel RGB lerp: channels move independently there, so
+// the fade slides through desaturated mid-tones and drops out of full scale —
+// red -> green passes through (128,127,0) and red -> cyan through (128,127,127),
+// i.e. grey at half brightness. That breaks the always-vivid invariant documented
+// on anim_color_from_hue() (which exists because the pattern controller scales
+// every pixel by a ~2% global brightness factor, so a half-scale mid-tone is
+// barely visible), and on the panel it reads as the channels fading at different
+// rates rather than one color becoming another. Walking the hue instead keeps a
+// channel pinned at 255 for the whole fade. Hardware-reported, issue #259.
+uint16_t hue_lerp(uint16_t from, uint16_t to, uint32_t t256) {
+    int32_t delta = static_cast<int32_t>(to) - static_cast<int32_t>(from);
+    if (delta > 768) {
+        delta -= 1536;  // shorter arc runs backwards through 0
+    } else if (delta < -768) {
+        delta += 1536;
     }
-    return out;
+    const int32_t h =
+        static_cast<int32_t>(from) + (delta * static_cast<int32_t>(t256)) / 256;
+    return static_cast<uint16_t>(((h % 1536) + 1536) % 1536);
 }
 
 }  // namespace
@@ -148,8 +159,7 @@ uint32_t ColorModeSource::get() const {
             }
             const uint32_t t256 =
                 static_cast<uint32_t>((static_cast<uint64_t>(elapsed) * 256u) / intervalMs);
-            return lerp_color(anim_color_from_hue(prevHue_), anim_color_from_hue(targetHue_),
-                              t256);
+            return anim_color_from_hue(hue_lerp(prevHue_, targetHue_, t256));
         }
 
         case ColorMode::Static:

@@ -60,6 +60,31 @@ constexpr uint32_t mode_value(uint8_t mode, uint8_t speed) {
     return (static_cast<uint32_t>(mode) << 24) | (static_cast<uint32_t>(speed) << 16);
 }
 
+// Halfway along the shorter hue arc — mirrors hue_lerp(from, to, 128) in the
+// implementation, so the fade tests state the expected hue independently.
+constexpr uint16_t hue_midpoint(uint16_t from, uint16_t to) {
+    int32_t delta = static_cast<int32_t>(to) - static_cast<int32_t>(from);
+    if (delta > 768) {
+        delta -= 1536;
+    } else if (delta < -768) {
+        delta += 1536;
+    }
+    return static_cast<uint16_t>(
+        ((static_cast<int32_t>(from) + (delta * 128) / 256) % 1536 + 1536) % 1536);
+}
+
+// The always-vivid invariant anim_color_from_hue() promises: at the pattern
+// controller's ~2% global brightness, any color whose peak channel is below full
+// scale is barely visible on the panel.
+void assert_fully_vivid(uint32_t color, const char *what, uint32_t at) {
+    const uint32_t r = (color >> 16) & 0xFFu;
+    const uint32_t g = (color >> 8) & 0xFFu;
+    const uint32_t b = color & 0xFFu;
+    const uint32_t peak = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    zassert_equal(peak, 255u, "%s at %u: (%u,%u,%u) peaks at %u, not full scale", what, at, r, g,
+                  b, peak);
+}
+
 void suite_before(void *) {
     rng_script({});
     sNowMs = 0;
@@ -261,16 +286,12 @@ ZTEST(color_mode_source, test_timer_fade_lerps_and_repicks) {
 
     zassert_equal(src.get(), prevColor);  // t = 0
 
-    sNowMs += 500;  // midpoint: every channel between the two endpoints
+    sNowMs += 500;  // midpoint: a real hue between the endpoints, still fully vivid
     const uint32_t mid = src.get();
-    for (int shift = 0; shift <= 16; shift += 8) {
-        const uint32_t cm = (mid >> shift) & 0xFF;
-        const uint32_t ca = (prevColor >> shift) & 0xFF;
-        const uint32_t cb = (targetColor >> shift) & 0xFF;
-        const uint32_t lo = ca < cb ? ca : cb;
-        const uint32_t hi = ca < cb ? cb : ca;
-        zassert_true(cm >= lo && cm <= hi, "midpoint channel %u outside [%u, %u]", cm, lo, hi);
-    }
+    zassert_not_equal(mid, prevColor, "fade did not move off the previous color");
+    zassert_not_equal(mid, targetColor, "fade reached the target early");
+    zassert_equal(mid, anim_color_from_hue(hue_midpoint(prevHue, targetHue)),
+                  "midpoint should be the hue-wheel midpoint, not an RGB blend");
 
     sNowMs += 500;  // interval elapsed: segment rolls over, starts at old target
     zassert_equal(src.get(), targetColor);
@@ -278,6 +299,51 @@ ZTEST(color_mode_source, test_timer_fade_lerps_and_repicks) {
     // And keeps moving toward the next pick.
     sNowMs += 1000;
     zassert_equal(src.get(), anim_color_from_hue(roll_from(targetHue, 200)));
+}
+
+// Regression, hardware-reported (issue #259): the fade used to lerp the two
+// endpoint colors per RGB channel, so each channel moved independently and the
+// mid-fade slid through washed-out half-scale mid-tones — red -> green hit
+// (128,127,0) and red -> cyan hit (128,127,127), i.e. grey at half brightness.
+// On the panel that read as "red and green fade faster than blue" instead of one
+// color turning into another. Every sample of the fade must stay fully vivid.
+ZTEST(color_mode_source, test_timer_fade_stays_fully_vivid_across_the_whole_fade) {
+    FakeRawSource raw;
+    ColorModeSource src(raw, scripted_rng, fake_now);
+    raw.value = mode_value(0x04, 255);  // 1000 ms interval
+
+    // Exercise a spread of arcs, including the 180-degree worst case for an RGB
+    // blend (roll offsets are 256 + rng % 1024, so 512 -> a half-wheel jump).
+    rng_script({0, 512, 100, 768, 900, 256, 300, 1000});
+    zassert_equal(src.get(), anim_color_from_hue(roll_from(0, 0)));
+
+    for (uint32_t segment = 0; segment < 4; segment++) {
+        for (uint32_t step = 1; step <= 10; step++) {
+            sNowMs += 100;
+            assert_fully_vivid(src.get(), "timer fade", segment * 10 + step);
+        }
+    }
+}
+
+ZTEST(color_mode_source, test_timer_fade_walks_the_shorter_hue_arc) {
+    FakeRawSource raw;
+    ColorModeSource src(raw, scripted_rng, fake_now);
+    raw.value = mode_value(0x04, 255);  // 1000 ms interval
+    // Offset 1279 (the largest a roll can produce) is 257 steps backwards, so the
+    // fade must run down through 0 rather than 1279 steps forwards.
+    rng_script({0, 1023});
+
+    const uint16_t prevHue = roll_from(0, 0);          // 256
+    const uint16_t targetHue = roll_from(prevHue, 1023);  // 256 + 1279 = 1535
+    zassert_equal(src.get(), anim_color_from_hue(prevHue));
+
+    sNowMs += 500;
+    // Backwards half of a 257-step arc: 256 - 128 = 128, NOT forwards past 896.
+    zassert_equal(src.get(), anim_color_from_hue(hue_midpoint(prevHue, targetHue)));
+    zassert_equal(hue_midpoint(prevHue, targetHue), 128u);
+
+    sNowMs += 500;
+    zassert_equal(src.get(), anim_color_from_hue(targetHue));
 }
 
 ZTEST(color_mode_source, test_timer_fade_slowest_interval) {
