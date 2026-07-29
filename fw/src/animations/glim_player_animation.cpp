@@ -3,6 +3,8 @@
 #include <storage/glim_registry.h>
 #include <zephyr/logging/log.h>
 
+#include <cstdint>
+
 LOG_MODULE_REGISTER(glim_player_animation, LOG_LEVEL_INF);
 
 void GlimPlayerAnimation::setDependencies(const GlimPlayerAnimationDependencies &deps) {
@@ -94,6 +96,33 @@ void GlimPlayerAnimation::onClipFinished() {
             break;
         }
     }
+}
+
+uint32_t GlimPlayerAnimation::goodSwitchPointGraceMs() const {
+    // Anything already reporting a permanent good switch point (error banner, a
+    // StopAfterOne clip frozen on its last frame, no file open) needs no wait at all.
+    if (inErrorState_ || finishedOnce_ || !decoder_.isOpen()) {
+        return 0;
+    }
+
+    const GlimDecoder::Header &h = decoder_.header();
+    if (h.frameCount == 0u || currentFrame_ >= h.frameCount) {
+        // The last frame has already elapsed — onClipFinished() fires on this very tick.
+        return 0;
+    }
+
+    // Mirrors tick()'s pacing expression exactly. GlimDecoder::open() already clamps a
+    // header fps of 0 to 24, so the 41 ms fallback is defensive only — and 1000/24 == 41,
+    // so the two agree numerically either way.
+    const uint32_t msPerFrame = (h.fps > 0u) ? (1000u / h.fps) : 41u;
+
+    // The current frame still owes its full display time; deliberately don't subtract the
+    // sub-frame accumulatedMs_ residue. Over-asking costs at most one frame period,
+    // under-asking would cut the clip just before its ending.
+    // frameCount is uint32 and msPerFrame up to 1000, so the product needs 64 bits —
+    // saturate rather than wrap (shuffle clamps to its own ceiling regardless).
+    const uint64_t remainingMs = static_cast<uint64_t>(h.frameCount - currentFrame_) * msPerFrame;
+    return (remainingMs > UINT32_MAX) ? UINT32_MAX : static_cast<uint32_t>(remainingMs);
 }
 
 void GlimPlayerAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {

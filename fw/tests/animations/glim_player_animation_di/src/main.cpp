@@ -246,6 +246,27 @@ void writeMonoGlim(const char *name, uint8_t mr, uint8_t mg, uint8_t mb, uint8_t
     fs_close(&f);
 }
 
+/* Writes a mono (Raw) GLIM whose HEADER declares `frameCount` frames but which only
+ * contains one real 60-byte frame. GlimDecoder::open() does not validate frameCount
+ * against the file size and readFrame(0) stays inside the file, so the player runs
+ * normally — which lets a declared 0xFFFFFFFF frame count exercise the remaining-time
+ * saturation path in an 84-byte file instead of a 4-billion-frame one. */
+void writeMonoGlimWithFrameCount(const char *name, uint32_t frameCount, uint8_t fps = 24) {
+    char path[64];
+    snprintf(path, sizeof(path), "%s/%s", glim_registry::kDirectory, name);
+
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC), "setup: create %s", path);
+    writeHeader(&f, 1 /* Raw */, fps, kWidth, kHeight, frameCount, 255, 255, 255);
+
+    static constexpr size_t kFrameBytes = (kWidth * kHeight + 7u) / 8u;
+    uint8_t frame[kFrameBytes];
+    memset(frame, 0xFF, sizeof(frame));
+    zassert_equal(fs_write(&f, frame, kFrameBytes), (ssize_t)kFrameBytes);
+    fs_close(&f);
+}
+
 /* Writes a GLIM whose declared dimensions exceed the test renderer's 40x12 display. */
 void writeOversizedGlim(const char *name) {
     char path[64];
@@ -286,6 +307,13 @@ ZTEST(glim_player_animation_di, test_no_files_enters_error_state) {
     anim->tick(renderer, 50);
     zassert_true(anim->inErrorState_, "Empty registry must enter error state");
     zassert_true(anyPixelLit(), "Error state must render the 'NO FILE' message");
+    // The error banner is permanently a good switch point, so shuffle needs no grace to
+    // leave it (covers goodSwitchPointGraceMs()'s inErrorState_ / decoder-closed legs).
+    // Asserted here rather than in a case of its own: ztest runs a suite's cases in
+    // alphabetical order, and any new case sorting before test_no_dependencies_renders_black
+    // would leave deps_ set on the shared singleton and break that test's premise.
+    zassert_equal(anim->goodSwitchPointGraceMs(), 0u,
+                  "an error-state player must not ask shuffle to wait");
     anim->setActive(false);
 }
 
@@ -816,3 +844,136 @@ ZTEST(glim_player_animation_di_io, test_corrupt_file_sets_openindex_to_suppress_
 
     anim->setActive(false);
 }
+
+// ---------------------------------------------------------------------------
+// goodSwitchPointGraceMs() — how long shuffle should wait for the end-of-clip
+// signal. Without it, shuffle hard-cuts any clip longer than its dwell target
+// plus CONFIG_APP_SHUFFLE_GRACE_S (30 s), which truncates e.g. bad_apple.glim.
+// ---------------------------------------------------------------------------
+
+ZTEST(glim_player_animation_di_io, test_grace_request_is_remaining_clip_time) {
+    reset_nand();
+    // fps 1 => 1000 ms/frame, so 4 frames model a "long" clip in 4 files' worth of bytes.
+    const uint8_t colors[4][3] = {{1, 0, 0}, {2, 0, 0}, {3, 0, 0}, {4, 0, 0}};
+    writeRgb24Glim("grace_a.glim", colors, 4, 1);
+    glim_registry::init();
+    size_t idx = indexOfName("grace_a.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+    zassert_equal(anim->goodSwitchPointGraceMs(), 0u,
+                  "no file open yet — nothing to ask for");
+
+    CapturingRenderer renderer;
+    anim->tick(renderer, 10);  // opens the file, still on frame 0
+    zassert_equal(anim->goodSwitchPointGraceMs(), 4000u,
+                  "the whole clip is still ahead (4 frames x 1000 ms)");
+
+    anim->tick(renderer, 1000);  // -> frame 1
+    zassert_equal(anim->currentFrame_, 1u);
+    zassert_equal(anim->goodSwitchPointGraceMs(), 3000u,
+                  "the current frame still owes its full display time");
+
+    anim->tick(renderer, 1000);  // -> frame 2
+    zassert_equal(anim->goodSwitchPointGraceMs(), 2000u, "must shrink one frame at a time");
+    anim->setActive(false);
+}
+
+ZTEST(glim_player_animation_di_io, test_grace_request_zero_fps_uses_pacing_fallback) {
+    reset_nand();
+    // GlimDecoder::open() clamps a header fps of 0 to 24, and 1000/24 == 41 — the same
+    // value as tick()'s defensive fallback, so pacing and the request agree either way.
+    const uint8_t colors[2][3] = {{5, 5, 5}, {6, 6, 6}};
+    writeRgb24Glim("grace_fps0.glim", colors, 2, 0);
+    glim_registry::init();
+    size_t idx = indexOfName("grace_fps0.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    anim->tick(renderer, 10);
+    zassert_equal(anim->decoder_.header().fps, 24u, "open() must clamp fps 0 to 24");
+    zassert_equal(anim->goodSwitchPointGraceMs(), 82u, "2 frames x 41 ms");
+    anim->setActive(false);
+}
+
+ZTEST(glim_player_animation_di_io, test_grace_request_zero_when_finished) {
+    reset_nand();
+    const uint8_t colors[1][3] = {{7, 7, 7}};
+    writeRgb24Glim("grace_stop.glim", colors, 1, 24);
+    glim_registry::init();
+    size_t idx = indexOfName("grace_stop.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::StopAfterOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    anim->tick(renderer, 10);
+    anim->tick(renderer, 50);  // clip finishes -> finishedOnce_ latches
+    zassert_true(anim->finishedOnce_);
+    zassert_true(anim->isAtGoodSwitchPoint());
+    zassert_equal(anim->goodSwitchPointGraceMs(), 0u,
+                  "a frozen clip is already a good switch point — no wait needed");
+    anim->setActive(false);
+}
+
+ZTEST(glim_player_animation_di_io, test_grace_request_zero_past_last_frame) {
+    reset_nand();
+    const uint8_t colors[2][3] = {{8, 8, 8}, {9, 9, 9}};
+    writeRgb24Glim("grace_past.glim", colors, 2, 24);
+    glim_registry::init();
+    size_t idx = indexOfName("grace_past.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    anim->tick(renderer, 10);
+
+    // Every loop mode either wraps to 0 or clamps to frameCount - 1, so currentFrame_ can
+    // only be poked past the end — but the guard must hold if it ever gets there.
+    anim->currentFrame_ = anim->decoder_.header().frameCount;
+    zassert_equal(anim->goodSwitchPointGraceMs(), 0u,
+                  "past the last frame, onClipFinished() fires on this very tick");
+    anim->setActive(false);
+}
+
+ZTEST(glim_player_animation_di_io, test_grace_request_saturates_on_huge_frame_count) {
+    reset_nand();
+    writeMonoGlimWithFrameCount("grace_huge.glim", 0xFFFFFFFFu, 24);
+    glim_registry::init();
+    size_t idx = indexOfName("grace_huge.glim");
+
+    GlimPlayerAnimation *anim = GlimPlayerAnimation::getInstance();
+    anim->setDependencies(sFakeDeps);
+    anim->setButtonSource(sFakeButton);
+    sFakeSelection.index = idx;
+    sFakeLoopMode.mode = GlimLoopMode::LoopOne;
+    anim->setActive(true);
+
+    CapturingRenderer renderer;
+    anim->tick(renderer, 10);
+    zassert_false(anim->inErrorState_, "a declared-huge frame count is not itself an error");
+    // 0xFFFFFFFF * 41 ms overflows uint32 — the 64-bit intermediate must saturate, not wrap.
+    zassert_equal(anim->goodSwitchPointGraceMs(), UINT32_MAX,
+                  "remaining-time overflow must saturate");
+    anim->setActive(false);
+}
+

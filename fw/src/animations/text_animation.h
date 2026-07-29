@@ -45,6 +45,11 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
     bool isAtGoodSwitchPoint() const override { return atGoodSwitchPoint_; }
 
+    // Shuffle's wait budget for that end-of-scroll signal: how much longer the current
+    // message needs, so a long message (a 255-char one scrolls for ~76 s at the default
+    // step time) plays out instead of being cut 30 s after shuffle's dwell target.
+    uint32_t goodSwitchPointGraceMs() const override { return remainingScrollMs_; }
+
    private:
     const char *getStringFromSlot(size_t slot);
 
@@ -69,6 +74,11 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
     // True only for the tick on which the current message finished scrolling (the frame
     // the next slot is loaded) — the natural boundary shuffle mode waits for.
     bool atGoodSwitchPoint_ = false;
+
+    // How much longer the current message needs before that boundary. Computed in tick()
+    // (it needs the renderer's width, which a const getter has no access to) and simply
+    // returned by goodSwitchPointGraceMs().
+    uint32_t remainingScrollMs_ = 0;
 };
 
 void text_animation_bind_default_dependencies();

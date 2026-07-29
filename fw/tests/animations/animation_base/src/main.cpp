@@ -33,6 +33,20 @@ class FakeAnimation : public BaseAnimationTemplate<FakeAnimation, Animation::Zig
 
 ZTEST_SUITE(animation_base_tests, NULL, NULL, NULL, NULL, NULL);
 
+// FakeAnimation overrides neither switch-point hook, so it stands in for every animation
+// that doesn't — which includes ExtensionAnimationProxy, the reason these defaults matter:
+// the rgbx ABI has no hook for either, so a sandboxed extension can never request extra
+// shuffle grace and stays bounded by CONFIG_APP_SHUFFLE_GRACE_S alone. A default that
+// drifted off 0 would silently widen that anti-hang guard for every extension.
+ZTEST(animation_base_tests, test_default_switch_point_hooks) {
+    BaseAnimation *anim = FakeAnimation::getInstance();
+
+    zassert_true(anim->isAtGoodSwitchPoint(),
+                 "an animation with no internal narrative must be switchable every frame");
+    zassert_equal(anim->goodSwitchPointGraceMs(), 0u,
+                  "an animation that doesn't know its next boundary must request no grace");
+}
+
 ZTEST(animation_base_tests, test_set_active_calls_observer_with_correct_id) {
     RecordingObserver observer;
     BaseAnimation::registerActiveStateObserver(&observer);

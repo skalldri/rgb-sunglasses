@@ -40,8 +40,16 @@ using ShuffleRandomFn = uint32_t (*)();
  */
 class ShuffleController {
    public:
+    /**
+     * @param graceMs The fixed wait every animation gets past its dwell target before
+     * the switch is forced — the anti-hang guard (CONFIG_APP_SHUFFLE_GRACE_S).
+     * @param maxGraceMs Ceiling on the *extra* wait an animation may REQUEST via
+     * onFrame()'s requestedGraceMs (CONFIG_APP_SHUFFLE_MAX_GRACE_S). 0 (the default)
+     * disables animation-requested grace entirely and reproduces the original issue-#121
+     * behaviour exactly.
+     */
     ShuffleController(ShuffleAnimationPool &pool, ShuffleConfigSource &config,
-                      ShuffleRandomFn rng, uint64_t graceMs);
+                      ShuffleRandomFn rng, uint64_t graceMs, uint64_t maxGraceMs = 0);
 
     struct Decision {
         bool switchNow = false;
@@ -53,23 +61,37 @@ class ShuffleController {
      * @param current The currently-active animation.
      * @param dtMs Nominal time covered by the frame just ticked.
      * @param animationAtGoodSwitchPoint The active animation's isAtGoodSwitchPoint().
+     * @param requestedGraceMs The active animation's goodSwitchPointGraceMs() — how far
+     * away its next natural boundary is measured from NOW, NOT an offset from the dwell
+     * target. 0 means "no request" (every animation but the GLIM player and the text
+     * animation, and unavoidably every sandboxed extension, which has no rgbx hook for
+     * this), which leaves graceMs alone in charge exactly as before.
      *
      * Detects external animation changes itself (current != last seen -> dwell resets),
      * so callers of pattern_controller_change_to_animation() need no shuffle hooks.
      */
-    Decision onFrame(Animation current, uint32_t dtMs, bool animationAtGoodSwitchPoint);
+    Decision onFrame(Animation current, uint32_t dtMs, bool animationAtGoodSwitchPoint,
+                     uint32_t requestedGraceMs = 0);
 
    private:
     Animation pickNext(Animation current);
     void rearm();
+    uint64_t computeForcedSwitchDeadlineMs(uint32_t requestedGraceMs) const;
 
     ShuffleAnimationPool &pool_;
     ShuffleConfigSource &config_;
     ShuffleRandomFn rng_;
     uint64_t graceMs_;
+    uint64_t maxGraceMs_;
 
     uint64_t dwellMs_ = 0;
     uint64_t targetMs_ = 0;
     bool armed_ = false;  // false when disabled / just constructed
     Animation lastSeen_ = Animation::None;
+
+    // The dwell at which the switch is forced regardless of the good-moment signal.
+    // Latched on the first frame past targetMs_ and held for the rest of the dwell (see
+    // computeForcedSwitchDeadlineMs), so exactly one grace window exists per dwell.
+    uint64_t graceDeadlineMs_ = 0;
+    bool graceDeadlineSet_ = false;
 };

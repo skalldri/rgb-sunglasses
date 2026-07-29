@@ -1,8 +1,8 @@
 #include <animations/shuffle_controller.h>
 
 ShuffleController::ShuffleController(ShuffleAnimationPool &pool, ShuffleConfigSource &config,
-                                     ShuffleRandomFn rng, uint64_t graceMs)
-    : pool_(pool), config_(config), rng_(rng), graceMs_(graceMs) {}
+                                     ShuffleRandomFn rng, uint64_t graceMs, uint64_t maxGraceMs)
+    : pool_(pool), config_(config), rng_(rng), graceMs_(graceMs), maxGraceMs_(maxGraceMs) {}
 
 void ShuffleController::rearm() {
     // Read min/max fresh on every re-arm so BLE config changes take effect on the next
@@ -23,6 +23,35 @@ void ShuffleController::rearm() {
     const uint64_t spanS = maxS - minS + 1u;
     targetMs_ = (minS + (rng_() % spanS)) * 1000u;
     dwellMs_ = 0;
+    // One dwell, one grace window: the deadline is re-derived from scratch next time we
+    // cross the target.
+    graceDeadlineSet_ = false;
+}
+
+uint64_t ShuffleController::computeForcedSwitchDeadlineMs(uint32_t requestedGraceMs) const {
+    // Floor: the fixed anti-hang budget. Every animation that requests nothing — which is
+    // all of them but the GLIM player and the text animation, and unavoidably every
+    // sandboxed extension, since the rgbx ABI has no hook for this — is bounded by
+    // exactly this, unchanged from issue #121.
+    const uint64_t floorMs = targetMs_ + graceMs_;
+
+    // Request: an animation that KNOWS where its next natural boundary is states the
+    // distance from NOW, so it must be measured from the dwell so far. Adding it to
+    // targetMs_ instead would HALVE the wait — the request shrinks 1 ms per elapsed ms,
+    // so `targetMs_ + request` converges on the midpoint between the target and the clip's
+    // end, which is still a hard cut mid-clip, just a later one.
+    const uint64_t requestedMs = dwellMs_ + requestedGraceMs;
+
+    // Ceiling: no animation, however insistent, waits more than maxGraceMs_ past its
+    // target. maxGraceMs_ <= graceMs_ (including the 0 default) simply disables the
+    // request. All arithmetic is 64-bit: targetMs_ maxes out at UINT32_MAX * 1000.
+    const uint64_t capMs = targetMs_ + maxGraceMs_;
+
+    uint64_t deadlineMs = (requestedMs > floorMs) ? requestedMs : floorMs;
+    if (deadlineMs > capMs) {
+        deadlineMs = (capMs > floorMs) ? capMs : floorMs;
+    }
+    return deadlineMs;
 }
 
 Animation ShuffleController::pickNext(Animation current) {
@@ -60,7 +89,8 @@ Animation ShuffleController::pickNext(Animation current) {
 }
 
 ShuffleController::Decision ShuffleController::onFrame(Animation current, uint32_t dtMs,
-                                                       bool animationAtGoodSwitchPoint) {
+                                                       bool animationAtGoodSwitchPoint,
+                                                       uint32_t requestedGraceMs) {
     Decision decision;
 
     if (!config_.enabled()) {
@@ -84,10 +114,19 @@ ShuffleController::Decision ShuffleController::onFrame(Animation current, uint32
         return decision;
     }
 
-    // Past the picked duration: switch at the animation's natural boundary, or force the
-    // switch once the grace cap expires so a signal that never comes (e.g. a misbehaving
-    // extension) can't pin shuffle on one animation forever.
-    if (!animationAtGoodSwitchPoint && dwellMs_ < targetMs_ + graceMs_) {
+    // Past the picked duration. Latch the forced-switch deadline on the FIRST frame past
+    // the target and hold it: one grace window per dwell, so a GLIM player auto-advancing
+    // to the next file mid-wait (PlayAll) or wrapping a loop can't chain a second clip's
+    // worth of grace onto this dwell.
+    if (!graceDeadlineSet_) {
+        graceDeadlineMs_ = computeForcedSwitchDeadlineMs(requestedGraceMs);
+        graceDeadlineSet_ = true;
+    }
+
+    // Switch at the animation's natural boundary, or force the switch once that deadline
+    // expires so a signal that never comes (e.g. a misbehaving extension) can't pin
+    // shuffle on one animation forever.
+    if (!animationAtGoodSwitchPoint && dwellMs_ < graceDeadlineMs_) {
         return decision;
     }
 

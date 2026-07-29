@@ -85,9 +85,10 @@ void default_pool(FakePool &pool) {
 // switch or `maxFrames` elapse. Returns the number of frames consumed (arm frame NOT
 // included — call onFrame once to arm before using this) and fills `out`.
 size_t run_until_switch(ShuffleController &ctrl, Animation current, uint32_t dtMs, bool good,
-                        size_t maxFrames, ShuffleController::Decision &out) {
+                        size_t maxFrames, ShuffleController::Decision &out,
+                        uint32_t requestedGraceMs = 0) {
     for (size_t i = 1; i <= maxFrames; i++) {
-        out = ctrl.onFrame(current, dtMs, good);
+        out = ctrl.onFrame(current, dtMs, good, requestedGraceMs);
         if (out.switchNow) {
             return i;
         }
@@ -456,4 +457,217 @@ ZTEST(shuffle_controller, test_uint32_max_no_overflow) {
     // Frame 1000: dwell = 1000 * (2^32 - 1) ms = the target exactly.
     d = ctrl.onFrame(kA, UINT32_MAX, true);
     zassert_true(d.switchNow, "must switch once dwell reaches the uint32-max-seconds target");
+}
+
+// ---------------------------------------------------------------------------
+// Animation-requested grace (long GLIM clips / long text scrolls)
+//
+// The animation states how far away its next natural boundary is, measured from NOW.
+// The controller turns that into a forced-switch deadline latched once per dwell:
+//   floor    = target + graceMs      (the unchanged anti-hang budget)
+//   rolling  = dwell  + requested
+//   cap      = target + maxGraceMs
+//   deadline = min(max(floor, rolling), max(floor, cap))
+// ---------------------------------------------------------------------------
+
+ZTEST(shuffle_controller, test_requested_grace_ignored_without_max) {
+    // The 4-arg ctor leaves maxGraceMs at 0, which disables animation-requested grace
+    // entirely — the pre-issue-#250 behaviour, byte for byte, no matter how much an
+    // animation asks for.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 2000);  // grace 2 s, no ceiling
+
+    auto d = ctrl.onFrame(kA, 500, false, 1000000u);  // arm
+    zassert_false(d.switchNow, "arm frame must not switch");
+
+    // dwell 500..2500: below target(1000) + grace(2000) = 3000.
+    for (int i = 0; i < 5; i++) {
+        d = ctrl.onFrame(kA, 500, false, 1000000u);
+        zassert_false(d.switchNow, "switched inside the grace window (dwell %d ms)",
+                      500 * (i + 2));
+    }
+
+    d = ctrl.onFrame(kA, 500, false, 1000000u);
+    zassert_true(d.switchNow, "a request must be ignored when maxGraceMs is 0");
+}
+
+ZTEST(shuffle_controller, test_requested_grace_extends_past_global_cap) {
+    // The core fix: an animation that says "my boundary is 10 s away" gets 10 s from
+    // NOW, not the fixed 2 s past its target.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 2000, 600000);  // grace 2 s, max 600 s
+
+    auto d = ctrl.onFrame(kA, 1000, false, 10000u);  // arm
+    zassert_false(d.switchNow, "arm frame must not switch");
+
+    // Deadline latches on the first frame past the target (dwell 1000): 1000 + 10000.
+    for (int i = 1; i <= 10; i++) {
+        d = ctrl.onFrame(kA, 1000, false, 10000u);
+        zassert_false(d.switchNow, "switched before the requested boundary (dwell %d ms)",
+                      1000 * i);
+    }
+
+    d = ctrl.onFrame(kA, 1000, false, 10000u);
+    zassert_true(d.switchNow, "must force the switch once the requested grace expires");
+}
+
+ZTEST(shuffle_controller, test_requested_grace_below_global_cap_uses_floor) {
+    // A request smaller than the fixed cap must never SHORTEN the wait — the fixed cap
+    // is a floor, not a default that a request replaces.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 10000, 600000);  // grace 10 s
+
+    auto d = ctrl.onFrame(kA, 1000, false, 1000u);  // arm; request only 1 s
+    zassert_false(d.switchNow, "arm frame must not switch");
+
+    // dwell 1000..10000: still inside the 1000 + 10000 floor, despite the 1 s request.
+    for (int i = 1; i <= 10; i++) {
+        d = ctrl.onFrame(kA, 1000, false, 1000u);
+        zassert_false(d.switchNow, "a small request shortened the fixed cap (dwell %d ms)",
+                      1000 * i);
+    }
+
+    d = ctrl.onFrame(kA, 1000, false, 1000u);
+    zassert_true(d.switchNow, "must still force the switch at target + grace");
+}
+
+ZTEST(shuffle_controller, test_requested_grace_clamped_to_max) {
+    // A clip longer than any sane ceiling is still cut — just far later.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 2000, 5000);  // grace 2 s, max 5 s
+
+    auto d = ctrl.onFrame(kA, 1000, false, 1000000u);  // arm; asks for 1000 s
+    zassert_false(d.switchNow, "arm frame must not switch");
+
+    // Deadline = target(1000) + maxGrace(5000) = 6000.
+    for (int i = 1; i <= 5; i++) {
+        d = ctrl.onFrame(kA, 1000, false, 1000000u);
+        zassert_false(d.switchNow, "switched before the ceiling (dwell %d ms)", 1000 * i);
+    }
+
+    d = ctrl.onFrame(kA, 1000, false, 1000000u);
+    zassert_true(d.switchNow, "an over-large request must be clamped to maxGraceMs");
+}
+
+ZTEST(shuffle_controller, test_shrinking_request_switches_at_clip_end) {
+    // Regression for the reported bug: a ~3.5 min GLIM clip (bad_apple.glim) modelled at
+    // 12 s. The animation restates a SHRINKING remaining time every frame, so a deadline
+    // computed as `target + requested` would converge on the midpoint between the target
+    // and the clip's end (D < target + (C - D) => D < (target + C) / 2 = 6500 here) and
+    // still cut mid-clip. The latched, dwell-relative deadline must land on the clip end.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 2000, 600000);
+
+    uint32_t remainingMs = 12000;                              // clip time left at the arm frame
+    auto d = ctrl.onFrame(kA, 1000, false, remainingMs);       // arm
+
+    // Frames 1..11: dwell 1000..11000, remaining 11000..1000, never a good moment.
+    for (int i = 1; i <= 11; i++) {
+        remainingMs -= 1000;
+        d = ctrl.onFrame(kA, 1000, false, remainingMs);
+        zassert_false(d.switchNow,
+                      "cut mid-clip at dwell %d ms (3000 = the old fixed cap, 7000 = the "
+                      "target+requested midpoint trap)",
+                      1000 * i);
+    }
+
+    // Frame 12: the clip's last frame elapses — the animation signals a good moment and
+    // has nothing left to ask for.
+    d = ctrl.onFrame(kA, 1000, true, 0u);
+    zassert_true(d.switchNow, "must switch at the clip's natural end");
+}
+
+ZTEST(shuffle_controller, test_grace_deadline_latched_not_re_extended) {
+    // Models GLIM PlayAll auto-advancing to a LONGER clip while shuffle is already
+    // waiting: the new clip's remaining time must not chain onto this dwell.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 2000, 600000);
+
+    auto d = ctrl.onFrame(kA, 1000, false, 10000u);  // arm
+    d = ctrl.onFrame(kA, 1000, false, 10000u);       // dwell 1000: latches deadline 11000
+    zassert_false(d.switchNow, "must not switch on the latching frame");
+
+    // Every later frame asks for the full ceiling — ignored, the deadline is latched.
+    for (int i = 2; i <= 10; i++) {
+        d = ctrl.onFrame(kA, 1000, false, 600000u);
+        zassert_false(d.switchNow, "switched before the latched deadline (dwell %d ms)",
+                      1000 * i);
+    }
+
+    d = ctrl.onFrame(kA, 1000, false, 600000u);
+    zassert_true(d.switchNow, "a re-stated larger request must not extend a latched deadline");
+}
+
+ZTEST(shuffle_controller, test_grace_deadline_recomputed_after_switch) {
+    // rearm() clears the latch, so the NEXT dwell gets its own (here: unrequested) window.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = 1;
+    cfg.maxS = 1;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 2000, 600000);
+
+    ShuffleController::Decision d;
+    ctrl.onFrame(kA, 1000, false, 10000u);  // arm
+    const size_t frames = run_until_switch(ctrl, kA, 1000, false, 20, d, 10000u);
+    zassert_equal(frames, 11, "first dwell must be forced at target + requested (got %zu)",
+                  frames);
+
+    // Second dwell on the animation shuffle just picked, this time requesting nothing.
+    const Animation next = d.next;
+    const size_t frames2 = run_until_switch(ctrl, next, 1000, false, 20, d, 0u);
+    zassert_equal(frames2, 3, "second dwell must fall back to target + grace (got %zu)",
+                  frames2);
+}
+
+ZTEST(shuffle_controller, test_requested_grace_no_overflow) {
+    // Companion to test_uint32_max_no_overflow: the deadline math adds a uint32 request
+    // to a uint64 dwell and a uint32-max-seconds target — all of it must stay 64-bit.
+    FakePool pool;
+    default_pool(pool);
+    FakeConfig cfg;
+    cfg.minS = UINT32_MAX;
+    cfg.maxS = UINT32_MAX;
+    ShuffleController ctrl(pool, cfg, scripted_rng, 0, 600000);
+
+    ShuffleController::Decision d;
+    ctrl.onFrame(kA, UINT32_MAX, false, UINT32_MAX);  // arm; target = UINT32_MAX * 1000 ms
+
+    for (int i = 0; i < 999; i++) {
+        d = ctrl.onFrame(kA, UINT32_MAX, false, UINT32_MAX);
+        zassert_false(d.switchNow, "switched early — 64-bit deadline math wrapped (frame %d)",
+                      i);
+    }
+
+    // Frame 1000: dwell == target exactly. The request (clamped to the 600 s ceiling)
+    // pushes the deadline past it, so this frame must still not switch.
+    d = ctrl.onFrame(kA, UINT32_MAX, false, UINT32_MAX);
+    zassert_false(d.switchNow, "must wait out the clamped request past the target");
+
+    d = ctrl.onFrame(kA, UINT32_MAX, false, UINT32_MAX);
+    zassert_true(d.switchNow, "must force the switch once the clamped deadline passes");
 }
