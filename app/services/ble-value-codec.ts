@@ -1,4 +1,5 @@
 import {
+  COLOR_MODE_DEFAULT_SPEED,
   COLOR_MODE_RANDOM_ON_ACTIVATE,
   COLOR_MODE_RANDOM_ON_BEAT,
   COLOR_MODE_RANDOM_TIMER_FADE,
@@ -135,11 +136,14 @@ export type ColorValue = {
 export function encodeColorValueToBase64(value: ColorValue): string {
   switch (value.mode) {
     case COLOR_MODE_SPECTRUM_SWEEP:
-    case COLOR_MODE_RANDOM_ON_BEAT:
     case COLOR_MODE_RANDOM_TIMER_FADE:
       // rgb is not a color in these modes: byte 2 (r) carries speed, g/b reserved.
       return btoa(String.fromCharCode(0, 0, value.speed & 0xff, value.mode));
+    case COLOR_MODE_RANDOM_ON_BEAT:
     case COLOR_MODE_RANDOM_ON_ACTIVATE:
+      // No rate property: bytes 0-2 are ALL reserved and must be written as zero.
+      // Beat is paced by the audio, not a speed value, which is why the picker
+      // shows it no slider — so never leak a stale speed byte into the payload.
       return btoa(String.fromCharCode(0, 0, 0, value.mode));
     default:
       return btoa(
@@ -150,7 +154,7 @@ export function encodeColorValueToBase64(value: ColorValue): string {
 
 export function decodeColorValueFromBase64(encodedValue?: string | null): ColorValue {
   if (!encodedValue) {
-    return { mode: COLOR_MODE_STATIC, rgb: { r: 0, g: 0, b: 0 }, speed: 0 };
+    return { mode: COLOR_MODE_STATIC, rgb: { r: 0, g: 0, b: 0 }, speed: COLOR_MODE_DEFAULT_SPEED };
   }
 
   const decoded = atob(encodedValue);
@@ -174,8 +178,16 @@ export function decodeColorValueFromBase64(encodedValue?: string | null): ColorV
       ? modeByte
       : COLOR_MODE_STATIC;
 
-  // speed always mirrors the r byte so mode UIs can seed without re-branching.
-  return { mode, rgb, speed: rgb.r };
+  // The r byte is ONLY a speed in the two rate-bearing modes. Everywhere else it
+  // is a color channel (STATIC) or reserved (BEAT / ON_ACTIVATE), so mirroring it
+  // would seed the picker's slider from unrelated bytes: a device on ON_ACTIVATE
+  // (r = 0) would open the sweep slider at 0, i.e. a ~60 s cycle that reads as
+  // "nothing is happening", and a static white device would open it at 255.
+  const speed =
+    mode === COLOR_MODE_SPECTRUM_SWEEP || mode === COLOR_MODE_RANDOM_TIMER_FADE
+      ? rgb.r
+      : COLOR_MODE_DEFAULT_SPEED;
+  return { mode, rgb, speed };
 }
 
 export function encodeColorToBase64(color: RgbColor): string {

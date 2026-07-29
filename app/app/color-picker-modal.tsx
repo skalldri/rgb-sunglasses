@@ -4,6 +4,7 @@ import { AppButton } from '@/components/ui/app-button';
 import { Card } from '@/components/ui/card';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import {
+    COLOR_MODE_DEFAULT_SPEED,
     COLOR_MODE_LABELS,
     COLOR_MODE_RANDOM_ON_ACTIVATE,
     COLOR_MODE_RANDOM_ON_BEAT,
@@ -99,13 +100,16 @@ export default function ColorPickerModal() {
     // Get the characteristic UUID from params
     const charUuid = params.charUuid as string;
 
-    // Mode/speed from query parameters (issue #259); garbage or absent -> STATIC/128.
+    // Mode/speed from query parameters (issue #259); garbage or absent -> STATIC and
+    // the neutral mid-scale speed.
     const parsedMode = params.mode ? parseInt(params.mode as string, 10) : COLOR_MODE_STATIC;
     const initialMode: ColorMode = MODE_OPTIONS.some((o) => o.value === parsedMode)
         ? (parsedMode as ColorMode)
         : COLOR_MODE_STATIC;
     const parsedSpeed = params.speed ? parseInt(params.speed as string, 10) : NaN;
-    const initialSpeed = Number.isFinite(parsedSpeed) ? Math.min(255, Math.max(0, parsedSpeed)) : 128;
+    const initialSpeed = Number.isFinite(parsedSpeed)
+        ? Math.min(255, Math.max(0, parsedSpeed))
+        : COLOR_MODE_DEFAULT_SPEED;
 
     // Parse RGB values from query parameters. In special modes the wire r/g/b
     // bytes are mode properties, not a color — seed the wheel at default red.

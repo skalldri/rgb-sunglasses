@@ -165,12 +165,17 @@ export const COLOR_MODE_RANDOM_ON_ACTIVATE = 0x03;
 export const COLOR_MODE_RANDOM_TIMER_FADE = 0x04;
 export type ColorMode = 0x00 | 0x01 | 0x02 | 0x03 | 0x04;
 
+// Mid-scale speed used wherever a rate is needed but the stored value carries none
+// (the r byte is a color channel in STATIC and reserved in BEAT / ON_ACTIVATE, so it
+// must never be reused as a speed — see decodeColorValueFromBase64).
+export const COLOR_MODE_DEFAULT_SPEED = 128;
+
 export const COLOR_MODE_LABELS: Record<ColorMode, string> = {
     [COLOR_MODE_STATIC]: 'Static',
     [COLOR_MODE_SPECTRUM_SWEEP]: 'Spectrum Sweep',
     [COLOR_MODE_RANDOM_ON_BEAT]: 'Random on Beat',
     [COLOR_MODE_RANDOM_ON_ACTIVATE]: 'Random on Activate',
-    [COLOR_MODE_RANDOM_TIMER_FADE]: 'Timer Fade',
+    [COLOR_MODE_RANDOM_TIMER_FADE]: 'Random Timer Fade',
 };
 
 // Custom format for a drop-down selection list (not standard). Value is a \n-separated string

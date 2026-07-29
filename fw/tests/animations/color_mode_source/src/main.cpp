@@ -346,6 +346,40 @@ ZTEST(color_mode_source, test_timer_fade_walks_the_shorter_hue_arc) {
     zassert_equal(src.get(), anim_color_from_hue(targetHue));
 }
 
+// Both time-driven modes clamp a negative delta to zero. k_uptime_get() should
+// never run backwards in production, but the clamps are the only thing standing
+// between a backwards jump and a huge unsigned value in the phase/elapsed math,
+// so prove they hold rather than trusting they are unreachable.
+ZTEST(color_mode_source, test_backwards_clock_jump_is_clamped) {
+    FakeRawSource raw;
+    ColorModeSource src(raw, scripted_rng, fake_now);
+
+    // SpectrumSweep: rewinding the clock must freeze the phase, not wrap it.
+    raw.value = mode_value(0x01, 255);  // 2000 ms period
+    sNowMs = 10000;
+    zassert_equal(src.get(), anim_color_from_hue(0));
+    sNowMs += 500;  // quarter of the period
+    const uint32_t advanced = src.get();
+    zassert_equal(advanced, anim_color_from_hue(384));
+
+    sNowMs -= 5000;  // clock jumps backwards
+    zassert_equal(src.get(), advanced, "backwards jump must hold the sweep phase");
+    sNowMs += 500;  // and forward progress resumes normally from there
+    zassert_equal(src.get(), anim_color_from_hue(768));
+
+    // RandomTimerFade: same, on the segment-elapsed path.
+    FakeRawSource fadeRaw;
+    ColorModeSource fade(fadeRaw, scripted_rng, fake_now);
+    fadeRaw.value = mode_value(0x04, 255);  // 1000 ms interval
+    rng_script({0, 512});
+    sNowMs = 10000;
+    const uint16_t prevHue = roll_from(0, 0);
+    zassert_equal(fade.get(), anim_color_from_hue(prevHue));
+    sNowMs -= 5000;  // backwards before the segment has advanced at all
+    zassert_equal(fade.get(), anim_color_from_hue(prevHue),
+                  "backwards jump must not roll the segment over");
+}
+
 ZTEST(color_mode_source, test_timer_fade_slowest_interval) {
     FakeRawSource raw;
     ColorModeSource src(raw, scripted_rng, fake_now);

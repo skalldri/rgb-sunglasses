@@ -51,9 +51,11 @@
 
 #include <cmsis_core.h>
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #if defined(CONFIG_AUDIO)
 #include <sound/audio_dsp.h>
@@ -164,16 +166,21 @@ struct ParamColorResolver {
     ColorModeSource mode;  // references `raw` — member order matters
 };
 
-/* ColorModeSource is neither copyable nor movable (atomic member); C++17
- * guaranteed elision constructs each element in place from its prvalue. */
-ParamColorResolver sParamColorResolvers[RGBX_MAX_PARAMS] = {
-    ParamColorResolver(0),  ParamColorResolver(1),  ParamColorResolver(2),
-    ParamColorResolver(3),  ParamColorResolver(4),  ParamColorResolver(5),
-    ParamColorResolver(6),  ParamColorResolver(7),  ParamColorResolver(8),
-    ParamColorResolver(9),  ParamColorResolver(10), ParamColorResolver(11),
-    ParamColorResolver(12), ParamColorResolver(13), ParamColorResolver(14),
-    ParamColorResolver(15)};
-static_assert(RGBX_MAX_PARAMS == 16u, "the resolver initializer list above must match");
+/* One resolver per param slot, built from an index sequence so a change to
+ * RGBX_MAX_PARAMS scales automatically (same idiom as kFactories in
+ * extension_animation_proxy.cpp) rather than needing a hand-written element
+ * list. ColorModeSource is neither copyable nor movable (atomic member), so
+ * this relies on C++17 guaranteed elision constructing each element in place
+ * from its prvalue -- which is also why the elements are built here rather
+ * than assigned in a loop. */
+template <size_t... I>
+std::array<ParamColorResolver, sizeof...(I)> make_param_color_resolvers(
+    std::index_sequence<I...>) {
+    return {{ParamColorResolver(I)...}};
+}
+
+std::array<ParamColorResolver, RGBX_MAX_PARAMS> sParamColorResolvers =
+    make_param_color_resolvers(std::make_index_sequence<RGBX_MAX_PARAMS>{});
 
 /* One shared sandbox domain, re-initialized per activation. Safe because
  * k_mem_domain_init() fully resets the object and the sandbox thread is

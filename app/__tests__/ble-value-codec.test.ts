@@ -1,4 +1,5 @@
 import {
+  COLOR_MODE_DEFAULT_SPEED,
   COLOR_MODE_RANDOM_ON_ACTIVATE,
   COLOR_MODE_RANDOM_ON_BEAT,
   COLOR_MODE_RANDOM_TIMER_FADE,
@@ -122,9 +123,11 @@ describe('ble-value-codec', () => {
     expect(
       encodeColorValueToBase64({ mode: COLOR_MODE_SPECTRUM_SWEEP, rgb: { r: 9, g: 9, b: 9 }, speed: 200 })
     ).toBe(btoa(String.fromCharCode(0, 0, 200, 0x01)));
+    // BEAT is paced by the audio, not a speed: bytes 0-2 are reserved and must be
+    // zeroed even when a stale speed is carried in from the previously-shown mode.
     expect(
-      encodeColorValueToBase64({ mode: COLOR_MODE_RANDOM_ON_BEAT, rgb: { r: 0, g: 0, b: 0 }, speed: 42 })
-    ).toBe(btoa(String.fromCharCode(0, 0, 42, 0x02)));
+      encodeColorValueToBase64({ mode: COLOR_MODE_RANDOM_ON_BEAT, rgb: { r: 7, g: 8, b: 9 }, speed: 42 })
+    ).toBe(btoa(String.fromCharCode(0, 0, 0, 0x02)));
     expect(
       encodeColorValueToBase64({ mode: COLOR_MODE_RANDOM_ON_ACTIVATE, rgb: { r: 1, g: 2, b: 3 }, speed: 99 })
     ).toBe(btoa(String.fromCharCode(0, 0, 0, 0x03)));
@@ -140,8 +143,21 @@ describe('ble-value-codec', () => {
     expect(sweep.mode).toBe(COLOR_MODE_SPECTRUM_SWEEP);
     expect(sweep.speed).toBe(200);
 
+    // speed is NOT seeded from the r byte outside the two rate-bearing modes — in
+    // STATIC that byte is a color channel, so the picker gets the neutral default.
     const staticValue = decodeColorValueFromBase64(encodeColorToBase64({ r: 10, g: 20, b: 30 }));
-    expect(staticValue).toEqual({ mode: COLOR_MODE_STATIC, rgb: { r: 10, g: 20, b: 30 }, speed: 10 });
+    expect(staticValue).toEqual({
+      mode: COLOR_MODE_STATIC,
+      rgb: { r: 10, g: 20, b: 30 },
+      speed: COLOR_MODE_DEFAULT_SPEED,
+    });
+
+    // ...and the reserved-byte modes likewise never report a speed of 0, which would
+    // open the slider at the slowest possible rate on the next mode switch.
+    expect(
+      decodeColorValueFromBase64(btoa(String.fromCharCode(0, 0, 0, COLOR_MODE_RANDOM_ON_ACTIVATE)))
+        .speed
+    ).toBe(COLOR_MODE_DEFAULT_SPEED);
   });
 
   it('treats unknown mode bytes as static (firmware 0xFF default)', () => {
@@ -156,18 +172,25 @@ describe('ble-value-codec', () => {
 
   it('decodes legacy 3-byte color payloads as static', () => {
     const value = decodeColorValueFromBase64(btoa(String.fromCharCode(30, 20, 10)));
-    expect(value).toEqual({ mode: COLOR_MODE_STATIC, rgb: { r: 10, g: 20, b: 30 }, speed: 10 });
+    expect(value).toEqual({
+      mode: COLOR_MODE_STATIC,
+      rgb: { r: 10, g: 20, b: 30 },
+      speed: COLOR_MODE_DEFAULT_SPEED,
+    });
   });
 
-  it('keeps the legacy color wrappers byte-identical to the mode-aware codec', () => {
+  it('keeps the legacy color wrappers byte-identical to the pre-#259 encoding', () => {
+    // Pin the LITERAL wire bytes, not "whatever the mode-aware encoder produces" —
+    // comparing the wrapper against its own implementation cannot fail, and the
+    // whole point here is byte-level compatibility with already-shipped devices.
     expect(encodeColorToBase64({ r: 10, g: 20, b: 30 })).toBe(
-      encodeColorValueToBase64({ mode: COLOR_MODE_STATIC, rgb: { r: 10, g: 20, b: 30 }, speed: 0 })
+      btoa(String.fromCharCode(30, 20, 10, 0))
     );
     expect(() => decodeColorValueFromBase64(btoa('ab'))).toThrow('Invalid color payload length');
     expect(decodeColorValueFromBase64(undefined)).toEqual({
       mode: COLOR_MODE_STATIC,
       rgb: { r: 0, g: 0, b: 0 },
-      speed: 0,
+      speed: COLOR_MODE_DEFAULT_SPEED,
     });
   });
 
