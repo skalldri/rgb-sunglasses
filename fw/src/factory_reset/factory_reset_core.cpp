@@ -67,6 +67,12 @@ Decision run_hold_loop(const HoldConfig& cfg, const HoldIo& io) {
         if (io.commit_phase1 != nullptr) {
             io.commit_phase1(io.ctx);
         }
+        // Keep the solid commit indication up a little longer than the bare
+        // erase — the chord isn't sampled during this pad, so a release here
+        // is simply observed at the first phase-2 poll (same outcome).
+        if (cfg.commit_hold_ms != 0) {
+            io.sleep_ms(io.ctx, cfg.commit_hold_ms);
+        }
         decision = run_phase(cfg, io, cfg.phase2_hold_ms, LedState::Phase2, led)
                        ? Decision::FullReset
                        : Decision::SettingsReset;

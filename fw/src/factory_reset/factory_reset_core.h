@@ -37,6 +37,9 @@ enum class LedState : uint8_t {
 struct HoldConfig {
     uint32_t hold_duration_ms;      // phase 1: how long the chord must be held (CONFIG_APP_FACTORY_RESET_HOLD_MS)
     uint32_t phase2_hold_ms;        // phase 2 release window (CONFIG_APP_FACTORY_RESET_PHASE2_HOLD_MS); 0 = legacy single-phase full reset
+    uint32_t commit_hold_ms;        // extra solid-Phase1 time after commit_phase1 returns, before the
+                                    // phase-2 flash starts — pads the commit indication to a clearly
+                                    // visible length (the erase itself can be under half a second)
     uint32_t poll_interval_ms;      // how often to sample the chord
     uint32_t flash_half_period_ms;  // flash half period (on time == off time), both phases
 };

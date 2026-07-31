@@ -244,6 +244,10 @@ static int factory_reset_boot_check(void) {
     const HoldConfig cfg = {
         .hold_duration_ms = CONFIG_APP_FACTORY_RESET_HOLD_MS,
         .phase2_hold_ms = CONFIG_APP_FACTORY_RESET_PHASE2_HOLD_MS,
+        // The settings-partition erase measures ~450 ms on proto0; the pad
+        // roughly doubles the solid-white commit indication (~950 ms total)
+        // so it reads as a deliberate step, not a flicker.
+        .commit_hold_ms = 500,
         .poll_interval_ms = 20,
         .flash_half_period_ms = 100,
     };
