@@ -263,10 +263,11 @@ config APP_FACTORY_RESET
 	  On boot (SYS_INIT APPLICATION 0, before settings_load), if the Up and
 	  Down D-PAD buttons are both held, pause boot and flash the status LEDs
 	  white. The reset is two-phase (issue #265): after a continuous 10 s
-	  hold the LEDs switch to flashing amber — releasing during that second
-	  window erases the NVS settings partition only (all config + BT bonds;
-	  a "soft" reset) and reboots; keep holding through it and the full
-	  reset runs instead: settings, coredump partition, and the FAT
+	  hold the LEDs go solid white while the NVS settings partition is
+	  erased (all config + BT bonds; the "soft" reset step), then switch to
+	  flashing amber — releasing during that second window stops there and
+	  reboots; keep holding through it and the LEDs go solid amber while
+	  the rest of the full reset runs: the coredump partition and the FAT
 	  filesystem (GLIM assets and extensions are lost). Releasing during
 	  the first (white) phase resumes a normal boot with nothing erased.
 	  Also registers the 'factory_reset now' and 'factory_reset soft'
@@ -290,12 +291,13 @@ config APP_FACTORY_RESET_PHASE2_HOLD_MS
 	default 10000
 	depends on APP_FACTORY_RESET
 	help
-	  After the phase-1 hold completes, how much longer the chord must be
-	  held — LEDs flashing amber instead of white — before the full reset
-	  (settings + coredump + FAT) runs. Releasing during this window
-	  performs a settings-only reset (whole NVS partition, BT bonds
-	  included — phones must re-pair). 0 restores the legacy single-phase
-	  full reset at the phase-1 deadline.
+	  After the phase-1 hold completes (and the settings erase has run,
+	  LEDs solid white), how much longer the chord must be held — LEDs
+	  flashing amber — before the rest of the full reset (coredump + FAT)
+	  runs. Releasing during this window stops at the settings-only reset
+	  (whole NVS partition, BT bonds included — phones must re-pair) and
+	  reboots. 0 restores the legacy single-phase full reset at the
+	  phase-1 deadline.
 
 config APP_SETTINGS_PARTITION_ERASE
 	bool

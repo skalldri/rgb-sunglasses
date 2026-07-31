@@ -9,17 +9,20 @@
  * coredump_manager_core::PartitionOps. The thin wiring to real GPIO / LED
  * strip / flash calls lives in factory_reset.cpp.
  *
- * The hold loop is pure: nothing is erased until it returns a Decision. This
- * is deliberate — outcomes are identical to erasing settings eagerly at the
- * phase-1/phase-2 boundary, and a power loss mid-phase-2 leaves settings
- * intact instead of half-reset. */
+ * The settings erase runs eagerly at the phase-1/phase-2 boundary (via the
+ * HoldIo::commit_phase1 seam, LEDs solid in the phase-1 color while it runs)
+ * so the user sees each step commit in sequence: phase-1 flash -> solid
+ * (settings erased) -> phase-2 flash -> solid (files erased). Release timing
+ * still selects the same outcomes as a decide-then-erase design would. */
 
 namespace factory_reset_core {
 
 enum class Decision {
     ContinueBoot,   // released during phase 1: nothing erased
-    SettingsReset,  // held through phase 1, released during phase 2: settings only
-    FullReset,      // held through both phases: settings + coredump + FAT
+    SettingsReset,  // released during phase 2: settings already erased by
+                    // commit_phase1 — the caller only needs to reboot
+    FullReset,      // held through both phases: settings already erased by
+                    // commit_phase1 — the caller erases coredump + FAT, then reboots
 };
 
 /* What the status LEDs should show. The hardware colors (Phase1 = white,
@@ -43,6 +46,10 @@ struct HoldIo {
     bool (*chord_held)(void* ctx);
     void (*set_leds)(void* ctx, LedState state);
     void (*sleep_ms)(void* ctx, uint32_t ms);
+    /* The phase-1 payload (the settings erase). Called exactly once, at the
+     * phase-1 deadline, with the LEDs already solid Phase1 — before the
+     * phase-2 flash starts. Null = no payload (skipped). */
+    void (*commit_phase1)(void* ctx);
     void* ctx;
 };
 
@@ -55,9 +62,11 @@ bool flash_led_on(const HoldConfig& cfg, uint32_t elapsed_ms);
  * sampled the chord once and found it held.
  *
  *  - Released during phase 1 (the first hold_duration_ms, LEDs flashing
- *    Phase1): ContinueBoot — nothing to erase.
+ *    Phase1): ContinueBoot — nothing erased, commit_phase1 never called.
+ *  - Phase 1 held to its deadline: LEDs go solid Phase1 and commit_phase1
+ *    runs (the settings erase), then the phase-2 flash starts.
  *  - Released during phase 2 (the next phase2_hold_ms, LEDs flashing
- *    Phase2): SettingsReset.
+ *    Phase2): SettingsReset — the phase-1 payload already ran.
  *  - Held through both phases: FullReset.
  *
  * A release observed on the same poll as a phase deadline takes the

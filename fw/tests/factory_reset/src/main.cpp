@@ -29,15 +29,25 @@ constexpr uint32_t kPhase2DeadlineMs = kCfg.hold_duration_ms + kCfg.phase2_hold_
 
 /* ---- Fake HoldIo --------------------------------------------------------
  * A virtual clock advanced by sleep_ms; the chord "releases" at a scripted
- * time; every set_leds call is logged with its timestamp. */
+ * time; every set_leds and commit_phase1 call is logged with its timestamp
+ * AND a global sequence number, so tests can assert ordering between LED
+ * changes and the commit even when they share a timestamp (the phase
+ * boundary: solid Phase1 -> commit -> Phase2 all at the same virtual time). */
 struct FakeHold {
     uint32_t now_ms = 0;
     uint32_t release_at_ms = UINT32_MAX;  // UINT32_MAX = held forever
+    int seq = 0;
     struct LedEvent {
         uint32_t at_ms;
         LedState state;
+        int seq;
     };
     std::vector<LedEvent> led_log;
+    struct CommitEvent {
+        uint32_t at_ms;
+        int seq;
+    };
+    std::vector<CommitEvent> commit_log;
 };
 
 bool fake_chord_held(void* ctx) {
@@ -47,11 +57,16 @@ bool fake_chord_held(void* ctx) {
 
 void fake_set_leds(void* ctx, LedState state) {
     auto* f = static_cast<FakeHold*>(ctx);
-    f->led_log.push_back({f->now_ms, state});
+    f->led_log.push_back({f->now_ms, state, f->seq++});
 }
 
 void fake_sleep_ms(void* ctx, uint32_t ms) {
     static_cast<FakeHold*>(ctx)->now_ms += ms;
+}
+
+void fake_commit_phase1(void* ctx) {
+    auto* f = static_cast<FakeHold*>(ctx);
+    f->commit_log.push_back({f->now_ms, f->seq++});
 }
 
 HoldIo make_io(FakeHold& f) {
@@ -59,6 +74,7 @@ HoldIo make_io(FakeHold& f) {
         .chord_held = fake_chord_held,
         .set_leds = fake_set_leds,
         .sleep_ms = fake_sleep_ms,
+        .commit_phase1 = fake_commit_phase1,
         .ctx = &f,
     };
 }
@@ -119,7 +135,7 @@ ZTEST(factory_reset_core, test_flash_led_on_boundaries) {
     zassert_true(flash_led_on(kCfg, 200));
 }
 
-/* ---- run_hold_loop: phase 1 (release = cancel) --------------------------- */
+/* ---- run_hold_loop: phase 1 (release = cancel, no commit) ---------------- */
 
 ZTEST(factory_reset_core, test_release_at_first_poll_continues_boot) {
     FakeHold f;
@@ -128,6 +144,7 @@ ZTEST(factory_reset_core, test_release_at_first_poll_continues_boot) {
     zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::ContinueBoot);
     // The loop should bail on the very first sample, not keep polling.
     zassert_equal(f.now_ms, kCfg.poll_interval_ms);
+    zassert_true(f.commit_log.empty(), "commit ran on a canceled hold");
 }
 
 ZTEST(factory_reset_core, test_release_midway_phase1_continues_boot) {
@@ -137,6 +154,7 @@ ZTEST(factory_reset_core, test_release_midway_phase1_continues_boot) {
     zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::ContinueBoot);
     zassert_true(f.now_ms >= 3000);
     zassert_true(f.now_ms < kPhase1DeadlineMs);
+    zassert_true(f.commit_log.empty(), "commit ran on a canceled hold");
 }
 
 ZTEST(factory_reset_core, test_release_just_before_phase1_deadline_continues_boot) {
@@ -145,19 +163,21 @@ ZTEST(factory_reset_core, test_release_just_before_phase1_deadline_continues_boo
 
     zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::ContinueBoot);
     zassert_true(f.now_ms < kPhase1DeadlineMs + kCfg.poll_interval_ms);
+    zassert_true(f.commit_log.empty(), "commit ran on a canceled hold");
 }
 
 ZTEST(factory_reset_core, test_release_exactly_at_phase1_deadline_continues_boot) {
     FakeHold f;
     // A release observed on the same poll as the phase-1 deadline must take
-    // the less-destructive outcome: cancel, not SettingsReset.
+    // the less-destructive outcome: cancel, not a committed settings erase.
     f.release_at_ms = kPhase1DeadlineMs;
 
     zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::ContinueBoot);
     zassert_equal(f.now_ms, kPhase1DeadlineMs);
+    zassert_true(f.commit_log.empty(), "commit ran on a canceled hold");
 }
 
-/* ---- run_hold_loop: phase 2 (release = settings-only reset) -------------- */
+/* ---- run_hold_loop: phase 2 (settings committed at the boundary) --------- */
 
 ZTEST(factory_reset_core, test_release_at_first_phase2_poll_settings_reset) {
     FakeHold f;
@@ -165,6 +185,8 @@ ZTEST(factory_reset_core, test_release_at_first_phase2_poll_settings_reset) {
 
     zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::SettingsReset);
     zassert_equal(f.now_ms, kPhase1DeadlineMs + kCfg.poll_interval_ms);
+    zassert_equal(f.commit_log.size(), 1u);
+    zassert_equal(f.commit_log[0].at_ms, kPhase1DeadlineMs);
 }
 
 ZTEST(factory_reset_core, test_release_midway_phase2_settings_reset) {
@@ -174,6 +196,7 @@ ZTEST(factory_reset_core, test_release_midway_phase2_settings_reset) {
     zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::SettingsReset);
     zassert_true(f.now_ms >= f.release_at_ms);
     zassert_true(f.now_ms < kPhase2DeadlineMs);
+    zassert_equal(f.commit_log.size(), 1u);
 }
 
 ZTEST(factory_reset_core, test_release_exactly_at_phase2_deadline_settings_reset) {
@@ -183,6 +206,7 @@ ZTEST(factory_reset_core, test_release_exactly_at_phase2_deadline_settings_reset
 
     zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::SettingsReset);
     zassert_equal(f.now_ms, kPhase2DeadlineMs);
+    zassert_equal(f.commit_log.size(), 1u);
 }
 
 ZTEST(factory_reset_core, test_full_hold_performs_full_reset) {
@@ -191,21 +215,37 @@ ZTEST(factory_reset_core, test_full_hold_performs_full_reset) {
     zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::FullReset);
     // The decision must land at the phase-2 deadline, not a poll interval late.
     zassert_equal(f.now_ms, kPhase2DeadlineMs);
+    // The settings erase committed once, at the phase boundary — not again at
+    // the end.
+    zassert_equal(f.commit_log.size(), 1u);
+    zassert_equal(f.commit_log[0].at_ms, kPhase1DeadlineMs);
 }
 
 ZTEST(factory_reset_core, test_zero_phase2_hold_is_legacy_single_phase) {
-    // phase2_hold_ms == 0: the full reset fires at the phase-1 deadline and
-    // Phase2 never appears in the LED log — the legacy one-phase behavior.
+    // phase2_hold_ms == 0: the full reset fires at the phase-1 deadline —
+    // commit still runs (solid Phase1 shown), but Phase2 never appears in
+    // the LED log.
     HoldConfig cfg = kCfg;
     cfg.phase2_hold_ms = 0;
     FakeHold f;  // held forever
 
     zassert_equal(run_hold_loop(cfg, make_io(f)), Decision::FullReset);
     zassert_equal(f.now_ms, cfg.hold_duration_ms);
+    zassert_equal(f.commit_log.size(), 1u);
+    zassert_equal(f.commit_log[0].at_ms, cfg.hold_duration_ms);
     for (const auto& ev : f.led_log) {
         zassert_not_equal(ev.state, LedState::Phase2,
                           "Phase2 LED event at %u with zero phase-2 window", ev.at_ms);
     }
+}
+
+ZTEST(factory_reset_core, test_null_commit_is_skipped) {
+    FakeHold f;  // held forever
+    HoldIo io = make_io(f);
+    io.commit_phase1 = nullptr;
+
+    zassert_equal(run_hold_loop(kCfg, io), Decision::FullReset);
+    zassert_true(f.commit_log.empty());
 }
 
 /* ---- run_hold_loop: LED behavior ----------------------------------------- */
@@ -224,23 +264,37 @@ ZTEST(factory_reset_core, test_led_flash_cadence_both_phases_and_final_off) {
     // Always ends OFF.
     zassert_equal(f.led_log.back().state, LedState::Off);
 
-    // Phase 2 starts ON in the phase-2 color exactly at the phase boundary —
-    // the flash clock restarts, so the color change is always visible.
-    bool boundary_seen = false;
+    // The boundary sequence at the phase-1 deadline: solid Phase1 (the
+    // commit indication — with the default config phase 1's flash ends in
+    // its Off half-cycle, so the solid write is a real event), then the
+    // commit itself, then Phase2 ON as the phase-2 flash clock restarts.
+    int solid_seq = -1;
+    int phase2_start_seq = -1;
     for (const auto& ev : f.led_log) {
-        if (ev.at_ms == kPhase1DeadlineMs) {
-            zassert_equal(ev.state, LedState::Phase2);
-            boundary_seen = true;
+        if (ev.at_ms == kPhase1DeadlineMs && ev.state == LedState::Phase1) {
+            solid_seq = ev.seq;
+        }
+        if (ev.at_ms == kPhase1DeadlineMs && ev.state == LedState::Phase2) {
+            phase2_start_seq = ev.seq;
         }
     }
-    zassert_true(boundary_seen, "no LED event at the phase-1/phase-2 boundary");
+    zassert_true(solid_seq >= 0, "no solid Phase1 commit event at the boundary");
+    zassert_true(phase2_start_seq >= 0, "no Phase2 start event at the boundary");
+    zassert_equal(f.commit_log.size(), 1u);
+    zassert_true(solid_seq < f.commit_log[0].seq,
+                 "commit ran before the LEDs went solid Phase1");
+    zassert_true(f.commit_log[0].seq < phase2_start_seq,
+                 "phase-2 flash started before the commit finished");
 
-    // Every intermediate event lands on a half-period boundary of its phase's
-    // local clock and matches the pure flash_led_on helper, in that phase's
-    // color; no Phase1 events after the boundary, no Phase2 before it.
+    // Flash events in each phase land on that phase's local half-period
+    // boundaries and match the pure flash_led_on helper; boundary and final
+    // events are exempt (they are commit/cleanup writes, not cadence).
     for (size_t i = 1; i + 1 < f.led_log.size(); i++) {
         const auto& ev = f.led_log[i];
-        const bool in_phase2 = ev.at_ms >= kPhase1DeadlineMs;
+        if (ev.at_ms == kPhase1DeadlineMs) {
+            continue;  // boundary events checked above
+        }
+        const bool in_phase2 = ev.at_ms > kPhase1DeadlineMs;
         const uint32_t phase_elapsed =
             in_phase2 ? ev.at_ms - kPhase1DeadlineMs : ev.at_ms;
         const LedState phase_on = in_phase2 ? LedState::Phase2 : LedState::Phase1;
@@ -249,9 +303,12 @@ ZTEST(factory_reset_core, test_led_flash_cadence_both_phases_and_final_off) {
                       "event at %u not on a phase-local half-period boundary", ev.at_ms);
         zassert_equal(ev.state, expected_flash_state(phase_elapsed, phase_on),
                       "wrong LED state at %u", ev.at_ms);
-        // Consecutive events differ — no redundant set_leds calls.
-        zassert_not_equal(ev.state, f.led_log[i - 1].state,
-                          "redundant LED event at %u", ev.at_ms);
+    }
+
+    // No redundant writes anywhere: every logged event is a real change.
+    for (size_t i = 1; i < f.led_log.size(); i++) {
+        zassert_not_equal(f.led_log[i].state, f.led_log[i - 1].state,
+                          "redundant LED event at %u", f.led_log[i].at_ms);
     }
 }
 
@@ -298,8 +355,8 @@ ZTEST(factory_reset_core, test_reset_returns_first_error) {
 }
 
 ZTEST(factory_reset_core, test_reset_null_ops_skipped_as_success) {
-    // This ops table — settings erase only — is exactly what the glue passes
-    // for a SettingsReset (soft reset), as well as the shape of a build with
+    // Settings-only ops table — the shape of the boot-path commit_phase1 and
+    // the 'factory_reset soft' shell command, as well as a build with
     // coredump/FAT support absent.
     const ResetOps ops = {
         .erase_settings = fake_erase_settings,

@@ -1,18 +1,22 @@
 /* Boot-time two-phase factory reset (issues #162, #265).
  *
  * If the user is holding the Up + Down D-PAD buttons when the app boots, boot
- * pauses and both status LEDs flash white (phase 1). Once the chord has been
- * held for CONFIG_APP_FACTORY_RESET_HOLD_MS (10 s), the LEDs switch to
- * flashing amber (phase 2) — releasing anywhere in that window performs a
- * "soft" reset: erase the NVS settings partition only (all app config + BT
- * bonds — phones must re-pair) and reboot. Holding through the full
- * CONFIG_APP_FACTORY_RESET_PHASE2_HOLD_MS window instead performs the full
- * reset: settings, the coredump partition, and a re-created FAT filesystem
- * on the NAND disk (GLIM assets and .llext extensions are lost; re-provision
- * afterwards). Releasing during phase 1 resumes a normal boot with nothing
- * erased. Nothing is erased until the hold loop returns its decision — the
- * lazy erase is deliberate (outcomes match erasing settings eagerly at the
- * phase boundary, and a power loss mid-phase-2 leaves settings intact).
+ * pauses and both status LEDs flash white (phase 1). Releasing during phase 1
+ * resumes a normal boot with nothing erased. Once the chord has been held for
+ * CONFIG_APP_FACTORY_RESET_HOLD_MS (10 s), the LEDs go SOLID white while the
+ * settings erase runs (the NVS settings partition — all app config + BT
+ * bonds; phones must re-pair), then switch to flashing amber (phase 2).
+ * Releasing anywhere in that window stops there — a "soft" reset — and the
+ * device reboots. Holding through the full
+ * CONFIG_APP_FACTORY_RESET_PHASE2_HOLD_MS window continues to the full
+ * reset: the LEDs go solid amber while the coredump partition is erased and
+ * the FAT filesystem on the NAND disk is re-created (GLIM assets and .llext
+ * extensions are lost; re-provision afterwards). Each solid-color step is
+ * the visible confirmation that its erase actually ran: white flash -> solid
+ * white (settings gone) -> amber flash -> solid amber (files gone). The
+ * settings erase is deliberately committed at the phase boundary, before the
+ * user's phase-2 choice — release timing selects the same outcomes either
+ * way, and the sequenced LED feedback is the point.
  *
  * Why Up + Down and not all 4 D-PAD buttons (as issue #162 originally asked):
  * Left (button1) is `mcuboot-button0`, MCUboot's serial-recovery entry button
@@ -161,40 +165,63 @@ int reformat_fat_op() {
 
 }  // namespace
 
-/* Erase the requested scope and report the first error. full == false is the
- * soft reset: settings only (coredump/FAT ops stay null and are skipped by
- * perform_reset). Steps that fail are logged by their op wrappers; later
- * steps still run (a partial reset beats an aborted one, and the erases are
- * independent). Callers reboot regardless of the return value — an
- * erased-but-unformatted state still comes up clean via
+/* Which erase steps to run. The boot path splits the work across the two
+ * phases (SettingsOnly at the phase-1 boundary, FilesOnly if phase 2 is held
+ * through); the 'factory_reset now' shell command still runs Everything in
+ * one shot. */
+enum class Scope {
+    SettingsOnly,  // NVS settings partition (all app config + BT bonds)
+    FilesOnly,     // coredump partition + FAT reformat (settings already done)
+    Everything,    // all three
+};
+
+/* Erase the requested scope and report the first error. Unused ops stay null
+ * and are skipped by perform_reset. Steps that fail are logged by their op
+ * wrappers; later steps still run (a partial reset beats an aborted one, and
+ * the erases are independent). Callers reboot regardless of the return value
+ * — an erased-but-unformatted state still comes up clean via
  * CONFIG_FS_FATFS_MOUNT_MKFS and NVS's tolerance of an erased partition. */
-static int factory_reset_perform(bool full) {
+static int factory_reset_perform(Scope scope) {
+    const bool settings = scope != Scope::FilesOnly;
+    const bool files = scope != Scope::SettingsOnly;
     const ResetOps ops = {
-        .erase_settings = erase_settings_op,
+        .erase_settings = settings ? erase_settings_op : nullptr,
 #if defined(CONFIG_DEBUG_COREDUMP)
-        .erase_coredump = full ? erase_coredump_op : nullptr,
+        .erase_coredump = files ? erase_coredump_op : nullptr,
 #else
         .erase_coredump = nullptr,
 #endif
 #if defined(FACTORY_RESET_HAS_FAT)
-        .reformat_fat = full ? reformat_fat_op : nullptr,
+        .reformat_fat = files ? reformat_fat_op : nullptr,
 #else
         .reformat_fat = nullptr,
 #endif
     };
 
-    if (full) {
-        LOG_WRN("factory reset: erasing settings, coredump, and FAT storage");
-    } else {
-        LOG_WRN("settings reset: erasing settings partition (BT bonds included)");
+    switch (scope) {
+        case Scope::SettingsOnly:
+            LOG_WRN("settings reset: erasing settings partition (BT bonds included)");
+            break;
+        case Scope::FilesOnly:
+            LOG_WRN("factory reset: erasing coredump and FAT storage");
+            break;
+        case Scope::Everything:
+            LOG_WRN("factory reset: erasing settings, coredump, and FAT storage");
+            break;
     }
     int rc = factory_reset_core::perform_reset(ops);
     if (rc == 0) {
-        LOG_WRN("%s reset complete", full ? "factory" : "settings");
+        LOG_WRN("erase complete");
     } else {
-        LOG_ERR("%s reset finished with errors (first: %d)", full ? "factory" : "settings", rc);
+        LOG_ERR("erase finished with errors (first: %d)", rc);
     }
     return rc;
+}
+
+/* HoldIo::commit_phase1 — runs inside the hold loop at the phase-1 deadline,
+ * LEDs already solid white. */
+static void commit_settings_erase(void*) {
+    factory_reset_perform(Scope::SettingsOnly);
 }
 
 static int factory_reset_boot_check(void) {
@@ -224,6 +251,7 @@ static int factory_reset_boot_check(void) {
         .chord_held = chord_held,
         .set_leds = set_leds,
         .sleep_ms = sleep_ms,
+        .commit_phase1 = commit_settings_erase,
         .ctx = nullptr,
     };
 
@@ -233,13 +261,15 @@ static int factory_reset_boot_check(void) {
         return 0;
     }
 
-    // Solid color while erasing (~2-4 s) so the user can tell it's working —
-    // white for a settings-only reset, amber for the full one, confirming
-    // which reset was committed.
-    const bool full = decision == Decision::FullReset;
-    set_leds(nullptr, full ? LedState::Phase2 : LedState::Phase1);
-    factory_reset_perform(full);
-    set_leds(nullptr, LedState::Off);
+    // The settings erase already ran inside the hold loop (solid white at the
+    // phase boundary). A phase-2 release stops there; holding through phase 2
+    // finishes the job — solid amber while the coredump + FAT erase runs
+    // (~2-4 s) so the user can tell it's working.
+    if (decision == Decision::FullReset) {
+        set_leds(nullptr, LedState::Phase2);
+        factory_reset_perform(Scope::FilesOnly);
+        set_leds(nullptr, LedState::Off);
+    }
 
     sys_reboot(SYS_REBOOT_COLD);
     CODE_UNREACHABLE;
@@ -259,7 +289,7 @@ static int cmd_factory_reset_now(const struct shell* sh, size_t argc, char** arg
 
     shell_warn(sh, "Factory reset: erasing all settings, coredumps, and files, then rebooting.");
 
-    factory_reset_perform(true);
+    factory_reset_perform(Scope::Everything);
 
     // Give the shell transport a moment to flush the warning before the
     // reboot drops the USB connection.
@@ -277,7 +307,7 @@ static int cmd_factory_reset_soft(const struct shell* sh, size_t argc, char** ar
     shell_warn(sh, "Settings reset: erasing all settings (BT bonds included), then rebooting. "
                    "Files are kept.");
 
-    factory_reset_perform(false);
+    factory_reset_perform(Scope::SettingsOnly);
 
     // Same flush delay as 'now' before the reboot drops the USB connection.
     k_msleep(100);
