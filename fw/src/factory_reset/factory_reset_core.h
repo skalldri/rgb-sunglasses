@@ -51,8 +51,11 @@ struct HoldIo {
     void (*sleep_ms)(void* ctx, uint32_t ms);
     /* The phase-1 payload (the settings erase). Called exactly once, at the
      * phase-1 deadline, with the LEDs already solid Phase1 — before the
-     * phase-2 flash starts. Null = no payload (skipped). */
-    void (*commit_phase1)(void* ctx);
+     * phase-2 flash starts. Returns 0 on success, negative errno on failure;
+     * on failure the commit_hold_ms pad is skipped so the solid dwell is a
+     * genuine success confirmation, not shown for a failed erase. Null = no
+     * payload (skipped as success). */
+    int (*commit_phase1)(void* ctx);
     void* ctx;
 };
 

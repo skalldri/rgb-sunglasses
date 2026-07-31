@@ -40,6 +40,7 @@ struct FakeHold {
     uint32_t now_ms = 0;
     uint32_t release_at_ms = UINT32_MAX;  // UINT32_MAX = held forever
     int seq = 0;
+    int commit_rc = 0;  // returned by the fake commit_phase1
     struct LedEvent {
         uint32_t at_ms;
         LedState state;
@@ -67,9 +68,10 @@ void fake_sleep_ms(void* ctx, uint32_t ms) {
     static_cast<FakeHold*>(ctx)->now_ms += ms;
 }
 
-void fake_commit_phase1(void* ctx) {
+int fake_commit_phase1(void* ctx) {
     auto* f = static_cast<FakeHold*>(ctx);
     f->commit_log.push_back({f->now_ms, f->seq++});
+    return f->commit_rc;
 }
 
 HoldIo make_io(FakeHold& f) {
@@ -261,6 +263,27 @@ ZTEST(factory_reset_core, test_null_commit_is_skipped) {
 
     zassert_equal(run_hold_loop(kCfg, io), Decision::FullReset);
     zassert_true(f.commit_log.empty());
+}
+
+ZTEST(factory_reset_core, test_failed_commit_skips_solid_pad) {
+    FakeHold f;  // held forever
+    f.commit_rc = -EIO;
+
+    // A failed settings erase must not get the deliberate solid-white
+    // success dwell: phase 2 starts straight after the commit attempt, so
+    // the whole run ends commit_hold_ms earlier than the success path.
+    zassert_equal(run_hold_loop(kCfg, make_io(f)), Decision::FullReset);
+    zassert_equal(f.now_ms, kCfg.hold_duration_ms + kCfg.phase2_hold_ms);
+    zassert_equal(f.commit_log.size(), 1u);
+
+    // Phase 2 begins at the phase-1 deadline itself (no pad).
+    bool phase2_at_deadline = false;
+    for (const auto& ev : f.led_log) {
+        if (ev.at_ms == kPhase1DeadlineMs && ev.state == LedState::Phase2) {
+            phase2_at_deadline = true;
+        }
+    }
+    zassert_true(phase2_at_deadline, "solid pad ran despite a failed commit");
 }
 
 /* ---- run_hold_loop: LED behavior ----------------------------------------- */
