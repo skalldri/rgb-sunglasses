@@ -255,30 +255,54 @@ config APP_MCUBOOT_UPDATER_INIT_PRIORITY
 	  room above CONFIG_MCUBOOT_INFO_INIT_PRIORITY (88).
 
 config APP_FACTORY_RESET
-	bool "Boot-time factory reset (hold Up+Down for 10 s)"
+	bool "Boot-time two-phase factory reset (hold Up+Down)"
 	default y if BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP
 	default n
 	depends on FLASH_MAP
 	help
 	  On boot (SYS_INIT APPLICATION 0, before settings_load), if the Up and
 	  Down D-PAD buttons are both held, pause boot and flash the status LEDs
-	  white. After a continuous 10 s hold: erase the NVS settings partition
-	  (all config + BT bonds), erase the coredump partition, re-create the
-	  FAT filesystem (GLIM assets and extensions are lost), and reboot.
-	  Releasing earlier resumes a normal boot. Also registers the
-	  'factory_reset now' shell command. Up+Down rather than all 4 D-PAD
-	  buttons because Left is MCUboot's serial-recovery entry button — see
-	  the header comment in src/factory_reset/factory_reset.cpp. Proto0
-	  only — the legacy DK board (dk-support branch) lacks the status
-	  LEDs, FAT disk, and coredump partition.
+	  white. The reset is two-phase (issue #265): after a continuous 10 s
+	  hold the LEDs go solid white while the NVS settings partition is
+	  erased (all config + BT bonds; the "soft" reset step), then switch to
+	  flashing amber — releasing during that second window stops there and
+	  reboots; keep holding through it and the LEDs go solid amber while
+	  the rest of the full reset runs: the coredump partition and the FAT
+	  filesystem (GLIM assets and extensions are lost). Releasing during
+	  the first (white) phase resumes a normal boot with nothing erased.
+	  Also registers the 'factory_reset now' and 'factory_reset soft'
+	  shell commands. Up+Down rather than all 4 D-PAD buttons because Left
+	  is MCUboot's serial-recovery entry button — see the header comment
+	  in src/factory_reset/factory_reset.cpp. Proto0 only — the legacy DK
+	  board (dk-support branch) lacks the status LEDs, FAT disk, and
+	  coredump partition.
 
 config APP_FACTORY_RESET_HOLD_MS
-	int "Factory reset hold duration (ms)"
+	int "Factory reset phase-1 hold duration (ms)"
 	default 10000
+	range 1000 3600000
 	depends on APP_FACTORY_RESET
 	help
-	  How long the Up+Down chord must be held continuously at boot before
-	  the factory reset is performed.
+	  How long the Up+Down chord must be held continuously at boot (LEDs
+	  flashing white) before phase 1 completes and the phase-2 window
+	  begins. The 1 s floor guarantees a release (cancel) window always
+	  exists before the settings erase commits — a zero-duration phase
+	  would erase on a single boot-time chord sample with no way to back
+	  out.
+
+config APP_FACTORY_RESET_PHASE2_HOLD_MS
+	int "Factory reset phase-2 (full erase) additional hold duration (ms)"
+	default 10000
+	range 0 3600000
+	depends on APP_FACTORY_RESET
+	help
+	  After the phase-1 hold completes (and the settings erase has run,
+	  LEDs solid white), how much longer the chord must be held — LEDs
+	  flashing amber — before the rest of the full reset (coredump + FAT)
+	  runs. Releasing during this window stops at the settings-only reset
+	  (whole NVS partition, BT bonds included — phones must re-pair) and
+	  reboots. 0 restores the legacy single-phase full reset at the
+	  phase-1 deadline.
 
 config APP_SETTINGS_PARTITION_ERASE
 	bool
