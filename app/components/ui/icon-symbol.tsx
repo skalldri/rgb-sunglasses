@@ -26,6 +26,8 @@ const MAPPING = {
   'magnifyingglass': 'search',
   'exclamationmark.triangle.fill': 'warning',
   'shuffle': 'shuffle',
+  'text.line.first.and.arrowtriangle.forward': 'playlist-play',
+  'play.fill': 'play-arrow',
 } as IconMapping;
 
 /**

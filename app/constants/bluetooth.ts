@@ -184,6 +184,27 @@ export const COLOR_MODE_LABELS: Record<ColorMode, string> = {
 // in fw/src/bluetooth/gatt_cpf.h.
 export const BLE_GATT_CPF_FORMAT_DROPDOWN_LIST = 0xE1;
 
+// Generic "slot machine" contract (issue #260) — the three formats below mark a service's slot
+// machinery so [serviceUuid].tsx renders a playlist-style UI (one row per slot with a
+// tap-to-queue button and a now-playing highlight) instead of raw text/number inputs. Must
+// match the same names in fw/src/bluetooth/gatt_cpf.h. There are deliberately NO UUID
+// constants for these: the characteristics have per-service unique auto-assigned UUIDs and
+// are discovered generically by CPF format (see services/slot-playlist.ts), never addressed
+// by a hardcoded UUID.
+
+// A slot's value, as a writable UTF8S-style string. Slot index = 0-based order of appearance
+// of the SLOT_TEXT characteristics within their service (firmware declaration order — the same
+// ATT ascending-handle-order guarantee the metadata blob zip relies on).
+export const BLE_GATT_CPF_FORMAT_SLOT_TEXT = 0xE2;
+
+// uint32 (little-endian), read/write/notify: the slot index that will play next. Writing k
+// queues slot k; the device notifies the new value whenever it advances on its own.
+export const BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT = 0xE3;
+
+// uint32 (little-endian), read-only/notify: the slot index currently playing, notified on each
+// advance. Rendered as a highlight on the matching slot row, not as its own input row.
+export const BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING = 0xE4;
+
 export function getServiceName(serviceId: string): string {
     return KnownServiceIds[serviceId] || serviceId;
 }

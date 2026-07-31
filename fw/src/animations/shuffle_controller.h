@@ -63,9 +63,9 @@ class ShuffleController {
      * @param animationAtGoodSwitchPoint The active animation's isAtGoodSwitchPoint().
      * @param requestedGraceMs The active animation's goodSwitchPointGraceMs() — how far
      * away its next natural boundary is measured from NOW, NOT an offset from the dwell
-     * target. 0 means "no request" (every animation but the GLIM player and the text
-     * animation, and unavoidably every sandboxed extension, which has no rgbx hook for
-     * this), which leaves graceMs alone in charge exactly as before.
+     * target. 0 means "no request" (every animation but the GLIM player, the text
+     * animation, and My Eyes, and unavoidably every sandboxed extension, which has no
+     * rgbx hook for this), which leaves graceMs alone in charge exactly as before.
      *
      * Detects external animation changes itself (current != last seen -> dwell resets),
      * so callers of pattern_controller_change_to_animation() need no shuffle hooks.

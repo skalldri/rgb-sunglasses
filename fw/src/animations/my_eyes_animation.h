@@ -20,16 +20,21 @@ class MyEyesAnimationDependencies {
     MyEyesAnimationDependencies(const AnimationUint32ParameterSource &blinkSpeedMs,
                                 const AnimationUint32ParameterSource &color,
                                 const MyEyesAnimationSlotSource &slotSource,
-                                MyEyesAnimationUpNextSource &upNextSource)
+                                MyEyesAnimationUpNextSource &upNextSource,
+                                const AnimationUint32ParameterSource &dwellTimeMs)
         : blinkSpeedMs(blinkSpeedMs),
           color(color),
           slotSource(slotSource),
-          upNextSource(upNextSource) {}
+          upNextSource(upNextSource),
+          dwellTimeMs(dwellTimeMs) {}
 
     const AnimationUint32ParameterSource &blinkSpeedMs;
     const AnimationUint32ParameterSource &color;
     const MyEyesAnimationSlotSource &slotSource;
     MyEyesAnimationUpNextSource &upNextSource;
+    // How long each eye slot displays before tick() advances to the next one
+    // (issue #260 autonomous cycling); clamped to a 500 ms floor in tick().
+    const AnimationUint32ParameterSource &dwellTimeMs;
 };
 
 enum class EyeState {
@@ -53,6 +58,12 @@ class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation:
 
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
+    bool isAtGoodSwitchPoint() const override { return dwellTracker_.isAtBoundary(); }
+
+    // Shuffle's wait budget for the dwell boundary: how much longer the current eyes
+    // display before tick() advances — so shuffle switches on a slot boundary instead
+    // of mid-dwell (same contract as TextAnimation's end-of-scroll signal).
+    uint32_t goodSwitchPointGraceMs() const override { return dwellTracker_.remainingMs(); }
 
    private:
     const char *getStringFromSlot(size_t slot);
@@ -78,6 +89,11 @@ class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation:
 
     // The amount of time spent in the current state
     size_t timeInCurrentStateMs = 0;
+
+    // Drives the autonomous advance to the next slot once the configured dwell time
+    // elapses (issue #260), with deferred-consume boundary semantics — see
+    // SlotDwellTracker in animation_base.h.
+    SlotDwellTracker dwellTracker_;
 };
 
 void my_eyes_animation_bind_default_dependencies();

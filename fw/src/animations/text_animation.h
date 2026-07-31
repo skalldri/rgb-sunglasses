@@ -71,9 +71,14 @@ class TextAnimation : public BaseAnimationTemplate<TextAnimation, Animation::Tex
 
     int32_t currentTextOffset = 0;
 
-    // True only for the tick on which the current message finished scrolling (the frame
-    // the next slot is loaded) — the natural boundary shuffle mode waits for.
+    // True only for the tick on which the current message finished scrolling — the
+    // natural boundary shuffle mode waits for.
     bool atGoodSwitchPoint_ = false;
+
+    // Set on that boundary tick; the queued next slot is consumed at the top of the
+    // FOLLOWING tick (deferred so a shuffle switch at the boundary never eats a slot
+    // queued via Up Next — same semantics as SlotDwellTracker in animation_base.h).
+    bool advancePending_ = false;
 
     // How much longer the current message needs before that boundary. Computed in tick()
     // (it needs the renderer's width, which a const getter has no access to) and simply

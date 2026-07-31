@@ -9,13 +9,11 @@
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 
-// Minimum time a message stays on screen before we advance to the next slot. A real
+// A message's minimum on-screen time is the shared kMinSlotDwellMs floor
+// (animation_base.h — see its comment for the issue #188 notify-flood rationale). A real
 // message scrolls for seconds before it finishes (a 1-char message at the 50ms default
-// step time dwells ~2.8s), so this floor never affects normal content; it only bounds
-// the degenerate case where an empty slot would otherwise advance every render tick and
-// flood the shared BT TX buffer pool with getUpNext()'s notifications. Caps advances at
-// ~2/s (worst case, all slots empty), which the pool absorbs comfortably.
-static constexpr size_t kMinMessageDwellMs = 500;
+// step time dwells ~2.8s), so the floor never affects normal content; it only bounds the
+// degenerate case where an empty slot would otherwise advance every render tick.
 
 TextAnimation::TextAnimation() = default;
 
@@ -40,6 +38,9 @@ void TextAnimation::init() {
     currentMessageDwellMs = 0;
     currentTextOffset = 0;
     atGoodSwitchPoint_ = false;
+    // Discard any advance still pending from a boundary tick — getUpNext() below is
+    // this activation's one consume; a stale flag would double-consume.
+    advancePending_ = false;
     remainingScrollMs_ = 0;
     strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
 }
@@ -49,6 +50,17 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
 
     // Only the tick that finishes the current message (below) is a good switch point.
     atGoodSwitchPoint_ = false;
+
+    // Deferred consume from the previous tick's end-of-scroll boundary (same rationale
+    // as SlotDwellTracker in animation_base.h): the boundary tick only REPORTS the
+    // switch point; the queued next slot is consumed here, one tick later, so a shuffle
+    // switch taken at the boundary never eats a slot the user queued via Up Next.
+    if (advancePending_) {
+        advancePending_ = false;
+        currentTextOffset = 0;
+        currentMessageDwellMs = 0;
+        strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
+    }
 
     // Turn off all LEDs
     for (size_t x = 0; x < renderer.displayWidth(); x++) {
@@ -134,10 +146,10 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     const size_t stepMs = deps_->stepTimeMs.get();
     const size_t msPerPixel = (stepMs > timeSinceLastTickMs) ? stepMs : timeSinceLastTickMs;
     if (firstChar >= currentMessageLen) {
-        // Done scrolling; only the kMinMessageDwellMs floor below is left to wait out.
-        remainingScrollMs_ = (currentMessageDwellMs >= kMinMessageDwellMs)
+        // Done scrolling; only the kMinSlotDwellMs floor below is left to wait out.
+        remainingScrollMs_ = (currentMessageDwellMs >= kMinSlotDwellMs)
                                  ? 0u
-                                 : (uint32_t)(kMinMessageDwellMs - currentMessageDwellMs);
+                                 : (uint32_t)(kMinSlotDwellMs - currentMessageDwellMs);
     } else {
         // firstChar >= currentMessageLen becomes true once currentTextOffset (<= 0, and
         // decremented one pixel at a time below) reaches -(len * charWidth + displayWidth
@@ -151,19 +163,20 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
         remainingScrollMs_ = (ms > UINT32_MAX) ? UINT32_MAX : (uint32_t)ms;
     }
 
-    // If we have finished scrolling the current message, pick the next message - but not
-    // before it has been shown for at least kMinMessageDwellMs. Without this floor an
-    // empty slot (currentMessageLen == 0) satisfies firstChar >= currentMessageLen on
-    // every tick and advances at the full render rate, and each advance calls getUpNext()
-    // which fires two GATT notifications - flooding the BT TX buffer pool (notify -12).
-    if (firstChar >= currentMessageLen && currentMessageDwellMs >= kMinMessageDwellMs) {
-        currentTextOffset = 0;
-        currentMessageDwellMs = 0;
+    // If we have finished scrolling the current message, queue the advance to the next
+    // message - but not before it has been shown for at least kMinSlotDwellMs. Without
+    // this floor an empty slot (currentMessageLen == 0) satisfies firstChar >=
+    // currentMessageLen on every tick and advances at the full render rate, and each
+    // advance calls getUpNext() which fires two GATT notifications - flooding the BT TX
+    // buffer pool (notify -12).
+    if (firstChar >= currentMessageLen && currentMessageDwellMs >= kMinSlotDwellMs) {
         // End of scroll: the frame the message finished is the natural boundary shuffle
-        // waits for. (The kMinMessageDwellMs floor above already bounds how often the
-        // all-empty-slots case can reach here — at most ~2/s.)
+        // waits for. The actual consume is deferred to the top of the NEXT tick (see
+        // above) so a shuffle switch taken here leaves the queued slot untouched. (The
+        // kMinSlotDwellMs floor already bounds how often the all-empty-slots case can
+        // reach here — at most ~2/s.)
         atGoodSwitchPoint_ = true;
-        strncpy(currentMessage, getStringFromSlot(getUpNext()), kMaxMsgLen);
+        advancePending_ = true;
         return;
     }
 
