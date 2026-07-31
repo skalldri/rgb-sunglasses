@@ -3,7 +3,18 @@
 #include <animations/animation_active_state_observer.h>
 #include <animations/animation_renderer.h>
 
+#include <cstddef>
 #include <cstdint>
+
+// Minimum time a slot-based animation shows one slot before advancing to the next,
+// regardless of how fast its content finishes or how small a remotely-writable dwell
+// parameter is set (issue #188 follow-up). Each advance calls consumeCurrentAndAdvance(),
+// which fires two GATT notifications (up next + now playing) — without this floor a
+// degenerate slot (empty text message, dwell time written as 0) would advance every
+// render tick and flood the shared BT TX buffer pool. Caps advances at ~2/s, which the
+// pool absorbs comfortably. Shared by every slot-cycling animation (Text, My Eyes) so
+// the figure can't drift between them if the pool budget ever changes.
+inline constexpr size_t kMinSlotDwellMs = 500;
 
 class BaseAnimation {
    public:

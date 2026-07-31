@@ -219,7 +219,7 @@ ZTEST(my_eyes_animation_di_tests, test_tick_advances_after_dwell_elapses) {
 
 ZTEST(my_eyes_animation_di_tests, test_zero_dwell_respects_min_floor) {
     NullTestRenderer renderer;
-    CyclingFixture f(0);  // remote write of 0 must clamp to kMinEyeDwellMs (500)
+    CyclingFixture f(0);  // remote write of 0 must clamp to kMinSlotDwellMs (500)
 
     // 400 ms of 20 ms ticks: below the floor, no advance despite dwell == 0.
     for (int i = 0; i < 20; i++) {

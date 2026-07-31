@@ -9,13 +9,14 @@
 
 LOG_MODULE_REGISTER(text_anim, LOG_LEVEL_INF);
 
-// Minimum time a message stays on screen before we advance to the next slot. A real
-// message scrolls for seconds before it finishes (a 1-char message at the 50ms default
-// step time dwells ~2.8s), so this floor never affects normal content; it only bounds
-// the degenerate case where an empty slot would otherwise advance every render tick and
-// flood the shared BT TX buffer pool with getUpNext()'s notifications. Caps advances at
-// ~2/s (worst case, all slots empty), which the pool absorbs comfortably.
-static constexpr size_t kMinMessageDwellMs = 500;
+// Minimum time a message stays on screen before we advance to the next slot — the
+// shared kMinSlotDwellMs floor (animation_base.h). A real message scrolls for seconds
+// before it finishes (a 1-char message at the 50ms default step time dwells ~2.8s), so
+// this floor never affects normal content; it only bounds the degenerate case where an
+// empty slot would otherwise advance every render tick and flood the shared BT TX
+// buffer pool with getUpNext()'s notifications. Caps advances at ~2/s (worst case, all
+// slots empty), which the pool absorbs comfortably.
+static constexpr size_t kMinMessageDwellMs = kMinSlotDwellMs;
 
 TextAnimation::TextAnimation() = default;
 

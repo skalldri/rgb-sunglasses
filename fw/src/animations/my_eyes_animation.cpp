@@ -8,14 +8,9 @@
 
 LOG_MODULE_REGISTER(my_eyes_animation, LOG_LEVEL_INF);
 
-// Minimum time a slot's eyes stay on screen before we advance to the next slot,
-// regardless of how small the remotely-writable dwell time is set. Same rationale as
-// TextAnimation's kMinMessageDwellMs (issue #188 follow-up): each advance calls
-// getUpNext(), which fires two GATT notifications (up next + now playing), so a dwell
-// of 0 must not advance every render tick and flood the shared BT TX buffer pool.
-// Caps advances at ~2/s, which the pool absorbs comfortably. Clamped here in tick()
-// rather than rejecting the GATT write — a written 0 simply means "as fast as allowed".
-static constexpr size_t kMinEyeDwellMs = 500;
+// The dwell floor is the shared kMinSlotDwellMs (animation_base.h — see its comment for
+// the issue #188 notify-flood rationale). Clamped in tick() rather than rejecting the
+// GATT write — a written 0 simply means "as fast as allowed".
 
 MyEyesAnimation::MyEyesAnimation() = default;
 
@@ -56,7 +51,7 @@ void MyEyesAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTick
     // advances at end-of-scroll. Advance-then-render so the new eyes draw on the
     // boundary frame.
     currentEyesDwellMs += timeSinceLastTickMs;
-    const size_t dwellMs = std::max<size_t>(deps_->dwellTimeMs.get(), kMinEyeDwellMs);
+    const size_t dwellMs = std::max<size_t>(deps_->dwellTimeMs.get(), kMinSlotDwellMs);
     remainingDwellMs_ = (currentEyesDwellMs >= dwellMs)
                             ? 0u
                             : (uint32_t)(dwellMs - currentEyesDwellMs);
