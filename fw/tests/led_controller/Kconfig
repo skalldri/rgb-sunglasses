@@ -5,7 +5,7 @@ source "Kconfig.zephyr"
 # (Same pattern as fw/tests/imu/pipeline/Kconfig.)
 config APP_LED_DISPLAY_THREAD_PRIORITY
 	int "LED display thread priority"
-	default 6
+	default 2
 
 config APP_LED_DISPLAY_THREAD_STACK_SIZE
 	int "LED display thread stack size (bytes)"
@@ -15,4 +15,4 @@ config APP_LED_DISPLAY_THREAD_STACK_SIZE
 # compares against it, so the assert is exercised in this suite too.
 config APP_PATTERN_CONTROLLER_THREAD_PRIORITY
 	int "Pattern controller (render) thread priority"
-	default 6
+	default 4

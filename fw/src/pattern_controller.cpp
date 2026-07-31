@@ -273,6 +273,10 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     // Restore without scheduling a save — this is a read-back, not a user-initiated change.
     pattern_controller_change_to_animation(startupAnimation, false);
 
+    // Overrun logging is rate-limited (see the overrun branch at the bottom of the loop).
+    int64_t lastRenderOverrunLogMs = 0;
+    uint32_t renderOverrunsSinceLog = 0;
+
     while (true) {
         int64_t startTicks = k_uptime_ticks();
 
@@ -350,7 +354,21 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         float updateTimeMs = updateTimeS * 1000.0f;
 
         if (updateTimeMs > kTargetRenderIntervalMs) {
-            LOG_WRN("Render update took >kTargetRenderIntervalMs, cannot keep render rate!");
+            renderOverrunsSinceLog++;
+            // Rate-limited: at the 11.1 ms default this fired once per render tick under
+            // sustained load, which is the per-tick log spam PR #110 banned.
+            const int64_t nowMs = k_uptime_get();
+            if (nowMs - lastRenderOverrunLogMs >= 5000) {
+                LOG_WRN("Render overran the tick interval %u time(s) in the last %lld ms — "
+                        "cannot keep render rate",
+                        renderOverrunsSinceLog, nowMs - lastRenderOverrunLogMs);
+                lastRenderOverrunLogMs = nowMs;
+                renderOverrunsSinceLog = 0;
+            }
+            // Always yield, even after blowing the budget. This thread is preemptible so a
+            // spin here is survivable, but an unconditional yield costs nothing and removes
+            // a latent trap identical to the one fixed in led_controller.cpp (issue #267).
+            k_msleep(1);
         } else {
             // Sleep for however much time is left
             k_msleep(kTargetRenderIntervalMs - updateTimeMs);

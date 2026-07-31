@@ -17,18 +17,29 @@ Lower number = higher priority, in both bands. On proto0 today
 is `-16 .. 14`.
 
 **The critical property, and the one that surprises people:** a *cooperative* thread is
-never preempted. Not by a preemptible thread, and not by a higher-priority cooperative
-thread either. It runs until it blocks, sleeps, or yields. A cooperative thread's priority
-number only decides which cooperative thread is picked next once the running one lets go.
+never preempted. Not by a preemptible thread, and **not by a higher-priority cooperative
+thread either**. It runs until it blocks, sleeps, or yields. A cooperative thread's
+priority number only decides which cooperative thread is picked next once the running one
+lets go.
 
-Two consequences that drive most of the layout below:
+This is not folklore — it is `should_preempt()` in
+`zephyr/kernel/include/kthread.h`, which returns false unless the **currently running**
+thread is preemptible (or the incoming thread is a meta-IRQ, which nothing here is).
+
+Three consequences that drive the whole layout below:
 
 - No priority you can assign in the preemptible band will let a thread run while a
-  cooperative thread is executing. If a preemptible thread is being starved by BT or by
-  the system workqueue, changing its number cannot fix that.
+  cooperative thread is executing. If a preemptible thread is being starved by a
+  cooperative one, changing its number cannot fix that.
+- **Nor can promoting the starved thread into the cooperative band.** That is the trap
+  issue #267 was originally going to walk into: making `led_display_thread` cooperative
+  would not have let it preempt the cooperative Bluetooth or system-workqueue threads
+  blocking it. It would only have stopped the BLE radio threads from preempting the
+  display thread — strictly worse. **The fix for a cooperative blocker is to move the
+  blocker out of the cooperative band, not to join it.**
 - A thread that does filesystem or flash I/O must stay preemptible. A long flash write
   from a cooperative thread starves the entire system (this is a standing rule in
-  `fw/CLAUDE.md`, from PR #51).
+  `fw/CLAUDE.md`, from PR #51). The system workqueue is a live example — see below.
 
 Timeslicing is on: `CONFIG_TIMESLICE_SIZE=20`, `CONFIG_TIMESLICE_PRIORITY=0`. Threads that
 share a preemptible priority therefore round-robin at 20 ms granularity — which is coarse
@@ -47,20 +58,20 @@ Rows marked **app** are ours; the rest come from Zephyr/NCS and are tuned from `
 | −9 | BT HCI TX | coop | `CONFIG_BT_HCI_TX_PRIO` (=7) |
 | −8 | `BT RX WQ` | coop | `CONFIG_BT_RX_PRIO` (=8) |
 | −8 | `usbd`, `udc_nrfx` | coop | USB device-next stack |
-| −7 | **app** `audio_dsp_thread` | coop | `CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY` |
 | −6 | `bmi270_thread` (IMU driver's own trigger thread) | coop | `CONFIG_BMI270_THREAD_PRIORITY` (=10, wrapped in `K_PRIO_COOP`) |
-| −1 | `sysworkq` | coop | `CONFIG_SYSTEM_WORKQUEUE_PRIORITY` |
+| −1 | `sysworkq` | coop | `CONFIG_SYSTEM_WORKQUEUE_PRIORITY` — SDK-pinned to the coop band, see below |
 | −1 | `usbd_msc` | coop | USB mass-storage |
 | 0 | `main`, `mbox_wq #0` | preempt | `CONFIG_MAIN_THREAD_PRIORITY` |
-| 3 | `mcumgr smp` | preempt | mcumgr transport |
-| 5 | **app** `tps25750_wq` (PD/charger driver) | preempt | `CONFIG_TPS25750_WORKQ_PRIORITY` |
-| 6 | **app** `led_display_thread` | preempt | `CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY` |
-| 6 | **app** `pattern_controller_thread` | preempt | `CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY` |
+| 2 | **app** `led_display_thread` | preempt | `CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY` |
+| 3 | `mcumgr smp` | preempt | `CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_THREAD_PRIO` |
+| 4 | **app** `pattern_controller_thread` | preempt | `CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY` |
+| 5 | **app** `audio_dsp_thread` | preempt | `CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY` |
 | 6 | **app** `bt_thread` (application state machine) | preempt | `CONFIG_APP_BT_THREAD_PRIORITY` |
 | 7 | **app** `imu_thread` | preempt | `CONFIG_IMU_THREAD_PRIORITY` |
-| 7 | **app** `status_led_thread` | preempt | `CONFIG_APP_STATUS_LED_THREAD_PRIORITY` |
-| 7 | **app** `charger_status_thread` | preempt | `CONFIG_APP_CHARGER_STATUS_THREAD_PRIORITY` |
-| 7 | **app** extension sandbox thread | preempt | `CONFIG_APP_EXT_HOST_THREAD_PRIORITY` |
+| 8 | **app** `status_led_thread` | preempt | `CONFIG_APP_STATUS_LED_THREAD_PRIORITY` |
+| 8 | **app** `charger_status_thread` | preempt | `CONFIG_APP_CHARGER_STATUS_THREAD_PRIORITY` |
+| 9 | **app** extension sandbox thread | preempt | `CONFIG_APP_EXT_HOST_THREAD_PRIORITY` |
+| 10 | **app** `tps25750_wq` (PD/charger driver) | preempt | `CONFIG_TPS25750_WORKQ_PRIORITY` |
 | 10 | `BT LW WQ` (ECDH / pairing crypto) | preempt | `CONFIG_BT_LONG_WQ_PRIO` |
 | 14 | **app** `persist_wq` | preempt | `CONFIG_APP_PERSIST_WORKQ_PRIORITY` |
 | 14 | **app** `coredump_wq` | preempt | `CONFIG_APP_COREDUMP_WORKQ_PRIORITY` |
@@ -140,28 +151,66 @@ rendering threads.** It runs multi-step CMD1/DATA1 bridge transactions under the
 task mutex and can hold the CPU for a while. It cannot be asserted in the driver, which is
 built standalone in two test suites and does not see the application's symbols.
 
-## Known contention
+## What issue #267 changed, and why
 
-Two structural problems are visible in the map above and are tracked by
-[issue #267](https://github.com/skalldri/rgb-sunglasses/issues/267):
+The reported symptom was animations freezing for a visible 100–500 ms during Bluetooth and
+flash activity. Four distinct causes, all visible in the map above before the fix:
 
-1. `led_display_thread`, `pattern_controller_thread` and `bt_thread` all share priority 6.
-   The frame-deadline thread round-robins at 20 ms granularity against two threads that do
-   long blocking work.
-2. The TPS25750 workqueue at priority 5 outranks every rendering thread.
+1. **`led_display_thread`, `pattern_controller_thread` and `bt_thread` all shared priority
+   6.** The one thread with a frame deadline round-robined at the 20 ms timeslice against
+   two threads that do long blocking work. → display 3, pattern controller 4, bt_thread 6.
+2. **`audio_dsp_thread` was cooperative at −7.** A CMSIS-DSP FFT therefore stalled every
+   rendering thread for its full duration, unpreemptably. → preemptible 5.
+3. **The TPS25750 workqueue at 5 outranked every rendering thread**, and its handlers run
+   multi-step I2C bridge transactions under a mutex. → 10.
 
-Separately, everything in the cooperative band — the BT host/controller threads, the
-system workqueue (which is where BT bond and CCC records get written to NVS/QSPI),
-`bmi270_thread`, and `audio_dsp_thread` — can block rendering for as long as it runs, and
-no preemptible priority can change that. Note that `audio_dsp_thread` and `bmi270_thread`
-are ours to move: both are configured from symbols we own.
+The tempting fourth "fix" — promoting `led_display_thread` into the cooperative band — is
+wrong, for the reason given at the top of this document: it would not have let it preempt
+causes 2–3, only stopped the radio from preempting it.
 
-The BT long workqueue is *not* part of that set, despite the name pattern — it is
-preemptible at 10 (see above).
+**Do not put the display thread at priority 3.** That is where Zephyr fixes the mcumgr SMP
+transport workqueue (`CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_THREAD_PRIO`), and the app holds an
+SMP link open. An intermediate version of this change used 3 and measured a full dropped
+frame because of it — worst wake-to-wake went 43.2 ms → 63.8 ms, reproducibly across two
+runs, purely from the 20 ms timeslice round-robin between the two. Priority 2 is free and
+sits above it. This is the whole reason the map above lists non-application threads too:
+picking a number without checking who else is already on it just moves the collision.
 
-Note that this is a CPU-scheduling problem, not bus contention: the WS2812 strips are on
-SPI1/SPI2/SPI4, the MX25R6435F is on QSPI, and the BMI270 is on SPI3, so flash traffic and
-LED output never contend for a peripheral.
+### What is still unpreemptable
+
+Three things remain cooperative and can still block rendering for as long as they run.
+
+**`sysworkq` (−1) is the significant one, and it cannot be fixed from here.** The
+Bluetooth host queues its bond/CCC/settings records onto the system workqueue
+(`subsys/bluetooth/host/settings.c`), so those become NVS writes to the external QSPI
+flash from a thread nothing can preempt. Raising `CONFIG_SYSTEM_WORKQUEUE_PRIORITY` into
+the preemptible band was tried for issue #267 and is **rejected at configure time**: both
+`zephyr/subsys/bluetooth/Kconfig` ("The Bluetooth subsystem requires the system workqueue
+to execute at a cooperative priority") and
+`zephyr/subsys/ipc/ipc_service/lib/Kconfig.icmsg` constrain the symbol to `range -256 -1`,
+and the SDK is not ours to modify. What limits the damage in practice is that these writes
+are event-driven (pairing, CCC subscription changes) rather than continuous, and that
+`CONFIG_BT_SETTINGS_DELAYED_STORE_MS=1000` already batches them. **The project's own
+persisted config does not go through here** — it has its own preemptible workqueue at 14
+(`persist_wq`), which is exactly why that indirection exists.
+
+The BT host/controller threads (−10/−9/−8) and `bmi270_thread` (−6) also remain
+cooperative, but each does short, bounded per-invocation work (one HCI packet, one sensor
+trigger) rather than an FFT or a flash erase, so they are accepted as-is. `BT LW WQ` is
+*not* in this set despite the name pattern — it is preemptible at 10.
+
+Note this was a CPU-scheduling problem throughout, not bus contention: the WS2812 strips
+are on SPI1/SPI2/SPI4, the MX25R6435F is on QSPI, and the BMI270 is on SPI3, so flash
+traffic and LED output never contend for a peripheral.
+
+### Measuring the symptom
+
+`led_stats` on the serial shell reports frame **wake-to-wake interval** (min/avg/max),
+late frames (>2× target), worst per-frame work, and the worst segment between yield
+points. `led_stats reset` zeroes it. Interval is the metric that corresponds to the
+user-visible stutter — the pre-existing `LOG_WRN` only measured the display thread's own
+work time, which stays perfectly healthy while another thread is hogging the CPU, so it
+could not have caught any of the four causes above.
 
 ## Measuring
 

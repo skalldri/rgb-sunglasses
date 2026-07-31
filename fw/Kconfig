@@ -473,7 +473,7 @@ config APP_EXTENSION_HOST
 
 config APP_EXT_HOST_THREAD_PRIORITY
 	int "Extension host thread priority"
-	default 7
+	default 9
 	depends on APP_EXTENSION_HOST
 	help
 	  Preemptive Zephyr priority for the sandboxed extension thread. Must be
@@ -667,7 +667,7 @@ menu "Thread priorities and stack sizes"
 
 config APP_LED_DISPLAY_THREAD_PRIORITY
 	int "LED display thread priority"
-	default 6
+	default 2
 	help
 	  Priority for led_display_thread (src/led_controller.cpp), which clocks
 	  the most recently rendered framebuffer out to the WS2812 strips once
@@ -676,6 +676,20 @@ config APP_LED_DISPLAY_THREAD_PRIORITY
 	  application thread. Must be numerically lower (higher priority) than
 	  APP_PATTERN_CONTROLLER_THREAD_PRIORITY — enforced by a BUILD_ASSERT in
 	  led_controller.cpp.
+
+	  The default of 2 is chosen to sit ABOVE the mcumgr SMP transport
+	  workqueue, which Zephyr fixes at CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_THREAD_PRIO
+	  = 3. Sharing 3 with it was measured to cost a whole dropped frame
+	  (max wake-to-wake 63.8 ms vs 43.2 ms) whenever the app's SMP link was
+	  active, because equal preemptible priorities round-robin at the 20 ms
+	  CONFIG_TIMESLICE_SIZE — the same collision this change set out to remove.
+
+	  Keep it preemptible (>= 0). Making it cooperative does NOT let it
+	  preempt the cooperative Bluetooth/system-workqueue threads that cause
+	  the issue-#267 stutter — a running cooperative thread is never
+	  preempted by anything (zephyr/kernel/include/kthread.h,
+	  should_preempt()) — it would only stop the BLE radio threads from
+	  preempting the display thread, which is strictly worse.
 
 config APP_LED_DISPLAY_THREAD_STACK_SIZE
 	int "LED display thread stack size (bytes)"
@@ -687,7 +701,7 @@ config APP_LED_DISPLAY_THREAD_STACK_SIZE
 
 config APP_PATTERN_CONTROLLER_THREAD_PRIORITY
 	int "Pattern controller (render) thread priority"
-	default 6
+	default 4
 	help
 	  Priority for pattern_controller_thread (src/pattern_controller.cpp),
 	  which ticks the active animation into a framebuffer once per
@@ -730,7 +744,7 @@ config APP_BT_THREAD_STACK_SIZE
 
 config APP_STATUS_LED_THREAD_PRIORITY
 	int "Status LED thread priority"
-	default 7
+	default 8
 	depends on STATUS_LED
 	help
 	  Priority for status_led_thread (src/status_led/status_led.cpp), which
@@ -746,16 +760,17 @@ config APP_STATUS_LED_THREAD_STACK_SIZE
 
 config APP_AUDIO_DSP_THREAD_PRIORITY
 	int "Audio DSP thread priority"
-	default -7
+	default 5
 	depends on AUDIO
 	help
 	  Priority for audio_dsp_thread (src/sound/sound.cpp), which runs the
 	  PDM capture, AGC and CMSIS-DSP FFT pipeline feeding the beat/fft_bars
 	  animations.
 
-	  The default is negative, i.e. cooperative, so this thread cannot be
-	  preempted by any rendering thread while it is running an FFT. See
-	  fw/docs/threading.md before changing it.
+	  This was cooperative (-7) until issue #267. A running cooperative
+	  thread is never preempted, so an FFT could stall rendering for its
+	  full duration. It is now preemptible and ranked below both rendering
+	  threads. Keep it there — see fw/docs/threading.md.
 
 config APP_AUDIO_DSP_THREAD_STACK_SIZE
 	int "Audio DSP thread stack size (bytes)"
@@ -769,7 +784,7 @@ config APP_AUDIO_DSP_THREAD_STACK_SIZE
 
 config APP_CHARGER_STATUS_THREAD_PRIORITY
 	int "Charger status thread priority"
-	default 7
+	default 8
 	help
 	  Priority for charger_status_thread (src/power.cpp), which polls the
 	  BQ25792 over the TPS25750 I2Cm bridge and drives the charge-status LED

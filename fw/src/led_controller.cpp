@@ -10,6 +10,7 @@
 #include <zephyr/logging/log.h>
 
 #include <algorithm>
+#include <cstring>
 
 LOG_MODULE_REGISTER(led_controller, LOG_LEVEL_INF);
 
@@ -34,15 +35,21 @@ K_KERNEL_THREAD_DEFINE(led_display_thread, CONFIG_APP_LED_DISPLAY_THREAD_STACK_S
                        led_display_thread_func, NULL, NULL, NULL,
                        CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY, 0, 0);
 
-// The display thread carries the only hard frame deadline in the system, so it must never
-// rank below the thread that produces the frames. (They are equal by default today; issue
-// #267 tracks separating them.) See fw/docs/threading.md.
-BUILD_ASSERT(CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY <=
-                 CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY,
-             "led_display_thread must not rank below pattern_controller_thread");
-BUILD_ASSERT(CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY >= -CONFIG_NUM_COOP_PRIORITIES &&
+// The display thread carries the only hard frame deadline in the system, so it must
+// outrank the thread that produces the frames (issue #267 separated them; they used to
+// share priority 6 and round-robin at the 20 ms timeslice). See fw/docs/threading.md.
+BUILD_ASSERT(CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY < CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY,
+             "led_display_thread must outrank pattern_controller_thread");
+// Deliberately preemptible. Making this cooperative cannot fix the issue-#267 stutter: a
+// running cooperative thread is never preempted by anything (should_preempt() in
+// zephyr/kernel/include/kthread.h returns false unless the *running* thread is
+// preemptible), so a cooperative display thread still could not preempt the cooperative
+// Bluetooth or system-workqueue threads — it would only stop the BLE radio threads from
+// preempting it, which is strictly worse. The fix is to keep the blockers out of the
+// cooperative band, not to join them.
+BUILD_ASSERT(CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY >= 0 &&
                  CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
-             "CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY is outside the configured priority range");
+             "CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY must be a valid preemptible priority");
 
 // Device Tree Node ID's for the LED strips
 #define LED_STRIP_0_NODE_ID DT_ALIAS(led_strip_0)
@@ -378,6 +385,42 @@ constexpr size_t kMaxStripPixels = std::max<size_t>(
      0});
 static struct led_rgb blackFrame[kMaxStripPixels];
 
+// Frame-pacing instrumentation (issue #267). The user-visible symptom is a stutter — the
+// panel holding a frame for 100-500 ms — which is a *scheduling* property, not a work-time
+// property: the pre-existing timing below only measured how long this thread's own work
+// took, so a frame delayed entirely by some other thread hogging the CPU looked perfectly
+// healthy. What matters is wake-to-wake interval, so that is what these track.
+//
+// worstSegmentUs is the safety metric for running this thread cooperatively: it is the
+// longest stretch between two points where the loop can yield. NOTE it is an upper bound,
+// not pure CPU time — the per-strip segments include the SPI transfer wait, during which
+// the thread is blocked and other threads do run. A cooperative display thread is only
+// acceptable while this stays small, because a cooperative thread blocks even the
+// higher-priority Bluetooth threads until it yields (see fw/docs/threading.md).
+struct LedDisplayStats {
+    uint32_t frames;
+    uint32_t overruns;      // frames whose work exceeded the target interval
+    uint32_t intervalMinUs; // wake-to-wake
+    uint32_t intervalMaxUs;
+    uint64_t intervalSumUs;
+    uint32_t workMaxUs;         // this thread's own work per frame
+    uint32_t worstSegmentUs;    // longest stretch between yield points
+    uint32_t lateFrames;        // interval > 2x target
+};
+
+// Written once per frame by led_display_thread, read by the shell. A spinlock rather than
+// per-field atomics so a `led_stats` dump is a single coherent snapshot (and so the 64-bit
+// sum can't tear on this 32-bit core).
+struct k_spinlock sStatsLock;
+LedDisplayStats sStats = {};
+
+void statsReset() {
+    K_SPINLOCK(&sStatsLock) {
+        sStats = LedDisplayStats{};
+        sStats.intervalMinUs = UINT32_MAX;
+    }
+}
+
 void led_display_thread_func(void *a, void *b, void *c) {
     const struct device *led_strip_0 = DEVICE_DT_GET(LED_STRIP_0_NODE_ID);
     const struct device *led_strip_1 = DEVICE_DT_GET(LED_STRIP_1_NODE_ID);
@@ -420,34 +463,62 @@ void led_display_thread_func(void *a, void *b, void *c) {
 
     int ret;
 
+    // Wake-to-wake tracking. 0 = no previous frame yet, so the first iteration only seeds.
+    uint32_t prevWakeUs = 0;
+    // Overrun logging is rate-limited: at the 33.3 ms default this fires once per frame
+    // under sustained load, which is exactly the per-tick log spam PR #110 banned. Count
+    // them instead and report periodically.
+    int64_t lastOverrunLogMs = 0;
+    uint32_t overrunsSinceLog = 0;
+
     while (true) {
         // Update LED strips with current framebuffer contents
         // Monitor how long updating takes
         // Sleep appropriate amount to maintain target framerate
         int64_t startTicks = k_uptime_ticks();
+        uint32_t wakeUs = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
 
         float kTargetFrameIntervalMs = getLedConfig().getDisplayRateMs();
+
+        // Longest stretch so far this frame between two points where the loop can yield.
+        uint32_t worstSegUs = 0;
+        uint32_t segStartUs = wakeUs;
+        auto markSegment = [&]() {
+            uint32_t now = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
+            uint32_t seg = now - segStartUs;  // unsigned wraparound is correct here
+            if (seg > worstSegUs) {
+                worstSegUs = seg;
+            }
+            segStartUs = now;
+        };
 
         size_t bufferId = 0;
         ret = claimBufferForDisplay(bufferId);
         if (ret) {
             LOG_ERR("Error claiming display buffer!");
         }
+        markSegment();  // claim can block on displayBufferMutex
 
         switch (atomic_get(&panelOutputMode)) {
             case PANEL_OUTPUT_NORMAL:
                 led_strip_update_rgb(led_strip_0, led_0[bufferId], LED_STRIP_0_NUM_PIXELS);
+                markSegment();
                 led_strip_update_rgb(led_strip_1, led_1[bufferId], LED_STRIP_1_NUM_PIXELS);
+                markSegment();
 #if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
                 led_strip_update_rgb(led_strip_2, led_2[bufferId], LED_STRIP_2_NUM_PIXELS);
+                markSegment();
 #endif
                 break;
             case PANEL_OUTPUT_BLANK:
                 // Same clocking as NORMAL, but all-black data
                 led_strip_update_rgb(led_strip_0, blackFrame, LED_STRIP_0_NUM_PIXELS);
+                markSegment();
                 led_strip_update_rgb(led_strip_1, blackFrame, LED_STRIP_1_NUM_PIXELS);
+                markSegment();
 #if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
                 led_strip_update_rgb(led_strip_2, blackFrame, LED_STRIP_2_NUM_PIXELS);
+                markSegment();
 #endif
                 break;
             case PANEL_OUTPUT_OFF:
@@ -460,6 +531,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
         if (ret) {
             LOG_ERR("Error releasing display buffer!");
         }
+        markSegment();
 
         int64_t endTicks = k_uptime_ticks();
         int64_t updateTicks = endTicks - startTicks;
@@ -467,8 +539,54 @@ void led_display_thread_func(void *a, void *b, void *c) {
         float updateTimeS = ((float)updateTicks) / ((float)CONFIG_SYS_CLOCK_TICKS_PER_SEC);
         float updateTimeMs = updateTimeS * 1000.0f;
 
+        const uint32_t targetUs = static_cast<uint32_t>(kTargetFrameIntervalMs * 1000.0f);
+        const uint32_t workUs =
+            k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32())) - wakeUs;
+
+        K_SPINLOCK(&sStatsLock) {
+            sStats.frames++;
+            if (workUs > sStats.workMaxUs) {
+                sStats.workMaxUs = workUs;
+            }
+            if (worstSegUs > sStats.worstSegmentUs) {
+                sStats.worstSegmentUs = worstSegUs;
+            }
+            if (prevWakeUs != 0) {
+                const uint32_t intervalUs = wakeUs - prevWakeUs;
+                if (intervalUs < sStats.intervalMinUs) {
+                    sStats.intervalMinUs = intervalUs;
+                }
+                if (intervalUs > sStats.intervalMaxUs) {
+                    sStats.intervalMaxUs = intervalUs;
+                }
+                sStats.intervalSumUs += intervalUs;
+                if (targetUs != 0 && intervalUs > 2 * targetUs) {
+                    sStats.lateFrames++;
+                }
+            }
+        }
+        prevWakeUs = wakeUs;
+
         if (updateTimeMs > kTargetFrameIntervalMs) {
-            LOG_WRN("Display update took >kTargetFrameIntervalMs, cannot keep framerate!");
+            K_SPINLOCK(&sStatsLock) {
+                sStats.overruns++;
+            }
+            overrunsSinceLog++;
+            // Rate-limited so a sustained overrun can't bury every other log line.
+            const int64_t nowMs = k_uptime_get();
+            if (nowMs - lastOverrunLogMs >= 5000) {
+                LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
+                        "(worst work %u us vs %u us budget) — cannot keep framerate",
+                        overrunsSinceLog, nowMs - lastOverrunLogMs, workUs, targetUs);
+                lastOverrunLogMs = nowMs;
+                overrunsSinceLog = 0;
+            }
+            // Yield unconditionally even when we blew the budget. Previously this branch
+            // looped with no sleep at all, which is survivable only because this thread is
+            // preemptible; the moment it is given a cooperative priority (which is the fix
+            // for issue #267) a single overrunning frame would wedge the whole system,
+            // since nothing can preempt a cooperative thread that never yields.
+            k_msleep(1);
         } else {
             // Sleep for however much time is left
             k_msleep(kTargetFrameIntervalMs - updateTimeMs);
@@ -498,6 +616,49 @@ SHELL_SUBCMD_DICT_SET_CREATE(
 
 SHELL_CMD_REGISTER(led_output, &sub_led_output,
                    "Panel serial-output control (issue #172 power experiment)", NULL);
+
+// Frame-pacing counters (issue #267). `led_stats` prints, `led_stats reset` zeroes — the
+// intended use is reset, drive a load (app connect + GATT discovery, ext select, a settings
+// flush), then print. The interval figures are what the reported stutter actually is; the
+// per-frame work figure is what the old LOG_WRN measured and is not the same thing.
+static int cmd_led_stats(const struct shell *shell, size_t argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "reset") == 0) {
+        statsReset();
+        shell_print(shell, "led stats reset");
+        return 0;
+    }
+
+    LedDisplayStats s;
+    K_SPINLOCK(&sStatsLock) {
+        s = sStats;
+    }
+
+    if (s.frames == 0) {
+        shell_print(shell, "no frames recorded yet");
+        return 0;
+    }
+
+    const uint32_t targetUs = static_cast<uint32_t>(getLedConfig().getDisplayRateMs() * 1000.0f);
+    // Intervals are only recorded from the second frame onwards.
+    const uint32_t intervalSamples = s.frames - 1;
+    const uint32_t avgUs =
+        intervalSamples ? static_cast<uint32_t>(s.intervalSumUs / intervalSamples) : 0;
+
+    shell_print(shell, "frames:        %u", s.frames);
+    shell_print(shell, "target:        %u us/frame", targetUs);
+    shell_print(shell, "interval:      min %u us  avg %u us  max %u us",
+                intervalSamples ? s.intervalMinUs : 0, avgUs, s.intervalMaxUs);
+    shell_print(shell, "late (>2x):    %u frame(s)", s.lateFrames);
+    shell_print(shell, "work max:      %u us", s.workMaxUs);
+    shell_print(shell, "worst segment: %u us  (upper bound - includes SPI wait)",
+                s.worstSegmentUs);
+    shell_print(shell, "overruns:      %u", s.overruns);
+    return 0;
+}
+
+SHELL_CMD_ARG_REGISTER(led_stats, NULL,
+                       "Display frame-pacing stats (issue #267). 'led_stats reset' to zero.",
+                       cmd_led_stats, 1, 1);
 #endif  // CONFIG_SHELL
 
 #if defined(CONFIG_SHELL) && 0
