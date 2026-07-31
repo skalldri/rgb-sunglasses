@@ -57,4 +57,17 @@ if [ -n "${CLAUDECODE:-}" ] && [ -z "${RGBSG_NO_LOCK:-}" ]; then
 fi
 
 cd "$REPO_ROOT/app"
+
+# Always re-run prebuild before building: `expo run:android` only generates
+# android/ when it's missing, so config-plugin output (e.g. the
+# ic_stat_connection notification icon from plugins/withNotificationIcon.js,
+# PR #224) silently never lands in a checkout whose android/ predates the
+# plugin. A build from such a stale android/ ships an APK whose BLE
+# foreground-service notification references a nonexistent drawable, and
+# Android kills the app with "Invalid notification (no valid small icon)" the
+# moment the reconnect path posts it (observed 2026-07-31 while reproducing
+# issue #248). Prebuild without --clean is an incremental sync -- cheap when
+# nothing changed.
+npx expo prebuild --platform android --no-install
+
 exec npx expo run:android --app-id com.autom8ed.rgbsunglassesapp.dev "$@"

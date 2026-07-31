@@ -367,6 +367,25 @@ Connect to any BLE device with custom services to test UI rendering logic. The a
 
 ## Autonomous Agent Notes (Claude / MCP)
 
+### Two shared test phones — identify which is attached before trusting phone-specific notes
+
+The bench phone is not always the same device: a **OnePlus 9 Pro (LE2125, OxygenOS /
+Android 14)** and a **Pixel 9 Pro (stock Android 16)** rotate. Identify the attached one
+first — `adb devices -l` (model field) or the `device` field in any execbro tool result —
+and read the phone-specific sections below through that lens. Verified differences:
+
+| | OnePlus 9 Pro (LE2125) | Pixel 9 Pro |
+|---|---|---|
+| BLE stack spec compliance | Non-compliant: ignores Service Changed; bonded reconnects **wedge** after a board reboot or GATT-changing reflash (`ATT MTU: 23` split-brain). Only recovery: forget + `/re-pair` (see the issue-#90/#124 entries above) | Compliant: honors Service Changed, re-discovers on its own after a GATT-changing reflash — no forget/re-pair needed (verified by adding a characteristic and reflashing) |
+| Coordinate taps from the screenshot image | **Unreliable** — land high/short; use `tap(text=…, strategy="accessibility")` or the fiber-walk recipes | **Reliable** (verified 2026-07-31: repeated coordinate taps all landed); accessibility strategy and fiber-walk also work |
+| Notification small-icon enforcement | Tolerant of a missing/invalid `smallIcon` | **Strict — a fatal app crash**, not a cosmetic issue: posting the BLE FGS notification without a resolvable `smallIcon` kills the process with `IllegalArgumentException: no valid small icon` (observed 2026-07-31 on every disconnect, because a stale `android/` lacked PR #224's `ic_stat_connection` drawable — `launch-app.sh` now always re-runs prebuild to prevent exactly this) |
+| System-level bonded auto-connect | OxygenOS grabs an advertising bonded board at the system level (CONNECTED/L4, `ATT MTU: 23`, no app client) | Same phenomenon observed 2026-07-31 after a board power-cycle with a reconnect pending: serial showed CONNECTED/L4/MTU 498 while the app stayed "Reconnecting…" and the board never reappeared in scans (link held ⇒ board not advertising). Recovery: cancel the reconnect + `am force-stop` + relaunch + fresh Connect (or reset/power-cycle the board to free the link) |
+
+Both phones: the fiber-walk `execute_in_app` recipes and `tap(text=…,
+strategy="accessibility")` work — but accessibility/OCR matching only finds **on-screen**
+elements, so scroll first for below-the-fold targets (e.g. the Battery card at the bottom
+of Controls).
+
 ### Device-Free Validation Loop
 
 For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) now gates all three — the `test` job runs jest, and a separate `typecheck-lint` job runs `tsc --noEmit` and `eslint --max-warnings 0` (added for issue #130, since a green CI used to mean only jest passed and tsc/lint debt drifted in undetected). Still run them locally before pushing so you're not waiting on CI to catch a type error or a new lint warning (any warning now fails CI).
@@ -514,6 +533,9 @@ Device density is 360 dpi → pixel ratio = 360/160 = **2.25**.
 **Practical rule**: get coordinates from the screenshot for `tap()`. Convert to dp for `inspect_at_point()`. Don't mix them up.
 
 ### execbro tapping on the OnePlus 9 Pro (LE2125) — use `strategy="accessibility"` first
+
+(OnePlus-specific — on the Pixel 9 Pro coordinate taps work fine; see the two-phones
+table above.)
 
 **The most reliable approach on this device is `tap(text="...", strategy="accessibility")`.** It fires directly via the Android accessibility tree without any coordinate conversion ambiguity, and it worked in every verified session. Try this first for any button/link with a visible label.
 

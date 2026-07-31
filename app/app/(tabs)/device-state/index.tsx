@@ -14,6 +14,7 @@ import { Section } from "@/components/ui/section";
 import { getServiceName, UUID_BATTERY_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
+import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { Link } from "expo-router";
@@ -48,6 +49,9 @@ function MenuRow({ label, href, rightSlot }: { label: string; href: string; righ
 export default function DeviceStateMenuScreen() {
     const { selectedDevice, writeServiceCharacteristic } = useBluetooth();
     const c = useThemeColors();
+    // Issue #248: a live disconnect while this screen is visible jumps
+    // straight to the Connect tab instead of leaving the dead menu up.
+    useDisconnectRedirect();
 
     const visibleServices = (selectedDevice?.services ?? [])
         .filter(service => service.uuid !== UUID_GENERIC_ATTRIBUTE_SERVICE && service.uuid !== UUID_GENERIC_ACCESS_SERVICE);

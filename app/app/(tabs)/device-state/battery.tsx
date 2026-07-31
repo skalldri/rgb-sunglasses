@@ -20,6 +20,7 @@ import {
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useCharacteristicEditor } from "@/hooks/use-characteristic-editor";
+import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import {
     batteryPresent, batteryWatts, chargeDirection, chargeStatusLabel, formatVolts, formatWatts,
@@ -72,6 +73,9 @@ export default function BatteryDetailScreen() {
     const { selectedDevice, writeToCharacteristic } = useBluetooth();
     const { renderCharacteristicInput, labelColorFor } = useCharacteristicEditor();
     const c = useThemeColors();
+    // Issue #248: on disconnect, pop this screen (and the stack) back to the
+    // Connect tab; the EmptyState below stays as a render-time fallback only.
+    useDisconnectRedirect();
 
     const chars = selectedDevice?.characteristics;
     const vbatMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VOLTAGE]?.value);

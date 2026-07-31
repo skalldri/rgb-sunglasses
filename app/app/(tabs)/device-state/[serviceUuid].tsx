@@ -12,6 +12,7 @@ import { getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERIST
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useCharacteristicEditor } from "@/hooks/use-characteristic-editor";
+import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { encodeUint32ToBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
@@ -28,6 +29,9 @@ export default function DeviceStateDetailScreen() {
     const { selectedDevice, writeToCharacteristic } = useBluetooth();
     const { renderCharacteristicInput, labelColorFor } = useCharacteristicEditor();
     const c = useThemeColors();
+    // Issue #248: on disconnect, pop this screen (and the stack) back to the
+    // Connect tab; the EmptyState below stays as a render-time fallback only.
+    useDisconnectRedirect();
 
     const serviceCharacteristics = selectedDevice?.characteristicsByService?.[serviceUuid] ?? null;
     const title = selectedDevice?.serviceDisplayNames?.[serviceUuid] ?? getServiceName(serviceUuid);
