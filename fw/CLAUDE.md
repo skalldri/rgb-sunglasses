@@ -203,6 +203,26 @@ Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.
 
 **Don't reuse a Kconfig symbol from one subsystem to configure unrelated code in another, even if the value/semantics happen to line up.** E.g. a BT-free module's debounce/delay tunable should get its own `CONFIG_APP_*` symbol, not borrow `CONFIG_BT_SETTINGS_DELAYED_STORE_MS` just because the timing happens to match — that creates a hidden cross-subsystem dependency and works against this project's general push to decouple BT from non-BT code (see the animation/BT decoupling refactor above).
 
+### Thread priorities and stack sizes
+
+**`fw/docs/threading.md` is the single system-wide map** — every thread, its priority, its
+stack symbol, and the invariants between them. Read it before changing any thread priority
+or adding a new thread; the important relationships (which threads are cooperative and
+therefore unpreemptable, which must stay preemptible because they touch flash) are not
+visible from any one call site.
+
+Every application thread priority and stack size is a Kconfig symbol (issue #269) — grouped
+under the `Thread priorities and stack sizes` menu in `fw/Kconfig`, plus the pre-existing
+`IMU_THREAD_*` / `APP_EXT_HOST_*` / `APP_*_WORKQ_STACK_SIZE` symbols left in place next to
+their modules. **Never re-introduce a bare literal** into a `K_THREAD_DEFINE` /
+`K_KERNEL_THREAD_DEFINE` / `k_thread_create` / `k_work_queue_start` call. Ordering
+invariants are enforced by `BUILD_ASSERT`s next to the threads they constrain, so a bad
+`prj.conf` override fails the build instead of misbehaving at runtime.
+
+A standalone Twister app does not see `fw/Kconfig`. Any test suite that compiles a
+thread-owning `.cpp` needs a test-local `Kconfig` redeclaring the symbols with matching
+defaults — see `fw/tests/led_controller/Kconfig` and `fw/tests/imu/pipeline/Kconfig`.
+
 ### SYS_INIT ordering for early registration
 
 `SYS_INIT(fn, APPLICATION, N)` runs before `K_THREAD_DEFINE` threads are scheduled. Lower N runs first. When an observer or listener must be registered before a thread can fire its first event, use `SYS_INIT(APPLICATION, 0)`. Both `bluetooth_init` and `button_init` run at priority 1, so registering observers at priority 0 guarantees the observer is in place before either subsystem starts.

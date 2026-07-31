@@ -23,6 +23,12 @@ namespace {
 // stack; this stack can never host a K_USER thread.
 K_KERNEL_STACK_DEFINE(persistent_value_store_stack, CONFIG_APP_PERSIST_WORKQ_STACK_SIZE);
 
+// This queue does long, bursty NVS/QSPI writes; it must never outrank a rendering thread.
+// The default matches CONFIG_NUM_PREEMPT_PRIORITIES - 1 (see fw/docs/threading.md).
+BUILD_ASSERT(CONFIG_APP_PERSIST_WORKQ_PRIORITY >= 0 &&
+                 CONFIG_APP_PERSIST_WORKQ_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
+             "CONFIG_APP_PERSIST_WORKQ_PRIORITY must be a valid preemptible priority");
+
 struct k_work_q persistent_value_lowpri_workq;
 
 void save_work_handler(struct k_work* work) {
@@ -46,9 +52,12 @@ SETTINGS_STATIC_HANDLER_DEFINE(appcfg, "appcfg", NULL, appcfg_handle_set, NULL, 
 
 int appcfg_settings_init() {
     k_work_queue_init(&persistent_value_lowpri_workq);
+    // Named so `kernel thread list` can attribute this queue's priority and stack
+    // high-water mark on device — see fw/docs/threading.md.
+    static const struct k_work_queue_config cfg = {.name = "persist_wq"};
     k_work_queue_start(&persistent_value_lowpri_workq, persistent_value_store_stack,
                        K_KERNEL_STACK_SIZEOF(persistent_value_store_stack),
-                       (CONFIG_NUM_PREEMPT_PRIORITIES - 1), NULL);
+                       CONFIG_APP_PERSIST_WORKQ_PRIORITY, &cfg);
     return 0;
 }
 

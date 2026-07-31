@@ -12,3 +12,9 @@ config IMU_THREAD_PRIORITY
 config IMU_THREAD_STACK_SIZE
 	int "IMU thread stack size (bytes)"
 	default 1024
+
+# imu.cpp's ordering BUILD_ASSERT compares against the pattern controller's priority.
+# Redeclared with the same default as fw/Kconfig so the assert is exercised here too.
+config APP_PATTERN_CONTROLLER_THREAD_PRIORITY
+	int "Pattern controller (render) thread priority"
+	default 6

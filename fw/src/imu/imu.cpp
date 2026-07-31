@@ -122,6 +122,14 @@ static void imu_thread_func(void* a, void* b, void* c) {
 K_THREAD_STACK_DEFINE(imu_stack, CONFIG_IMU_THREAD_STACK_SIZE);
 static struct k_thread s_imu_thread_data;
 
+// The animation tick thread must be able to preempt the IMU reader, so this stays
+// preemptible and strictly below it. See fw/docs/threading.md.
+BUILD_ASSERT(CONFIG_IMU_THREAD_PRIORITY > CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY,
+             "imu_thread must rank below pattern_controller_thread");
+BUILD_ASSERT(CONFIG_IMU_THREAD_PRIORITY >= 0 &&
+                 CONFIG_IMU_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
+             "CONFIG_IMU_THREAD_PRIORITY must be a valid preemptible priority");
+
 static struct sensor_trigger s_drdy_trig = {
     .type = SENSOR_TRIG_DATA_READY,
     .chan = SENSOR_CHAN_ALL,

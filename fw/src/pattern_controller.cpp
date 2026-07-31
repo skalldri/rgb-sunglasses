@@ -55,8 +55,17 @@ void pattern_controller_thread_func(void *a, void *b, void *c);
 // Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack; this
 // stack can never host a K_USER thread. (Extension code runs on the extension host's own
 // K_USER sandbox thread, not this one.)
-K_KERNEL_THREAD_DEFINE(pattern_controller_thread, 4096, pattern_controller_thread_func, NULL, NULL,
-                       NULL, 6, 0, 0);
+K_KERNEL_THREAD_DEFINE(pattern_controller_thread, CONFIG_APP_PATTERN_CONTROLLER_THREAD_STACK_SIZE,
+                       pattern_controller_thread_func, NULL, NULL, NULL,
+                       CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY, 0, 0);
+
+// This thread does FAT/QSPI I/O (GLIM assets, .llext loads) and settings persistence, so
+// it must stay preemptible — a long flash operation from a cooperative thread starves the
+// whole system (see fw/CLAUDE.md's coding rules and fw/docs/threading.md).
+BUILD_ASSERT(CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY >= 0,
+             "pattern_controller_thread does flash I/O and must be preemptible");
+BUILD_ASSERT(CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
+             "CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY is outside the preemptible range");
 
 // Intentionally unsynchronized: written from the BT thread (via
 // PatternControllerBtObserver), the shell thread (`anim indicator ...`) and this file's

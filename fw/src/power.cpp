@@ -183,8 +183,9 @@ static void charger_status_thread_func(void *, void *, void *);
 
 // Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
 // this stack can never host a K_USER thread.
-K_KERNEL_THREAD_DEFINE(charger_status_thread, 1024, charger_status_thread_func, NULL, NULL, NULL, 7, 0,
-                0);
+K_KERNEL_THREAD_DEFINE(charger_status_thread, CONFIG_APP_CHARGER_STATUS_THREAD_STACK_SIZE,
+                       charger_status_thread_func, NULL, NULL, NULL,
+                       CONFIG_APP_CHARGER_STATUS_THREAD_PRIORITY, 0, 0);
 
 static void charger_status_thread_func(void *, void *, void *) {
     if (!device_is_ready(bq)) {

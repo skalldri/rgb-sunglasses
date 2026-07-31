@@ -18,6 +18,13 @@ config APP_PERSIST_WORKQ_STACK_SIZE
 	  persistent config values (see src/settings/). This option controls the
 	  stack size of that workqueue's thread.
 
+config APP_PERSIST_WORKQ_PRIORITY
+	int "Priority for the persistent-value-store workqueue"
+	default 14
+	depends on APP_PERSIST_BT_CONFIG
+	help
+	  Mirrors the symbol of the same name in fw/Kconfig.
+
 config APP_SETTINGS_SAVE_DEBOUNCE_MS
 	int "Debounce interval (ms) before persisting a changed config value"
 	default 1000

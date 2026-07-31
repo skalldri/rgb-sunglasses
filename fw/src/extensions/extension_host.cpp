@@ -135,6 +135,14 @@ struct {
 } sResident;
 
 K_THREAD_STACK_DEFINE(sSandboxStack, CONFIG_APP_EXT_HOST_STACK_SIZE);
+
+// A runaway extension must always be preemptible by the pattern controller thread, which
+// is what enforces its per-tick deadline. See fw/docs/threading.md.
+BUILD_ASSERT(CONFIG_APP_EXT_HOST_THREAD_PRIORITY > CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY,
+             "the extension sandbox must rank below pattern_controller_thread");
+BUILD_ASSERT(CONFIG_APP_EXT_HOST_THREAD_PRIORITY >= 0 &&
+                 CONFIG_APP_EXT_HOST_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
+             "CONFIG_APP_EXT_HOST_THREAD_PRIORITY must be a valid preemptible priority");
 struct k_thread sSandboxThread;
 bool sSandboxAlive = false;
 int sActiveSlot = -1;       // slot the pattern controller should tick (-1 none)

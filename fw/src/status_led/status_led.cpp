@@ -40,7 +40,9 @@ static void status_led_thread_func(void *, void *, void *);
 
 // Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
 // this stack can never host a K_USER thread.
-K_KERNEL_THREAD_DEFINE(status_led_thread, 2048, status_led_thread_func, NULL, NULL, NULL, 7, 0, 0);
+K_KERNEL_THREAD_DEFINE(status_led_thread, CONFIG_APP_STATUS_LED_THREAD_STACK_SIZE,
+                       status_led_thread_func, NULL, NULL, NULL,
+                       CONFIG_APP_STATUS_LED_THREAD_PRIORITY, 0, 0);
 
 static void status_led_thread_func(void *, void *, void *) {
     const struct device *strip = DEVICE_DT_GET(LED_STRIP_2_NODE);

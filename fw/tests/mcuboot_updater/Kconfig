@@ -7,3 +7,9 @@ config APP_MCUBOOT_UPDATER_STACK_SIZE
 	  Stack size for the mcuboot updater work-queue thread.
 	  Mirrors the symbol in fw/Kconfig — this test compiles mcuboot_updater.cpp
 	  directly outside the main application's Kconfig tree.
+
+config APP_MCUBOOT_UPDATER_WORKQ_PRIORITY
+	int "Priority for the MCUboot updater workqueue"
+	default 14
+	help
+	  Mirrors the symbol of the same name in fw/Kconfig.
