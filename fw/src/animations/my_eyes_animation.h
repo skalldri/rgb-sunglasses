@@ -20,16 +20,21 @@ class MyEyesAnimationDependencies {
     MyEyesAnimationDependencies(const AnimationUint32ParameterSource &blinkSpeedMs,
                                 const AnimationUint32ParameterSource &color,
                                 const MyEyesAnimationSlotSource &slotSource,
-                                MyEyesAnimationUpNextSource &upNextSource)
+                                MyEyesAnimationUpNextSource &upNextSource,
+                                const AnimationUint32ParameterSource &dwellTimeMs)
         : blinkSpeedMs(blinkSpeedMs),
           color(color),
           slotSource(slotSource),
-          upNextSource(upNextSource) {}
+          upNextSource(upNextSource),
+          dwellTimeMs(dwellTimeMs) {}
 
     const AnimationUint32ParameterSource &blinkSpeedMs;
     const AnimationUint32ParameterSource &color;
     const MyEyesAnimationSlotSource &slotSource;
     MyEyesAnimationUpNextSource &upNextSource;
+    // How long each eye slot displays before tick() advances to the next one
+    // (issue #260 autonomous cycling); clamped to a 500 ms floor in tick().
+    const AnimationUint32ParameterSource &dwellTimeMs;
 };
 
 enum class EyeState {
@@ -53,6 +58,12 @@ class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation:
 
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
+    bool isAtGoodSwitchPoint() const override { return atGoodSwitchPoint_; }
+
+    // Shuffle's wait budget for the dwell boundary: how much longer the current eyes
+    // display before tick() advances — so shuffle switches on a slot boundary instead
+    // of mid-dwell (same contract as TextAnimation's end-of-scroll signal).
+    uint32_t goodSwitchPointGraceMs() const override { return remainingDwellMs_; }
 
    private:
     const char *getStringFromSlot(size_t slot);
@@ -78,6 +89,19 @@ class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation:
 
     // The amount of time spent in the current state
     size_t timeInCurrentStateMs = 0;
+
+    // How long the current eyes have been displayed, accumulated every tick. Drives the
+    // autonomous advance to the next slot once it reaches the configured dwell time
+    // (issue #260).
+    size_t currentEyesDwellMs = 0;
+
+    // True only for the tick on which the dwell elapsed and the next slot was loaded —
+    // the natural boundary shuffle mode waits for.
+    bool atGoodSwitchPoint_ = false;
+
+    // How much longer the current eyes need before that boundary; returned by
+    // goodSwitchPointGraceMs().
+    uint32_t remainingDwellMs_ = 0;
 };
 
 void my_eyes_animation_bind_default_dependencies();

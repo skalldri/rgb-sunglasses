@@ -115,6 +115,37 @@ static bool chrc_has_notify(const bt_gatt_service_static *svc, const bt_gatt_att
            (static_cast<const bt_gatt_chrc *>(chrc->user_data)->properties & BT_GATT_CHRC_NOTIFY);
 }
 
+static bool chrc_has_write(const bt_gatt_service_static *svc, const bt_gatt_attr *valueAttr) {
+    const bt_gatt_attr *chrc = chrc_decl_for(svc, valueAttr);
+    return chrc != nullptr &&
+           (static_cast<const bt_gatt_chrc *>(chrc->user_data)->properties & BT_GATT_CHRC_WRITE);
+}
+
+/* Returns the CPF descriptor's format byte for a characteristic, found by scanning
+ * forward from the value attr to the next 0x2904 descriptor (stopping at the next
+ * CHRC declaration, i.e. the next characteristic). The 0xE2-0xE4 formats are the
+ * issue #260 slot-playlist contract the app keys its UI on, so a silent regression
+ * to the plain UINT32/UTF8S formats would break the slot UI without failing any
+ * value round-trip - pin them here. */
+static uint8_t read_cpf_format(const bt_gatt_service_static *svc, const bt_gatt_attr *valueAttr) {
+    bool found = false;
+    for (size_t i = 0; i < svc->attr_count; i++) {
+        const bt_gatt_attr *attr = &svc->attrs[i];
+        if (!found) {
+            found = (attr == valueAttr);
+            continue;
+        }
+        if (bt_uuid_cmp(attr->uuid, BT_UUID_GATT_CHRC) == 0) {
+            break;  // next characteristic - this one has no CPF descriptor
+        }
+        if (bt_uuid_cmp(attr->uuid, BT_UUID_GATT_CPF) == 0) {
+            return static_cast<const bt_gatt_cpf *>(attr->user_data)->format;
+        }
+    }
+    zassert_unreachable("no CPF descriptor found for value attr");
+    return 0;
+}
+
 static ssize_t do_read(const bt_gatt_attr *attr, void *buf, size_t bufLen) {
     return attr->read(nullptr, attr, buf, bufLen, 0);
 }
@@ -391,8 +422,9 @@ ZTEST(animation_adapters, test_matrix_code) {
 
 /* text/my_eyes share the same shape: step/blink time, color, up_next, 20
  * string slots (pre-seeded from a static message table at static-init time,
- * before this test runs), IsActive, Animation Name (text also has a trailing
- * "Now Playing" characteristic my_eyes doesn't). */
+ * before this test runs), IsActive, Animation Name, a "Now Playing"
+ * characteristic (text's sits right after Animation Name; my_eyes' is
+ * appended last, after Include in Shuffle and Dwell Time Ms — issue #260). */
 ZTEST(animation_adapters, test_text) {
     const bt_uuid_128 svcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Text));
     const bt_gatt_service_static *svc = find_service(svcUuid);
@@ -401,6 +433,11 @@ ZTEST(animation_adapters, test_text) {
     zassert_equal(read_u32(nth_char_value(svc, 0)), 50);          // step_time_ms
     zassert_equal(read_u32(nth_char_value(svc, 1)), 0xFFFFFFFFu); // color
     zassert_equal(read_u32(nth_char_value(svc, 2)), 0);           // up_next
+
+    /* Issue #260 slot-playlist CPF contract (control: step_time stays UINT32). */
+    zassert_equal(read_cpf_format(svc, nth_char_value(svc, 0)), BLE_GATT_CPF_FORMAT_UINT32);
+    zassert_equal(read_cpf_format(svc, nth_char_value(svc, 2)), BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT);
+    zassert_equal(read_cpf_format(svc, nth_char_value(svc, 3)), BLE_GATT_CPF_FORMAT_SLOT_TEXT);
 
     /* Slot 0 is pre-seeded from kStaticMessages[0]. */
     char slotBuf[TextAnimation::kMaxMsgLen];
@@ -437,6 +474,7 @@ ZTEST(animation_adapters, test_text) {
     const bt_gatt_attr *nowPlayingAttr = nth_char_value(svc, 3 + TextAnimation::kNumStringSlots + 2);
     zassert_not_null(nowPlayingAttr);
     zassert_equal(read_u32(nowPlayingAttr), 0);
+    zassert_equal(read_cpf_format(svc, nowPlayingAttr), BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING);
 
     check_shuffle_include<Animation::Text>(svcUuid, 3 + TextAnimation::kNumStringSlots + 3);
 
@@ -454,6 +492,11 @@ ZTEST(animation_adapters, test_my_eyes) {
     zassert_equal(read_u32(nth_char_value(svc, 0)), 100);         // blink_speed_ms
     zassert_equal(read_u32(nth_char_value(svc, 1)), 0xFFFFFFFFu); // color
     zassert_equal(read_u32(nth_char_value(svc, 2)), 0);           // up_next
+
+    /* Issue #260 slot-playlist CPF contract (control: blink_speed stays UINT32). */
+    zassert_equal(read_cpf_format(svc, nth_char_value(svc, 0)), BLE_GATT_CPF_FORMAT_UINT32);
+    zassert_equal(read_cpf_format(svc, nth_char_value(svc, 2)), BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT);
+    zassert_equal(read_cpf_format(svc, nth_char_value(svc, 3)), BLE_GATT_CPF_FORMAT_SLOT_TEXT);
 
     char slotBuf[MyEyesAnimation::kMaxEyeLen];
     const bt_gatt_attr *slot0 = nth_char_value(svc, 3);
@@ -483,6 +526,26 @@ ZTEST(animation_adapters, test_my_eyes) {
     zassert_true(read_str(nameAttr, nameBuf, sizeof(nameBuf)) == "MyEyes");
 
     check_shuffle_include<Animation::MyEyes>(svcUuid, 3 + MyEyesAnimation::kNumStringSlots + 2);
+
+    /* Issue #260 appends, strictly after Include in Shuffle (append-only rule):
+     * Dwell Time Ms (plain uint32, default 5000, write round trip)... */
+    const bt_gatt_attr *dwellAttr = nth_char_value(svc, 3 + MyEyesAnimation::kNumStringSlots + 3);
+    zassert_not_null(dwellAttr, "missing Dwell Time Ms characteristic");
+    zassert_equal(read_cpf_format(svc, dwellAttr), BLE_GATT_CPF_FORMAT_UINT32);
+    zassert_equal(read_u32(dwellAttr), 5000);
+    uint32_t newDwell = 7500;
+    zassert_equal(do_write(dwellAttr, &newDwell, sizeof(newDwell)), sizeof(newDwell));
+    zassert_equal(read_u32(dwellAttr), 7500);
+
+    /* ...then Now Playing (read-only + notify, default 0 — the PR #106 rule: a
+     * read-only characteristic's properties byte must not advertise WRITE). */
+    const bt_gatt_attr *nowPlayingAttr =
+        nth_char_value(svc, 3 + MyEyesAnimation::kNumStringSlots + 4);
+    zassert_not_null(nowPlayingAttr, "missing Now Playing characteristic");
+    zassert_equal(read_cpf_format(svc, nowPlayingAttr), BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING);
+    zassert_equal(read_u32(nowPlayingAttr), 0);
+    zassert_true(chrc_has_notify(svc, nowPlayingAttr), "Now Playing must expose NOTIFY");
+    zassert_false(chrc_has_write(svc, nowPlayingAttr), "Now Playing must not advertise WRITE");
 
     my_eyes_animation_bind_default_dependencies();
     exercise_tick(MyEyesAnimation::getInstance());

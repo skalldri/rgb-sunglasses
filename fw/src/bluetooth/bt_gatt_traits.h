@@ -132,6 +132,51 @@ struct BtGattColor {
     uint32_t value = 0;
 };
 
+// Wire-compatible string value for one slot of a slot-based animation (see
+// BLE_GATT_CPF_FORMAT_SLOT_TEXT in gatt_cpf.h). A distinct type (not just BtGattString<N>)
+// so it can carry its own BtGattCpfTraits specialization below instead of UTF8S — the CPF
+// format is what tells the app to render the playlist UI. Same composition-not-inheritance
+// rationale as BtGattDropdownList above. Must stay a structural type (all members public):
+// it is used as a characteristic's compile-time Default NTTP argument.
+template <size_t N>
+struct BtGattSlotString {
+    BtGattString<N> value{};
+
+    constexpr char *data() { return value.data(); }
+    constexpr const char *data() const { return value.data(); }
+    constexpr char &operator[](size_t i) { return value[i]; }
+    constexpr const char &operator[](size_t i) const { return value[i]; }
+    constexpr bool operator==(const BtGattSlotString &other) const { return value == other.value; }
+    constexpr bool operator!=(const BtGattSlotString &other) const { return value != other.value; }
+};
+
+template <size_t N>
+struct BtGattStringTraits<BtGattSlotString<N>> {
+    static constexpr bool kIsString = true;
+    static constexpr size_t kMaxLen = N;
+};
+
+// uint32-shaped wrappers (same shape as BtGattColor: non-explicit converting ctor +
+// operator uint32_t, so `characteristic = someUint32;` and uint32 NTTP defaults work) whose
+// only job is to carry the SLOT_UP_NEXT / SLOT_NOW_PLAYING CPF formats defined in gatt_cpf.h.
+struct BtGattSlotUpNext {
+    constexpr BtGattSlotUpNext() = default;
+    constexpr BtGattSlotUpNext(uint32_t raw) : value(raw) {}
+
+    constexpr operator uint32_t() const { return value; }
+
+    uint32_t value = 0;
+};
+
+struct BtGattSlotNowPlaying {
+    constexpr BtGattSlotNowPlaying() = default;
+    constexpr BtGattSlotNowPlaying(uint32_t raw) : value(raw) {}
+
+    constexpr operator uint32_t() const { return value; }
+
+    uint32_t value = 0;
+};
+
 template <typename T>
 struct BtGattCpfTraits {
     static constexpr bool kSupported = false;
@@ -256,5 +301,29 @@ struct BtGattCpfTraits<BtGattDropdownList<N>> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
         .format = BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
+    };
+};
+
+template <size_t N>
+struct BtGattCpfTraits<BtGattSlotString<N>> {
+    static constexpr bool kSupported = true;
+    static constexpr bt_gatt_cpf kValue = {
+        .format = BLE_GATT_CPF_FORMAT_SLOT_TEXT,
+    };
+};
+
+template <>
+struct BtGattCpfTraits<BtGattSlotUpNext> {
+    static constexpr bool kSupported = true;
+    static constexpr bt_gatt_cpf kValue = {
+        .format = BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT,
+    };
+};
+
+template <>
+struct BtGattCpfTraits<BtGattSlotNowPlaying> {
+    static constexpr bool kSupported = true;
+    static constexpr bt_gatt_cpf kValue = {
+        .format = BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING,
     };
 };

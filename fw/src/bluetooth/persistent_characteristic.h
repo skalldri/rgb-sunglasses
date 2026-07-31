@@ -18,9 +18,11 @@
  * any was loaded) before BT comes up, and debounces a flash save after every remote
  * write rather than writing on every keystroke/drag.
  *
- * Only handles plain POD / BtGattColor / BtGattString<N> storage - BtGattDropdownList<N>
- * characteristics (e.g. glim selection/loop mode) already have bespoke write semantics
- * and persist by hand instead of through this mixin.
+ * Only handles plain POD / BtGattColor / BtGattString<N> storage (and their wire-compatible
+ * slot wrappers BtGattSlotString<N> / BtGattSlotUpNext, which forward the same data()/compare
+ * operations or convert to uint32 — same persisted byte layout, different CPF format) -
+ * BtGattDropdownList<N> characteristics (e.g. glim selection/loop mode) already have bespoke
+ * write semantics and persist by hand instead of through this mixin.
  */
 template <StringLiteral Key, StringLiteral Description, bool Notify, typename T, T Default>
 class BtGattPersistentCharacteristic

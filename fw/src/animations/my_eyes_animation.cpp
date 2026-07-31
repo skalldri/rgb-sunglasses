@@ -3,9 +3,19 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/__assert.h>
 
+#include <algorithm>
 #include <cstring>
 
 LOG_MODULE_REGISTER(my_eyes_animation, LOG_LEVEL_INF);
+
+// Minimum time a slot's eyes stay on screen before we advance to the next slot,
+// regardless of how small the remotely-writable dwell time is set. Same rationale as
+// TextAnimation's kMinMessageDwellMs (issue #188 follow-up): each advance calls
+// getUpNext(), which fires two GATT notifications (up next + now playing), so a dwell
+// of 0 must not advance every render tick and flood the shared BT TX buffer pool.
+// Caps advances at ~2/s, which the pool absorbs comfortably. Clamped here in tick()
+// rather than rejecting the GATT write — a written 0 simply means "as fast as allowed".
+static constexpr size_t kMinEyeDwellMs = 500;
 
 MyEyesAnimation::MyEyesAnimation() = default;
 
@@ -26,14 +36,35 @@ void MyEyesAnimation::setDependencies(const MyEyesAnimationDependencies &deps) {
 }
 
 void MyEyesAnimation::init() {
+    currentEyesDwellMs = 0;
+    atGoodSwitchPoint_ = false;
+    remainingDwellMs_ = 0;
     strncpy(currentEyes, getStringFromSlot(getUpNext()), kMaxEyeLen);
 }
 
 void MyEyesAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
     __ASSERT(deps_, "MyEyesAnimation::tick before setDependencies");
 
-    ARG_UNUSED(timeSinceLastTickMs);
+    // The blink state machine below is still a stub; blinkSpeedMs stays unused.
     ARG_UNUSED(deps_->blinkSpeedMs);
+
+    // Only the tick that advances to the next slot (below) is a good switch point.
+    atGoodSwitchPoint_ = false;
+
+    // Autonomous slot cycling (issue #260): advance to the next slot once the current
+    // eyes have been displayed for the configured dwell time, mirroring how Text
+    // advances at end-of-scroll. Advance-then-render so the new eyes draw on the
+    // boundary frame.
+    currentEyesDwellMs += timeSinceLastTickMs;
+    const size_t dwellMs = std::max<size_t>(deps_->dwellTimeMs.get(), kMinEyeDwellMs);
+    remainingDwellMs_ = (currentEyesDwellMs >= dwellMs)
+                            ? 0u
+                            : (uint32_t)(dwellMs - currentEyesDwellMs);
+    if (currentEyesDwellMs >= dwellMs) {
+        currentEyesDwellMs = 0;
+        atGoodSwitchPoint_ = true;
+        strncpy(currentEyes, getStringFromSlot(getUpNext()), kMaxEyeLen);
+    }
 
     // Turn off all LEDs
     for (size_t x = 0; x < renderer.displayWidth(); x++) {

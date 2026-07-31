@@ -39,3 +39,22 @@
 // listed first. Write the bare text of one of the listed options (no separators) to select it.
 // Instructs the app to render a drop-down picker instead of a free-text/numeric input.
 #define BLE_GATT_CPF_FORMAT_DROPDOWN_LIST 0xE1
+
+// Generic "slot machine" contract (issue #260): a service exposing characteristics with the
+// three formats below gets a playlist-style UI in the app — one row per slot with a
+// tap-to-queue button and a "now playing" highlight — instead of raw text/number inputs.
+//
+// A slot's value, as a writable UTF8S-style string. The app derives each slot's index from
+// the 0-based order of appearance of the SLOT_TEXT characteristics within their service
+// (GATT declaration order == ascending handle order == metadata-blob entry order); that
+// ordinal is the index the SLOT_UP_NEXT / SLOT_NOW_PLAYING characteristics refer to.
+#define BLE_GATT_CPF_FORMAT_SLOT_TEXT 0xE2
+
+// uint32 (little-endian), read/write/notify: the slot index that will play next. Writing k
+// queues slot k; the device notifies the new value whenever it advances on its own.
+#define BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT 0xE3
+
+// uint32 (little-endian), read-only/notify: the slot index currently playing, notified on
+// each advance. Rendered by the app as a highlight on the matching slot row, not as its own
+// input row.
+#define BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING 0xE4

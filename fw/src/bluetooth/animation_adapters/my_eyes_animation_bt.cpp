@@ -19,68 +19,75 @@ BtGattPersistentCharacteristic<"my_eyes/blink_speed_ms", "Blink Speed Ms", false
 BtGattPersistentCharacteristic<"my_eyes/color", "Color", false, BtGattColor,
                                BtGattColor{0xFFFFFFFF}>
     myEyesColor;
-BtGattPersistentCharacteristic<"my_eyes/up_next", "Up Next", true, uint32_t, 0> myEyesUpNext;
+// BtGattSlotUpNext / BtGattSlotString / BtGattSlotNowPlaying below are wire- and
+// persistence-compatible with the plain uint32_t / BtGattString types they replaced —
+// only the CPF format byte differs (issue #260: tells the app to render the slot
+// playlist UI instead of raw numeric/text inputs). Settings keys and stored bytes are
+// unchanged, so values persisted by older firmware load as-is.
+BtGattPersistentCharacteristic<"my_eyes/up_next", "Up Next", true, BtGattSlotUpNext,
+                               BtGattSlotUpNext{0}>
+    myEyesUpNext;
 
-constexpr BtGattString<MyEyesAnimation::kMaxEyeLen> kEmptyEyeSlot = {};
+constexpr BtGattSlotString<MyEyesAnimation::kMaxEyeLen> kEmptyEyeSlot = {};
 BtGattPersistentCharacteristic<"my_eyes/slot0", "Slot 0", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot0;
 BtGattPersistentCharacteristic<"my_eyes/slot1", "Slot 1", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot1;
 BtGattPersistentCharacteristic<"my_eyes/slot2", "Slot 2", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot2;
 BtGattPersistentCharacteristic<"my_eyes/slot3", "Slot 3", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot3;
 BtGattPersistentCharacteristic<"my_eyes/slot4", "Slot 4", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot4;
 BtGattPersistentCharacteristic<"my_eyes/slot5", "Slot 5", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot5;
 BtGattPersistentCharacteristic<"my_eyes/slot6", "Slot 6", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot6;
 BtGattPersistentCharacteristic<"my_eyes/slot7", "Slot 7", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot7;
 BtGattPersistentCharacteristic<"my_eyes/slot8", "Slot 8", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot8;
 BtGattPersistentCharacteristic<"my_eyes/slot9", "Slot 9", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot9;
 BtGattPersistentCharacteristic<"my_eyes/slot10", "Slot 10", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot10;
 BtGattPersistentCharacteristic<"my_eyes/slot11", "Slot 11", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot11;
 BtGattPersistentCharacteristic<"my_eyes/slot12", "Slot 12", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot12;
 BtGattPersistentCharacteristic<"my_eyes/slot13", "Slot 13", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot13;
 BtGattPersistentCharacteristic<"my_eyes/slot14", "Slot 14", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot14;
 BtGattPersistentCharacteristic<"my_eyes/slot15", "Slot 15", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot15;
 BtGattPersistentCharacteristic<"my_eyes/slot16", "Slot 16", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot16;
 BtGattPersistentCharacteristic<"my_eyes/slot17", "Slot 17", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot17;
 BtGattPersistentCharacteristic<"my_eyes/slot18", "Slot 18", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot18;
 BtGattPersistentCharacteristic<"my_eyes/slot19", "Slot 19", false,
-                               BtGattString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
+                               BtGattSlotString<MyEyesAnimation::kMaxEyeLen>, kEmptyEyeSlot>
     myEyesSlot19;
 
 using MyEyesIsActiveCharacteristic = IsActiveCharacteristic<Animation::MyEyes>;
@@ -95,13 +102,22 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
 // positions don't shift either way — but bonded phones cache handles per table).
 ShuffleIncludeCharacteristic<"my_eyes/shuffle"> myEyesShuffleInclude;
 
+// How long each eye slot displays before the animation advances to the next (issue #260 —
+// this is what makes My Eyes cycle autonomously like Text does). Plain uint32 CPF so the
+// app renders it as a normal numeric input. tick() clamps values below its 500 ms floor.
+BtGattPersistentCharacteristic<"my_eyes/dwell_time_ms", "Dwell Time Ms", false, uint32_t, 5000>
+    myEyesDwellTimeMs;
+
+BtGattAutoReadNotifyCharacteristic<"Now Playing", BtGattSlotNowPlaying, BtGattSlotNowPlaying{0}>
+    myEyesNowPlaying;
+
 BtGattServer myEyesConfigServer(myEyesPrimaryService, myEyesBlinkSpeedMs, myEyesColor, myEyesUpNext,
                                 myEyesSlot0, myEyesSlot1, myEyesSlot2, myEyesSlot3, myEyesSlot4,
                                 myEyesSlot5, myEyesSlot6, myEyesSlot7, myEyesSlot8, myEyesSlot9,
                                 myEyesSlot10, myEyesSlot11, myEyesSlot12, myEyesSlot13,
                                 myEyesSlot14, myEyesSlot15, myEyesSlot16, myEyesSlot17,
                                 myEyesSlot18, myEyesSlot19, myEyesIsActive, myEyesAnimationName,
-                                myEyesShuffleInclude);
+                                myEyesShuffleInclude, myEyesDwellTimeMs, myEyesNowPlaying);
 BT_GATT_SERVER_REGISTER(myEyesConfigServerStatic, myEyesConfigServer);
 
 namespace {
@@ -202,7 +218,7 @@ static const char *getMyEyesSlot(size_t slot) {
 }
 
 static void setMyEyesSlot(size_t slot, const char *value) {
-    BtGattString<MyEyesAnimation::kMaxEyeLen> storage = {};
+    BtGattSlotString<MyEyesAnimation::kMaxEyeLen> storage = {};
     strncpy(storage.data(), value, MyEyesAnimation::kMaxEyeLen - 1);
 
     switch (slot) {
@@ -277,23 +293,33 @@ class MyEyesSlotSource : public MyEyesAnimationSlotSource {
 class MyEyesUpNextSource : public MyEyesAnimationUpNextSource {
    public:
     size_t consumeCurrentAndAdvance(size_t numSlots) override {
-        uint32_t currUpNext = myEyesUpNext;
+        // .value() (not the characteristic's operator T()) so the wrapper's
+        // operator uint32_t is the only user-defined conversion in the sequence.
+        uint32_t currUpNext = myEyesUpNext.value();
         uint32_t nextUpNext = currUpNext + 1;
         if (nextUpNext >= numSlots) {
             nextUpNext = 0;
         }
 
         myEyesUpNext = nextUpNext;
+        myEyesNowPlaying = currUpNext;
         return currUpNext;
     }
+};
+
+class MyEyesDwellTimeSource : public AnimationUint32ParameterSource {
+   public:
+    uint32_t get() const override { return myEyesDwellTimeMs; }
 };
 
 MyEyesBlinkSpeedSource sDefaultBlinkSpeedSource;
 MyEyesSlotSource sDefaultSlotSource;
 MyEyesUpNextSource sDefaultUpNextSource;
+MyEyesDwellTimeSource sDefaultDwellTimeSource;
 
 MyEyesAnimationDependencies sDefaultMyEyesDeps(sDefaultBlinkSpeedSource, sMyEyesColorMode,
-                                               sDefaultSlotSource, sDefaultUpNextSource);
+                                               sDefaultSlotSource, sDefaultUpNextSource,
+                                               sDefaultDwellTimeSource);
 
 struct MyEyesSlotInitializer {
     MyEyesSlotInitializer() {

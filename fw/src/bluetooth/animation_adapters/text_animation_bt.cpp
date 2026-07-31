@@ -18,68 +18,75 @@ BtGattPersistentCharacteristic<"text/step_time_ms", "Step Time Ms", false, uint3
     textStepTimeMs;
 BtGattPersistentCharacteristic<"text/color", "Color", false, BtGattColor, BtGattColor{0xFFFFFFFF}>
     textColor;
-BtGattPersistentCharacteristic<"text/up_next", "Up Next", true, uint32_t, 0> textUpNext;
+// BtGattSlotUpNext / BtGattSlotString / BtGattSlotNowPlaying below are wire- and
+// persistence-compatible with the plain uint32_t / BtGattString types they replaced —
+// only the CPF format byte differs (issue #260: tells the app to render the slot
+// playlist UI instead of raw numeric/text inputs). Settings keys and stored bytes are
+// unchanged, so values persisted by older firmware load as-is.
+BtGattPersistentCharacteristic<"text/up_next", "Up Next", true, BtGattSlotUpNext,
+                               BtGattSlotUpNext{0}>
+    textUpNext;
 
-constexpr BtGattString<TextAnimation::kMaxMsgLen> kEmptyTextSlot = {};
+constexpr BtGattSlotString<TextAnimation::kMaxMsgLen> kEmptyTextSlot = {};
 BtGattPersistentCharacteristic<"text/slot0", "Slot 0", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot0;
 BtGattPersistentCharacteristic<"text/slot1", "Slot 1", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot1;
 BtGattPersistentCharacteristic<"text/slot2", "Slot 2", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot2;
 BtGattPersistentCharacteristic<"text/slot3", "Slot 3", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot3;
 BtGattPersistentCharacteristic<"text/slot4", "Slot 4", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot4;
 BtGattPersistentCharacteristic<"text/slot5", "Slot 5", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot5;
 BtGattPersistentCharacteristic<"text/slot6", "Slot 6", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot6;
 BtGattPersistentCharacteristic<"text/slot7", "Slot 7", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot7;
 BtGattPersistentCharacteristic<"text/slot8", "Slot 8", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot8;
 BtGattPersistentCharacteristic<"text/slot9", "Slot 9", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot9;
 BtGattPersistentCharacteristic<"text/slot10", "Slot 10", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot10;
 BtGattPersistentCharacteristic<"text/slot11", "Slot 11", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot11;
 BtGattPersistentCharacteristic<"text/slot12", "Slot 12", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot12;
 BtGattPersistentCharacteristic<"text/slot13", "Slot 13", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot13;
 BtGattPersistentCharacteristic<"text/slot14", "Slot 14", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot14;
 BtGattPersistentCharacteristic<"text/slot15", "Slot 15", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot15;
 BtGattPersistentCharacteristic<"text/slot16", "Slot 16", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot16;
 BtGattPersistentCharacteristic<"text/slot17", "Slot 17", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot17;
 BtGattPersistentCharacteristic<"text/slot18", "Slot 18", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot18;
 BtGattPersistentCharacteristic<"text/slot19", "Slot 19", false,
-                               BtGattString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
+                               BtGattSlotString<TextAnimation::kMaxMsgLen>, kEmptyTextSlot>
     textSlot19;
 
 using TextIsActiveCharacteristic = IsActiveCharacteristic<Animation::Text>;
@@ -90,7 +97,8 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
                              kTextAnimationName>
     textAnimationName;
 
-BtGattAutoReadNotifyCharacteristic<"Now Playing", uint32_t, 0> nowPlayingCharacteristic;
+BtGattAutoReadNotifyCharacteristic<"Now Playing", BtGattSlotNowPlaying, BtGattSlotNowPlaying{0}>
+    nowPlayingCharacteristic;
 
 // APPEND-ONLY: new providers go after every existing one (fixed UUID, so auto-UUID
 // positions don't shift either way — but bonded phones cache handles per table).
@@ -217,7 +225,7 @@ static const char* getTextSlot(size_t slot) {
 }
 
 static void setTextSlot(size_t slot, const char* value) {
-    BtGattString<TextAnimation::kMaxMsgLen> storage = {};
+    BtGattSlotString<TextAnimation::kMaxMsgLen> storage = {};
     strncpy(storage.data(), value, TextAnimation::kMaxMsgLen - 1);
 
     switch (slot) {
@@ -292,7 +300,9 @@ class TextSlotSource : public TextAnimationSlotSource {
 class TextUpNextSource : public TextAnimationUpNextSource {
    public:
     size_t consumeCurrentAndAdvance(size_t numSlots) override {
-        uint32_t currUpNext = textUpNext;
+        // .value() (not the characteristic's operator T()) so the wrapper's
+        // operator uint32_t is the only user-defined conversion in the sequence.
+        uint32_t currUpNext = textUpNext.value();
         uint32_t nextUpNext = currUpNext + 1;
         if (nextUpNext >= numSlots) {
             nextUpNext = 0;
