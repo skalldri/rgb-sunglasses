@@ -156,26 +156,24 @@ struct BtGattStringTraits<BtGattSlotString<N>> {
     static constexpr size_t kMaxLen = N;
 };
 
-// uint32-shaped wrappers (same shape as BtGattColor: non-explicit converting ctor +
+// uint32-shaped wrapper (same shape as BtGattColor: non-explicit converting ctor +
 // operator uint32_t, so `characteristic = someUint32;` and uint32 NTTP defaults work) whose
-// only job is to carry the SLOT_UP_NEXT / SLOT_NOW_PLAYING CPF formats defined in gatt_cpf.h.
-struct BtGattSlotUpNext {
-    constexpr BtGattSlotUpNext() = default;
-    constexpr BtGattSlotUpNext(uint32_t raw) : value(raw) {}
+// only job is to carry a custom slot-index CPF format from gatt_cpf.h. One format-tagged
+// template rather than a struct per format, so the wrapper shape and its BtGattCpfTraits
+// specialization exist exactly once — the next uint32-shaped custom format is a new alias,
+// not another copy-paste block.
+template <uint8_t Format>
+struct BtGattSlotIndex {
+    constexpr BtGattSlotIndex() = default;
+    constexpr BtGattSlotIndex(uint32_t raw) : value(raw) {}
 
     constexpr operator uint32_t() const { return value; }
 
     uint32_t value = 0;
 };
 
-struct BtGattSlotNowPlaying {
-    constexpr BtGattSlotNowPlaying() = default;
-    constexpr BtGattSlotNowPlaying(uint32_t raw) : value(raw) {}
-
-    constexpr operator uint32_t() const { return value; }
-
-    uint32_t value = 0;
-};
+using BtGattSlotUpNext = BtGattSlotIndex<BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT>;
+using BtGattSlotNowPlaying = BtGattSlotIndex<BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING>;
 
 template <typename T>
 struct BtGattCpfTraits {
@@ -312,18 +310,10 @@ struct BtGattCpfTraits<BtGattSlotString<N>> {
     };
 };
 
-template <>
-struct BtGattCpfTraits<BtGattSlotUpNext> {
+template <uint8_t Format>
+struct BtGattCpfTraits<BtGattSlotIndex<Format>> {
     static constexpr bool kSupported = true;
     static constexpr bt_gatt_cpf kValue = {
-        .format = BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT,
-    };
-};
-
-template <>
-struct BtGattCpfTraits<BtGattSlotNowPlaying> {
-    static constexpr bool kSupported = true;
-    static constexpr bt_gatt_cpf kValue = {
-        .format = BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING,
+        .format = Format,
     };
 };

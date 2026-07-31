@@ -1,12 +1,14 @@
 import {
+  BLE_GATT_CPF_FORMAT_BOOLEAN,
   BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING,
   BLE_GATT_CPF_FORMAT_SLOT_TEXT,
   BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT,
   BLE_GATT_CPF_FORMAT_UINT32,
   BLE_GATT_CPF_FORMAT_UTF8S,
+  UUID_IS_ACTIVE_CHARACTERISTIC,
 } from '@/constants/bluetooth';
-import { encodeUint32ToBase64, encodeUtf8ToBase64 } from '@/services/ble-value-codec';
-import { decodeSlotIndex, groupSlotPlaylist } from '@/services/slot-playlist';
+import { encodeBooleanToBase64, encodeUint32ToBase64, encodeUtf8ToBase64 } from '@/services/ble-value-codec';
+import { decodeSlotIndex, groupSlotPlaylist, isServiceActive } from '@/services/slot-playlist';
 
 function char(cpfFormat: number, value: string | null = null) {
   return {
@@ -72,6 +74,24 @@ describe('groupSlotPlaylist', () => {
     } as any);
     expect(playlist!.upNext?.charUuid).toBe('up-next-1');
     expect(playlist!.hiddenCharUuids.has('up-next-2')).toBe(false);
+  });
+});
+
+describe('isServiceActive', () => {
+  it('reads the shared-UUID Is Active characteristic', () => {
+    expect(isServiceActive({
+      [UUID_IS_ACTIVE_CHARACTERISTIC]: char(BLE_GATT_CPF_FORMAT_BOOLEAN, encodeBooleanToBase64(true)),
+    } as any)).toBe(true);
+    expect(isServiceActive({
+      [UUID_IS_ACTIVE_CHARACTERISTIC]: char(BLE_GATT_CPF_FORMAT_BOOLEAN, encodeBooleanToBase64(false)),
+    } as any)).toBe(false);
+  });
+
+  it('reads as inactive when the characteristic or its value is missing', () => {
+    expect(isServiceActive({} as any)).toBe(false);
+    expect(isServiceActive({
+      [UUID_IS_ACTIVE_CHARACTERISTIC]: char(BLE_GATT_CPF_FORMAT_BOOLEAN, null),
+    } as any)).toBe(false);
   });
 });
 

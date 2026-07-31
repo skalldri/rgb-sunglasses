@@ -210,9 +210,17 @@ ZTEST(my_eyes_animation_di_tests, test_tick_advances_after_dwell_elapses) {
     zassert_equal(f.advancesSinceInit(), 0, "Advanced before the dwell elapsed");
     zassert_true(strcmp(f.animation->currentEyes, "^^") == 0, "Eyes changed before the boundary");
 
-    // Crossing 1000 ms advances exactly once and loads the next slot's string.
+    // Crossing 1000 ms reports the boundary but defers the consume one tick (so a
+    // shuffle switch taken at the boundary can't eat a queued slot).
     f.animation->tick(renderer, 1);
-    zassert_equal(f.advancesSinceInit(), 1, "Expected exactly one advance at the boundary");
+    zassert_equal(f.advancesSinceInit(), 0,
+                  "The boundary tick must not consume — the advance is deferred one tick");
+    zassert_true(strcmp(f.animation->currentEyes, "^^") == 0,
+                 "Eyes must not change on the boundary tick");
+
+    // The following tick consumes exactly one advance and loads the next slot's string.
+    f.animation->tick(renderer, 10);
+    zassert_equal(f.advancesSinceInit(), 1, "Expected exactly one advance after the boundary");
     zassert_true(strcmp(f.animation->currentEyes, "@@") == 0,
                  "Expected the next slot's eyes after the advance");
 }
@@ -243,11 +251,42 @@ ZTEST(my_eyes_animation_di_tests, test_good_switch_point_only_on_advance_tick) {
 
     f.animation->tick(renderer, 500);
     zassert_true(f.animation->isAtGoodSwitchPoint(),
-                 "The advancing tick must report a good switch point");
+                 "The boundary tick must report a good switch point");
 
     f.animation->tick(renderer, 10);
     zassert_false(f.animation->isAtGoodSwitchPoint(),
                   "The switch-point flag must clear on the next tick");
+}
+
+// The two regressions from the PR #262 review: (1) a shuffle switch taken exactly at
+// the boundary must not eat a slot the user queued via Up Next — the boundary tick
+// only reports the switch point, the consume happens on the FOLLOWING tick, so if the
+// animation is switched away at the boundary the queue is untouched; (2) an
+// activation right after a boundary must not double-consume via a stale pending flag.
+ZTEST(my_eyes_animation_di_tests, test_boundary_tick_leaves_queue_untouched) {
+    NullTestRenderer renderer;
+    CyclingFixture f(1000);
+
+    f.animation->tick(renderer, 1000);
+    zassert_true(f.animation->isAtGoodSwitchPoint(), "expected the boundary tick");
+    zassert_equal(f.advancesSinceInit(), 0,
+                  "A switch-away at the boundary must find the queued slot unconsumed");
+}
+
+ZTEST(my_eyes_animation_di_tests, test_init_discards_pending_advance) {
+    NullTestRenderer renderer;
+    CyclingFixture f(1000);
+
+    // Reach the boundary (advance now pending), then re-activate: init()'s own
+    // getUpNext() is this activation's one consume.
+    f.animation->tick(renderer, 1000);
+    f.animation->init();
+    size_t indexAfterInit = f.upNextSource.index;
+
+    // The stale pending flag must not consume a second slot on the first tick.
+    f.animation->tick(renderer, 10);
+    zassert_equal(f.upNextSource.index, indexAfterInit,
+                  "init() must discard a pending advance from before the activation");
 }
 
 ZTEST(my_eyes_animation_di_tests, test_grace_request_tracks_remaining_dwell) {

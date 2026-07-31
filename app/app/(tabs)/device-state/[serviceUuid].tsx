@@ -15,7 +15,7 @@ import { useCharacteristicEditor } from "@/hooks/use-characteristic-editor";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { encodeUint32ToBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
-import { decodeSlotIndex, groupSlotPlaylist } from "@/services/slot-playlist";
+import { decodeSlotIndex, groupSlotPlaylist, isServiceActive } from "@/services/slot-playlist";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import React from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
@@ -77,7 +77,14 @@ export default function DeviceStateDetailScreen() {
 
     const upNextInfo = slotPlaylist?.upNext?.charInfo ?? null;
     const upNextIndex = decodeSlotIndex(upNextInfo);
-    const nowPlayingIndex = decodeSlotIndex(slotPlaylist?.nowPlaying?.charInfo);
+    // Now Playing holds its last value while the animation is off (and defaults to 0 at
+    // boot), so the "this is on the glasses right now" highlight is additionally gated
+    // on the service's Is Active characteristic. The up-next tint is NOT gated — a
+    // queued slot is meaningful while inactive (it plays on the next activation).
+    const serviceIsActive = slotPlaylist !== null && isServiceActive(serviceCharacteristics);
+    const nowPlayingIndex = serviceIsActive
+        ? decodeSlotIndex(slotPlaylist?.nowPlaying?.charInfo)
+        : null;
 
     // Queue a slot: write its index to the service's SLOT_UP_NEXT characteristic (unique
     // per-service auto UUID, so the flat write path is correct — unlike is-active/
@@ -92,9 +99,15 @@ export default function DeviceStateDetailScreen() {
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>
             {header}
-            {/* keyboardShouldPersistTaps: with a slot's keyboard open, the first tap on an
-                up-next button must fire the button, not just dismiss the keyboard. */}
-            <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+            {/* keyboardShouldPersistTaps, ONLY on slot-playlist screens: with a slot's
+                keyboard open, the first tap on an up-next button must fire the button,
+                not just dismiss the keyboard. Every other service screen keeps the stock
+                first-tap-dismisses behavior so a keyboard-dismissing tap can't
+                accidentally fire a toggle and send an unintended BLE write. */}
+            <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps={slotPlaylist ? "handled" : undefined}
+            >
                 <ThemedText type="heading">{title}</ThemedText>
                 <Card style={styles.card}>
                     <Section>

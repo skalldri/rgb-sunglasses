@@ -3,14 +3,10 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/__assert.h>
 
-#include <algorithm>
 #include <cstring>
 
 LOG_MODULE_REGISTER(my_eyes_animation, LOG_LEVEL_INF);
 
-// The dwell floor is the shared kMinSlotDwellMs (animation_base.h — see its comment for
-// the issue #188 notify-flood rationale). Clamped in tick() rather than rejecting the
-// GATT write — a written 0 simply means "as fast as allowed".
 
 MyEyesAnimation::MyEyesAnimation() = default;
 
@@ -31,9 +27,9 @@ void MyEyesAnimation::setDependencies(const MyEyesAnimationDependencies &deps) {
 }
 
 void MyEyesAnimation::init() {
-    currentEyesDwellMs = 0;
-    atGoodSwitchPoint_ = false;
-    remainingDwellMs_ = 0;
+    // Discards any advance still pending from a boundary tick (getUpNext() below is
+    // this activation's one consume — a stale pending flag would double-consume).
+    dwellTracker_.reset();
     strncpy(currentEyes, getStringFromSlot(getUpNext()), kMaxEyeLen);
 }
 
@@ -43,23 +39,15 @@ void MyEyesAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTick
     // The blink state machine below is still a stub; blinkSpeedMs stays unused.
     ARG_UNUSED(deps_->blinkSpeedMs);
 
-    // Only the tick that advances to the next slot (below) is a good switch point.
-    atGoodSwitchPoint_ = false;
-
     // Autonomous slot cycling (issue #260): advance to the next slot once the current
-    // eyes have been displayed for the configured dwell time, mirroring how Text
-    // advances at end-of-scroll. Advance-then-render so the new eyes draw on the
-    // boundary frame.
-    currentEyesDwellMs += timeSinceLastTickMs;
-    const size_t dwellMs = std::max<size_t>(deps_->dwellTimeMs.get(), kMinSlotDwellMs);
-    remainingDwellMs_ = (currentEyesDwellMs >= dwellMs)
-                            ? 0u
-                            : (uint32_t)(dwellMs - currentEyesDwellMs);
-    if (currentEyesDwellMs >= dwellMs) {
-        currentEyesDwellMs = 0;
-        atGoodSwitchPoint_ = true;
+    // eyes have displayed for the configured dwell time, mirroring how Text advances at
+    // end-of-scroll. The consume is deferred one tick past the reported boundary so a
+    // shuffle switch taken at the boundary never eats a queued slot — full semantics on
+    // SlotDwellTracker (animation_base.h).
+    if (dwellTracker_.consumePendingAdvance()) {
         strncpy(currentEyes, getStringFromSlot(getUpNext()), kMaxEyeLen);
     }
+    dwellTracker_.accumulate(timeSinceLastTickMs, deps_->dwellTimeMs.get());
 
     // Turn off all LEDs
     for (size_t x = 0; x < renderer.displayWidth(); x++) {

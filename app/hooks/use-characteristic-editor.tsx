@@ -178,9 +178,9 @@ export function useCharacteristicEditor() {
             if (cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32) {
                 return formatFloat32(decodeFloat32FromBase64(encodedValue));
             }
-            if (isUtf8Like(cpfFormat)) {
-                return decodeUtf8FromBase64(encodedValue);
-            }
+            // Everything else — UTF8S, SLOT_TEXT, and unknown formats alike — decodes as
+            // best-effort text (there is deliberately no separate utf8 branch: it would
+            // be identical to this fallthrough and invite the two paths drifting apart).
             return decodeUtf8FromBase64(encodedValue);
         } catch (error) {
             console.log(`Error decoding value for ${charUuid}:`, error);

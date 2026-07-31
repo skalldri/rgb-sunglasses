@@ -14,6 +14,7 @@ import {
   BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT,
   BLE_GATT_CPF_FORMAT_UINT32,
   BLE_GATT_CPF_FORMAT_UTF8S,
+  UUID_IS_ACTIVE_CHARACTERISTIC,
 } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import {
@@ -352,9 +353,11 @@ describe('DeviceStateDetailScreen', () => {
   // ---- Slot playlist (issue #260) ------------------------------------------------------
 
   // A minimal slot-based service modeled on the real Text layout: a plain param, an
-  // up-next, three slots, and a now-playing (read-only, declared away from the slots so
-  // the by-CPF grouping — not adjacency — is what's exercised).
-  function buildSlotDevice({ upNextIndex = 1, nowPlayingIndex = 0 } = {}) {
+  // up-next, three slots, a now-playing (read-only, declared away from the slots so
+  // the by-CPF grouping — not adjacency — is what's exercised), and the shared-UUID
+  // Is Active characteristic (active by default — the now-playing highlight is gated
+  // on it).
+  function buildSlotDevice({ upNextIndex = 1, nowPlayingIndex = 0, isActive = true } = {}) {
     const selectedDevice = buildSelectedDevice([
       { uuid: 'step-time', cpfFormat: BLE_GATT_CPF_FORMAT_UINT32, value: encodeUint32ToBase64(50), name: 'Step Time Ms' },
       { uuid: 'up-next', cpfFormat: BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT, value: encodeUint32ToBase64(upNextIndex), name: 'Up Next' },
@@ -362,6 +365,7 @@ describe('DeviceStateDetailScreen', () => {
       { uuid: 'slot-1', cpfFormat: BLE_GATT_CPF_FORMAT_SLOT_TEXT, value: encodeUtf8ToBase64('SECOND'), name: 'Slot 1' },
       { uuid: 'slot-2', cpfFormat: BLE_GATT_CPF_FORMAT_SLOT_TEXT, value: encodeUtf8ToBase64('THIRD'), name: 'Slot 2' },
       { uuid: 'now-playing', cpfFormat: BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING, value: encodeUint32ToBase64(nowPlayingIndex), name: 'Now Playing' },
+      { uuid: UUID_IS_ACTIVE_CHARACTERISTIC, cpfFormat: BLE_GATT_CPF_FORMAT_BOOLEAN, value: encodeBooleanToBase64(isActive), name: 'Is Active' },
     ]);
     selectedDevice.characteristics['now-playing'].characteristic = {
       isWritableWithResponse: false,
@@ -453,6 +457,20 @@ describe('DeviceStateDetailScreen', () => {
     await waitFor(() => {
       expect(writeToCharacteristic).toHaveBeenCalledWith('slot-2', encodeUtf8ToBase64('NEW MESSAGE'));
     });
+  });
+
+  it('suppresses the now-playing highlight while the animation is inactive (keeps the up-next tint)', () => {
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildSlotDevice({ isActive: false }),
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+    } as any);
+
+    const { queryByLabelText, getByTestId } = render(<DeviceStateDetailScreen />);
+    // Now Playing reads 0, but nothing is actually on the glasses — no highlight.
+    expect(queryByLabelText('Slot 0, now playing')).toBeNull();
+    // The queued slot stays meaningful while inactive: it plays on the next activation.
+    expect(getByTestId('slot-up-next-1').props.accessibilityState.selected).toBe(true);
   });
 
   it('falls back to a standalone numeric row for an up-next characteristic with no slots', () => {

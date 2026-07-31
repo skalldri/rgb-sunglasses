@@ -300,6 +300,14 @@ class TextSlotSource : public TextAnimationSlotSource {
 class TextUpNextSource : public TextAnimationUpNextSource {
    public:
     size_t consumeCurrentAndAdvance(size_t numSlots) override {
+        // The read-modify-write of textUpNext races remote GATT writes (the app's
+        // tap-to-queue) running on another thread: a write landing between the read and
+        // the store below would be silently clobbered, losing the user's queued slot.
+        // Single-core target, so briefly locking the scheduler makes the sequence atomic
+        // against every other thread. Safe to hold across operator=: its notify() never
+        // blocks (bt_gatt_notify fails immediately with -ENOMEM when no buffer is
+        // available — see notify()'s failure logging — rather than waiting).
+        k_sched_lock();
         // .value() (not the characteristic's operator T()) so the wrapper's
         // operator uint32_t is the only user-defined conversion in the sequence.
         uint32_t currUpNext = textUpNext.value();
@@ -307,8 +315,9 @@ class TextUpNextSource : public TextAnimationUpNextSource {
         if (nextUpNext >= numSlots) {
             nextUpNext = 0;
         }
-
         textUpNext = nextUpNext;
+        k_sched_unlock();
+
         nowPlayingCharacteristic = currUpNext;
 
         return currUpNext;

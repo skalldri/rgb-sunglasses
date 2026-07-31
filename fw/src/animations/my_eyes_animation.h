@@ -58,12 +58,12 @@ class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation:
 
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
-    bool isAtGoodSwitchPoint() const override { return atGoodSwitchPoint_; }
+    bool isAtGoodSwitchPoint() const override { return dwellTracker_.isAtBoundary(); }
 
     // Shuffle's wait budget for the dwell boundary: how much longer the current eyes
     // display before tick() advances — so shuffle switches on a slot boundary instead
     // of mid-dwell (same contract as TextAnimation's end-of-scroll signal).
-    uint32_t goodSwitchPointGraceMs() const override { return remainingDwellMs_; }
+    uint32_t goodSwitchPointGraceMs() const override { return dwellTracker_.remainingMs(); }
 
    private:
     const char *getStringFromSlot(size_t slot);
@@ -90,18 +90,10 @@ class MyEyesAnimation : public BaseAnimationTemplate<MyEyesAnimation, Animation:
     // The amount of time spent in the current state
     size_t timeInCurrentStateMs = 0;
 
-    // How long the current eyes have been displayed, accumulated every tick. Drives the
-    // autonomous advance to the next slot once it reaches the configured dwell time
-    // (issue #260).
-    size_t currentEyesDwellMs = 0;
-
-    // True only for the tick on which the dwell elapsed and the next slot was loaded —
-    // the natural boundary shuffle mode waits for.
-    bool atGoodSwitchPoint_ = false;
-
-    // How much longer the current eyes need before that boundary; returned by
-    // goodSwitchPointGraceMs().
-    uint32_t remainingDwellMs_ = 0;
+    // Drives the autonomous advance to the next slot once the configured dwell time
+    // elapses (issue #260), with deferred-consume boundary semantics — see
+    // SlotDwellTracker in animation_base.h.
+    SlotDwellTracker dwellTracker_;
 };
 
 void my_eyes_animation_bind_default_dependencies();

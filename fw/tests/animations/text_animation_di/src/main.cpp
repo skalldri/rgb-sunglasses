@@ -189,8 +189,13 @@ ZTEST(text_animation_di_tests, test_empty_slot_does_not_advance_every_tick) {
     zassert_equal(upNextSource.index, indexAfterInit,
                   "Empty slot must not advance before the dwell floor elapses");
 
-    // Crossing the floor (400 + 200 = 600ms >= 500ms) advances exactly once.
+    // Crossing the floor (400 + 200 = 600ms >= 500ms) reports the boundary; the consume
+    // is deferred to the next tick (so a shuffle switch at the boundary can't eat a
+    // queued slot), which advances exactly once.
     animation->tick(renderer, 200);
+    zassert_equal(upNextSource.index, indexAfterInit,
+                  "The boundary tick must not consume — the advance is deferred one tick");
+    animation->tick(renderer, 20);
     zassert_equal(upNextSource.index, indexAfterInit + 1,
                   "Empty slot should advance exactly once after the dwell floor elapses");
 }
@@ -211,8 +216,7 @@ ZTEST(text_animation_di_tests, test_good_switch_point_only_at_end_of_scroll) {
     NullTestRenderer renderer;
 
     // Scroll until the message finishes; every tick before the finishing one must NOT
-    // be a good switch point, and the finishing tick (the one that consumes the next
-    // slot) must be.
+    // be a good switch point.
     bool sawGood = false;
     for (int i = 0; i < 5000; i++) {
         animation->tick(renderer, 20);
@@ -224,11 +228,15 @@ ZTEST(text_animation_di_tests, test_good_switch_point_only_at_end_of_scroll) {
                       "advanced to the next message without signalling a switch point");
     }
     zassert_true(sawGood, "end of scroll never became a good switch point");
-    zassert_equal(upNextSource.index, indexAfterInit + 1,
-                  "the good-switch-point tick must be the message-advance tick");
+    // The boundary tick must NOT consume the queued slot — the advance is deferred one
+    // tick so a shuffle switch taken at the boundary leaves the queue untouched.
+    zassert_equal(upNextSource.index, indexAfterInit,
+                  "the boundary tick must not consume the queued slot");
 
-    // The next tick starts the new message: the pulse must clear.
+    // The next tick consumes the advance and starts the new message: the pulse clears.
     animation->tick(renderer, 20);
+    zassert_equal(upNextSource.index, indexAfterInit + 1,
+                  "the tick after the boundary must consume exactly one advance");
     zassert_false(animation->isAtGoodSwitchPoint(),
                   "switch point must be a one-tick pulse, not a latched state");
 }
@@ -307,7 +315,7 @@ ZTEST(text_animation_di_tests, test_grace_request_zero_at_end_of_scroll) {
 
 ZTEST(text_animation_di_tests, test_grace_request_floors_at_min_dwell) {
     // An empty slot satisfies the "finished scrolling" test on every tick, so the only
-    // thing shuffle would ever wait for is the kMinMessageDwellMs floor — not a whole
+    // thing shuffle would ever wait for is the kMinSlotDwellMs floor — not a whole
     // message's worth of scroll.
     ConstUint32Source stepTimeMs(10);
     ConstUint32Source color(0xFFFFFF);
@@ -327,7 +335,7 @@ ZTEST(text_animation_di_tests, test_grace_request_floors_at_min_dwell) {
     animation->tick(renderer, 300);  // dwell 400
     zassert_equal(animation->goodSwitchPointGraceMs(), 100u, "floor must count down");
 
-    animation->tick(renderer, 200);  // crosses the floor -> advances, dwell resets
+    animation->tick(renderer, 200);  // crosses the floor -> boundary (consume is next tick)
     zassert_equal(animation->goodSwitchPointGraceMs(), 0u,
                   "past the floor there is nothing left to wait for");
 }

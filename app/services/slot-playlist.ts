@@ -1,9 +1,9 @@
 import {
     BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING, BLE_GATT_CPF_FORMAT_SLOT_TEXT,
-    BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT,
+    BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT, UUID_IS_ACTIVE_CHARACTERISTIC,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo } from "@/context/bluetooth-context";
-import { decodeUint32FromBase64 } from "@/services/ble-value-codec";
+import { decodeBooleanFromBase64, decodeUint32FromBase64 } from "@/services/ble-value-codec";
 
 /**
  * Grouping logic for the generic slot-playlist contract (issue #260): any service exposing
@@ -90,5 +90,24 @@ export function decodeSlotIndex(charInfo: CharacteristicInfo | null | undefined)
         return decodeUint32FromBase64(charInfo.value);
     } catch {
         return null;
+    }
+}
+
+/**
+ * Whether the service's animation is currently active, from its shared-UUID Is Active
+ * characteristic. Gates the now-playing highlight: firmware's Now Playing characteristic
+ * defaults to 0 at boot and holds its last value after deactivation, so without this gate
+ * the app would claim a slot is "on the glasses" while the animation is off. Missing
+ * characteristic / no value / bad payload all read as inactive (no false highlight). The
+ * up-next highlight is deliberately NOT gated on this — a queued slot is meaningful while
+ * inactive ("plays when the animation next activates").
+ */
+export function isServiceActive(chars: Record<string, CharacteristicInfo>): boolean {
+    const info = chars[UUID_IS_ACTIVE_CHARACTERISTIC];
+    if (!info?.value) return false;
+    try {
+        return decodeBooleanFromBase64(info.value);
+    } catch {
+        return false;
     }
 }
