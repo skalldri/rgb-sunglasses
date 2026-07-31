@@ -36,7 +36,7 @@ You will also need a **USB-C cable** to power and charge the Compute Pack.
 2. (Purple) — Battery Connectors (2×): JST PH connectors for the 2× lithium-polymer cells in the battery pack.
 3. (Blue) — Battery Charger Status LED: a simple LED driven directly by the BQ25792 battery charger, separate from the firmware-driven System Status LEDs below. **Solid** = charging; **flashing** = charge error; **off** = not charging.
 4. (Teal) — System Status LEDs: two independently controlled, firmware-driven status LEDs — a **top** LED for **charge status** and a **bottom** LED for **Bluetooth status**. See [Status LEDs](#status-leds).
-5. (Green) — D-Pad Buttons: Up, Down, Left and Right. Intended to control animations. Currently, only the GLIM player uses the buttons. The "Left" button can be used to enter DFU mode (see [Firmware Recovery](/recovery)). Holding **Up + Down while booting** triggers a factory reset.
+5. (Green) — D-Pad Buttons: Up, Down, Left and Right. Intended to control animations. Currently, only the GLIM player uses the buttons. The "Left" button can be used to enter DFU mode (see [Firmware Recovery](/recovery)). Holding **Up + Down while booting** triggers a factory reset — see [Factory Reset](#factory-reset).
 6. (Yellow) — Recessed Reset Button: press this button to reset the MCU if it's stuck.
 
 There is a USB-C port on the side of the case, near the System Status LEDs,
@@ -245,6 +245,28 @@ The filesystem contains a few folders:
   drop your own `.glim` files here; on the next reboot the GLIM player re-scans the
   folder and exposes any new animations to the companion app.
 - **`coredump/`** — firmware crash dumps. Empty unless a crash has produced a dump.
+
+## Factory Reset
+
+Hold the **Up + Down** D-Pad buttons together while the glasses boot (press the
+recessed reset button, or plug in power, with the chord already held). The reset
+is **two-step**, with the System Status LEDs showing which step you're in:
+
+1. **Settings reset (white flashing, 10 s).** Both status LEDs flash **white**
+   while you hold the chord. If you release during this white phase, nothing is
+   erased and the glasses boot normally. Once the 10 s are up, the LEDs switch
+   to flashing **amber** — release now (anytime during the amber phase) to
+   erase **settings only**: all configuration returns to defaults and Bluetooth
+   pairings are forgotten (you'll need to re-pair your phone), but your GLIM
+   animations and extensions are kept.
+2. **Full reset (amber flashing, 10 s more).** Keep holding through the entire
+   amber phase and the glasses perform a **full factory reset**: settings,
+   stored crash dumps, *and* the whole USB filesystem — all GLIM animations and
+   extensions are erased (see [USB Interface](#usb-interface) for restoring
+   files).
+
+During the erase itself the LEDs turn solid (white for a settings reset, amber
+for a full reset), and the glasses reboot when it finishes.
 
 ## Firmware Update
 

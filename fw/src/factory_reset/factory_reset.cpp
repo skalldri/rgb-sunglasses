@@ -1,12 +1,18 @@
-/* Boot-time factory reset (issue #162).
+/* Boot-time two-phase factory reset (issues #162, #265).
  *
  * If the user is holding the Up + Down D-PAD buttons when the app boots, boot
- * pauses and both status LEDs flash white. If the chord is held for
- * CONFIG_APP_FACTORY_RESET_HOLD_MS (10 s), the device erases the NVS settings
- * partition (all app config + BT bonds — phones must re-pair), erases the
- * coredump partition, re-creates the FAT filesystem on the NAND disk (GLIM
- * assets and .llext extensions are lost; re-provision afterwards), and
- * reboots. Releasing the chord earlier resumes a normal boot.
+ * pauses and both status LEDs flash white (phase 1). Once the chord has been
+ * held for CONFIG_APP_FACTORY_RESET_HOLD_MS (10 s), the LEDs switch to
+ * flashing amber (phase 2) — releasing anywhere in that window performs a
+ * "soft" reset: erase the NVS settings partition only (all app config + BT
+ * bonds — phones must re-pair) and reboot. Holding through the full
+ * CONFIG_APP_FACTORY_RESET_PHASE2_HOLD_MS window instead performs the full
+ * reset: settings, the coredump partition, and a re-created FAT filesystem
+ * on the NAND disk (GLIM assets and .llext extensions are lost; re-provision
+ * afterwards). Releasing during phase 1 resumes a normal boot with nothing
+ * erased. Nothing is erased until the hold loop returns its decision — the
+ * lazy erase is deliberate (outcomes match erasing settings eagerly at the
+ * phase boundary, and a power loss mid-phase-2 leaves settings intact).
  *
  * Why Up + Down and not all 4 D-PAD buttons (as issue #162 originally asked):
  * Left (button1) is `mcuboot-button0`, MCUboot's serial-recovery entry button
@@ -63,6 +69,7 @@ namespace {
 using factory_reset_core::Decision;
 using factory_reset_core::HoldConfig;
 using factory_reset_core::HoldIo;
+using factory_reset_core::LedState;
 using factory_reset_core::ResetOps;
 
 // The reset chord: Up (sw0) + Down (sw3). See the header comment for why
@@ -86,28 +93,35 @@ bool chord_held(void*) {
 
 /* The status_led module's render thread isn't running during SYS_INIT (static
  * threads start only after the APPLICATION level completes), so drive the
- * strip directly instead of via status_led_set(). White is kept local rather
- * than added to StatusColor — it's a boot-only indication, not part of the
- * public shell-parsed palette. Moderate brightness: settings (and thus the
- * configured status-LED brightness factor) aren't loaded yet. */
+ * strip directly instead of via status_led_set(). Phase 1 is white, phase 2
+ * amber — the palette's Orange (255,128,0) scaled to the same moderate
+ * brightness as the white: settings (and thus the configured status-LED
+ * brightness factor) aren't loaded yet. Both colors are kept local rather
+ * than added to StatusColor — boot-only indications, not part of the public
+ * shell-parsed palette. */
 #if DT_HAS_ALIAS(led_strip_2)
-void set_leds_white(void*, bool on) {
+void set_leds(void*, LedState state) {
     const struct device* strip = DEVICE_DT_GET(DT_ALIAS(led_strip_2));
     if (!device_is_ready(strip)) {
         return;
     }
-    const uint8_t level = on ? 128 : 0;
-    struct led_rgb buf[2];
-    for (auto& px : buf) {
-        px.r = level;
-        px.g = level;
-        px.b = level;
+    struct led_rgb px = {.r = 0, .g = 0, .b = 0};
+    switch (state) {
+        case LedState::Phase1:
+            px = {.r = 128, .g = 128, .b = 128};  // white
+            break;
+        case LedState::Phase2:
+            px = {.r = 128, .g = 64, .b = 0};  // amber
+            break;
+        case LedState::Off:
+            break;
     }
+    struct led_rgb buf[2] = {px, px};
     led_strip_update_rgb(strip, buf, ARRAY_SIZE(buf));
 }
 #else
 // Boards without status LEDs: the hold loop still works, silently.
-void set_leds_white(void*, bool) {}
+void set_leds(void*, LedState) {}
 #endif
 
 void sleep_ms(void*, uint32_t ms) {
@@ -147,32 +161,38 @@ int reformat_fat_op() {
 
 }  // namespace
 
-/* Erase everything and report the first error. Steps that fail are logged by
- * their op wrappers; later steps still run (a partial reset beats an aborted
- * one, and the erases are independent). Callers reboot regardless of the
- * return value — an erased-but-unformatted state still comes up clean via
+/* Erase the requested scope and report the first error. full == false is the
+ * soft reset: settings only (coredump/FAT ops stay null and are skipped by
+ * perform_reset). Steps that fail are logged by their op wrappers; later
+ * steps still run (a partial reset beats an aborted one, and the erases are
+ * independent). Callers reboot regardless of the return value — an
+ * erased-but-unformatted state still comes up clean via
  * CONFIG_FS_FATFS_MOUNT_MKFS and NVS's tolerance of an erased partition. */
-static int factory_reset_perform(void) {
+static int factory_reset_perform(bool full) {
     const ResetOps ops = {
         .erase_settings = erase_settings_op,
 #if defined(CONFIG_DEBUG_COREDUMP)
-        .erase_coredump = erase_coredump_op,
+        .erase_coredump = full ? erase_coredump_op : nullptr,
 #else
         .erase_coredump = nullptr,
 #endif
 #if defined(FACTORY_RESET_HAS_FAT)
-        .reformat_fat = reformat_fat_op,
+        .reformat_fat = full ? reformat_fat_op : nullptr,
 #else
         .reformat_fat = nullptr,
 #endif
     };
 
-    LOG_WRN("factory reset: erasing settings, coredump, and FAT storage");
+    if (full) {
+        LOG_WRN("factory reset: erasing settings, coredump, and FAT storage");
+    } else {
+        LOG_WRN("settings reset: erasing settings partition (BT bonds included)");
+    }
     int rc = factory_reset_core::perform_reset(ops);
     if (rc == 0) {
-        LOG_WRN("factory reset complete");
+        LOG_WRN("%s reset complete", full ? "factory" : "settings");
     } else {
-        LOG_ERR("factory reset finished with errors (first: %d)", rc);
+        LOG_ERR("%s reset finished with errors (first: %d)", full ? "factory" : "settings", rc);
     }
     return rc;
 }
@@ -190,30 +210,36 @@ static int factory_reset_boot_check(void) {
         return 0;
     }
 
-    LOG_WRN("factory reset armed: hold Up+Down for %u ms to erase all settings",
-            CONFIG_APP_FACTORY_RESET_HOLD_MS);
+    LOG_WRN("factory reset armed: hold Up+Down %u ms (white flash) for settings reset; "
+            "keep holding %u ms more (amber flash) for full reset",
+            CONFIG_APP_FACTORY_RESET_HOLD_MS, CONFIG_APP_FACTORY_RESET_PHASE2_HOLD_MS);
 
     const HoldConfig cfg = {
         .hold_duration_ms = CONFIG_APP_FACTORY_RESET_HOLD_MS,
+        .phase2_hold_ms = CONFIG_APP_FACTORY_RESET_PHASE2_HOLD_MS,
         .poll_interval_ms = 20,
         .flash_half_period_ms = 100,
     };
     const HoldIo io = {
         .chord_held = chord_held,
-        .set_leds = set_leds_white,
+        .set_leds = set_leds,
         .sleep_ms = sleep_ms,
         .ctx = nullptr,
     };
 
-    if (factory_reset_core::run_hold_loop(cfg, io) == Decision::ContinueBoot) {
+    const Decision decision = factory_reset_core::run_hold_loop(cfg, io);
+    if (decision == Decision::ContinueBoot) {
         LOG_INF("factory reset canceled (chord released); resuming boot");
         return 0;
     }
 
-    // Solid white while erasing (~2-4 s) so the user can tell it's working.
-    set_leds_white(nullptr, true);
-    factory_reset_perform();
-    set_leds_white(nullptr, false);
+    // Solid color while erasing (~2-4 s) so the user can tell it's working —
+    // white for a settings-only reset, amber for the full one, confirming
+    // which reset was committed.
+    const bool full = decision == Decision::FullReset;
+    set_leds(nullptr, full ? LedState::Phase2 : LedState::Phase1);
+    factory_reset_perform(full);
+    set_leds(nullptr, LedState::Off);
 
     sys_reboot(SYS_REBOOT_COLD);
     CODE_UNREACHABLE;
@@ -233,10 +259,27 @@ static int cmd_factory_reset_now(const struct shell* sh, size_t argc, char** arg
 
     shell_warn(sh, "Factory reset: erasing all settings, coredumps, and files, then rebooting.");
 
-    factory_reset_perform();
+    factory_reset_perform(true);
 
     // Give the shell transport a moment to flush the warning before the
     // reboot drops the USB connection.
+    k_msleep(100);
+    sys_reboot(SYS_REBOOT_COLD);
+    return 0;
+}
+
+/* The one-shot runtime equivalent of the boot gesture's phase-2 release.
+ * 'appcfg erase' is the same settings-partition erase without the reboot. */
+static int cmd_factory_reset_soft(const struct shell* sh, size_t argc, char** argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    shell_warn(sh, "Settings reset: erasing all settings (BT bonds included), then rebooting. "
+                   "Files are kept.");
+
+    factory_reset_perform(false);
+
+    // Same flush delay as 'now' before the reboot drops the USB connection.
     k_msleep(100);
     sys_reboot(SYS_REBOOT_COLD);
     return 0;
@@ -246,8 +289,12 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_factory_reset,
     SHELL_CMD(now, NULL,
               "Erase settings + coredump + FAT storage and reboot (DESTRUCTIVE)",
               cmd_factory_reset_now),
+    SHELL_CMD(soft, NULL,
+              "Erase settings only (incl. BT bonds) and reboot; files kept "
+              "('appcfg erase' is the same erase without the reboot)",
+              cmd_factory_reset_soft),
     SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(factory_reset, &sub_factory_reset,
-                   "Factory reset (see 'factory_reset now')", NULL);
+                   "Factory reset (see 'factory_reset now' / 'factory_reset soft')", NULL);
 
 #endif /* CONFIG_SHELL */
