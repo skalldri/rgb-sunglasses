@@ -1,6 +1,7 @@
 import { ThemedText } from "@/components/themed-text";
 import {
     BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_SINT32,
+    BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING, BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT,
     BLE_GATT_CPF_FORMAT_UINT8, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo } from "@/context/bluetooth-context";
@@ -22,6 +23,12 @@ export function formatReadonlyValue(cpfFormat: number | null, encodedValue: stri
             case BLE_GATT_CPF_FORMAT_UINT8:
                 return String(decodeUint8FromBase64(encodedValue));
             case BLE_GATT_CPF_FORMAT_UINT32:
+            // The slot-index formats (issue #260) carry uint32 LE bytes. They normally render
+            // as playlist-row highlights, not standalone rows — these cases only cover the
+            // degraded fallback (e.g. SLOT_NOW_PLAYING in a service with no SLOT_TEXT slots),
+            // where the default utf8 branch would otherwise render 4 binary bytes as garbage.
+            case BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT:
+            case BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING:
                 return String(decodeUint32FromBase64(encodedValue));
             case BLE_GATT_CPF_FORMAT_SINT32:
                 return String(decodeSint32FromBase64(encodedValue));

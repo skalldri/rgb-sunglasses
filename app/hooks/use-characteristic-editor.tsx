@@ -7,8 +7,9 @@ import { CharacteristicUint32 } from "@/components/characteristic-uint32";
 import { CharacteristicUtf8 } from "@/components/characteristic-utf8";
 import {
     BLE_GATT_CPF_FORMAT_BOOLEAN, BLE_GATT_CPF_FORMAT_CUSTOM_COLOR, BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
-    BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_UINT32, BLE_GATT_CPF_FORMAT_UTF8S,
-    UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_IS_ACTIVE_CHARACTERISTIC,
+    BLE_GATT_CPF_FORMAT_FLOAT32, BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING,
+    BLE_GATT_CPF_FORMAT_SLOT_TEXT, BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT, BLE_GATT_CPF_FORMAT_UINT32,
+    BLE_GATT_CPF_FORMAT_UTF8S, UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_IS_ACTIVE_CHARACTERISTIC,
     UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
@@ -16,6 +17,20 @@ import { useThemeColors } from "@/hooks/use-theme-color";
 import { decodeFloat32FromBase64, decodeUint32FromBase64, decodeUtf8FromBase64, formatFloat32 } from "@/services/ble-value-codec";
 import React, { useEffect, useRef, useState } from "react";
 import { Animated } from "react-native";
+
+// The issue #260 slot formats are wire-identical aliases of existing formats — SLOT_TEXT
+// carries UTF8S bytes, SLOT_UP_NEXT/SLOT_NOW_PLAYING carry uint32 LE bytes — differing only
+// in the UI treatment ([serviceUuid].tsx groups them into the slot playlist). Everywhere this
+// hook decodes/dispatches by format, they follow their base format's path via these predicates.
+function isUtf8Like(cpfFormat: number | null): boolean {
+    return cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S || cpfFormat === BLE_GATT_CPF_FORMAT_SLOT_TEXT;
+}
+
+function isUint32Like(cpfFormat: number | null): boolean {
+    return cpfFormat === BLE_GATT_CPF_FORMAT_UINT32 ||
+        cpfFormat === BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT ||
+        cpfFormat === BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING;
+}
 
 /**
  * Shared characteristic read/write/decode/animate logic, lifted out of the old single-page
@@ -67,13 +82,13 @@ export function useCharacteristicEditor() {
                 // service header instead, so skip it here (see device-state render loop).
                 if (charUuid === UUID_ANIMATION_NAME_CHARACTERISTIC) return;
                 // Only initialize for text/numeric inputs (not boolean or color)
-                if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S && charInfo.value) {
+                if (isUtf8Like(charInfo.cpfFormat) && charInfo.value) {
                     try {
                         initialValues[charUuid] = decodeUtf8FromBase64(charInfo.value);
                     } catch (e) {
                         console.log(`Error decoding UTF8 value for ${charUuid}:`, e);
                     }
-                } else if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UINT32 && charInfo.value) {
+                } else if (isUint32Like(charInfo.cpfFormat) && charInfo.value) {
                     try {
                         initialValues[charUuid] = String(decodeUint32FromBase64(charInfo.value));
                     } catch (e) {
@@ -109,10 +124,10 @@ export function useCharacteristicEditor() {
             // too, and for those, a pending/stored mismatch just means the user is mid-edit.
             if (lastSyncedValuesRef.current[charUuid] === charInfo.value) return;
             try {
-                if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S) {
+                if (isUtf8Like(charInfo.cpfFormat)) {
                     const decoded = decodeUtf8FromBase64(charInfo.value);
                     if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
-                } else if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UINT32) {
+                } else if (isUint32Like(charInfo.cpfFormat)) {
                     const decoded = String(decodeUint32FromBase64(charInfo.value));
                     if (prev[charUuid] !== decoded) updates[charUuid] = decoded;
                 } else if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32) {
@@ -157,13 +172,13 @@ export function useCharacteristicEditor() {
 
     function decodeValueForInput(cpfFormat: number | null, encodedValue: string, charUuid: string): string {
         try {
-            if (cpfFormat === BLE_GATT_CPF_FORMAT_UINT32) {
+            if (isUint32Like(cpfFormat)) {
                 return String(decodeUint32FromBase64(encodedValue));
             }
             if (cpfFormat === BLE_GATT_CPF_FORMAT_FLOAT32) {
                 return formatFloat32(decodeFloat32FromBase64(encodedValue));
             }
-            if (cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S) {
+            if (isUtf8Like(cpfFormat)) {
                 return decodeUtf8FromBase64(encodedValue);
             }
             return decodeUtf8FromBase64(encodedValue);
@@ -219,7 +234,7 @@ export function useCharacteristicEditor() {
                 />
             );
         }
-        if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UTF8S) {
+        if (isUtf8Like(charInfo.cpfFormat)) {
             return (
                 <CharacteristicUtf8
                     charUuid={charUuid}
@@ -230,7 +245,12 @@ export function useCharacteristicEditor() {
                 />
             );
         }
-        if (charInfo.cpfFormat === BLE_GATT_CPF_FORMAT_UINT32) {
+        // SLOT_UP_NEXT normally never reaches this dispatch (the slot playlist hides its row);
+        // this is the defined standalone fallback for a service that exposes SLOT_UP_NEXT with
+        // zero SLOT_TEXT siblings (or a duplicate) — degraded to a raw numeric input, never
+        // invisible. SLOT_NOW_PLAYING needs no branch: it's read-only, so the guard at the top
+        // already routes it to CharacteristicReadonly.
+        if (isUint32Like(charInfo.cpfFormat)) {
             return (
                 <CharacteristicUint32
                     charUuid={charUuid}
