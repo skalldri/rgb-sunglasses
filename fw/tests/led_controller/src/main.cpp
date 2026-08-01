@@ -15,7 +15,10 @@
 #include <zephyr/shell/shell_dummy.h>
 #include <zephyr/ztest.h>
 
+#include <string.h>
+
 #include "fake_led_strip.h"
+#include "led_stats_core.h"
 
 static const struct device *const strip0 = DEVICE_DT_GET(DT_ALIAS(led_strip_0));
 static const struct device *const strip1 = DEVICE_DT_GET(DT_ALIAS(led_strip_1));
@@ -153,6 +156,111 @@ ZTEST(led_controller, test_set_pixel_bounds_and_population) {
                   "(39,11) should be populated");
 
     zassert_equal(releaseBufferFromRender(buffer), 0, "releaseBufferFromRender failed");
+}
+
+
+/* ------------------------------------------------------------------------
+ * Frame-pacing stats (issue #267): led_stats_core logic + the shell command.
+ * ------------------------------------------------------------------------ */
+
+ZTEST(led_controller, test_stats_reset_clears_and_seeds_min) {
+    led_stats_core::Stats s{};
+    led_stats_core::recordFrame(s, true, 40000, 5000, 1000, 33300);
+    led_stats_core::recordOverrun(s);
+
+    led_stats_core::reset(s);
+
+    zassert_equal(s.frames, 0, "reset should clear the frame count");
+    zassert_equal(s.overruns, 0, "reset should clear overruns");
+    zassert_equal(s.intervalMaxUs, 0, "reset should clear max");
+    zassert_equal(s.intervalSumUs, 0, "reset should clear the sum");
+    // Seeded high so the first real sample always wins the min comparison.
+    zassert_equal(s.intervalMinUs, UINT32_MAX, "reset should seed min with the sentinel");
+}
+
+ZTEST(led_controller, test_stats_first_frame_records_no_interval) {
+    led_stats_core::Stats s;
+    led_stats_core::reset(s);
+
+    // haveInterval=false: there is no previous wake-up to measure against. The work and
+    // segment figures still count — only the interval is skipped.
+    led_stats_core::recordFrame(s, false, 999999, 7000, 2000, 33300);
+
+    zassert_equal(s.frames, 1, "the frame itself should still count");
+    zassert_equal(s.workMaxUs, 7000, "work should be recorded on the first frame");
+    zassert_equal(s.worstSegmentUs, 2000, "segment should be recorded on the first frame");
+    zassert_equal(s.intervalSumUs, 0, "no interval should be accumulated");
+    zassert_equal(s.intervalMaxUs, 0, "no interval should be recorded");
+
+    // ...and it must not leak the sentinel into the report.
+    led_stats_core::Summary sum = led_stats_core::summarize(s);
+    zassert_equal(sum.intervalSamples, 0, "one frame means zero interval samples");
+    zassert_equal(sum.intervalMinUs, 0, "min must not report the UINT32_MAX sentinel");
+    zassert_equal(sum.intervalAvgUs, 0, "avg must not divide by zero");
+}
+
+ZTEST(led_controller, test_stats_tracks_min_max_and_average) {
+    led_stats_core::Stats s;
+    led_stats_core::reset(s);
+
+    led_stats_core::recordFrame(s, false, 0, 1000, 500, 33300);  // seed frame
+    led_stats_core::recordFrame(s, true, 30000, 1000, 500, 33300);
+    led_stats_core::recordFrame(s, true, 40000, 1000, 500, 33300);
+    led_stats_core::recordFrame(s, true, 35000, 1000, 500, 33300);
+
+    led_stats_core::Summary sum = led_stats_core::summarize(s);
+    zassert_equal(sum.frames, 4, "four frames recorded");
+    zassert_equal(sum.intervalSamples, 3, "intervals are recorded from the 2nd frame on");
+    zassert_equal(sum.intervalMinUs, 30000, "min interval");
+    zassert_equal(sum.intervalMaxUs, 40000, "max interval");
+    zassert_equal(sum.intervalAvgUs, 35000, "avg of 30000/40000/35000");
+}
+
+ZTEST(led_controller, test_stats_late_frame_threshold) {
+    led_stats_core::Stats s;
+    led_stats_core::reset(s);
+    const uint32_t target = 33300;
+
+    led_stats_core::recordFrame(s, false, 0, 0, 0, target);
+    // Exactly 2x is NOT late — the comparison is strictly greater.
+    led_stats_core::recordFrame(s, true, 2 * target, 0, 0, target);
+    zassert_equal(s.lateFrames, 0, "exactly 2x target must not count as late");
+
+    led_stats_core::recordFrame(s, true, 2 * target + 1, 0, 0, target);
+    zassert_equal(s.lateFrames, 1, "just over 2x target is late");
+
+    // A zero target (display rate not yet readable) must not classify everything as late.
+    led_stats_core::recordFrame(s, true, 500000, 0, 0, 0);
+    zassert_equal(s.lateFrames, 1, "a zero target must not produce late frames");
+}
+
+ZTEST(led_controller, test_stats_keeps_worst_not_last) {
+    led_stats_core::Stats s;
+    led_stats_core::reset(s);
+
+    led_stats_core::recordFrame(s, false, 0, 9000, 8000, 33300);
+    led_stats_core::recordFrame(s, true, 33000, 100, 100, 33300);  // a fast frame after
+
+    zassert_equal(s.workMaxUs, 9000, "work max must survive a later smaller sample");
+    zassert_equal(s.worstSegmentUs, 8000, "worst segment must survive a later smaller sample");
+}
+
+ZTEST(led_controller, test_led_stats_shell_command) {
+    const struct shell *sh = shell_backend_dummy_get_ptr();
+    zassert_not_null(sh, "dummy shell backend missing");
+
+    // The real display thread is running in this suite, so frames accumulate on their own.
+    zassert_equal(shell_execute_cmd(sh, "led_stats reset"), 0, "led_stats reset failed");
+    k_msleep(kSeveralTicksMs);
+
+    shell_backend_dummy_clear_output(sh);
+    zassert_equal(shell_execute_cmd(sh, "led_stats"), 0, "led_stats failed");
+
+    size_t len = 0;
+    const char *out = shell_backend_dummy_get_output(sh, &len);
+    zassert_not_null(out, "no shell output captured");
+    zassert_not_null(strstr(out, "interval:"), "led_stats should report the interval line");
+    zassert_not_null(strstr(out, "worst segment:"), "led_stats should report worst segment");
 }
 
 ZTEST_SUITE(led_controller, NULL, NULL, NULL, NULL, NULL);

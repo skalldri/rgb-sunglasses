@@ -17,4 +17,4 @@ config IMU_THREAD_STACK_SIZE
 # Redeclared with the same default as fw/Kconfig so the assert is exercised here too.
 config APP_PATTERN_CONTROLLER_THREAD_PRIORITY
 	int "Pattern controller (render) thread priority"
-	default 6
+	default 4

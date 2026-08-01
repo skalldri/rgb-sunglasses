@@ -214,12 +214,16 @@ K_KERNEL_THREAD_DEFINE(audio_dsp_thread,
                        0                                      // Startup delay
 );
 
-// The default is negative, i.e. cooperative: while this thread runs an FFT it cannot be
-// preempted by the rendering threads at all. Kept as-is here so this change is a pure
-// Kconfig lift; issue #267 tracks revisiting it. See fw/docs/threading.md.
-BUILD_ASSERT(CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY >= -CONFIG_NUM_COOP_PRIORITIES &&
+// This thread was cooperative (-7) until issue #267. A running cooperative thread is never
+// preempted, so a CMSIS-DSP FFT here stalled every rendering thread for its full duration.
+// It must stay preemptible and ranked below both rendering threads.
+BUILD_ASSERT(CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY > CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY &&
+                 CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY >
+                     CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY,
+             "audio_dsp_thread must rank below both rendering threads");
+BUILD_ASSERT(CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY >= 0 &&
                  CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
-             "CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY is outside the configured priority range");
+             "CONFIG_APP_AUDIO_DSP_THREAD_PRIORITY must be a valid preemptible priority");
 
 int configure_pdm() {
     if (!device_is_ready(pdm0)) {
