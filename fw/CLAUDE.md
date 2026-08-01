@@ -61,6 +61,26 @@ twister -T fw/tests/animations/animation_registry -p native_sim
 
 Commands above are relative to the repo root (or worktree root) — always run them from there, not from inside `fw/`.
 
+### An incremental build IGNORES a changed Kconfig `default`
+
+Zephyr loads the existing `fw/build/fw/zephyr/.config` as the **base** for each configure pass, so editing a `default` in `fw/Kconfig` (or a driver `Kconfig`) and rebuilding incrementally silently keeps the **old** value. The build succeeds, so nothing warns you — verified 2026-08-01 while retuning thread priorities for issue #267: `default 3` → `default 2` rebuilt clean and `autoconf.h` still read `3`, and the flashed board ran the old priority.
+
+Note this only affects **defaults**. An explicit `CONFIG_FOO=...` in `prj.conf` or a board `.conf` *does* override on an incremental build — that asymmetry is what makes the failure so easy to miss.
+
+Either of these fixes it:
+
+```bash
+rm fw/build/fw/zephyr/.config      # cheaper than --pristine; forces one Kconfig regeneration
+```
+
+or set the value explicitly in `fw/prj.conf` instead of relying on the default (this is also the right way to build a throwaway A/B variant without touching committed defaults).
+
+**Always confirm the value actually landed before flashing** — this is the concrete reason for the root `CLAUDE.md` rule about checking `build/fw/zephyr/include/generated/zephyr/autoconf.h`:
+
+```bash
+grep CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY fw/build/fw/zephyr/include/generated/zephyr/autoconf.h
+```
+
 Treat successful `west build` as the primary validation step after any change. The NCS SDK lives at:
 
 | Host | NCS v3.1.1 path | How west gets on PATH |
@@ -200,6 +220,8 @@ App modules are compiled via `target_sources_ifdef(CONFIG_<MODULE> app PRIVATE .
 Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_CBPRINTF_FP_SUPPORT=n`); `CONFIG_SIZE_OPTIMIZATIONS=y` lives in the proto0 **board** conf, not `prj.conf`.
 
 **No `%f`/`%g` in log or shell format strings.** `CONFIG_CBPRINTF_FP_SUPPORT` and `CONFIG_PICOLIBC_IO_FLOAT` are disabled (~10KB FLASH, issue #79 ROM pass); a `%f` prints the literal specifier instead of the value (no crash). Print floats via integer fixed-point instead — see `fmt_fixed4()` / `agc_gain_db10()` in `src/sound/sound.cpp` (the only float-printing code in the app).
+
+**Changing a `default` here does not take effect on an incremental build** — see "An incremental build IGNORES a changed Kconfig `default`" above before you conclude a new value isn't working.
 
 **Don't reuse a Kconfig symbol from one subsystem to configure unrelated code in another, even if the value/semantics happen to line up.** E.g. a BT-free module's debounce/delay tunable should get its own `CONFIG_APP_*` symbol, not borrow `CONFIG_BT_SETTINGS_DELAYED_STORE_MS` just because the timing happens to match — that creates a hidden cross-subsystem dependency and works against this project's general push to decouple BT from non-BT code (see the animation/BT decoupling refactor above).
 
