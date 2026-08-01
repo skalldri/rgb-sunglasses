@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "led_stats_core.h"
+
 LOG_MODULE_REGISTER(led_controller, LOG_LEVEL_INF);
 
 static ConfigurationProvider *sLedConfigProvider = nullptr;
@@ -385,39 +387,26 @@ constexpr size_t kMaxStripPixels = std::max<size_t>(
      0});
 static struct led_rgb blackFrame[kMaxStripPixels];
 
-// Frame-pacing instrumentation (issue #267). The user-visible symptom is a stutter — the
-// panel holding a frame for 100-500 ms — which is a *scheduling* property, not a work-time
-// property: the pre-existing timing below only measured how long this thread's own work
-// took, so a frame delayed entirely by some other thread hogging the CPU looked perfectly
-// healthy. What matters is wake-to-wake interval, so that is what these track.
+// Frame-pacing instrumentation (issue #267). The tracking logic — and the reasoning about
+// why wake-to-wake interval rather than work time is the metric that matches the reported
+// stutter — lives in led_stats_core.h, where the native_sim suite can test it. This file
+// supplies the clock reads, the lock, and the shell output.
 //
-// worstSegmentUs is the safety metric for running this thread cooperatively: it is the
+// worstSegmentUs is the safety metric for ever running this thread cooperatively: the
 // longest stretch between two points where the loop can yield. NOTE it is an upper bound,
 // not pure CPU time — the per-strip segments include the SPI transfer wait, during which
-// the thread is blocked and other threads do run. A cooperative display thread is only
-// acceptable while this stays small, because a cooperative thread blocks even the
-// higher-priority Bluetooth threads until it yields (see fw/docs/threading.md).
-struct LedDisplayStats {
-    uint32_t frames;
-    uint32_t overruns;      // frames whose work exceeded the target interval
-    uint32_t intervalMinUs; // wake-to-wake
-    uint32_t intervalMaxUs;
-    uint64_t intervalSumUs;
-    uint32_t workMaxUs;         // this thread's own work per frame
-    uint32_t worstSegmentUs;    // longest stretch between yield points
-    uint32_t lateFrames;        // interval > 2x target
-};
-
+// the thread is blocked and other threads do run. (It measured 30.5 ms, which is one of the
+// reasons the display thread stayed preemptible; see fw/docs/threading.md.)
+//
 // Written once per frame by led_display_thread, read by the shell. A spinlock rather than
 // per-field atomics so a `led_stats` dump is a single coherent snapshot (and so the 64-bit
 // sum can't tear on this 32-bit core).
 struct k_spinlock sStatsLock;
-LedDisplayStats sStats = {};
+led_stats_core::Stats sStats = {};
 
 void statsReset() {
     K_SPINLOCK(&sStatsLock) {
-        sStats = LedDisplayStats{};
-        sStats.intervalMinUs = UINT32_MAX;
+        led_stats_core::reset(sStats);
     }
 }
 
@@ -543,33 +532,17 @@ void led_display_thread_func(void *a, void *b, void *c) {
         const uint32_t workUs =
             k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32())) - wakeUs;
 
+        // prevWakeUs == 0 only before the first frame, so there is no interval to record yet.
+        const bool haveInterval = (prevWakeUs != 0);
         K_SPINLOCK(&sStatsLock) {
-            sStats.frames++;
-            if (workUs > sStats.workMaxUs) {
-                sStats.workMaxUs = workUs;
-            }
-            if (worstSegUs > sStats.worstSegmentUs) {
-                sStats.worstSegmentUs = worstSegUs;
-            }
-            if (prevWakeUs != 0) {
-                const uint32_t intervalUs = wakeUs - prevWakeUs;
-                if (intervalUs < sStats.intervalMinUs) {
-                    sStats.intervalMinUs = intervalUs;
-                }
-                if (intervalUs > sStats.intervalMaxUs) {
-                    sStats.intervalMaxUs = intervalUs;
-                }
-                sStats.intervalSumUs += intervalUs;
-                if (targetUs != 0 && intervalUs > 2 * targetUs) {
-                    sStats.lateFrames++;
-                }
-            }
+            led_stats_core::recordFrame(sStats, haveInterval, wakeUs - prevWakeUs, workUs,
+                                        worstSegUs, targetUs);
         }
         prevWakeUs = wakeUs;
 
         if (updateTimeMs > kTargetFrameIntervalMs) {
             K_SPINLOCK(&sStatsLock) {
-                sStats.overruns++;
+                led_stats_core::recordOverrun(sStats);
             }
             overrunsSinceLog++;
             // Rate-limited so a sustained overrun can't bury every other log line.
@@ -628,27 +601,25 @@ static int cmd_led_stats(const struct shell *shell, size_t argc, char **argv) {
         return 0;
     }
 
-    LedDisplayStats s;
+    led_stats_core::Stats snapshot;
     K_SPINLOCK(&sStatsLock) {
-        s = sStats;
+        snapshot = sStats;
     }
 
-    if (s.frames == 0) {
+    if (snapshot.frames == 0) {
         shell_print(shell, "no frames recorded yet");
         return 0;
     }
 
+    const led_stats_core::Summary s = led_stats_core::summarize(snapshot);
     const uint32_t targetUs = static_cast<uint32_t>(getLedConfig().getDisplayRateMs() * 1000.0f);
-    // Intervals are only recorded from the second frame onwards.
-    const uint32_t intervalSamples = s.frames - 1;
-    const uint32_t avgUs =
-        intervalSamples ? static_cast<uint32_t>(s.intervalSumUs / intervalSamples) : 0;
 
     shell_print(shell, "frames:        %u", s.frames);
     shell_print(shell, "target:        %u us/frame", targetUs);
-    shell_print(shell, "interval:      min %u us  avg %u us  max %u us",
-                intervalSamples ? s.intervalMinUs : 0, avgUs, s.intervalMaxUs);
-    shell_print(shell, "late (>2x):    %u frame(s)", s.lateFrames);
+    shell_print(shell, "interval:      min %u us  avg %u us  max %u us", s.intervalMinUs,
+                s.intervalAvgUs, s.intervalMaxUs);
+    shell_print(shell, "late (>%ux):    %u frame(s)", led_stats_core::kLateFrameMultiple,
+                s.lateFrames);
     shell_print(shell, "work max:      %u us", s.workMaxUs);
     shell_print(shell, "worst segment: %u us  (upper bound - includes SPI wait)",
                 s.worstSegmentUs);
