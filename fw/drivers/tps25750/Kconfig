@@ -6,6 +6,25 @@ config TPS25750_INIT_PRIORITY
     int "TPS25750 device initialization priority"
     default 51
 
+config TPS25750_WORKQ_PRIORITY
+    int "TPS25750 work queue thread priority"
+    default 5
+    depends on TPS25750
+    help
+       Priority for the driver's dedicated work queue, which services the
+       interrupt and recovery work items. Those run multi-step CMD1/DATA1 4CC
+       bridge transactions under the task mutex, so this thread can hold the
+       CPU for a while — keep it numerically greater (lower priority) than the
+       rendering threads. See fw/docs/threading.md for the system-wide map.
+
+config TPS25750_WORKQ_STACK_SIZE
+    int "TPS25750 work queue thread stack size (bytes)"
+    default 1024
+    depends on TPS25750
+    help
+       Kernel-only stack (K_KERNEL_STACK_DEFINE): this stack can never host a
+       K_USER thread.
+
 config TPS25750_INTERNAL_PATCH
     bool "Manage TPS25750 firmware patching inside the driver. Requires TPS25750_PATCH_HEADER_FILE to be set."
     default n

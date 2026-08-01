@@ -98,8 +98,10 @@ config IMU_THREAD_PRIORITY
 	depends on IMU
 	help
 	  Preemptive Zephyr priority for the IMU reader thread. Lower numbers run
-	  first. Must be positive (preemptive) so the animation tick thread
-	  (priority 6) can preempt it.
+	  first. Must be positive (preemptive) and numerically greater than
+	  CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY so the animation tick
+	  thread can preempt it — enforced by a BUILD_ASSERT in src/imu/imu.cpp.
+	  See fw/docs/threading.md for the system-wide priority map.
 
 config IMU_THREAD_STACK_SIZE
 	int "IMU thread stack size (bytes)"
@@ -474,10 +476,12 @@ config APP_EXT_HOST_THREAD_PRIORITY
 	default 7
 	depends on APP_EXTENSION_HOST
 	help
-	  Preemptive Zephyr priority for the sandboxed extension thread. Must
-	  be numerically greater than the pattern controller thread (priority
-	  6) so a runaway extension can always be preempted by the thread that
-	  enforces its deadline.
+	  Preemptive Zephyr priority for the sandboxed extension thread. Must be
+	  numerically greater than CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY
+	  so a runaway extension can always be preempted by the thread that
+	  enforces its deadline — enforced by a BUILD_ASSERT in
+	  src/extensions/extension_host.cpp. See fw/docs/threading.md for the
+	  system-wide priority map.
 
 config APP_EXT_HOST_STACK_SIZE
 	int "Extension host thread stack size (bytes)"
@@ -640,5 +644,181 @@ config MCUBOOT_INFO_INIT_PRIORITY
 	help
 	  The init priority of the MCUboot info service. Lower numbers are
 	  initialized first. The default is 88, which is one-higher than CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY.
+
+menu "Thread priorities and stack sizes"
+
+# Zephyr priority convention, shared by every priority symbol in this menu:
+#
+#   negative  = cooperative (the K_PRIO_COOP band, -CONFIG_NUM_COOP_PRIORITIES .. -1).
+#               A cooperative thread is NEVER preempted — not by a preemptible thread,
+#               and not by a higher-priority cooperative one either. It runs until it
+#               blocks or sleeps.
+#   0 .. CONFIG_NUM_PREEMPT_PRIORITIES-1 = preemptible. Lower number = higher priority.
+#
+# Setting a thread cooperative is a deliberate act with system-wide consequences, not a
+# way to "make it faster". In particular a thread that does filesystem or flash I/O must
+# stay preemptible (see fw/CLAUDE.md's coding rules — a long flash write from a
+# cooperative thread starves everything else).
+#
+# Not every thread in the system is configured here: the Bluetooth host/controller
+# threads and Zephyr's system workqueue are all cooperative and therefore outrank every
+# preemptible thread below no matter what you set. fw/docs/threading.md has the full
+# system-wide map and the ordering invariants; read it before changing any default here.
+
+config APP_LED_DISPLAY_THREAD_PRIORITY
+	int "LED display thread priority"
+	default 6
+	help
+	  Priority for led_display_thread (src/led_controller.cpp), which clocks
+	  the most recently rendered framebuffer out to the WS2812 strips once
+	  per core/display_thread_rate_ms. This is the only thread in the system
+	  with a hard frame deadline, so it should outrank every other
+	  application thread. Must be numerically lower (higher priority) than
+	  APP_PATTERN_CONTROLLER_THREAD_PRIORITY — enforced by a BUILD_ASSERT in
+	  led_controller.cpp.
+
+config APP_LED_DISPLAY_THREAD_STACK_SIZE
+	int "LED display thread stack size (bytes)"
+	default 4096
+	help
+	  Kernel-only stack: the thread is created with K_KERNEL_THREAD_DEFINE,
+	  which skips the 1KB CONFIG_USERSPACE privileged stack, so this stack
+	  can never host a K_USER thread.
+
+config APP_PATTERN_CONTROLLER_THREAD_PRIORITY
+	int "Pattern controller (render) thread priority"
+	default 6
+	help
+	  Priority for pattern_controller_thread (src/pattern_controller.cpp),
+	  which ticks the active animation into a framebuffer once per
+	  core/render_thread_rate_ms.
+
+	  Keep this preemptible: the thread also does FAT/QSPI I/O (GLIM asset
+	  reads, .llext loads) and settings persistence, which fw/CLAUDE.md
+	  forbids from a cooperative thread.
+
+	  Both APP_EXT_HOST_THREAD_PRIORITY and IMU_THREAD_PRIORITY must be
+	  numerically greater than this value; BUILD_ASSERTs enforce it.
+
+config APP_PATTERN_CONTROLLER_THREAD_STACK_SIZE
+	int "Pattern controller (render) thread stack size (bytes)"
+	default 4096
+	help
+	  Kernel-only stack (K_KERNEL_THREAD_DEFINE). Extension code runs on the
+	  extension host's own K_USER sandbox thread, never on this one, so this
+	  stack never needs the CONFIG_USERSPACE privileged reservation.
+
+config APP_BT_THREAD_PRIORITY
+	int "Application Bluetooth state-machine thread priority"
+	default 6
+	help
+	  Priority for bt_thread (src/bluetooth.cpp) — the application's own
+	  advertising/connection state machine, NOT the Bluetooth host or
+	  controller threads (those are cooperative and are configured by
+	  CONFIG_BT_RX_PRIO / CONFIG_BT_HCI_TX_PRIO / CONFIG_BT_DRIVER_RX_HIGH_PRIO).
+	  This thread has no deadline: it blocks on a K_MSGQ and reacts to
+	  connection callbacks.
+
+config APP_BT_THREAD_STACK_SIZE
+	int "Application Bluetooth state-machine thread stack size (bytes)"
+	default 2048
+	help
+	  Verified against real connect/disconnect/GATT-write traffic (issue
+	  #75): the high-water mark stayed at 724 B out of the previous 8096 B
+	  budget, so 2048 B leaves ~2.8x margin. Kernel-only stack
+	  (K_KERNEL_THREAD_DEFINE).
+
+config APP_STATUS_LED_THREAD_PRIORITY
+	int "Status LED thread priority"
+	default 7
+	depends on STATUS_LED
+	help
+	  Priority for status_led_thread (src/status_led/status_led.cpp), which
+	  drives the two onboard WS2812 status LEDs. Cosmetic and low-rate — it
+	  should sit below the frame-deadline threads.
+
+config APP_STATUS_LED_THREAD_STACK_SIZE
+	int "Status LED thread stack size (bytes)"
+	default 2048
+	depends on STATUS_LED
+	help
+	  Kernel-only stack (K_KERNEL_THREAD_DEFINE).
+
+config APP_AUDIO_DSP_THREAD_PRIORITY
+	int "Audio DSP thread priority"
+	default -7
+	depends on AUDIO
+	help
+	  Priority for audio_dsp_thread (src/sound/sound.cpp), which runs the
+	  PDM capture, AGC and CMSIS-DSP FFT pipeline feeding the beat/fft_bars
+	  animations.
+
+	  The default is negative, i.e. cooperative, so this thread cannot be
+	  preempted by any rendering thread while it is running an FFT. See
+	  fw/docs/threading.md before changing it.
+
+config APP_AUDIO_DSP_THREAD_STACK_SIZE
+	int "Audio DSP thread stack size (bytes)"
+	default 2048
+	depends on AUDIO
+	help
+	  Verified against real beat/fft_bars animation load (issue #75): the
+	  high-water mark stayed at 692 B out of the previous 8096 B budget, so
+	  2048 B leaves ~3x margin, including headroom for K_FP_REGS' FPU
+	  context save. Kernel-only stack (K_KERNEL_THREAD_DEFINE).
+
+config APP_CHARGER_STATUS_THREAD_PRIORITY
+	int "Charger status thread priority"
+	default 7
+	help
+	  Priority for charger_status_thread (src/power.cpp), which polls the
+	  BQ25792 over the TPS25750 I2Cm bridge and drives the charge-status LED
+	  colour. Low-rate and cosmetic — keep it below the rendering threads.
+
+config APP_CHARGER_STATUS_THREAD_STACK_SIZE
+	int "Charger status thread stack size (bytes)"
+	default 1024
+	help
+	  Kernel-only stack (K_KERNEL_THREAD_DEFINE).
+
+	  Measured on proto0 hardware at 912 B of 1024 B used (89%), so there is
+	  very little headroom left here — re-check `kernel thread list` after
+	  adding anything to this thread's call path.
+
+config APP_PERSIST_WORKQ_PRIORITY
+	int "Priority for the persistent-value-store workqueue"
+	default 14
+	depends on APP_PERSIST_BT_CONFIG
+	help
+	  Priority for the workqueue that flushes debounced config writes to
+	  flash (src/settings/persistent_value_store.cpp). It does long, bursty
+	  NVS/QSPI work, so it must be the lowest-priority preemptible thread in
+	  the system. The default matches CONFIG_NUM_PREEMPT_PRIORITIES - 1, and
+	  a BUILD_ASSERT re-checks that relationship.
+
+config APP_COREDUMP_WORKQ_PRIORITY
+	int "Priority for the coredump manager workqueue"
+	default 14
+	depends on APP_COREDUMP_MANAGER
+	help
+	  Priority for the workqueue that drains crash dumps to
+	  /NAND:/coredump (src/debug/coredump_manager.cpp). Does FAT filesystem
+	  I/O, so it must be the lowest-priority preemptible thread in the
+	  system. Same reasoning and BUILD_ASSERT as
+	  APP_PERSIST_WORKQ_PRIORITY.
+
+config APP_MCUBOOT_UPDATER_WORKQ_PRIORITY
+	int "Priority for the MCUboot updater workqueue"
+	default 14
+	depends on APP_MCUBOOT_UPDATER
+	help
+	  Priority for the workqueue that erases, validates and rewrites the
+	  bootloader region (src/mcuboot_updater.cpp). Page-by-page internal
+	  flash rewrites are the longest-running flash operation in the
+	  firmware, so it must be the lowest-priority preemptible thread in the
+	  system. Same reasoning and BUILD_ASSERT as
+	  APP_PERSIST_WORKQ_PRIORITY.
+
+endmenu
 
 rsource "drivers/Kconfig"

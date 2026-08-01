@@ -1,3 +1,14 @@
 source "Kconfig.zephyr"
 
 rsource "../../../drivers/Kconfig"
+
+# power.cpp consumes these app symbols for charger_status_thread. They're defined in
+# fw/Kconfig, which standalone Twister apps don't see — redeclared here with the same
+# names and defaults. (Same pattern as fw/tests/imu/pipeline/Kconfig.)
+config APP_CHARGER_STATUS_THREAD_PRIORITY
+	int "Charger status thread priority"
+	default 7
+
+config APP_CHARGER_STATUS_THREAD_STACK_SIZE
+	int "Charger status thread stack size (bytes)"
+	default 1024

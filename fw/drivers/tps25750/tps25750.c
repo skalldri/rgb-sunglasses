@@ -930,12 +930,9 @@ int tps25750_go2p(const struct device *dev, uint8_t *task_result) {
     return ret;
 }
 
-#define TPS25750_WORKQ_STACK_SIZE 1024
-#define TPS25750_WORKQ_PRIORITY 5
-
 /* Kernel-only work queue: K_KERNEL_STACK_* skips the 1KB CONFIG_USERSPACE privileged
  * stack; this stack can never host a K_USER thread. */
-K_KERNEL_STACK_DEFINE(tps25750_workq_stack_area, TPS25750_WORKQ_STACK_SIZE);
+K_KERNEL_STACK_DEFINE(tps25750_workq_stack_area, CONFIG_TPS25750_WORKQ_STACK_SIZE);
 struct k_work_q tps25750_work_q;
 
 void tps25750_irq_work(struct k_work *item) {
@@ -1161,10 +1158,17 @@ static int tps25750_init(const struct device *dev) {
     LOG_INF("cfg: %p", cfg);
     LOG_INF("data: %p", data);
 
+    /* Named so `kernel thread list` can attribute this queue's priority and stack
+     * high-water mark on device — see fw/docs/threading.md. Declared here rather than
+     * at file scope: the patch-decompression test app compiles this file with no DT
+     * instance, so tps25750_init() is dropped as unused and a file-scope const would
+     * trip -Werror=unused-const-variable. */
+    static const struct k_work_queue_config workq_cfg = { .name = "tps25750_wq" };
+
     k_work_queue_init(&tps25750_work_q);
     k_work_queue_start(&tps25750_work_q, tps25750_workq_stack_area,
-                       K_KERNEL_STACK_SIZEOF(tps25750_workq_stack_area), TPS25750_WORKQ_PRIORITY,
-                       NULL);
+                       K_KERNEL_STACK_SIZEOF(tps25750_workq_stack_area),
+                       CONFIG_TPS25750_WORKQ_PRIORITY, &workq_cfg);
 
     k_work_init_delayable(&data->work, tps25750_irq_work);
     k_work_init_delayable(&data->recovery_work, tps25750_recovery_work);

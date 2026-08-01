@@ -75,6 +75,12 @@ constexpr coredump_manager_core::PartitionOps kRealOps = {
  * (fatfs reformat measured ~5 KB) — too big for the 2 KB system workqueue.
  * Same pattern as persistent_value_store.cpp. */
 K_THREAD_STACK_DEFINE(coredump_workq_stack, CONFIG_APP_COREDUMP_WORKQ_STACK_SIZE);
+
+// FAT filesystem I/O; must never outrank a rendering thread. The default matches
+// CONFIG_NUM_PREEMPT_PRIORITIES - 1 (see fw/docs/threading.md).
+BUILD_ASSERT(CONFIG_APP_COREDUMP_WORKQ_PRIORITY >= 0 &&
+                 CONFIG_APP_COREDUMP_WORKQ_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
+             "CONFIG_APP_COREDUMP_WORKQ_PRIORITY must be a valid preemptible priority");
 struct k_work_q coredump_workq;
 
 void check_work_handler(struct k_work* work);
@@ -119,9 +125,12 @@ void check_work_handler(struct k_work* work) {
 
 int coredump_manager_init() {
     k_work_queue_init(&coredump_workq);
+    // Named so `kernel thread list` can attribute this queue's priority and stack
+    // high-water mark on device — see fw/docs/threading.md.
+    static const struct k_work_queue_config cfg = {.name = "coredump_wq"};
     k_work_queue_start(&coredump_workq, coredump_workq_stack,
                        K_THREAD_STACK_SIZEOF(coredump_workq_stack),
-                       (CONFIG_NUM_PREEMPT_PRIORITIES - 1), NULL);
+                       CONFIG_APP_COREDUMP_WORKQ_PRIORITY, &cfg);
     // First pass shortly after boot (once USB/FAT have settled), then periodic.
     k_work_reschedule_for_queue(&coredump_workq, &sCheckWork, K_SECONDS(5));
     return 0;

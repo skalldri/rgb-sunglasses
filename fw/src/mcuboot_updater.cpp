@@ -77,6 +77,13 @@ static uint8_t s_scratch_buf[kPageSize];
 // Kernel-only work queue: K_KERNEL_STACK_* skips the 1KB CONFIG_USERSPACE privileged
 // stack; this stack can never host a K_USER thread.
 K_KERNEL_STACK_DEFINE(s_updater_stack, CONFIG_APP_MCUBOOT_UPDATER_STACK_SIZE);
+
+/* Page-by-page internal flash rewrites are the longest flash operation in the firmware;
+ * this queue must never outrank a rendering thread. The default matches
+ * CONFIG_NUM_PREEMPT_PRIORITIES - 1 (see fw/docs/threading.md). */
+BUILD_ASSERT(CONFIG_APP_MCUBOOT_UPDATER_WORKQ_PRIORITY >= 0 &&
+                 CONFIG_APP_MCUBOOT_UPDATER_WORKQ_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
+             "CONFIG_APP_MCUBOOT_UPDATER_WORKQ_PRIORITY must be a valid preemptible priority");
 static struct k_work_q      s_updater_wq;
 static struct k_work        s_erase_work;
 static struct k_work        s_validate_work;
@@ -410,9 +417,12 @@ void mcuboot_updater_init(mcuboot_updater_status_cb_t cb)
     s_status.flash_unlocked = (bm == 1) ? 1U : 0U;
 
     k_work_queue_init(&s_updater_wq);
+    /* Named so `kernel thread list` can attribute this queue's priority and stack
+     * high-water mark on device — see fw/docs/threading.md. */
+    static const struct k_work_queue_config wq_cfg = { .name = "mcuboot_upd_wq" };
     k_work_queue_start(&s_updater_wq, s_updater_stack,
                        K_KERNEL_STACK_SIZEOF(s_updater_stack),
-                       CONFIG_NUM_PREEMPT_PRIORITIES - 1, NULL);
+                       CONFIG_APP_MCUBOOT_UPDATER_WORKQ_PRIORITY, &wq_cfg);
     k_work_init(&s_erase_work,    erase_work_handler);
     k_work_init(&s_validate_work, validate_work_handler);
     k_work_init(&s_commit_work,   commit_work_handler);

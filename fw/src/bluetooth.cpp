@@ -160,9 +160,14 @@ void bt_thread_func(void *a, void *b, void *c);
 
 // Stack size verified against real connect/disconnect/GATT-write traffic (issue #75):
 // high-water mark stayed at 724 B out of the previous 8096 B budget. 2048 B leaves ~2.8x margin.
+// (That rationale now also lives in CONFIG_APP_BT_THREAD_STACK_SIZE's help text.)
 // Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
 // this stack can never host a K_USER thread.
-K_KERNEL_THREAD_DEFINE(bt_thread, 2048, bt_thread_func, NULL, NULL, NULL, 6, 0, 0);
+// NOTE: this is the *application's* BT state-machine thread, not the Bluetooth host or
+// controller threads — those are cooperative and configured by CONFIG_BT_RX_PRIO and
+// friends, so they outrank this one regardless. See fw/docs/threading.md.
+K_KERNEL_THREAD_DEFINE(bt_thread, CONFIG_APP_BT_THREAD_STACK_SIZE, bt_thread_func, NULL, NULL, NULL,
+                       CONFIG_APP_BT_THREAD_PRIORITY, 0, 0);
 
 // Diagnostic-only (issue #41 investigation): tracks the currently connected peer so the
 // `bt_conn_info` shell command (below) can report live LE connection parameters on demand,

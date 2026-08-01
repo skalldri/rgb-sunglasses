@@ -30,8 +30,19 @@ void led_display_thread_func(void *a, void *b, void *c);
 
 // Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
 // this stack can never host a K_USER thread.
-K_KERNEL_THREAD_DEFINE(led_display_thread, 4096, led_display_thread_func, NULL, NULL, NULL, 6, 0,
-                       0);
+K_KERNEL_THREAD_DEFINE(led_display_thread, CONFIG_APP_LED_DISPLAY_THREAD_STACK_SIZE,
+                       led_display_thread_func, NULL, NULL, NULL,
+                       CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY, 0, 0);
+
+// The display thread carries the only hard frame deadline in the system, so it must never
+// rank below the thread that produces the frames. (They are equal by default today; issue
+// #267 tracks separating them.) See fw/docs/threading.md.
+BUILD_ASSERT(CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY <=
+                 CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY,
+             "led_display_thread must not rank below pattern_controller_thread");
+BUILD_ASSERT(CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY >= -CONFIG_NUM_COOP_PRIORITIES &&
+                 CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
+             "CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY is outside the configured priority range");
 
 // Device Tree Node ID's for the LED strips
 #define LED_STRIP_0_NODE_ID DT_ALIAS(led_strip_0)
