@@ -34,10 +34,29 @@ LOG_MODULE_REGISTER(audio_dsp);
 namespace {
 class DefaultAudioDspConfigProvider : public AudioDspConfigProvider {
    public:
-    float getFluxGamma() override { return 1000.0f; }
-    float getBeatFluxFloor() override { return 0.005f; }
-    float getBeatAlpha() override { return 3.5f; }
-    uint32_t getBeatRefractoryFrames() override { return 5; }
+    float getFluxGamma() override { return fluxGamma_; }
+    void setFluxGamma(float value) override { fluxGamma_ = std::clamp(value, 1.0f, 100000.0f); }
+
+    float getBeatFluxFloor() override { return beatFluxFloor_; }
+    void setBeatFluxFloor(float value) override {
+        beatFluxFloor_ = std::clamp(value, 0.0f, 1.0f);
+    }
+
+    float getBeatAlpha() override { return beatAlpha_; }
+    void setBeatAlpha(float value) override { beatAlpha_ = std::clamp(value, 0.1f, 20.0f); }
+
+    uint32_t getBeatRefractoryFrames() override { return beatRefractoryFrames_; }
+    void setBeatRefractoryFrames(uint32_t value) override {
+        /* Clamped to fit the uint8_t per-band refractory counter below. */
+        beatRefractoryFrames_ = std::clamp<uint32_t>(value, 0, 255);
+    }
+
+   private:
+    /* Defaults (and clamp ranges) mirror the BT-backed AudioConfig in audio_config.cpp. */
+    float fluxGamma_ = 1000.0f;
+    float beatFluxFloor_ = 0.005f;
+    float beatAlpha_ = 3.5f;
+    uint32_t beatRefractoryFrames_ = 5;
 };
 
 DefaultAudioDspConfigProvider sDefaultProvider;
@@ -47,6 +66,8 @@ AudioDspConfigProvider *sProvider = &sDefaultProvider;
 void audio_dsp_set_config_provider(AudioDspConfigProvider *provider) {
     sProvider = provider ? provider : &sDefaultProvider;
 }
+
+AudioDspConfigProvider *audio_dsp_get_config_provider(void) { return sProvider; }
 
 /* Sub-band bin boundaries (512-pt FFT at 16 kHz, bin width = 31.25 Hz).
  * Band 0 bass:    bins  1– 6  →  31– 200 Hz (kick drum)
@@ -171,6 +192,7 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
             flux = log_e - s_prev_log_energy[b];
         }
         s_prev_log_energy[b] = log_e;
+        out->band_flux[b] = flux;
 
         /* 4c. Adaptive threshold: track flux history, compute mean + alpha*sigma. */
         s_band_flux_history[b][s_history_idx] = flux;

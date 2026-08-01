@@ -151,9 +151,13 @@ namespace {
 class FakeAudioDspConfigProvider : public AudioDspConfigProvider {
    public:
     float getFluxGamma() override { return 1000.0f; }
+    void setFluxGamma(float) override {}
     float getBeatFluxFloor() override { return 0.005f; }
+    void setBeatFluxFloor(float) override {}
     float getBeatAlpha() override { return 1000.0f; /* practically unreachable threshold */ }
+    void setBeatAlpha(float) override {}
     uint32_t getBeatRefractoryFrames() override { return 5; }
+    void setBeatRefractoryFrames(uint32_t) override {}
 };
 }  // namespace
 
@@ -183,6 +187,78 @@ ZTEST(audio_dsp, test_custom_config_provider_overrides_defaults) {
     audio_dsp_set_config_provider(NULL);
 
     zassert_false(beat_fired, "beat[0] should not fire with an injected BeatAlpha=1000 threshold");
+}
+
+/* ── Test 7: band_flux is populated and consistent with the beat decision ────
+ * band_flux (added for the issue #264 debugging environment) must carry the
+ * actual per-frame ODF value: ~0 on silence, large and positive on the onset
+ * frame — and on a beat frame it must exceed the mean + alpha*sigma threshold
+ * the detector reports through band_mean/band_sigma. */
+ZTEST(audio_dsp, test_band_flux_populated) {
+    audio_dsp_init();
+
+    int16_t pcm[AUDIO_FFT_SIZE];
+    struct audio_analysis_result result;
+
+    make_silence(pcm);
+    for (int i = 0; i < HISTORY_LEN; i++) {
+        audio_dsp_process(pcm, i, &result);
+    }
+    for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+        zassert_true(result.band_flux[b] < 0.001f, "silence flux in band %d should be ~0 (%f)",
+                     b, (double)result.band_flux[b]);
+    }
+
+    make_100hz_sine(pcm);
+    audio_dsp_process(pcm, HISTORY_LEN, &result);
+
+    zassert_true(result.beat[0], "onset should fire beat[0]");
+    zassert_true(result.band_flux[0] > 1.0f, "onset flux should be large (%f)",
+                 (double)result.band_flux[0]);
+    /* The reported flux/mean/sigma triple must reproduce the fire decision
+     * (default alpha = 3.5). */
+    zassert_true(result.band_flux[0] > result.band_mean[0] + 3.5f * result.band_sigma[0],
+                 "flux (%f) should exceed reported threshold (%f)",
+                 (double)result.band_flux[0],
+                 (double)(result.band_mean[0] + 3.5f * result.band_sigma[0]));
+}
+
+/* ── Test 8: Default provider setters clamp and round-trip ──────────────────
+ * The "sound dsp set" shell path writes through audio_dsp_get_config_provider();
+ * with no BT provider injected that's the built-in DefaultAudioDspConfigProvider.
+ * Verify set→get round-trips and that out-of-range values clamp to the same
+ * ranges the BT-backed AudioConfig enforces. Restores defaults at the end so
+ * other tests in this suite are unaffected regardless of execution order. */
+ZTEST(audio_dsp, test_default_provider_setters_clamp) {
+    audio_dsp_set_config_provider(NULL); /* ensure the built-in default provider */
+    AudioDspConfigProvider *p = audio_dsp_get_config_provider();
+    zassert_not_null(p, "default provider must never be NULL");
+
+    p->setFluxGamma(500.0f);
+    zassert_within(p->getFluxGamma(), 500.0f, 1e-3f, "gamma round-trip");
+    p->setFluxGamma(0.001f); /* below range → clamps to 1.0 */
+    zassert_within(p->getFluxGamma(), 1.0f, 1e-6f, "gamma clamps low");
+
+    p->setBeatFluxFloor(0.02f);
+    zassert_within(p->getBeatFluxFloor(), 0.02f, 1e-6f, "floor round-trip");
+    p->setBeatFluxFloor(2.0f); /* above range → clamps to 1.0 */
+    zassert_within(p->getBeatFluxFloor(), 1.0f, 1e-6f, "floor clamps high");
+
+    p->setBeatAlpha(2.5f);
+    zassert_within(p->getBeatAlpha(), 2.5f, 1e-6f, "alpha round-trip");
+    p->setBeatAlpha(0.0f); /* below range → clamps to 0.1 */
+    zassert_within(p->getBeatAlpha(), 0.1f, 1e-6f, "alpha clamps low");
+
+    p->setBeatRefractoryFrames(10);
+    zassert_equal(p->getBeatRefractoryFrames(), 10, "refractory round-trip");
+    p->setBeatRefractoryFrames(999); /* above uint8_t counter range → clamps to 255 */
+    zassert_equal(p->getBeatRefractoryFrames(), 255, "refractory clamps to 255");
+
+    /* Restore the documented defaults. */
+    p->setFluxGamma(1000.0f);
+    p->setBeatFluxFloor(0.005f);
+    p->setBeatAlpha(3.5f);
+    p->setBeatRefractoryFrames(5);
 }
 
 ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, NULL, NULL);

@@ -191,7 +191,7 @@ grep -rlE 'bluetooth|BT_GATT|BtGatt' fw/src/animations/
   - Prefer exercising power code on native_sim first: `tests/drivers/emul_tps25750` runs the **real** tps25750 + bq25792 drivers against an emulated register file — no hardware, no risk.
 - `src/buttons.cpp` — GPIO button handling. Button callback runs in ISR context; dispatch to `ButtonEventListener` is deferred via `K_MSGQ_DEFINE` + `k_work` for thread safety.
 - `src/fonts/` — `FontAtlas` and `FontShell` provide bitmap font rendering used by `TextAnimation` and `BtPairingAnimation`.
-- `src/sound/sound.cpp` — PDM microphone via VM3011 driver; conditionally compiled with `CONFIG_AUDIO`.
+- `src/sound/sound.cpp` — PDM microphone capture + AGC + audio DSP thread; conditionally compiled with `CONFIG_AUDIO`. (The VM3011 driver path is compiled out on proto0 — `CONFIG_VM3011` unset.) Beat detection lives in the BT-free `src/sound/audio_dsp.cpp`. **Debugging/tuning beat detection**: see `fw/docs/beat-detection-debugging.md` — on-device capture (`sound mic record_wav`, `sound dump`, `sound agc freeze/gain`, `sound dsp`), a native_sim WAV-replay harness (`fw/tests/sound/audio_dsp_replay/`), and offline scoring/plot tooling (`fw/tools/beat_lab/`), all gated by `CONFIG_APP_AUDIO_DEBUG`.
 - `src/core_config.cpp` — device-level settings (brightness, display/render thread rates, status LED brightness), each backed by `BtGattPersistentCharacteristic` so they persist via Zephyr's settings subsystem (see below).
 
 ### Settings-backed config persistence
@@ -412,7 +412,10 @@ new file under `.serial_mcp/plugins/`) and update `SERIAL_MCP_PLUGINS` according
 
 Tools: `rgb_sunglasses.get_animation`, `rgb_sunglasses.set_animation` (name one of
 `none, zigzag, text, rainbow, my_eyes, beat, fft_bars, bad_apple, nyan_cat`),
-`rgb_sunglasses.clear_indicator`.
+`rgb_sunglasses.clear_indicator`, plus the beat-detection capture tools
+`rgb_sunglasses.sound_record` (freeze AGC gain → `sound mic record_wav` → parsed
+result incl. dropped-frame count) and `rgb_sunglasses.sound_dump` (capture N
+frames of live analysis to a host file) — see `fw/docs/beat-detection-debugging.md`.
 
 **Always clear the active BT indicator before starting an animation.** A BT
 indicator (advertising/connecting/pairing overlay) overrides whatever animation

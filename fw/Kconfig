@@ -782,6 +782,20 @@ config APP_AUDIO_DSP_THREAD_STACK_SIZE
 	  2048 B leaves ~3x margin, including headroom for K_FP_REGS' FPU
 	  context save. Kernel-only stack (K_KERNEL_THREAD_DEFINE).
 
+config APP_AUDIO_DEBUG
+	bool "Audio beat-detection debug instrumentation"
+	default y
+	depends on AUDIO
+	help
+	  Compiles in the beat-detection debugging surface (issue #264): the
+	  audio tap queue that lets "sound mic record_wav" and "sound dump"
+	  capture the exact PCM frames + analysis results the DSP thread
+	  processed, plus the "sound agc freeze"/"sound agc gain" and
+	  "sound dsp" shell commands. Static RAM cost ~33 KB total: 16-entry
+	  tap queue (~18.5 KB) + sector-aligned WAV/CSV write-batching and
+	  drain buffers (~14.5 KB) in sound.cpp. Disable to reclaim it once
+	  beat detection tuning is finished.
+
 config APP_CHARGER_STATUS_THREAD_PRIORITY
 	int "Charger status thread priority"
 	default 8

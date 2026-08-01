@@ -116,6 +116,50 @@ TOOLS = [
         },
     ),
     Tool(
+        name="rgb_sunglasses.sound_record",
+        description=(
+            "Record mic audio + per-frame beat analysis on the dev board "
+            "(`sound mic record_wav`): freezes AGC gain at the given register value "
+            "first so the capture is replay-comparable, then records duration_s "
+            "seconds to /NAND:/sound.wav (+ .csv sidecar with per-frame analysis). "
+            "Pull the files off the USB mass-storage disk afterwards; analyze with "
+            "fw/tools/beat_lab (see fw/docs/beat-detection-debugging.md)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "duration_s": {"type": "integer", "minimum": 1, "maximum": 120},
+                "gain": {
+                    "type": "string",
+                    "description": "PDM gain register value to freeze at, e.g. '0x28' (0 dB)",
+                },
+                "path": {"type": "string", "description": "output path (default /NAND:/sound.wav)"},
+            },
+            "required": ["connection_id", "duration_s"],
+        },
+    ),
+    Tool(
+        name="rgb_sunglasses.sound_dump",
+        description=(
+            "Stream N frames of live beat-detection analysis off the dev board "
+            "(`sound dump`) and save the capture (D-line format, see "
+            "fw/tools/beat_lab/frames.py) to a host file. ~31 frames/second."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "frames": {"type": "integer", "minimum": 1, "maximum": 10000},
+                "output_path": {"type": "string",
+                                "description": "host file to write the capture to"},
+                "buckets": {"type": "boolean",
+                            "description": "include the 20 display-bucket energies"},
+            },
+            "required": ["connection_id", "frames", "output_path"],
+        },
+    ),
+    Tool(
         name="rgb_sunglasses.glim_set_loop_mode",
         description=(
             "Set the Glim Player's loop mode (`glim set_loop_mode <mode>`): loop_one "
@@ -258,6 +302,62 @@ async def handle_glim_set_loop_mode(state: SerialState, args: dict) -> dict:
     return _ok(loop_mode=mode)
 
 
+async def handle_sound_record(state: SerialState, args: dict) -> dict:
+    connection_id = args["connection_id"]
+    duration_s = args["duration_s"]
+    gain = args.get("gain", "0x28")
+    path = args.get("path", "/NAND:/sound.wav")
+
+    # Freeze the gain first — an AGC step mid-recording would make the capture
+    # unusable for device-vs-host replay comparison (see beat-detection-debugging.md).
+    freeze_out = await _run_command(state, connection_id, f"sound agc gain {gain}")
+    if "set to" not in freeze_out:
+        return _err("agc_gain_failed", freeze_out or "no response to 'sound agc gain'")
+
+    # The recording itself blocks the shell for duration_s; wait generously.
+    output = await _run_command(
+        state, connection_id, f"sound mic record_wav {duration_s} {path}",
+        timeout_ms=(duration_s + 10) * 1000, max_rounds=10,
+    )
+    if "Wrote" not in output:
+        return _err("record_failed", output or "no response from record_wav")
+
+    m = re.search(r"Wrote (\d+) bytes of PCM to (\S+) \((\d+) frames, (\d+) dropped,"
+                  r" (\d+) io retries\)", output)
+    if not m:
+        return _ok(raw=output)
+    return _ok(bytes=int(m.group(1)), wav_path=m.group(2), csv_path=m.group(2) + ".csv",
+               frames=int(m.group(3)), dropped=int(m.group(4)), io_retries=int(m.group(5)),
+               contiguous=(int(m.group(4)) == 0))
+
+
+async def handle_sound_dump(state: SerialState, args: dict) -> dict:
+    connection_id = args["connection_id"]
+    frames = args["frames"]
+    output_path = args["output_path"]
+    buckets = args.get("buckets", False)
+
+    cmd = f"sound dump {frames}" + (" buckets" if buckets else "")
+    # ~31 frames/s plus slack for shell throughput.
+    timeout_ms = int(frames * 40 + 5000)
+    output = await _run_command(state, connection_id, cmd,
+                                timeout_ms=min(timeout_ms, 30000),
+                                max_rounds=max(6, frames // 50))
+    if "#DONE" not in output:
+        return _err("dump_incomplete", (output[-500:] if output else "no response"))
+
+    kept = [ln for ln in output.split("\n")
+            if ln.startswith(("D,", "#PARAMS", "#DONE"))]
+    with open(output_path, "w") as f:
+        f.write("\n".join(kept) + "\n")
+
+    done = kept[-1] if kept and kept[-1].startswith("#DONE") else ""
+    m = re.search(r"frames=(\d+) dropped=(\d+)", done)
+    return _ok(output_path=output_path, lines=len(kept),
+               frames=int(m.group(1)) if m else None,
+               dropped=int(m.group(2)) if m else None)
+
+
 HANDLERS = {
     "rgb_sunglasses.clear_indicator": handle_clear_indicator,
     "rgb_sunglasses.set_animation": handle_set_animation,
@@ -265,4 +365,6 @@ HANDLERS = {
     "rgb_sunglasses.glim_list": handle_glim_list,
     "rgb_sunglasses.glim_select": handle_glim_select,
     "rgb_sunglasses.glim_set_loop_mode": handle_glim_set_loop_mode,
+    "rgb_sunglasses.sound_record": handle_sound_record,
+    "rgb_sunglasses.sound_dump": handle_sound_dump,
 }

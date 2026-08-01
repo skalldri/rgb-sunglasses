@@ -26,15 +26,23 @@ class AudioDspConfigProvider {
 
     /** Log-compression factor: log1p(GAMMA * energy). */
     virtual float getFluxGamma() = 0;
+    /** Set (clamped by the implementation) — used by the "sound dsp set" shell path. */
+    virtual void setFluxGamma(float value) = 0;
 
     /** Minimum flux to prevent false positives on silence. */
     virtual float getBeatFluxFloor() = 0;
+    /** Set (clamped by the implementation). */
+    virtual void setBeatFluxFloor(float value) = 0;
 
     /** Adaptive threshold multiplier: mean + alpha * sigma. */
     virtual float getBeatAlpha() = 0;
+    /** Set (clamped by the implementation). */
+    virtual void setBeatAlpha(float value) = 0;
 
     /** Minimum frames between beats per band. */
     virtual uint32_t getBeatRefractoryFrames() = 0;
+    /** Set (clamped to [0, 255] to fit the uint8_t per-band counter). */
+    virtual void setBeatRefractoryFrames(uint32_t value) = 0;
 };
 
 /**
@@ -43,6 +51,13 @@ class AudioDspConfigProvider {
  * Pass nullptr to revert to the built-in default (historical #define values).
  */
 void audio_dsp_set_config_provider(AudioDspConfigProvider *provider);
+
+/**
+ * @brief Returns the provider currently in effect (never nullptr - falls back to the
+ * built-in default). Lets the "sound dsp" shell commands read/write the same values
+ * audio_dsp_process() uses without knowing which concrete provider is installed.
+ */
+AudioDspConfigProvider *audio_dsp_get_config_provider(void);
 
 /**
  * @brief Injects the real BT-backed config provider. Implemented in audio_config.cpp
@@ -54,6 +69,7 @@ void audio_dsp_bind_default_bt_dependencies();
 
 struct audio_analysis_result {
     float band_energy[AUDIO_NUM_BANDS];
+    float band_flux[AUDIO_NUM_BANDS];  /* half-wave-rectified log spectral flux (the ODF) */
     float band_mean[AUDIO_NUM_BANDS];  /* history mean, for noise-floor tuning */
     float band_sigma[AUDIO_NUM_BANDS]; /* history std-dev, for noise-floor tuning */
     bool beat[AUDIO_NUM_BANDS];
