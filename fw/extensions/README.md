@@ -146,11 +146,21 @@ sync && umount /mnt/sunglasses-fs
 ext list                      # slots, ids, names, [active]/[FAULTED] flags
 ext select <slot>             # activate an extension animation (clears a fault)
 ext param <slot> <idx> [<v>]  # get/set a param (bools 0/1, strings as text)
-ext stats                     # per-extension tick-handshake timing (us)
+ext stats                     # per-extension timing, cpu and wall rows (us)
 ```
 
+`ext stats` prints a `cpu` row and a `wall` row per slot. The **cpu** row is the
+extension's own cost and is what the per-tick budget is enforced against; the
+**wall** row additionally contains whatever preempted the sandbox and will run
+higher under load, by design (issue #276). Read cpu when judging an extension.
+
 `hello` doubles as the sandbox-recovery test: its `Crash` bool makes the next
-tick MPU-fault; `Hang` makes it spin until the deadline. Both abort only the
+tick MPU-fault; `Hang` makes it spin until it exceeds its CPU budget. `Crash` is
+reported as soon as the sandbox thread is seen dead; `Hang` takes as long as the
+sandbox needs to actually burn `CONFIG_APP_EXT_TICK_CPU_BUDGET_MS` of CPU, so on
+a loaded system the fault banner appears later than the budget itself (a budget
+is spent at the rate the scheduler grants it — the wall backstop bounds the
+tail). Both abort only the
 sandbox thread, unload the extension, push Is Active = false to the app, and
 scroll the fault banner; `ext select <slot>` clears the fault and retries
 (BLE activation of a faulted extension is rejected, so recovery is always a

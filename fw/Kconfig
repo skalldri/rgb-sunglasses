@@ -459,6 +459,7 @@ config APP_USB_PRODUCT_STRING
 config APP_EXTENSION_HOST
 	bool "Sandboxed LLEXT animation extension host"
 	depends on LLEXT && USERSPACE && FAT_FILESYSTEM_ELM
+	select THREAD_RUNTIME_STATS
 	default n
 	help
 	  Discovers .llext animation extensions on /NAND:/ext at boot, loads
@@ -467,9 +468,12 @@ config APP_EXTENSION_HOST
 	  memory domain (issue #85). The kernel-side pattern controller
 	  exchanges data with the extension purely through the extension's own
 	  exported globals (see include/rgbx/rgbx_api.h), enforcing a per-tick
-	  deadline with abort/recreate/fallback recovery. Proto0 only — the
+	  CPU budget with abort/recreate/fallback recovery. Proto0 only — the
 	  legacy DK board (dk-support branch) has neither LLEXT nor USERSPACE
 	  enabled.
+
+	  Selects THREAD_RUNTIME_STATS because the per-tick budget is charged
+	  against the sandbox thread's own execution_cycles (issue #276).
 
 config APP_EXT_HOST_THREAD_PRIORITY
 	int "Extension host thread priority"
@@ -479,23 +483,72 @@ config APP_EXT_HOST_THREAD_PRIORITY
 	  Preemptive Zephyr priority for the sandboxed extension thread. Must be
 	  numerically greater than CONFIG_APP_PATTERN_CONTROLLER_THREAD_PRIORITY
 	  so a runaway extension can always be preempted by the thread that
-	  enforces its deadline — enforced by a BUILD_ASSERT in
+	  enforces its budget — enforced by a BUILD_ASSERT in
 	  src/extensions/extension_host.cpp. See fw/docs/threading.md for the
 	  system-wide priority map.
+
+	  That assert is the ONLY schedulability property checkable at build time;
+	  the sandbox's worst-case scheduling latency is not expressible here.
+	  See fw/docs/threading.md, "The extension sandbox's scheduling latency is
+	  unbounded — by design".
 
 config APP_EXT_HOST_STACK_SIZE
 	int "Extension host thread stack size (bytes)"
 	default 2048
 	depends on APP_EXTENSION_HOST
 
-config APP_EXT_TICK_DEADLINE_MS
-	int "Extension tick deadline (ms)"
+config APP_EXT_TICK_CPU_BUDGET_MS
+	int "Extension tick CPU budget (ms)"
 	default 50
+	range 1 1000
 	depends on APP_EXTENSION_HOST
 	help
-	  How long the pattern controller waits for the sandboxed extension to
-	  finish one tick before declaring it hung, aborting the host thread,
-	  and falling back (issue #85 recovery path).
+	  How much CPU the sandbox thread itself may consume in one tick before
+	  the host declares the extension a runaway, aborts it, and falls back
+	  (issue #85 recovery path).
+
+	  This is CPU time charged to the sandbox thread, NOT elapsed wall time
+	  (issue #276) — see fw/docs/threading.md for why, and for the bounds
+	  that constrain this and APP_EXT_TICK_WALL_BACKSTOP_MS.
+
+	  The default preserves the old wall-clock deadline's value, so the
+	  "how much may one tick cost" contract is unchanged — only the quantity
+	  being measured is corrected. Note a CPU budget is spent at the rate the
+	  scheduler grants it, so a runaway on a loaded system is caught later in
+	  wall terms than a flat deadline caught it; the backstop bounds the tail.
+
+config APP_EXT_TICK_WALL_BACKSTOP_MS
+	int "Extension tick wall-clock backstop (ms)"
+	default 500
+	range 1 10000
+	depends on APP_EXTENSION_HOST
+	help
+	  Absolute ceiling on how long the pattern controller will wait for one
+	  sandbox handshake, regardless of CPU consumed.
+
+	  This exists only for an extension that BLOCKS rather than spins: it
+	  burns no CPU, so APP_EXT_TICK_CPU_BUDGET_MS alone would never fire.
+	  Keep it well above the CPU budget (a BUILD_ASSERT in
+	  src/extensions/extension_host.cpp enforces the ordering) and well above
+	  the worst-case time the sandbox can go unscheduled under load, or it
+	  reintroduces the issue #276 false positives it exists to avoid.
+
+	  It is also a latency ceiling, not just a fault threshold: the extension
+	  host mutex is held for the whole handshake, so a blocked extension
+	  stalls concurrent BLE parameter writes and `ext select` on ANY slot for
+	  this long, once, before it is unloaded. Raising it widens that stall.
+
+	  The true bound is this value PLUS one poll period (the deadline is only
+	  re-checked at poll boundaries) — about 510 ms at the defaults. One
+	  tick() computes a single deadline and shares it with the lazy load's
+	  rgbx_init handshake, so a load followed by a tick cannot consume two
+	  backstops. Size any host-side timeout against backstop + poll, not
+	  against this number alone.
+
+	  A fault from this backstop does NOT clear the extension's persisted
+	  parameters — low CPU means the extension barely ran, so a bad parameter
+	  cannot be the cause. See verdict_resets_params() in
+	  src/extensions/extension_tick_budget.h.
 
 config APP_BOOT_GATE_TIMEOUT_MS
 	int "Boot gate timeout (ms)"

@@ -150,10 +150,16 @@ void clearFault(size_t slot);
  * @brief Runs one sandboxed tick: performs the pending lazy load if this
  * activation hasn't loaded yet, writes the input snapshot (params, strings,
  * IMU/audio/buttons) into the extension, signals the sandbox thread, waits
- * up to CONFIG_APP_EXT_TICK_DEADLINE_MS, then copies the extension's
- * framebuffer into `renderer`.
+ * for it to finish, then copies the extension's framebuffer into `renderer`.
  *
- * On deadline overrun, fault, or load failure the slot is marked faulted,
+ * The wait is budgeted against CONFIG_APP_EXT_TICK_CPU_BUDGET_MS of CPU time
+ * consumed by the sandbox thread itself, with
+ * CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS bounding the tail for an extension that
+ * blocks rather than spins (issue #276). One deadline is computed per call and
+ * shared with the lazy load's rgbx_init handshake. Rationale and bounds:
+ * fw/docs/threading.md.
+ *
+ * On budget overrun, fault, or load failure the slot is marked faulted,
  * the sandbox is torn down and the extension unloaded, the animation's
  * Is Active state is un-marked (notifying the app), and false is returned
  * (issue #85 recovery path — the proxy then renders the fault screen).

@@ -66,9 +66,14 @@ verification needs a build/profiling/hardware).
    low-priority workqueue (PR #51; fw/CLAUDE.md Coding rules).
 8. **Tick-path cost must be profiled in µs against the 11.1 ms frame budget**
    (`core/render_thread_rate_ms`, default `11100` = ms×1000, `fw/src/core_config.cpp`;
-   extensions also have `CONFIG_APP_EXT_TICK_DEADLINE_MS`). New `tick()`/render-path
+   extensions also have `CONFIG_APP_EXT_TICK_CPU_BUDGET_MS`). New `tick()`/render-path
    work (per-pixel loops, float math, trig, large copies) with no measured µs cost
    stated in comments or commit messages → *plausible*; require the number pre-merge.
+   **A wall-clock timeout used to police a low-priority thread is a defect** — it
+   measures system load, not the thread's own cost, and false-positives under
+   preemption (issue #276: the extension sandbox at priority 9 faulted a healthy
+   extension because one display frame ran 41.5 ms). Budget CPU time
+   (`k_thread_runtime_stats_get`) and keep any wall-clock value as a generous backstop.
 
 **Logging — major**
 9. **No `printk`/`LOG_INF` in steady-state or per-tick paths** (render ticks, notify calls,
