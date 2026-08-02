@@ -67,7 +67,7 @@ def main(argv=None):
     # the default 3.5 produced 175 spurious beat-mask "mismatches").
     params_mismatch = False
     for key in ("gamma", "alpha", "floor", "refractory", "gain", "target_low", "target_high",
-                "rate_limit", "attack", "release", "gate"):
+                "rate_limit", "attack", "release", "gate", "sf_delta", "mode"):
         dv, hv = dev.params.get(key), host.params.get(key)
         if dv is not None and hv is not None and abs(float(dv) - float(hv)) > 1e-6 * max(
                 abs(float(dv)), 1.0):
@@ -130,8 +130,16 @@ def main(argv=None):
         i, j = di[k], hi[k]
         for b in range(frames.NUM_BANDS):
             if dev.beat[i, b] != host.beat[j, b]:
-                margin_d = dev.band_flux[i, b] - (dev.band_mean[i, b]
-                                                  + dev.params.get("alpha", 3.5) * dev.band_sigma[i, b])
+                # Threshold reconstruction is mode-dependent: in mode 1
+                # (median+delta) band_sigma already IS the threshold, while in
+                # mode 0 it is the std-dev that alpha scales. See the
+                # audio_analysis_result comment in fw/src/sound/audio_dsp.h.
+                if int(dev.params.get("mode", 0)) == 1:
+                    threshold_d = dev.band_sigma[i, b]
+                else:
+                    threshold_d = (dev.band_mean[i, b]
+                                   + dev.params.get("alpha", 0.3) * dev.band_sigma[i, b])
+                margin_d = dev.band_flux[i, b] - threshold_d
                 print(f"  mismatch seq={int(dev.seq[i])} band={b}: device={bool(dev.beat[i, b])} "
                       f"host={bool(host.beat[j, b])} device threshold margin={margin_d:+.4g}")
     if len(bad) > 10:

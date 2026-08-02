@@ -153,6 +153,37 @@ Roadmap + evidence is also on the issue:
 
 ## 5. PHASE 3 — threshold shape (the next PR)
 
+> **OUTCOME (2026-08-02, same day — read this before §5.1).** Phase 3 is
+> implemented and measured. The central hypothesis did **not** hold, and three
+> of the design items below were rejected by their own evidence. The plan text
+> is kept intact for provenance; the corrections are:
+>
+> 1. **Median+delta (mode 1) is implemented but NOT the default.** It wins when
+>    tuned per clip (F 0.321/0.296/0.376 vs mode 0's 0.294/0.294/0.362), but
+>    loses on the criterion that actually governs a shipped device — one
+>    setting for every venue: best shared `sf_delta`=0.26 gives worst-clip
+>    F 0.274, vs mode 0's best shared `alpha`=0.3 at 0.289 (max regret 0.030 vs
+>    0.010). Mechanism, found in the on-device A/B: `sf_delta` is an ABSOLUTE
+>    flux offset, but per-band flux scales differ >20x (band 0 peaks ~3.5,
+>    band 3 ~0.2) — at delta 0.10 band 3 fired 1x per 300 frames where mode 0
+>    fired 37x. Alpha is scale-relative, which is why it transfers. A future
+>    mode-1 default needs a per-band delta or a normalized flux.
+> 2. **§5.1 item 7 (band 0 → bin 2) is WRONG — reverted.** Measured A/B on one
+>    build: moving band 0 off bin 1 cost F on every clip (base60 0.294→0.234,
+>    loud30 0.294→0.266, newbase 0.362→0.312). Bin 1 (31 Hz) carries real kick
+>    energy; the display-bucket table's reasoning does not transfer.
+> 3. **The actual win was retuning alpha 3.5 → 0.3**, which this plan never
+>    considered because the earlier sweeps only covered alpha >= 1.0 and read
+>    "best at the edge" as a result. Band-0 F: base60 0.014→0.294,
+>    loud30 0.000→0.294, newbase 0.129→0.362. Quiet-room cost: none (0 beats
+>    per 40 s at every alpha — the Phase 2 gate owns that regime).
+> 4. **§5.1 item 6 (floor retune): not needed.** The floor is still provably
+>    inert at the new operating point — identical fire counts across
+>    0.005–0.105.
+>
+> See the PR for the full corpus tables; `fw/tools/beat_lab/phase3_table.py`
+> regenerates them.
+
 **Goal**: replace/augment `mean + α·σ` with the doc-specified running
 **median + delta**, retune the inert floor, and finalize defaults with sweep
 evidence. Expected size ~120 LOC + 2 characteristics + tests + sweeps.
@@ -260,6 +291,18 @@ detector fires on assorted onsets, not the beat grid. Two stages:
    shape). GATE: only do this if the Phase-3 corpus results still show
    misses/jitter attributable to 32 ms quantization — check the offset
    histogram first.
+
+   > **GATE EVALUATED 2026-08-02: DO NOT DO PHASE 4 NEXT.** The offset
+   > histogram at the tuned operating point (base60, mode 0, alpha=0.3) is:
+   > median +64 ms, **sd 143 ms**, 24% of detections within ±50 ms but 98%
+   > within ±250 ms; median inter-detection interval 288 ms against a 480 ms
+   > true beat period (1.59 detections per beat). The scatter is ~4.5 frames —
+   > an order of magnitude larger than the 32 ms quantization Phase 4 would
+   > halve, so halving the hop cannot fix it. The detector is firing on
+   > assorted onsets with no model of which are beats, and the report plot
+   > shows the kick pattern is unmistakably periodic in RMS. Go straight to
+   > Phase 5 (tempo/beat-grid tracking); revisit Phase 4 only if a phase-locked
+   > detector then turns out to be resolution-limited.
 2. **Phase 5 — tempo/beat-grid tracking** (the likely real fix for "in time
    with the music"): autocorrelation over a ~4 s ODF ring every ~250 ms,
    τ ∈ [37, 125] @ 31.25 Hz (200–60 BPM), log-Gaussian prior at 120 BPM;

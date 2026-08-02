@@ -4,7 +4,8 @@ Format (one line per 32 ms frame; floats are 8-hex-char IEEE-754 bit patterns,
 big-endian hex of the 32-bit value, exact round-trip, produced without %f):
 
     #PARAMS gamma=<hex8> alpha=<hex8> floor=<hex8> refractory=<u> agc_frozen=<0|1> \
-            gain=<hex2> target_low=<hex8> target_high=<hex8> rate_limit=<u>
+            gain=<hex2> target_low=<hex8> target_high=<hex8> rate_limit=<u> \
+            attack=<u> release=<u> gate=<hex8> sf_delta=<hex8> mode=<u>
     D,<seq>,<gain hex2>,<beatmask hex1>,<rms>,<e0..e3>,<f0..f3>,<m0..m3>,<s0..s3>[,<d0..d19>]
     #DONE frames=<u> dropped=<u>
 
@@ -93,7 +94,7 @@ def _parse_params(line: str) -> dict:
     out = {}
     for tok in line.split()[1:]:
         key, _, val = tok.partition("=")
-        if key in ("gamma", "alpha", "floor", "target_low", "target_high", "gate"):
+        if key in ("gamma", "alpha", "floor", "target_low", "target_high", "gate", "sf_delta"):
             out[key] = hex_to_f32(val)
         elif key == "gain":
             out[key] = int(val, 16)

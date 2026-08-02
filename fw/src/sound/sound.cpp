@@ -713,7 +713,8 @@ static size_t tap_params_format(char *buf, size_t cap) {
                                    sAgcProvider->getRateLimitFrames(),
                                    sAgcProvider->getAttackFrames(),
                                    sAgcProvider->getReleaseFrames(),
-                                   sAgcProvider->getNoiseGateRms(), buf, cap);
+                                   sAgcProvider->getNoiseGateRms(), dsp->getSfDelta(),
+                                   dsp->getThresholdMode(), buf, cap);
 }
 
 /* Shell-side drain buffers, shared by record_wav and dump: too big for the shell
@@ -1381,32 +1382,46 @@ static int cmd_sound_dsp_params(const struct shell *shell, size_t argc, char **a
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
     AudioDspConfigProvider *p = audio_dsp_get_config_provider();
-    char b1[16], b2[16], b3[16];
+    char b1[16], b2[16], b3[16], b4[16];
+    uint32_t mode = p->getThresholdMode();
     shell_print(shell, "gamma: %s | floor: %s | alpha: %s | refractory: %u frames",
                 fmt_fixed4(p->getFluxGamma(), b1, sizeof(b1)),
                 fmt_fixed4(p->getBeatFluxFloor(), b2, sizeof(b2)),
                 fmt_fixed4(p->getBeatAlpha(), b3, sizeof(b3)), p->getBeatRefractoryFrames());
+    shell_print(shell, "threshold mode: %u (%s) | sf_delta: %s", mode,
+                mode == AUDIO_THRESHOLD_MODE_MEDIAN_DELTA ? "median + sf_delta"
+                                                          : "mean + alpha*sigma",
+                fmt_fixed4(p->getSfDelta(), b4, sizeof(b4)));
     return 0;
 }
 
 static int cmd_sound_dsp_set(const struct shell *shell, size_t argc, char **argv) {
     if (argc != 3) {
-        shell_error(shell, "Usage: sound dsp set <gamma|floor|alpha|refractory> <value>");
+        shell_error(shell,
+                    "Usage: sound dsp set <gamma|floor|alpha|refractory|sf_delta|mode> <value>");
         return -EINVAL;
     }
     AudioDspConfigProvider *p = audio_dsp_get_config_provider();
     const char *name = argv[1];
     char buf[16];
 
-    if (strcmp(name, "refractory") == 0) {
+    if (strcmp(name, "refractory") == 0 || strcmp(name, "mode") == 0) {
         char *end = nullptr;
         unsigned long v = strtoul(argv[2], &end, 10);
         if (end == argv[2] || *end != '\0') {
             shell_error(shell, "Invalid value: %s", argv[2]);
             return -EINVAL;
         }
+        /* Both read back through the getter so the printed value reflects clamping. */
+        if (strcmp(name, "mode") == 0) {
+            p->setThresholdMode((uint32_t)v);
+            uint32_t mode = p->getThresholdMode();
+            shell_print(shell, "threshold mode set to %u (%s)", mode,
+                        mode == AUDIO_THRESHOLD_MODE_MEDIAN_DELTA ? "median + sf_delta"
+                                                                  : "mean + alpha*sigma");
+            return 0;
+        }
         p->setBeatRefractoryFrames((uint32_t)v);
-        /* Read back through the getter so the printed value reflects clamping. */
         shell_print(shell, "refractory set to %u frames", p->getBeatRefractoryFrames());
         return 0;
     }
@@ -1426,8 +1441,12 @@ static int cmd_sound_dsp_set(const struct shell *shell, size_t argc, char **argv
     } else if (strcmp(name, "alpha") == 0) {
         p->setBeatAlpha(v);
         shell_print(shell, "alpha set to %s", fmt_fixed4(p->getBeatAlpha(), buf, sizeof(buf)));
+    } else if (strcmp(name, "sf_delta") == 0) {
+        p->setSfDelta(v);
+        shell_print(shell, "sf_delta set to %s", fmt_fixed4(p->getSfDelta(), buf, sizeof(buf)));
     } else {
-        shell_error(shell, "Unknown parameter '%s' (gamma|floor|alpha|refractory)", name);
+        shell_error(shell, "Unknown parameter '%s' (gamma|floor|alpha|refractory|sf_delta|mode)",
+                    name);
         return -EINVAL;
     }
     return 0;
@@ -1522,7 +1541,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_agc,
 // Subcommands for "sound dsp" (beat-detection parameters)
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_dsp,
                                SHELL_CMD_ARG(params, NULL, "Print beat-detection parameters", cmd_sound_dsp_params, 0, 0),
-                               SHELL_CMD_ARG(set, NULL, "Set parameter: <gamma|floor|alpha|refractory> <value>", cmd_sound_dsp_set, 3, 0),
+                               SHELL_CMD_ARG(set, NULL, "Set parameter: <gamma|floor|alpha|refractory|sf_delta|mode> <value>", cmd_sound_dsp_set, 3, 0),
                                SHELL_SUBCMD_SET_END);
 // clang-format on
 

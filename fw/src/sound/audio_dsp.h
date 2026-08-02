@@ -34,7 +34,7 @@ class AudioDspConfigProvider {
     /** Set (clamped by the implementation). */
     virtual void setBeatFluxFloor(float value) = 0;
 
-    /** Adaptive threshold multiplier: mean + alpha * sigma. */
+    /** Adaptive threshold multiplier: mean + alpha * sigma (threshold mode 0 only). */
     virtual float getBeatAlpha() = 0;
     /** Set (clamped by the implementation). */
     virtual void setBeatAlpha(float value) = 0;
@@ -43,7 +43,29 @@ class AudioDspConfigProvider {
     virtual uint32_t getBeatRefractoryFrames() = 0;
     /** Set (clamped to [0, 255] to fit the uint8_t per-band counter). */
     virtual void setBeatRefractoryFrames(uint32_t value) = 0;
+
+    /** Additive offset above the running median (threshold mode 1 only).
+     *
+     * NOTE this is an ABSOLUTE flux offset applied identically to every band,
+     * while the bands' flux scales differ by more than an order of magnitude
+     * (hardware-measured: band 0 peaks near 3.5, band 3 near 0.2). One delta
+     * therefore cannot suit all four — at 0.10, band 3 fired once in 300
+     * frames where mode 0 fired 37 times. Mode 0's alpha does not have this
+     * problem because sigma scales with each band. Any future work that makes
+     * mode 1 the default needs a per-band delta (or a normalized flux). */
+    virtual float getSfDelta() = 0;
+    /** Set (clamped by the implementation). */
+    virtual void setSfDelta(float value) = 0;
+
+    /** Adaptive-threshold shape: 0 = mean + alpha*sigma, 1 = median + sfDelta. */
+    virtual uint32_t getThresholdMode() = 0;
+    /** Set (clamped to [0, 1]). */
+    virtual void setThresholdMode(uint32_t value) = 0;
 };
+
+/** Threshold shape selector values for get/setThresholdMode(). */
+#define AUDIO_THRESHOLD_MODE_MEAN_SIGMA 0u
+#define AUDIO_THRESHOLD_MODE_MEDIAN_DELTA 1u
 
 /**
  * @brief Sets the provider audio_dsp_process() reads beat-detection parameters from.
@@ -69,9 +91,19 @@ void audio_dsp_bind_default_bt_dependencies();
 
 struct audio_analysis_result {
     float band_energy[AUDIO_NUM_BANDS];
-    float band_flux[AUDIO_NUM_BANDS];  /* half-wave-rectified log spectral flux (the ODF) */
-    float band_mean[AUDIO_NUM_BANDS];  /* history mean, for noise-floor tuning */
-    float band_sigma[AUDIO_NUM_BANDS]; /* history std-dev, for noise-floor tuning */
+    float band_flux[AUDIO_NUM_BANDS]; /* half-wave-rectified log spectral flux (the ODF) */
+    /* The two threshold-statistic slots are MODE-DEPENDENT (struct layout is
+     * deliberately unchanged so the msgq, tap format, extension ABI and every
+     * consumer stay binary-compatible across the mode switch):
+     *   mode 0 (mean+alpha*sigma): band_mean = history mean, band_sigma = history std-dev
+     *   mode 1 (median+sfDelta):   band_mean = history MEDIAN, band_sigma = the
+     *                              resulting THRESHOLD (median + sfDelta)
+     * In both modes the fire test is `flux > band_sigma-as-threshold` in mode 1
+     * and `flux > band_mean + alpha*band_sigma` in mode 0, so a consumer that
+     * wants to plot the threshold must know the mode (fw/tools/beat_lab/report.py
+     * reads threshold_mode from the #PARAMS line for exactly this reason). */
+    float band_mean[AUDIO_NUM_BANDS];
+    float band_sigma[AUDIO_NUM_BANDS];
     bool beat[AUDIO_NUM_BANDS];
 
     /* Mean power per display bucket, filled after beat detection. */
