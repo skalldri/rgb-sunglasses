@@ -67,11 +67,24 @@ class DefaultAudioDspConfigProvider : public AudioDspConfigProvider {
     /* Defaults (and clamp ranges) mirror the BT-backed AudioConfig in audio_config.cpp. */
     float fluxGamma_ = 1000.0f;
     float beatFluxFloor_ = 0.005f;
-    /* Retuned 3.5 -> 0.3 in Phase 3 (issue #264) from the 3-clip corpus sweep:
-     * band-0 F went 0.096 -> 0.294 (base60), 0.090 -> 0.294 (loud30),
-     * 0.299 -> 0.362 (newbase). 3.5 was never measured — it mutes the detector
-     * on steady music because the beats inflate sigma. 0.3 is the best SHARED
-     * value across the corpus (max regret 0.010 vs each clip's own optimum). */
+    /* Retuned 3.5 -> 0.3 in Phase 3 (issue #264). 3.5 was never measured — it
+     * mutes the detector on steady music, because the beats sit in the flux
+     * history and inflate sigma.
+     *
+     * This value is shared by ALL FOUR bands (it is read once per frame, not
+     * per band), so it was validated on all four rather than on band 0 alone.
+     * F at alpha=0.3 vs each (clip, band) pair's own optimum, over the 3-clip
+     * corpus, gives a max regret of 0.036 — lower than alpha=0.2 (0.042) or
+     * 0.5 (0.079), so 0.3 is the best single value for the whole bank, not
+     * just for bass. Per-band F at 0.3 (base60/loud30/newbase):
+     *   band 0  0.294 / 0.289 / 0.352     band 1  0.222 / 0.201 / 0.277
+     *   band 2  0.199 / 0.276 / 0.187     band 3  0.175 / 0.108 / 0.250
+     * versus 0.014 / 0.000 / 0.129 (band 0) at the old 3.5 — every band
+     * improves. Firing stays clear of saturation: 3.3-4.0 fires/s against the
+     * ~5.2/s ceiling the 5-frame refractory imposes.
+     *
+     * A per-band alpha would buy at most 0.036 F and add four tuning knobs;
+     * not worth it until the Phase 5 beat-grid work changes the picture. */
     float beatAlpha_ = 0.3f;
     uint32_t beatRefractoryFrames_ = 5;
     float sfDelta_ = 0.10f;
@@ -89,14 +102,20 @@ void audio_dsp_set_config_provider(AudioDspConfigProvider *provider) {
 AudioDspConfigProvider *audio_dsp_get_config_provider(void) { return sProvider; }
 
 /* Sub-band bin boundaries (512-pt FFT at 16 kHz, bin width = 31.25 Hz).
- * Band 0 bass:    bins  2– 6  →  62– 200 Hz (kick drum)
+ * Band 0 bass:    bins  1– 6  →  31– 200 Hz (kick drum)
  * Band 1 low-mid: bins  7–25  → 219– 781 Hz
  * Band 2 mid:     bins 26–63  → 813–1969 Hz
  * Band 3 high:    bins 64–191 → 2.0– 6.0 kHz
  *
- * Band 0 starts at bin 2, not bin 1: bin 1 (31 Hz) sits below the PDM mic's
- * usable response, so it contributes noise rather than kick energy — the
- * display-bucket table below already skipped it for the same reason. */
+ * Band 0 deliberately KEEPS bin 1 (31 Hz). Phase 3 (issue #264) tried starting
+ * at bin 2 on the theory that bin 1 is below the PDM mic's usable response —
+ * the reason the display-bucket table below skips it — and measured the
+ * result: band-0 F got WORSE on every corpus clip (0.294→0.234, 0.294→0.266,
+ * 0.362→0.312). Bin 1 carries real kick energy, so the change was reverted.
+ * Do not "fix" this to {2, ...} without re-running the corpus sweeps: per
+ * fw/docs/beat-detection-debugging.md, any change to these boundaries
+ * invalidates every prior F-measure, including the ones that justify the
+ * beat_alpha default. */
 static const uint16_t band_bin_start[NUM_BANDS] = {1, 7, 26, 64};
 static const uint16_t band_bin_end[NUM_BANDS] = {6, 25, 63, 191};
 

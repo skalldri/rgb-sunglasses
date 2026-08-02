@@ -23,7 +23,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.beat_lab import evaluate, frames, replay  # noqa: E402
 
-CORPUS = Path("fw/testdata/beat-corpus")
+# Resolved from this file, not the cwd, so the script works from anywhere.
+# fw/tools/beat_lab/phase3_table.py -> parents[2] == fw/
+CORPUS = Path(__file__).resolve().parents[2] / "testdata" / "beat-corpus"
 ALPHAS = [round(0.1 + 0.1 * i, 2) for i in range(12)]
 DELTAS = [round(0.02 + 0.02 * i, 2) for i in range(20)]
 
@@ -53,6 +55,28 @@ def main(argv=None):
     ap.add_argument("--band", type=int, default=0)
     ap.add_argument("--clips", nargs="*", default=["base60", "loud30", "newbase"])
     args = ap.parse_args(argv)
+
+    # Check the corpus BEFORE `west build` — otherwise a fresh checkout burns
+    # minutes compiling the replay app and then dies on a bare FileNotFoundError.
+    # The clips are deliberately not committed (they are large and cheap to
+    # re-record), so this is the expected state for everyone but whoever
+    # recorded them.
+    missing = [c for c in args.clips
+               if not (CORPUS / f"{c}.wav").exists() or not (CORPUS / f"{c}.wav.csv").exists()]
+    if missing:
+        print(
+            f"error: no corpus clips found for {', '.join(missing)} in {CORPUS}\n"
+            "\n"
+            "The tuning corpus is intentionally NOT committed (see .gitignore).\n"
+            "Record a fresh one on hardware — it takes a few minutes and any music\n"
+            "works; the workflow (freeze gain -> sound mic record_wav -> pull over\n"
+            "USB MSC) is in fw/docs/beat-detection-debugging.md, section 'The corpus'.\n"
+            "Each clip needs BOTH <name>.wav and its <name>.wav.csv sidecar, since\n"
+            "--params-from replays it with the exact parameters the device used.\n"
+            "\n"
+            "Or point at your own clips: --clips <name> [<name> ...]",
+            file=sys.stderr)
+        return 2
 
     replay.build()
     results = {}

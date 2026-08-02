@@ -82,10 +82,17 @@ measured against. Recorded 2026-08-02 on proto0, PDM gain frozen at +9 dB
 | `newbase` | 30 s | earlier session, +4 dB, different track | 78 (~156 BPM) |
 | `quiet40` | 40 s | quiet room, AGC **unfrozen** — captures the park-to-0 dB walk | n/a |
 
-Each `.wav` ships with its `.wav.csv` sidecar, so `--params-from` reproduces the
-exact device parameters and `compare.py` can re-verify the harness at any time.
-Re-record with the workflow above if you need a different genre or level; the
-rig regenerates a corpus in minutes.
+**These clips are NOT in the repo** — `fw/testdata/beat-corpus/` is gitignored
+(a 60 s WAV is ~2 MB, and the rig regenerates a corpus in minutes). A fresh
+checkout has an empty directory, so the numbers above are not reproducible until
+you record your own; `phase3_table.py` checks for the clips up front and points
+back here rather than failing deep in a run.
+
+Record each clip with the workflow above, keeping **both** the `.wav` and its
+`.wav.csv` sidecar — `--params-from` needs the sidecar to replay with the exact
+parameters the device used, and `compare.py` needs it to re-verify the harness.
+Any music works; match the table's lengths and levels if you want comparable
+numbers, or use `--clips <name>` to score your own set.
 
 **Tune against the whole corpus, never one clip.** A parameter's best value on
 a single clip routinely differs from the best SHARED value across clips, and

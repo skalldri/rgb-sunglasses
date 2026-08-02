@@ -245,12 +245,19 @@ ZTEST(audio_dsp, test_band_flux_populated) {
     zassert_true(result.beat[0], "onset should fire beat[0]");
     zassert_true(result.band_flux[0] > 1.0f, "onset flux should be large (%f)",
                  (double)result.band_flux[0]);
-    /* The reported flux/mean/sigma triple must reproduce the fire decision
-     * (default alpha = 3.5). */
-    zassert_true(result.band_flux[0] > result.band_mean[0] + 3.5f * result.band_sigma[0],
-                 "flux (%f) should exceed reported threshold (%f)",
-                 (double)result.band_flux[0],
-                 (double)(result.band_mean[0] + 3.5f * result.band_sigma[0]));
+    /* The reported flux/mean/sigma triple must reproduce the fire decision.
+     * Alpha is read from the provider rather than hard-coded: this assertion is
+     * meaningful only when it reconstructs the threshold the detector ACTUALLY
+     * used. Pinning it to the old 3.5 default while the shipped value is 0.3
+     * would make the bound ~11.7x stricter than the real one, which a >1.0
+     * onset flux clears trivially — so a regression where band_mean/band_sigma
+     * stop matching the fire decision (stale pre-update stats, or mode-1 values
+     * reported while mode 0 is active) would pass unnoticed. */
+    const float alpha = audio_dsp_get_config_provider()->getBeatAlpha();
+    const float reported_threshold = result.band_mean[0] + alpha * result.band_sigma[0];
+    zassert_true(result.band_flux[0] > reported_threshold,
+                 "flux (%f) should exceed reported threshold (%f) at alpha %f",
+                 (double)result.band_flux[0], (double)reported_threshold, (double)alpha);
 }
 
 /* ── Test 8: Default provider setters clamp and round-trip ──────────────────
@@ -296,7 +303,9 @@ ZTEST(audio_dsp, test_default_provider_setters_clamp) {
     p->setThresholdMode(7); /* above range → clamps to 1 */
     zassert_equal(p->getThresholdMode(), AUDIO_THRESHOLD_MODE_MEDIAN_DELTA, "mode clamps high");
 
-    /* Restore the documented defaults. */
+    /* Restore the documented defaults. Redundant with audio_dsp_after_each()
+     * (which is what makes this safe on the assertion-failure path) — kept so
+     * the test reads correctly in isolation. */
     p->setFluxGamma(1000.0f);
     p->setBeatFluxFloor(0.005f);
     p->setBeatAlpha(0.3f);
@@ -469,6 +478,92 @@ ZTEST(audio_dsp, test_median_uses_upper_middle_of_even_history) {
                  (double)result.band_mean[0]);
 
     audio_dsp_set_config_provider(NULL);
+}
+
+/* ── Phase 3, Test E: mode 1's single delta mutes the upper bands ───────────
+ * A HAZARD test, in the same spirit as
+ * test_gain_compensation_misordered_is_harmful: it pins a known-bad property
+ * so the behavior is visible in CI rather than discovered on hardware.
+ *
+ * sfDelta is an ABSOLUTE flux offset applied identically to all four bands,
+ * but the bands' flux scales differ by more than an order of magnitude. A
+ * delta chosen for band 0 therefore sits near or above the entire dynamic
+ * range of band 3, silencing it. Measured on hardware at sfDelta=0.10: band 3
+ * fired once per 300 frames where mode 0 fired 37 times.
+ *
+ * This is why mode 1 is NOT the shipped default (see getSfDelta() in
+ * audio_dsp.h). If a future change gives sfDelta per-band scaling or
+ * normalizes the flux, THIS TEST SHOULD START FAILING — that is the signal the
+ * hazard is fixed, and the assertion below should then be inverted rather than
+ * deleted. */
+ZTEST(audio_dsp, test_median_mode_threshold_is_band_blind) {
+    int16_t tone[AUDIO_FFT_SIZE], silence[AUDIO_FFT_SIZE];
+    make_100hz_sine(tone);
+    make_silence(silence);
+
+    TunableAudioDspConfigProvider provider;
+    audio_dsp_set_config_provider(&provider);
+
+    const int kGap = 8, kBursts = 8;
+    const float kDelta = 0.10f; /* the shipped sf_delta */
+    struct audio_analysis_result mode0 = {}, mode1 = {};
+
+    for (int mode = 0; mode < 2; mode++) {
+        provider.mode_ = (uint32_t)mode;
+        provider.alpha_ = 0.3f; /* the shipped default */
+        provider.sfDelta_ = kDelta;
+        audio_dsp_init();
+        struct audio_analysis_result result;
+        uint32_t seq = 0;
+        for (int n = 0; n < kBursts; n++) {
+            audio_dsp_process(tone, seq++, &result);
+            for (int i = 1; i < kGap; i++) {
+                audio_dsp_process(silence, seq++, &result);
+            }
+        }
+        /* Snapshot the steady-state reported statistics on an onset frame. */
+        audio_dsp_process(tone, seq++, &result);
+        ((mode == 0) ? mode0 : mode1) = result;
+    }
+
+    audio_dsp_set_config_provider(NULL);
+
+    /* Mode 0 SELF-SCALES: each band's threshold is built from that band's own
+     * mean/sigma, so a loud band and a quiet band get very different bars. */
+    const float thr0_band0 = mode0.band_mean[0] + 0.3f * mode0.band_sigma[0];
+    const float thr0_top = mode0.band_mean[AUDIO_NUM_BANDS - 1]
+                           + 0.3f * mode0.band_sigma[AUDIO_NUM_BANDS - 1];
+    zassert_true(thr0_band0 > thr0_top * 2.0f,
+                 "mode 0's threshold should scale with each band (band0 %f vs top %f)",
+                 (double)thr0_band0, (double)thr0_top);
+
+    /* Mode 1 is BAND-BLIND: band_sigma carries the threshold, and with a
+     * silence-dominated history every band's median is 0, so all four bands sit
+     * at exactly the same absolute bar — sfDelta. That is the defect. A band
+     * whose entire onset flux is below sfDelta can never fire, no matter how
+     * clear its onsets are relative to its own noise floor. Hardware-measured
+     * consequence at this delta: band 3 fired once per 300 frames where mode 0
+     * fired 37 times (see getSfDelta() in audio_dsp.h).
+     *
+     * If a future change gives sfDelta per-band scaling or normalizes the flux,
+     * THIS ASSERTION SHOULD START FAILING — that is the signal the hazard is
+     * fixed; update it to the new contract rather than deleting it. */
+    for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+        zassert_within(mode1.band_sigma[b], kDelta, 1e-6f,
+                       "HAZARD PINNED: mode 1 applies one absolute delta to every band — "
+                       "band %d threshold %f should equal sf_delta %f",
+                       b, (double)mode1.band_sigma[b], (double)kDelta);
+    }
+
+    /* And the consequence, stated directly: the top band's own onset flux is
+     * far below that shared bar, while band 0's is far above it. */
+    zassert_true(mode1.band_flux[0] > kDelta,
+                 "band 0 onset flux (%f) should clear the shared delta (%f)",
+                 (double)mode1.band_flux[0], (double)kDelta);
+    zassert_true(mode1.band_flux[AUDIO_NUM_BANDS - 1] < kDelta,
+                 "top-band onset flux (%f) should fall UNDER the shared delta (%f) — this is "
+                 "why one delta cannot serve all four bands",
+                 (double)mode1.band_flux[AUDIO_NUM_BANDS - 1], (double)kDelta);
 }
 
 /* ── Phase 3, Test D: silence stays silent in mode 1 ────────────────────────
@@ -706,4 +801,36 @@ ZTEST(audio_dsp, test_gain_compensation_large_jump_resets) {
     zassert_equal(result.band_sigma[0], 0.0f, "reset must zero the flux sigma");
 }
 
-ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, NULL, NULL);
+/* Per-test teardown, not per-test cleanup done by hand at the end of each test.
+ *
+ * A zassert failure longjmps straight out of the test body, so any restoration
+ * written after the assertions is SKIPPED on exactly the runs where it matters
+ * most. Two ways that corrupts every later test in the suite:
+ *
+ *   1. A test that installed a stack-local provider leaves &provider installed
+ *      globally after the object's frame is gone — every subsequent
+ *      audio_dsp_process() then reads gamma/floor/alpha/mode off freed stack.
+ *   2. test_default_provider_setters_clamp mutates the process-global default
+ *      provider; bailing early leaves it at sf_delta=2.0 / mode=median.
+ *
+ * Either way one real regression cascades into unrelated failures (or a
+ * native_sim crash) and Twister points at the wrong test. Restoring here runs
+ * on the failure path too, so a failing test stays a single failing test.
+ */
+static void audio_dsp_after_each(void *fixture) {
+    ARG_UNUSED(fixture);
+
+    /* Drop any test-installed provider BEFORE touching the default's values,
+     * so the setters below can't be dispatched to a dangling object. */
+    audio_dsp_set_config_provider(NULL);
+
+    AudioDspConfigProvider *p = audio_dsp_get_config_provider();
+    p->setFluxGamma(1000.0f);
+    p->setBeatFluxFloor(0.005f);
+    p->setBeatAlpha(0.3f);
+    p->setBeatRefractoryFrames(5);
+    p->setSfDelta(0.10f);
+    p->setThresholdMode(AUDIO_THRESHOLD_MODE_MEAN_SIGMA);
+}
+
+ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, audio_dsp_after_each, NULL);

@@ -159,6 +159,16 @@ def main(argv=None):
               f"sf_delta={args.sf_delta} mode={args.threshold_mode}",
               file=sys.stderr)
 
+    # sf_delta is read ONLY inside the median branch of audio_dsp.cpp; in mode 0
+    # it is dead. Sweeping it without also selecting mode 1 therefore runs N
+    # identical mode-0 replays whose table shows one repeated row, and prints a
+    # "# best:" naming an arbitrary value that measured nothing. Select mode 1
+    # automatically and say so, rather than silently producing a fake result.
+    if args.sweep and "sf_delta" in parse_sweep(args.sweep) and args.threshold_mode is None:
+        args.threshold_mode = 1
+        print("# sweeping sf_delta implies --threshold-mode 1 (it is inert in mode 0); "
+              "pass --threshold-mode 0 explicitly to override", file=sys.stderr)
+
     fixed = dict(gamma=args.gamma, alpha=args.alpha, floor=args.floor,
                  refractory=args.refractory, agc=args.agc, gain=args.gain,
                  target_low=args.target_low, target_high=args.target_high, gate=args.gate,

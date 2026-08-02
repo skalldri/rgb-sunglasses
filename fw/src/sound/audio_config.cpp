@@ -51,12 +51,24 @@ BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", tru
     audioNoiseGateRms;
 /* Phase 3 threshold-shape tunables (issue #264) — appended AFTER the existing
  * providers for the same positional-UUID reason as the Phase 2 block above.
- * Both are notify=false: these are tuning knobs the app never subscribes to,
- * and the CCC store is already at its 96-entry ceiling (see the note in
- * fw/CLAUDE.md) — spending two more notify slots on them would risk overflow
- * for no functional gain. */
-BtGattPersistentCharacteristic<"audio/sf_delta", "Beat SF Delta", false, float, 0.10f> audioSfDelta;
-BtGattPersistentCharacteristic<"audio/threshold_mode", "Beat Threshold Mode", false, uint32_t, 0>
+ *
+ * notify=true, matching every sibling in this service. It is load-bearing, not
+ * cosmetic: both getters below clamp on read and assign the clamped value back,
+ * and that write-back only reaches the app as a notification. The app's write
+ * path optimistically shows what it wrote and never re-reads, so with
+ * notify=false an out-of-range write (mode=2, sf_delta=5.0) would leave the UI
+ * displaying that value indefinitely while the firmware ran the clamped one.
+ * The write-back happens on the DSP thread's next getter call (~32 ms), not
+ * inside the write handler, so it does not hit the "corrective notify races the
+ * write response" hazard documented in fw/CLAUDE.md.
+ *
+ * CCC cost: two more entries per bonded peer. CONFIG_BT_SETTINGS_CCC_STORE_MAX
+ * is 96 (see fw/prj.conf, which records why it was raised from the stock 48
+ * during Phase 2) and the limit is PER BOND, not global — Zephyr's ccc_save
+ * builds one struct ccc_store[CCC_STORE_MAX] per peer address
+ * (zephyr/subsys/bluetooth/host/gatt.c). */
+BtGattPersistentCharacteristic<"audio/sf_delta", "Beat SF Delta", true, float, 0.10f> audioSfDelta;
+BtGattPersistentCharacteristic<"audio/threshold_mode", "Beat Threshold Mode", true, uint32_t, 0>
     audioThresholdMode;
 
 BtGattServer audioConfigServer(audioConfigPrimaryService, audioFluxGamma, audioBeatFluxFloor,
