@@ -131,7 +131,14 @@ class DefaultAgcConfigProvider : public AgcConfigProvider {
     uint32_t rateLimitFrames_ = 10;
     uint32_t attackFrames_ = 3;
     uint32_t releaseFrames_ = 15;
-    float noiseGateRms_ = 0.001f;
+    /* Retuned 0.001 -> 0.0006 (issue #264, post-Phase-3) in response to a field
+     * report: with music playing the glasses sometimes did not react at all,
+     * and turning the volume up fixed it. Measured cause — the gate sat ABOVE
+     * the bottom half of real music. Smoothed input-referred RMS over the
+     * corpus: quiet room p95 0.00049, but normal-volume music p5 0.00061 and a
+     * whole normal-volume capture had 52.9% of its frames below the 0.001 gate,
+     * i.e. all beat output suppressed. See docs/plans/2026-08-02-*.md §5.5.1. */
+    float noiseGateRms_ = 0.0006f;
 };
 
 DefaultAgcConfigProvider sDefaultAgcProvider;

@@ -307,7 +307,7 @@ ZTEST(audio_dsp, test_default_provider_setters_clamp) {
      * (which is what makes this safe on the assertion-failure path) — kept so
      * the test reads correctly in isolation. */
     p->setFluxGamma(1000.0f);
-    p->setBeatFluxFloor(0.005f);
+    p->setBeatFluxFloor(0.08f);
     p->setBeatAlpha(0.3f);
     p->setBeatRefractoryFrames(5);
     p->setSfDelta(0.10f);
@@ -478,6 +478,75 @@ ZTEST(audio_dsp, test_median_uses_upper_middle_of_even_history) {
                  (double)result.band_mean[0]);
 
     audio_dsp_set_config_provider(NULL);
+}
+
+/* ── Flux floor is load-bearing in the quiet regime ─────────────────────────
+ * Before Phase 3 the floor was measured as PROVABLY INERT (identical fire
+ * counts across 0.005..0.105) and was nearly deleted as dead weight. Dropping
+ * alpha 3.5 -> 0.3 changed that: the adaptive threshold now sits low enough
+ * that small noise-flux events clear it, and the absolute floor is what stops
+ * them. Post-Phase-3 measurement: raising the floor 0.005 -> 0.08 cut
+ * quiet-room beats from 4 to 1 per 40 s at zero cost to any music clip.
+ *
+ * This pins that role, so a future "the floor does nothing, simplify it away"
+ * cleanup fails loudly instead of quietly reopening the quiet-room complaint.
+ * Uses a deliberately permissive adaptive threshold (alpha at its 0.1 clamp
+ * floor) so the ONLY thing that can reject the small onset is the floor. */
+ZTEST(audio_dsp, test_flux_floor_rejects_small_onsets) {
+    int16_t silence[AUDIO_FFT_SIZE], quiet[AUDIO_FFT_SIZE], loud[AUDIO_FFT_SIZE];
+    make_silence(silence);
+    make_100hz_sine(loud); /* full-scale onset */
+    /* A few LSB of amplitude — genuinely room-noise scale. It has to be this
+     * small: flux is log1p(gamma * energy) with gamma = 1000, so even a very
+     * quiet tone rising out of silence produces a large flux (amplitude 30 LSB
+     * already measures 1.45). That compression is exactly why the adaptive
+     * threshold alone struggles down here and an absolute floor earns its keep.
+     * Written inline rather than via make_tone() because that helper is defined
+     * further down, with the gain-compensation tests it serves. */
+    for (int i = 0; i < AUDIO_FFT_SIZE; i++) {
+        double t = (double)i / 16000.0;
+        quiet[i] = (int16_t)(3.0 * sin(2.0 * M_PI * 100.0 * t));
+    }
+
+    TunableAudioDspConfigProvider provider;
+    provider.alpha_ = 0.1f;            /* adaptive threshold as permissive as it can be */
+    provider.floor_ = 0.08f;           /* the shipped default */
+    provider.mode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
+    audio_dsp_set_config_provider(&provider);
+    audio_dsp_init();
+
+    struct audio_analysis_result result;
+    uint32_t seq = 0;
+    for (int i = 0; i < HISTORY_LEN; i++) {
+        audio_dsp_process(silence, seq++, &result);
+    }
+
+    /* A tiny onset: its flux is real and positive, and it WOULD clear
+     * mean + 0.1*sigma over a silent history — only the floor stops it. */
+    audio_dsp_process(quiet, seq++, &result);
+    const float quiet_flux = result.band_flux[0];
+    const bool quiet_fired = result.beat[0];
+
+    /* Re-settle, then a genuine onset must still fire through the same floor. */
+    for (int i = 0; i < HISTORY_LEN; i++) {
+        audio_dsp_process(silence, seq++, &result);
+    }
+    audio_dsp_process(loud, seq++, &result);
+    const float loud_flux = result.band_flux[0];
+    const bool loud_fired = result.beat[0];
+
+    audio_dsp_set_config_provider(NULL);
+
+    zassert_true(quiet_flux > 0.0f && quiet_flux < 0.08f,
+                 "test needs a small-but-real flux below the floor (got %f)",
+                 (double)quiet_flux);
+    zassert_false(quiet_fired,
+                  "flux %f is below the 0.08 floor and must NOT fire — the floor is the only "
+                  "defence against small noise-flux events now that alpha is 0.3",
+                  (double)quiet_flux);
+    zassert_true(loud_flux > 0.08f, "a full-scale onset should clear the floor (got %f)",
+                 (double)loud_flux);
+    zassert_true(loud_fired, "a genuine onset must still fire through the floor");
 }
 
 /* ── Phase 3, Test E: mode 1's single delta mutes the upper bands ───────────
@@ -826,7 +895,7 @@ static void audio_dsp_after_each(void *fixture) {
 
     AudioDspConfigProvider *p = audio_dsp_get_config_provider();
     p->setFluxGamma(1000.0f);
-    p->setBeatFluxFloor(0.005f);
+    p->setBeatFluxFloor(0.08f);
     p->setBeatAlpha(0.3f);
     p->setBeatRefractoryFrames(5);
     p->setSfDelta(0.10f);

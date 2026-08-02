@@ -117,7 +117,7 @@ class EnvConfigProvider : public AudioDspConfigProvider {
         return true;
     }
     float gamma_ = 1000.0f;
-    float floor_ = 0.005f;
+    float floor_ = 0.08f; /* post-Phase-3 retune — mirrors DefaultAudioDspConfigProvider */
     float alpha_ = 0.3f; /* Phase 3 retune — mirrors DefaultAudioDspConfigProvider */
     uint32_t refractory_ = 5;
     float sfDelta_ = 0.10f;
@@ -186,7 +186,7 @@ class EnvAgcProvider : public AgcConfigProvider {
     uint32_t rate_ = 10;
     uint32_t attack_ = 3;
     uint32_t release_ = 15;
-    float gate_ = 0.001f;
+    float gate_ = 0.0006f; /* post-Phase-3 retune — mirrors DefaultAgcConfigProvider */
 };
 
 /* ── D-line emission — field order comes from the shared audio_tap_format.h,

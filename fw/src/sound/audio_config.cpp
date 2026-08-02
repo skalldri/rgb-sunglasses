@@ -14,7 +14,10 @@ BtGattPrimaryService<kAudioConfigServiceUuid> audioConfigPrimaryService;
 
 BtGattPersistentCharacteristic<"audio/flux_gamma", "Flux Gamma", true, float, 1000.0f>
     audioFluxGamma;
-BtGattPersistentCharacteristic<"audio/beat_flux_floor", "Beat Flux Floor", true, float, 0.005f>
+/* Default retuned 0.005 -> 0.08 (issue #264, post-Phase-3) — derivation in
+ * DefaultAudioDspConfigProvider (audio_dsp.cpp). Provisioned boards keep their
+ * persisted value; set it explicitly with "sound dsp set floor" when testing. */
+BtGattPersistentCharacteristic<"audio/beat_flux_floor", "Beat Flux Floor", true, float, 0.08f>
     audioBeatFluxFloor;
 /* Default retuned 3.5 -> 0.3 in Phase 3 (issue #264) — derivation in
  * DefaultAudioDspConfigProvider (audio_dsp.cpp) and the PR body. NOTE this only
@@ -47,7 +50,9 @@ BtGattPersistentCharacteristic<"audio/agc_attack_frames", "AGC Attack Frames", t
 BtGattPersistentCharacteristic<"audio/agc_release_frames", "AGC Release Frames", true, uint32_t,
                                15>
     audioAgcReleaseFrames;
-BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", true, float, 0.001f>
+/* Default retuned 0.001 -> 0.0006 (issue #264, post-Phase-3) — derivation in
+ * DefaultAgcConfigProvider (sound.cpp). Same persisted-value caveat as above. */
+BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", true, float, 0.0006f>
     audioNoiseGateRms;
 /* Phase 3 threshold-shape tunables (issue #264) — appended AFTER the existing
  * providers for the same positional-UUID reason as the Phase 2 block above.
