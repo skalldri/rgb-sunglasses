@@ -126,7 +126,14 @@ def main(argv=None):
         return 0
 
     # Sweep mode: score every combination against the reference.
-    from . import evaluate, frames  # local imports keep non-sweep use librosa-free
+    # Local imports keep non-sweep use librosa-free; the fallback makes direct
+    # script invocation (python3 fw/tools/beat_lab/replay.py) work too, where
+    # relative imports have no parent package.
+    try:
+        from . import evaluate, frames
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from tools.beat_lab import evaluate, frames
 
     ref_times = evaluate.load_reference(args.ref, args.ref_librosa, args.wav)
     grid = parse_sweep(args.sweep)

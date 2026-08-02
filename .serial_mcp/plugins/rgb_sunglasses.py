@@ -350,15 +350,47 @@ async def handle_sound_dump(state: SerialState, args: dict) -> dict:
     buckets = args.get("buckets", False)
 
     cmd = f"sound dump {frames}" + (" buckets" if buckets else "")
-    # ~31 frames/s plus slack for shell throughput.
-    timeout_ms = int(frames * 40 + 5000)
-    output = await _run_command(state, connection_id, cmd,
-                                timeout_ms=min(timeout_ms, 30000),
-                                max_rounds=max(6, frames // 50))
-    if "#DONE" not in output:
-        return _err("dump_incomplete", (output[-500:] if output else "no response"))
 
-    kept = [ln for ln in output.split("\n")
+    # Streamed capture: _run_command's echo+prompt heuristic is wrong here — the
+    # Zephyr shell redraws the prompt after EVERY line it prints, so a
+    # prompt-anchored read returns after roughly one line and a long dump needs
+    # ~one read round per frame (observed: 600-frame dumps truncated with the
+    # old frames//50 round budget). Accumulate on the "#DONE ... dropped=" trailer
+    # instead, with the round budget scaled to the stream length.
+    await handle_write(state, {"connection_id": connection_id, "data": "03", "as": "hex"})
+    await handle_flush(state, {"connection_id": connection_id, "what": "input"})
+    await handle_write(state, {
+        "connection_id": connection_id,
+        "data": cmd,
+        "append_newline": True,
+    })
+
+    accumulated = ""
+    empty_rounds = 0
+    for _ in range(frames + 120):  # ~1 round per line + slack for params/echo/logs
+        resp = await handle_read_until(state, {
+            "connection_id": connection_id,
+            "delimiter": PROMPT,
+            "timeout_ms": 3000,
+        })
+        chunk = resp.get("data", "") if isinstance(resp, dict) else ""
+        accumulated += chunk
+        if "#DONE" in accumulated and "dropped=" in accumulated.split("#DONE")[-1]:
+            break
+        if not chunk:
+            # Frames arrive every 32 ms; a 3 s silent window twice over means the
+            # stream ended without the trailer — stop rather than spin.
+            empty_rounds += 1
+            if empty_rounds >= 2:
+                break
+        else:
+            empty_rounds = 0
+
+    plain = _ANSI_RE.sub("", accumulated).replace("\r", "")
+    if "#DONE" not in plain:
+        return _err("dump_incomplete", (plain[-500:] if plain else "no response"))
+
+    kept = [ln for ln in plain.split("\n")
             if ln.startswith(("D,", "#PARAMS", "#DONE"))]
     with open(output_path, "w") as f:
         f.write("\n".join(kept) + "\n")
