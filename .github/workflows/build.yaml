@@ -222,7 +222,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install Pillow numpy pytest pytest-cov
+        run: pip install Pillow numpy pytest pytest-cov scipy matplotlib librosa mir_eval
 
       - name: Run Python tests
         run: |

@@ -116,6 +116,50 @@ TOOLS = [
         },
     ),
     Tool(
+        name="rgb_sunglasses.sound_record",
+        description=(
+            "Record mic audio + per-frame beat analysis on the dev board "
+            "(`sound mic record_wav`): freezes AGC gain at the given register value "
+            "first so the capture is replay-comparable, then records duration_s "
+            "seconds to /NAND:/sound.wav (+ .csv sidecar with per-frame analysis). "
+            "Pull the files off the USB mass-storage disk afterwards; analyze with "
+            "fw/tools/beat_lab (see fw/docs/beat-detection-debugging.md)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "duration_s": {"type": "integer", "minimum": 1, "maximum": 120},
+                "gain": {
+                    "type": "string",
+                    "description": "PDM gain register value to freeze at, e.g. '0x28' (0 dB)",
+                },
+                "path": {"type": "string", "description": "output path (default /NAND:/sound.wav)"},
+            },
+            "required": ["connection_id", "duration_s"],
+        },
+    ),
+    Tool(
+        name="rgb_sunglasses.sound_dump",
+        description=(
+            "Stream N frames of live beat-detection analysis off the dev board "
+            "(`sound dump`) and save the capture (D-line format, see "
+            "fw/tools/beat_lab/frames.py) to a host file. ~31 frames/second."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "frames": {"type": "integer", "minimum": 1, "maximum": 10000},
+                "output_path": {"type": "string",
+                                "description": "host file to write the capture to"},
+                "buckets": {"type": "boolean",
+                            "description": "include the 20 display-bucket energies"},
+            },
+            "required": ["connection_id", "frames", "output_path"],
+        },
+    ),
+    Tool(
         name="rgb_sunglasses.glim_set_loop_mode",
         description=(
             "Set the Glim Player's loop mode (`glim set_loop_mode <mode>`): loop_one "
@@ -258,6 +302,106 @@ async def handle_glim_set_loop_mode(state: SerialState, args: dict) -> dict:
     return _ok(loop_mode=mode)
 
 
+async def handle_sound_record(state: SerialState, args: dict) -> dict:
+    connection_id = args["connection_id"]
+    duration_s = args["duration_s"]
+    gain = args.get("gain", "0x28")
+    path = args.get("path", "/NAND:/sound.wav")
+
+    # Freeze the gain first — an AGC step mid-recording would make the capture
+    # unusable for device-vs-host replay comparison (see beat-detection-debugging.md).
+    freeze_out = await _run_command(state, connection_id, f"sound agc gain {gain}")
+    if "set to" not in freeze_out:
+        return _err("agc_gain_failed", freeze_out or "no response to 'sound agc gain'")
+
+    async def _restore_agc() -> bool:
+        # 'sound agc gain' force-froze the AGC; leaving it frozen would silently
+        # kill gain adaptation (and beat-reactive animations) for the rest of the
+        # board's uptime. Always unfreeze, on success and failure paths alike.
+        out = await _run_command(state, connection_id, "sound agc freeze off")
+        return "off" in out
+
+    # The recording itself blocks the shell for duration_s; wait generously.
+    output = await _run_command(
+        state, connection_id, f"sound mic record_wav {duration_s} {path}",
+        timeout_ms=(duration_s + 10) * 1000, max_rounds=10,
+    )
+    if "Wrote" not in output:
+        restored = await _restore_agc()
+        # An aborted capture prints "ABORTED: capture incomplete - N of M frames".
+        return _err("record_failed",
+                    (output[-500:] if output else "no response from record_wav")
+                    + f" (agc_restored={restored})")
+
+    restored = await _restore_agc()
+    m = re.search(r"Wrote (\d+) bytes of PCM to (\S+) \((\d+) frames, (\d+) dropped,"
+                  r" (\d+) io retries\)", output)
+    if not m:
+        return _ok(raw=output, agc_restored=restored)
+    return _ok(bytes=int(m.group(1)), wav_path=m.group(2), csv_path=m.group(2) + ".csv",
+               frames=int(m.group(3)), dropped=int(m.group(4)), io_retries=int(m.group(5)),
+               contiguous=(int(m.group(4)) == 0), agc_restored=restored)
+
+
+async def handle_sound_dump(state: SerialState, args: dict) -> dict:
+    connection_id = args["connection_id"]
+    frames = args["frames"]
+    output_path = args["output_path"]
+    buckets = args.get("buckets", False)
+
+    cmd = f"sound dump {frames}" + (" buckets" if buckets else "")
+
+    # Streamed capture: _run_command's echo+prompt heuristic is wrong here — the
+    # Zephyr shell redraws the prompt after EVERY line it prints, so a
+    # prompt-anchored read returns after roughly one line and a long dump needs
+    # ~one read round per frame (observed: 600-frame dumps truncated with the
+    # old frames//50 round budget). Accumulate on the "#DONE ... dropped=" trailer
+    # instead, with the round budget scaled to the stream length.
+    await handle_write(state, {"connection_id": connection_id, "data": "03", "as": "hex"})
+    await handle_flush(state, {"connection_id": connection_id, "what": "input"})
+    await handle_write(state, {
+        "connection_id": connection_id,
+        "data": cmd,
+        "append_newline": True,
+    })
+
+    accumulated = ""
+    empty_rounds = 0
+    for _ in range(frames + 120):  # ~1 round per line + slack for params/echo/logs
+        resp = await handle_read_until(state, {
+            "connection_id": connection_id,
+            "delimiter": PROMPT,
+            "timeout_ms": 3000,
+        })
+        chunk = resp.get("data", "") if isinstance(resp, dict) else ""
+        accumulated += chunk
+        if "#DONE" in accumulated and "dropped=" in accumulated.split("#DONE")[-1]:
+            break
+        if not chunk:
+            # Frames arrive every 32 ms; a 3 s silent window twice over means the
+            # stream ended without the trailer — stop rather than spin.
+            empty_rounds += 1
+            if empty_rounds >= 2:
+                break
+        else:
+            empty_rounds = 0
+
+    plain = _ANSI_RE.sub("", accumulated).replace("\r", "")
+    if "#DONE" not in plain:
+        return _err("dump_incomplete", (plain[-500:] if plain else "no response"))
+
+    kept = [ln for ln in plain.split("\n")
+            if ln.startswith(("D,", "#PARAMS", "#DONE"))]
+    with open(output_path, "w") as f:
+        f.write("\n".join(kept) + "\n")
+
+    done = kept[-1] if kept and kept[-1].startswith("#DONE") else ""
+    m = re.search(r"frames=(\d+) dropped=(\d+)", done)
+    return _ok(output_path=output_path, lines=len(kept),
+               frames=int(m.group(1)) if m else None,
+               dropped=int(m.group(2)) if m else None)
+
+
 HANDLERS = {
     "rgb_sunglasses.clear_indicator": handle_clear_indicator,
     "rgb_sunglasses.set_animation": handle_set_animation,
@@ -265,4 +409,6 @@ HANDLERS = {
     "rgb_sunglasses.glim_list": handle_glim_list,
     "rgb_sunglasses.glim_select": handle_glim_select,
     "rgb_sunglasses.glim_set_loop_mode": handle_glim_set_loop_mode,
+    "rgb_sunglasses.sound_record": handle_sound_record,
+    "rgb_sunglasses.sound_dump": handle_sound_dump,
 }

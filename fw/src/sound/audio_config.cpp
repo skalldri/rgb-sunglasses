@@ -51,6 +51,17 @@ float AudioConfig::getFluxGamma() {
     return clamped;
 }
 
+void AudioConfig::setFluxGamma(float value) {
+    audioFluxGamma = std::clamp(value, 1.0f, 100000.0f);
+    // operator= does not invoke onWrite/persistence (see persistent_characteristic.h) -
+    // this is a non-BT-write mutation path (shell), so it must mark dirty and request the
+    // save itself, mirroring setTargetLow() below.
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioFluxGamma.mark_dirty();
+        persistent_value_store::request_save();
+    }
+}
+
 float AudioConfig::getBeatFluxFloor() {
     float value = audioBeatFluxFloor;
     float clamped = std::clamp(value, 0.0f, 1.0f);
@@ -58,6 +69,14 @@ float AudioConfig::getBeatFluxFloor() {
         audioBeatFluxFloor = clamped;
     }
     return clamped;
+}
+
+void AudioConfig::setBeatFluxFloor(float value) {
+    audioBeatFluxFloor = std::clamp(value, 0.0f, 1.0f);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioBeatFluxFloor.mark_dirty();
+        persistent_value_store::request_save();
+    }
 }
 
 float AudioConfig::getBeatAlpha() {
@@ -69,6 +88,14 @@ float AudioConfig::getBeatAlpha() {
     return clamped;
 }
 
+void AudioConfig::setBeatAlpha(float value) {
+    audioBeatAlpha = std::clamp(value, 0.1f, 20.0f);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioBeatAlpha.mark_dirty();
+        persistent_value_store::request_save();
+    }
+}
+
 uint32_t AudioConfig::getBeatRefractoryFrames() {
     uint32_t value = audioBeatRefractoryFrames;
     // Clamped to fit the uint8_t per-band refractory counter in audio_dsp.cpp.
@@ -77,6 +104,15 @@ uint32_t AudioConfig::getBeatRefractoryFrames() {
         audioBeatRefractoryFrames = clamped;
     }
     return clamped;
+}
+
+void AudioConfig::setBeatRefractoryFrames(uint32_t value) {
+    // Clamped to fit the uint8_t per-band refractory counter in audio_dsp.cpp.
+    audioBeatRefractoryFrames = std::clamp<uint32_t>(value, 0, 255);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioBeatRefractoryFrames.mark_dirty();
+        persistent_value_store::request_save();
+    }
 }
 
 float AudioConfig::getTargetLow() {

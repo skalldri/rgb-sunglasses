@@ -11,7 +11,7 @@ extern struct k_msgq audio_result_q;
  * @brief Runtime-tunable AGC parameters. Decouples sound.cpp from any concrete
  * BT/Settings-backed implementation - see AudioDspConfigProvider in audio_dsp.h for the
  * full rationale (same seam, applied to the AGC loop + its shell commands instead of
- * audio_dsp_process()). Unlike AudioDspConfigProvider, this interface also has setters:
+ * audio_dsp_process()). Like AudioDspConfigProvider, this interface has setters:
  * the existing "sound agc target-low/target-high/rate" shell commands both read *and*
  * write through whichever provider is currently set.
  */

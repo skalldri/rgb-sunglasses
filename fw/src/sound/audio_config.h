@@ -25,9 +25,13 @@ class AudioConfig : public Singleton<AudioConfig>,
 
     // AudioDspConfigProvider
     float getFluxGamma() override;
+    void setFluxGamma(float value) override;
     float getBeatFluxFloor() override;
+    void setBeatFluxFloor(float value) override;
     float getBeatAlpha() override;
+    void setBeatAlpha(float value) override;
     uint32_t getBeatRefractoryFrames() override;
+    void setBeatRefractoryFrames(uint32_t value) override;
 
     // AgcConfigProvider
     float getTargetLow() override;

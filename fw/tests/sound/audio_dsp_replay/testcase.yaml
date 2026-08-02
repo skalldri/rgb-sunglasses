@@ -1,0 +1,11 @@
+tests:
+  sound.audio_dsp_replay:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    harness: console
+    harness_config:
+      type: one_line
+      regex:
+        - "REPLAY SELFTEST PASS"
