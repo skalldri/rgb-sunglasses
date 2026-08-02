@@ -34,6 +34,7 @@
 #include <extensions/extension_manifest.h>
 #include <extensions/extension_param_persistence.h>
 #include <extensions/extension_registry.h>
+#include <extensions/extension_tick_budget.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
 #include <settings/persistent_value_registry.h>
@@ -107,11 +108,15 @@ struct Slot {
     char shuffleKey[extension_param_persistence::kShuffleKeyMaxLen] = {};
     bool shufflePersistRegistered = false;
     PersistentValueRegistryEntry shufflePersistEntry = {};
-    /* Tick-handshake profiling (cycles), reset on every activation. */
-    uint32_t tickMinCyc = 0;
-    uint32_t tickMaxCyc = 0;
-    uint64_t tickSumCyc = 0;
-    uint32_t tickCount = 0;
+    /* Tick profiling (cycles), reset on every activation. Wall and CPU are
+     * tracked SEPARATELY on purpose (issue #276): wall time includes every
+     * higher-priority thread that preempted the sandbox mid-tick, so a single
+     * conflated number reads as "the extension got slow" when in fact the
+     * system got busy. `ext stats` prints both so the two are never confused
+     * again. Only `tickWall.count` is used as the "has ticked" test; the two
+     * accumulators are always recorded together. */
+    TickStatAccumulator tickWall = {};
+    TickStatAccumulator tickCpu = {};
     /* Shuffle's good-switch-point signal (issue #121), cached from the extension's
      * optional rgbx_good_moment export after each completed tick. Defaults to true
      * (and stays true when the extension doesn't export the symbol) so shuffle mode
@@ -143,6 +148,36 @@ BUILD_ASSERT(CONFIG_APP_EXT_HOST_THREAD_PRIORITY > CONFIG_APP_PATTERN_CONTROLLER
 BUILD_ASSERT(CONFIG_APP_EXT_HOST_THREAD_PRIORITY >= 0 &&
                  CONFIG_APP_EXT_HOST_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
              "CONFIG_APP_EXT_HOST_THREAD_PRIORITY must be a valid preemptible priority");
+/* The wall backstop only makes sense as a ceiling ABOVE the CPU budget: a tick
+ * cannot consume more CPU than wall time, so an inverted pair would make the
+ * backstop fire first and reintroduce the issue #276 starvation false
+ * positives that the CPU budget exists to eliminate. */
+BUILD_ASSERT(CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS > CONFIG_APP_EXT_TICK_CPU_BUDGET_MS,
+             "CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS must exceed the per-tick CPU budget");
+/* APP_EXTENSION_HOST selects THREAD_RUNTIME_STATS, which enables this by
+ * default — but a board .conf could still turn it off, and the failure mode
+ * would be silent (execution_cycles absent, every tick billed as zero CPU, no
+ * runaway ever detected). Fail the build instead. */
+#if !defined(CONFIG_SCHED_THREAD_USAGE)
+#error "extension_host requires CONFIG_SCHED_THREAD_USAGE for per-tick CPU accounting"
+#endif
+/* The budget is built in the system-clock domain (k_ms_to_cyc_ceil64(), 32768 Hz
+ * on proto0) and compared against k_thread_runtime_stats_t::execution_cycles.
+ * Those units agree only while Zephyr's usage accounting uses the same clock.
+ * Setting THREAD_RUNTIME_STATS_USE_TIMING_FUNCTIONS switches it to
+ * timing_counter_get() — the DWT counter at the 64/128 MHz CPU clock — which is
+ * a ~2000x unit change in the WRONG direction: a healthy 4.7 ms tick would
+ * report ~300000 cycles against a 50 ms budget of 1639, so evaluate_tick_budget()
+ * would return CpuBudgetExceeded on the very first tick of every extension and
+ * sandbox_fault() would wipe each slot's persisted params to flash. That symbol
+ * is user-selectable under the THREAD_RUNTIME_STATS menu this file's Kconfig
+ * force-selects, and enabling it is the obvious move when profiling — so guard
+ * it rather than leaving a profiling session to destroy user settings. */
+#if defined(CONFIG_THREAD_RUNTIME_STATS_USE_TIMING_FUNCTIONS)
+#error \
+    "extension_host's CPU budget assumes k_cycle_get_32() units; \
+THREAD_RUNTIME_STATS_USE_TIMING_FUNCTIONS reports a different clock domain"
+#endif
 struct k_thread sSandboxThread;
 bool sSandboxAlive = false;
 int sActiveSlot = -1;       // slot the pattern controller should tick (-1 none)
@@ -201,6 +236,113 @@ struct k_mem_domain sSandboxDomain;
  * synchronous. */
 K_SEM_DEFINE(sReqSem, 0, 1);
 K_SEM_DEFINE(sDoneSem, 0, 1);
+
+/* Poll granularity for the handshake wait, in ms. Small and deliberately
+ * independent of the CPU budget: it sets how promptly a runaway is noticed once
+ * it has actually exceeded its budget, and it is the amount by which the wall
+ * deadline can be overshot (the deadline is only re-checked at poll
+ * boundaries). The real ceiling on one tick() is therefore
+ * CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS + kPollMs, which is what Kconfig and
+ * fw/docs/threading.md state. Bounded by the CPU budget so a deliberately tiny
+ * budget still gets at least one sample per period. */
+constexpr int kPollMs = MAX(1, MIN(CONFIG_APP_EXT_TICK_CPU_BUDGET_MS, 10));
+
+/** @brief CPU cycles the sandbox thread has consumed over its lifetime, or 0
+ *  if the kernel can't report them (thread not yet running). Only ever used as
+ *  a delta across one handshake, so the absolute origin does not matter. */
+uint64_t sandbox_exec_cycles() {
+    k_thread_runtime_stats_t stats;
+    if (!sSandboxAlive || k_thread_runtime_stats_get(&sSandboxThread, &stats) != 0) {
+        return 0;
+    }
+    return stats.execution_cycles;
+}
+
+/** @brief True once the sandbox thread has terminated — which for this thread
+ *  means it took a CPU fault and k_sys_fatal_error_handler let Zephyr abort it
+ *  (issue #85 containment). K_NO_WAIT makes this a state query, safe to call
+ *  while holding sHostLock. */
+bool sandbox_thread_terminated() {
+    return sSandboxAlive && k_thread_join(&sSandboxThread, K_NO_WAIT) == 0;
+}
+
+/**
+ * @brief Waits for one sandbox handshake, budgeting the sandbox's own CPU
+ * time rather than elapsed wall time (issue #276).
+ *
+ * The CPU budget can only be sampled where this thread runs, i.e. at poll
+ * boundaries, so the poll period sets the detection granularity for a runaway.
+ * kPollMs is therefore kept small and independent of the budget: a healthy tick
+ * still returns on the very first take (the semaphore is already given, so no
+ * extra context switches), while a spinner is caught within about one period of
+ * actually exceeding its budget instead of one whole budget later. Detection is
+ * still load-dependent by construction — an extension granted 10% of the CPU
+ * needs 10x the wall time to burn its budget — which is the correct behaviour
+ * for a CPU budget, and the wall deadline bounds the tail.
+ *
+ * @param deadline   Shared wall-clock deadline. tick() computes ONE per call and
+ *        passes the same timepoint to the lazy load's handshake and its own, so
+ *        a load followed by a tick can never together exceed one backstop.
+ * @param postRequest true to post the tick request AFTER the measurement
+ *        origin is taken. The rgbx_init path passes false: the sandbox thread
+ *        signals done on its own once init returns, with no request to post.
+ * @param cpuCycOut  CPU cycles the sandbox consumed (valid on every return).
+ * @param wallCycOut Wall cycles elapsed in THIS wait (valid on every return;
+ *        for `ext stats` only — the deadline, not this, bounds the wait).
+ * @return The terminal verdict — never TickVerdict::Running.
+ */
+TickVerdict wait_for_sandbox(k_timepoint_t deadline, bool postRequest, uint32_t &cpuCycOut,
+                             uint32_t &wallCycOut) {
+    /* Cycle-domain budget. Not constexpr: sys_clock_hw_cycles_per_sec() is a
+     * runtime call on targets that read their timer frequency at boot, so the
+     * conversion has to go through Zephyr's own helper. */
+    const TickBudgetLimits limits{k_ms_to_cyc_ceil64(CONFIG_APP_EXT_TICK_CPU_BUDGET_MS)};
+
+    /* Origin BEFORE the request is posted. Taking it after would let a
+     * preemption of THIS thread (pattern_controller, priority 4, is itself
+     * preemptible by led_display at 2) slide the origin later and silently
+     * loosen the reported wall figures. */
+    const uint32_t startCyc = k_cycle_get_32();
+    const uint64_t startExec = sandbox_exec_cycles();
+    if (postRequest) {
+        k_sem_give(&sReqSem);
+    }
+
+    TickBudgetSample sample;
+    TickVerdict verdict;
+    do {
+        sample.completed = (k_sem_take(&sDoneSem, K_MSEC(kPollMs)) == 0);
+        /* Defensive clamp. Not because the kernel ever reports zero for a live
+         * thread — k_thread_runtime_stats_get() reads thread->base.usage.total
+         * and an aborted sandbox keeps reporting its final accumulated total —
+         * but because the two samples are taken at different times and a
+         * wrapped/reset accumulator must not turn into a fake CPU overrun. */
+        const uint64_t execNow = sandbox_exec_cycles();
+        sample.cpuCyc = execNow > startExec ? execNow - startExec : 0;
+        sample.sandboxDied = sandbox_thread_terminated();
+        sample.wallDeadlineExpired = sys_timepoint_expired(deadline);
+        verdict = evaluate_tick_budget(sample, limits);
+    } while (verdict == TickVerdict::Running);
+
+    cpuCycOut = (uint32_t)sample.cpuCyc;
+    wallCycOut = k_cycle_get_32() - startCyc;
+    return verdict;
+}
+
+/** @brief Human-readable cause for a fault verdict, for the log line. */
+const char *verdict_describe(TickVerdict verdict) {
+    switch (verdict) {
+        case TickVerdict::CpuBudgetExceeded:
+            return "tick exceeded its CPU budget (runaway extension)";
+        case TickVerdict::SandboxDied:
+            return "sandbox thread died mid-tick (CPU fault inside the extension)";
+        case TickVerdict::WallBackstopExceeded:
+            return "tick never completed before the wall-clock backstop (blocked, or "
+                   "the system is severely overloaded)";
+        default:
+            return "tick failed";
+    }
+}
 
 /* Serializes every entry point that touches the singleton sandbox state
  * (thread object, handshake semaphores, sActiveSlot/sPendingLoadSlot,
@@ -622,7 +764,10 @@ bool scan_slot(size_t fileIndex, size_t slotIndex) {
  * cross-checks against the boot-time metadata, builds the shared domain, and
  * starts the sandbox thread through its rgbx_init() deadline. Returns false
  * with everything torn down on any failure. */
-bool runtime_load(size_t slotIndex) {
+/* @param deadline Shared wall-clock deadline owned by the calling tick(), so
+ * this load's rgbx_init handshake and the tick that follows it draw on ONE
+ * backstop between them rather than one each. */
+bool runtime_load(size_t slotIndex, k_timepoint_t deadline) {
     Slot &slot = sSlots[slotIndex];
 
     char path[64];
@@ -709,19 +854,27 @@ bool runtime_load(size_t slotIndex) {
     sResident.tickFn = exports.tickFn;
     sResident.goodMoment = exports.goodMoment;
 
-    /* Wait for the extension's rgbx_init() to finish (same deadline as a
-     * tick — init runs sandboxed too, and a hang there must not stall the
-     * pattern controller forever). */
-    if (k_sem_take(&sDoneSem, K_MSEC(CONFIG_APP_EXT_TICK_DEADLINE_MS)) != 0) {
-        LOG_ERR("%s: rgbx_init() missed deadline", path);
+    /* Wait for the extension's rgbx_init() to finish (same budget as a tick —
+     * init runs sandboxed too, and a hang there must not stall the pattern
+     * controller forever). This path is if anything MORE starvation-prone
+     * than a steady-state tick (issue #276): activation happens during
+     * animation switches and at boot, when the display and BT threads are
+     * busiest, and rgbx_init also runs the extension's C++ static
+     * constructors. Budgeting CPU rather than wall time is what keeps a
+     * healthy extension from failing to activate under load. */
+    uint32_t initCpuCyc = 0;
+    uint32_t initWallCyc = 0;
+    const TickVerdict initVerdict =
+        wait_for_sandbox(deadline, /*postRequest=*/false, initCpuCyc, initWallCyc);
+    if (initVerdict != TickVerdict::Completed) {
+        LOG_ERR("%s: rgbx_init() %s (cpu %u us, wall %u us)", path, verdict_describe(initVerdict),
+                k_cyc_to_us_near32(initCpuCyc), k_cyc_to_us_near32(initWallCyc));
         unload_resident();
         return false;
     }
 
-    slot.tickMinCyc = 0;
-    slot.tickMaxCyc = 0;
-    slot.tickSumCyc = 0;
-    slot.tickCount = 0;
+    slot.tickWall.reset();
+    slot.tickCpu.reset();
     slot.goodMoment = true;
 
     LOG_INF("extension '%s' loaded and activated (%zu bytes heap)", slot.meta.displayName,
@@ -973,16 +1126,36 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
     /* Held across the whole handshake (and the one-time lazy load): an
      * Is Active write on the BT RX thread must not abort/recreate the
      * sandbox thread while this tick is between the request and done
-     * semaphores. */
+     * semaphores.
+     *
+     * Worst-case hold time is therefore the handshake's worst case, and CPU
+     * budgeting (issue #276) changed that bound: it used to be a flat
+     * CONFIG_APP_EXT_TICK_DEADLINE_MS, because a starved tick was simply
+     * declared dead at 50 ms. Now a starved-but-healthy tick is correctly
+     * waited out, so the hold lasts as long as the sandbox actually takes to
+     * get scheduled, and only a genuinely blocked extension runs to the
+     * deadline below. Concurrent BLE param writes and `ext select` block for
+     * that long, on ANY slot, since they share this mutex. Measured on proto0
+     * under app-connected load: worst handshake wall time 8.3 ms against a
+     * 500 ms backstop — reached only in the fault case, once, immediately
+     * before the extension is unloaded. Keep that ratio in mind before raising
+     * the backstop, and see fw/docs/threading.md for the full trade-off. */
     HostLockGuard lock;
     if (!isLoaded(slot) || sSlots[slot].faulted || sActiveSlot != static_cast<int>(slot)) {
         return false;
     }
     Slot &s = sSlots[slot];
 
+    /* ONE deadline for everything this call does under the lock. The lazy load
+     * below runs its own full rgbx_init handshake before the tick handshake
+     * that follows it; giving each its own backstop would let a single tick()
+     * hold sHostLock for twice the advertised ceiling. */
+    const k_timepoint_t deadline =
+        sys_timepoint_calc(K_MSEC(CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS));
+
     if (sPendingLoadSlot == static_cast<int>(slot)) {
         sPendingLoadSlot = -1;
-        if (!runtime_load(slot)) {
+        if (!runtime_load(slot, deadline)) {
             sandbox_fault(s, "activation load failed", /*resetParams=*/false);
             return false;
         }
@@ -1042,24 +1215,26 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
         }
     }
 
-    const uint32_t startCyc = k_cycle_get_32();
-    k_sem_give(&sReqSem);
-    if (k_sem_take(&sDoneSem, K_MSEC(CONFIG_APP_EXT_TICK_DEADLINE_MS)) != 0) {
-        /* Deadline overrun — either the extension is spinning or it MPU-
-         * faulted (Zephyr already aborted the thread in that case; aborting
-         * again is harmless). */
-        sandbox_fault(s, "tick missed deadline (hang or fault)", /*resetParams=*/true);
+    uint32_t tickCpuCyc = 0;
+    uint32_t tickWallCyc = 0;
+    /* wait_for_sandbox() posts the request itself, so the measurement origin is
+     * taken before it rather than after (issue #276 review). */
+    const TickVerdict verdict =
+        wait_for_sandbox(deadline, /*postRequest=*/true, tickCpuCyc, tickWallCyc);
+    if (verdict_is_fault(verdict)) {
+        /* Budget blown — the extension is spinning, blocked, or it MPU-faulted
+         * (Zephyr already aborted the thread in that case; aborting again is
+         * harmless). EVERY tick-time fault clears the slot's params: any of the
+         * three can be driven by a poisoned persisted value, including the
+         * blocked case — an extension that burns no CPU is often blocked
+         * precisely because a parameter sent it down a waiting path. Sparing
+         * any of them leaves the slot unable to self-recover across `ext
+         * select` or a reboot. See the NOTE in extension_tick_budget.h. */
+        sandbox_fault(s, verdict_describe(verdict), /*resetParams=*/true);
         return false;
     }
-    const uint32_t tickCyc = k_cycle_get_32() - startCyc;
-    if (s.tickCount == 0 || tickCyc < s.tickMinCyc) {
-        s.tickMinCyc = tickCyc;
-    }
-    if (tickCyc > s.tickMaxCyc) {
-        s.tickMaxCyc = tickCyc;
-    }
-    s.tickSumCyc += tickCyc;
-    s.tickCount++;
+    s.tickWall.record(tickWallCyc);
+    s.tickCpu.record(tickCpuCyc);
 
     /* The sandbox is quiescent between the done-semaphore and the next request, so this
      * is the one safe point to read the extension's per-tick outputs. Absent symbol =
@@ -1098,14 +1273,23 @@ int cmd_ext_list(const struct shell *sh, size_t, char **) {
 int cmd_ext_stats(const struct shell *sh, size_t, char **) {
     for (size_t i = 0; i < sSlotCount; i++) {
         const Slot &s = sSlots[i];
-        if (s.tickCount == 0) {
+        if (s.tickWall.count == 0) {
             shell_print(sh, "[%zu] '%s': no ticks recorded", i, s.meta.displayName);
             continue;
         }
-        shell_print(sh, "[%zu] '%s': %u ticks, handshake min/avg/max = %u/%u/%u us", i,
-                    s.meta.displayName, s.tickCount, k_cyc_to_us_near32(s.tickMinCyc),
-                    k_cyc_to_us_near32((uint32_t)(s.tickSumCyc / s.tickCount)),
-                    k_cyc_to_us_near32(s.tickMaxCyc));
+        /* CPU is what the budget is enforced against; wall is what the render
+         * loop actually waited. A large gap between them is preemption, not a
+         * slow extension (issue #276) — printing only one number is what made
+         * that misdiagnosable. */
+        shell_print(sh, "[%zu] '%s': %u ticks", i, s.meta.displayName, s.tickWall.count);
+        shell_print(sh, "      cpu  min/avg/max = %u/%u/%u us  (budget %u us)",
+                    k_cyc_to_us_near32(s.tickCpu.minCyc), k_cyc_to_us_near32(s.tickCpu.avgCyc()),
+                    k_cyc_to_us_near32(s.tickCpu.maxCyc),
+                    (unsigned)CONFIG_APP_EXT_TICK_CPU_BUDGET_MS * 1000U);
+        shell_print(sh, "      wall min/avg/max = %u/%u/%u us  (backstop %u us)",
+                    k_cyc_to_us_near32(s.tickWall.minCyc), k_cyc_to_us_near32(s.tickWall.avgCyc()),
+                    k_cyc_to_us_near32(s.tickWall.maxCyc),
+                    (unsigned)CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS * 1000U);
     }
     return 0;
 }
@@ -1204,7 +1388,7 @@ int cmd_ext_shuffle(const struct shell *sh, size_t argc, char **argv) {
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_ext, SHELL_CMD(list, NULL, "List loaded animation extensions", cmd_ext_list),
-    SHELL_CMD(stats, NULL, "Per-extension tick-handshake timing (min/avg/max us)",
+    SHELL_CMD(stats, NULL, "Per-extension tick timing: cpu vs wall (min/avg/max us)",
               cmd_ext_stats),
     SHELL_CMD_ARG(param, NULL, "Get/set a param: ext param <slot> <index> [<value>]",
                   cmd_ext_param, 3, 1),

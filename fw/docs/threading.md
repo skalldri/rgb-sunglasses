@@ -142,7 +142,8 @@ Each of these is enforced by a `BUILD_ASSERT` next to the thread it constrains, 
 | --- | --- | --- |
 | `APP_LED_DISPLAY_THREAD_PRIORITY <= APP_PATTERN_CONTROLLER_THREAD_PRIORITY` | `src/led_controller.cpp` | The display thread owns the only hard frame deadline; it must never rank below its own producer. |
 | `APP_PATTERN_CONTROLLER_THREAD_PRIORITY >= 0` | `src/pattern_controller.cpp` | It does FAT/QSPI I/O (GLIM assets, `.llext` loads) and settings persistence. |
-| `APP_EXT_HOST_THREAD_PRIORITY > APP_PATTERN_CONTROLLER_THREAD_PRIORITY` | `src/extensions/extension_host.cpp` | The pattern controller enforces the extension's per-tick deadline; it must be able to preempt a runaway sandbox. |
+| `APP_EXT_HOST_THREAD_PRIORITY > APP_PATTERN_CONTROLLER_THREAD_PRIORITY` | `src/extensions/extension_host.cpp` | The pattern controller enforces the extension's per-tick budget; it must be able to preempt a runaway sandbox. |
+| `APP_EXT_TICK_WALL_BACKSTOP_MS > APP_EXT_TICK_CPU_BUDGET_MS` | `src/extensions/extension_host.cpp` | A tick cannot consume more CPU than wall time, so an inverted pair would make the backstop fire first and reintroduce the issue #276 false positives. |
 | `IMU_THREAD_PRIORITY > APP_PATTERN_CONTROLLER_THREAD_PRIORITY` | `src/imu/imu.cpp` | The animation tick must preempt the sensor reader. |
 | The three flash/FS workqueue priorities are valid preemptible values | their respective `.cpp` files | They do the longest blocking I/O in the system and must stay at the bottom. |
 
@@ -150,6 +151,57 @@ Not machine-checkable, but equally binding: **the TPS25750 workqueue must rank b
 rendering threads.** It runs multi-step CMD1/DATA1 bridge transactions under the driver's
 task mutex and can hold the CPU for a while. It cannot be asserted in the driver, which is
 built standalone in two test suites and does not see the application's symbols.
+
+### The extension sandbox's scheduling latency is unbounded — by design
+
+The assert above is the *only* schedulability property of the sandbox that a build can
+check. It says the deadline enforcer can preempt a runaway extension. It deliberately says
+nothing about how long the sandbox may go **unscheduled**, and nothing can: the sandbox
+sits at the bottom of the application band, so its worst-case scheduling latency is the
+summed worst-case work of every numerically-lower-priority thread — today `led_display`
+(2), `mcumgr smp` (3), `pattern_controller` (4), `audio_dsp` (5), `bt_thread` (6),
+`imu_thread` (7), `status_led`/`charger` (8), plus the whole cooperative band above them.
+That figure is not expressible in Kconfig and changes with every retune.
+
+**This is why the per-tick budget is CPU time, not wall time (issue #276).** The host used
+to time the handshake with a wall-clock `k_sem_take` timeout, which silently made
+correctness depend on the latency bound above. It broke exactly as you would expect: after
+#271 moved the sandbox from 7 to 9 and `led_display` from 6 to 2, a single 41.5 ms display
+frame (measured — `led_stats`, `work max`) consumed 83% of the 50 ms deadline, and a
+healthy extension whose own cost was 4.7 ms started faulting. `ext stats` now prints CPU
+and wall separately so the two can never be conflated again.
+
+The rule for future retunes: **you may move the sandbox anywhere the assert allows without
+worrying about extension false-positives**, because nothing in the fault path measures
+elapsed time any more except the deliberately-generous `APP_EXT_TICK_WALL_BACKSTOP_MS`. If
+you ever reintroduce a wall-clock deadline here, you reintroduce this bug.
+
+**The trade-off that buys, and who pays it.** `extension_host`'s mutex is held across the
+whole handshake, so its worst-case hold time is the handshake's worst case — and CPU
+budgeting deliberately lengthened that. The old wall deadline capped the hold at 50 ms by
+declaring a starved tick dead; now a starved-but-healthy tick is waited out, and only a
+genuinely *blocked* extension runs to the backstop. Concurrent BLE parameter writes and
+`ext select` share that mutex and block for the same duration, on any slot. Measured on
+proto0 with the companion app connected, worst handshake wall time was **8.3 ms** — the
+backstop is reached only in the fault case, once, immediately before the extension is
+unloaded. So the recurring cost tracks real scheduling latency, not the backstop; but if
+you raise `APP_EXT_TICK_WALL_BACKSTOP_MS`, you are widening a BLE-visible stall, not just a
+fault threshold.
+
+Two bounds that are easy to get wrong, both load-bearing:
+
+- **The ceiling is `APP_EXT_TICK_WALL_BACKSTOP_MS + one poll period`**, not the backstop
+  alone — the deadline is only re-checked when a poll expires. ~510 ms at the defaults.
+  Size host-side timeouts against the sum.
+- **One `tick()` computes one deadline and shares it** with the lazy load's `rgbx_init`
+  handshake. Without that, a tick that triggers a load would run two full handshakes under
+  one lock acquisition and could hold it for twice the advertised ceiling.
+
+**Detection latency is load-dependent, and that is correct.** A CPU budget is spent at
+whatever rate the scheduler grants, so an extension given 10% of the CPU needs ~10x the
+wall time to burn 50 ms of CPU. A runaway is therefore caught later on a loaded system than
+the old flat wall deadline caught it; the wall backstop is what bounds that tail. Do not
+"fix" this by reintroducing a wall deadline — that is the #276 bug.
 
 ## What issue #267 changed, and why
 

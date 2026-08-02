@@ -42,7 +42,7 @@ provisioned proto0.
 | `anim get` | Prints one lowercase name (e.g. `zigzag`, `glim_player`); `unknown` means an enum/name mapping gap |
 | `anim indicator clear` | (State-changing but benign) returns silently; use when an overlay masks the animation |
 | `glim list` / `glim get_selected` | Lists provisioned `.glim` files (nyan_cat, bad_apple after `/provision-device`); empty list + FS errors in log = storage problem |
-| `ext list` / `ext stats` | Provisioned extensions listed, none marked faulted; stats show per-tick µs timings well under the ~11 ms frame budget |
+| `ext list` / `ext stats` | Provisioned extensions listed, none marked faulted. `ext stats` prints TWO rows per slot: **`cpu`** is the extension's own cost and is the one to judge — it should sit well under the printed budget and be stable across min/avg/max. **`wall`** includes every higher-priority thread that preempted the sandbox mid-tick, so it runs higher and spikes under load **by design** (issue #276) — a large cpu/wall gap is normal preemption, NOT a slow extension. Judging a board by the wall row is the exact misdiagnosis #276 was fixed to prevent |
 | `power bq status` | Plausible physics: 2S VBAT roughly 6000–8400 mV, VBUS ≈ 5000 mV only when USB present, small signed currents, sensible charge status. VBAT == VBUS is the PR #111 corruption signature |
 | `power pd dump` / `power bq dump` | Register dumps complete without I2C error lines |
 | `power vreghvout` | Reports the 3.3 V UICR mode on any board that has booted this firmware |
