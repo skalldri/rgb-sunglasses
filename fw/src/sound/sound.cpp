@@ -417,23 +417,38 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
         s_agc_frames_since++;
         if (!s_agc_frozen &&
             static_cast<uint32_t>(s_agc_frames_since) >= sAgcProvider->getRateLimitFrames()) {
-            bool gain_changed = false;
+            int steps = 0;
 
             /* Use smoothed RMS (1-second average) for stable decisions. */
             if (s_smoothed_rms < sAgcProvider->getTargetLow() && s_agc_gain < AGC_GAIN_MAX) {
                 s_agc_gain++;
-                gain_changed = true;
+                steps = 1;
             } else if (s_smoothed_rms > sAgcProvider->getTargetHigh() &&
                        s_agc_gain > AGC_GAIN_MIN) {
                 s_agc_gain--;
-                gain_changed = true;
+                steps = -1;
             }
 
-            if (gain_changed) {
+            if (steps != 0) {
                 *s_gain_l = s_agc_gain;
                 *s_gain_r = s_agc_gain;
-                /* Gain discontinuity invalidates the flux history. */
-                audio_dsp_reset_history();
+                /* Carry the detector's previous-frame state across the gain
+                 * discontinuity instead of resetting its 1 s threshold history —
+                 * the reset-per-step behavior blinded the detector for ~1 s
+                 * after every step, ~30% of all frames during music (issue #264,
+                 * hardware-measured: 16 steps in 30 s of ABGT at listening
+                 * volume). */
+                audio_dsp_compensate_gain_change(steps);
+                /* The AGC's own RMS window is in the old gain domain too: scale
+                 * it by the amplitude ratio (0.5 dB/step) so the smoothed RMS
+                 * tracks the step instantly instead of lagging it for up to a
+                 * second and triggering over-stepping. */
+                const float amp = (steps > 0) ? 1.0592537f /* 10^0.025 */
+                                              : 0.9440609f /* 10^-0.025 */;
+                for (int i = 0; i < AGC_HISTORY_LEN; i++) {
+                    s_rms_history[i] *= amp;
+                }
+                s_smoothed_rms *= amp;
                 s_agc_frames_since = 0;
                 int db10 = agc_gain_db10(s_agc_gain);
                 char rms_buf[16];
@@ -1264,14 +1279,16 @@ static int cmd_sound_agc_gain(const struct shell *shell, size_t argc, char **arg
         shell_error(shell, "PDM not configured; gain registers unavailable");
         return -ENOEXEC;
     }
+    int steps = (int)v - (int)s_agc_gain;
     s_agc_gain = (uint8_t)v;
     *s_gain_l = s_agc_gain;
     *s_gain_r = s_agc_gain;
     /* Manual gain implies freeze - the point is a known, fixed gain for recordings. */
     s_agc_frozen = true;
-    /* Same rationale as the AGC loop: the amplitude discontinuity would look like an
-     * onset to the beat detector. */
-    audio_dsp_reset_history();
+    /* Same rationale as the AGC loop: carry detector state across the gain
+     * discontinuity. Small nudges compensate exactly; a jump of more than 4
+     * steps falls back to the full history reset inside the call. */
+    audio_dsp_compensate_gain_change(steps);
     int db10 = agc_gain_db10(s_agc_gain);
     shell_print(shell, "AGC gain set to 0x%02x (%s%d.%u dB), freeze forced on", s_agc_gain,
                 db10 < 0 ? "-" : "", abs(db10) / 10, (unsigned)(abs(db10) % 10));

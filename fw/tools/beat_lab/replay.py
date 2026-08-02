@@ -96,7 +96,9 @@ def main(argv=None):
     ap.add_argument("--alpha", type=float)
     ap.add_argument("--floor", type=float)
     ap.add_argument("--refractory", type=int)
-    ap.add_argument("--agc", choices=["off", "sim"], default="off")
+    ap.add_argument("--agc", choices=["off", "sim", "sim_reset"], default="off",
+                    help="off = fixed gain; sim = firmware AGC with Phase-1 gain "
+                         "compensation; sim_reset = legacy full-reset-per-step (A/B)")
     ap.add_argument("--gain", type=lambda s: int(s, 0),
                     help="recording's PDM gain register value (default 0x28)")
     ap.add_argument("--buckets", action="store_true", help="include display buckets")

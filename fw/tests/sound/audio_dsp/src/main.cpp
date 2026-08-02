@@ -261,4 +261,126 @@ ZTEST(audio_dsp, test_default_provider_setters_clamp) {
     p->setBeatRefractoryFrames(5);
 }
 
+/* Helper for the gain-compensation tests: 100 Hz sine at the given amplitude,
+ * optionally pre-scaled by `scale` (simulating the hardware capturing at a
+ * changed PDM gain). */
+static void make_tone(int16_t *buf, double amplitude, float scale) {
+    for (int i = 0; i < AUDIO_FFT_SIZE; i++) {
+        double t = (double)i / 16000.0;
+        buf[i] = (int16_t)((float)(amplitude * sin(2.0 * M_PI * 100.0 * t)) * scale);
+    }
+}
+
+/* One PDM register step = 0.5 dB of amplitude. */
+#define STEP_DOWN_AMP 0.9440609f /* 10^(-0.025) */
+
+/* ── Test 9: Gain compensation carries detector state across a step ─────────
+ * The pre-Phase-1 behavior reset ALL history on every AGC gain step, blinding
+ * the adaptive threshold for ~1 s (hardware-measured: 16 steps in 30 s of
+ * music → ~30% of frames blinded; issue #264). The fix scales the linear
+ * previous-frame energy instead. Assert, across a simulated -1 step:
+ *   (a) no spurious beat and ~zero flux on the step frame,
+ *   (b) the threshold history SURVIVES (band_mean stays near its value),
+ *   (c) a genuine onset right after the step still fires. */
+ZTEST(audio_dsp, test_gain_compensation_preserves_history) {
+    audio_dsp_init();
+
+    int16_t pcm[AUDIO_FFT_SIZE];
+    struct audio_analysis_result result;
+    uint32_t seq = 0;
+
+    /* Build non-trivial flux history: a small quiet→medium bump every 8 frames
+     * (flux ≈ ln(4) per bump — small enough that a later real onset clears the
+     * mean+3.5σ threshold). */
+    for (int cycle = 0; cycle < 5; cycle++) {
+        for (int i = 0; i < 7; i++) {
+            make_tone(pcm, 2000.0, 1.0f);
+            audio_dsp_process(pcm, seq++, &result);
+        }
+        make_tone(pcm, 4000.0, 1.0f);
+        audio_dsp_process(pcm, seq++, &result);
+    }
+    /* Settle on quiet so the step frame is quiet-vs-quiet. */
+    for (int i = 0; i < 3; i++) {
+        make_tone(pcm, 2000.0, 1.0f);
+        audio_dsp_process(pcm, seq++, &result);
+    }
+    float mean_before = result.band_mean[0];
+    zassert_true(mean_before > 0.05f, "test needs non-trivial history (mean=%f)",
+                 (double)mean_before);
+
+    /* Simulated -1 gain step: hardware now captures everything 0.5 dB quieter. */
+    audio_dsp_compensate_gain_change(-1);
+    make_tone(pcm, 2000.0, STEP_DOWN_AMP);
+    audio_dsp_process(pcm, seq++, &result);
+
+    zassert_false(result.beat[0], "compensated gain step must not fire a beat");
+    zassert_true(result.band_flux[0] < 0.01f, "flux across a compensated step should be ~0 (%f)",
+                 (double)result.band_flux[0]);
+    zassert_true(result.band_mean[0] > 0.6f * mean_before,
+                 "threshold history must survive the step (mean %f -> %f)",
+                 (double)mean_before, (double)result.band_mean[0]);
+
+    /* A genuine onset (16x amplitude vs the quiet tone) in the new gain domain
+     * must still fire — the detector is neither blinded nor desensitized. */
+    make_tone(pcm, 32000.0, STEP_DOWN_AMP);
+    audio_dsp_process(pcm, seq++, &result);
+    zassert_true(result.beat[0], "real onset right after a compensated step must fire");
+}
+
+/* ── Test 10: Compensation is exact for quiet signals too ────────────────────
+ * The previous-frame state is LINEAR energy, so the correction is an exact
+ * multiply at any level — including γE ≪ 1 where a log-domain offset would be
+ * wrong. A quiet tone across a compensated step must produce ~zero flux. */
+ZTEST(audio_dsp, test_gain_compensation_exact_when_quiet) {
+    audio_dsp_init();
+
+    int16_t pcm[AUDIO_FFT_SIZE];
+    struct audio_analysis_result result;
+    uint32_t seq = 0;
+
+    make_tone(pcm, 300.0, 1.0f); /* γ·E lands around 0.01-0.1 for band 0 */
+    for (int i = 0; i < 8; i++) {
+        audio_dsp_process(pcm, seq++, &result);
+    }
+
+    audio_dsp_compensate_gain_change(-1);
+    make_tone(pcm, 300.0, STEP_DOWN_AMP);
+    audio_dsp_process(pcm, seq++, &result);
+
+    zassert_false(result.beat[0], "quiet compensated step must not fire");
+    zassert_true(result.band_flux[0] < 0.005f,
+                 "flux across a compensated step on a quiet tone should be ~0 (%f)",
+                 (double)result.band_flux[0]);
+}
+
+/* ── Test 11: A large jump falls back to the full reset ─────────────────────
+ * Manual "sound agc gain" changes can jump many steps at once; |steps| > 4
+ * takes the audio_dsp_reset_history() path, which zeroes the threshold
+ * statistics (observable as band_mean == band_sigma == 0 on the next frame). */
+ZTEST(audio_dsp, test_gain_compensation_large_jump_resets) {
+    audio_dsp_init();
+
+    int16_t pcm[AUDIO_FFT_SIZE];
+    struct audio_analysis_result result;
+    uint32_t seq = 0;
+
+    for (int cycle = 0; cycle < 3; cycle++) {
+        make_tone(pcm, 2000.0, 1.0f);
+        for (int i = 0; i < 7; i++) {
+            audio_dsp_process(pcm, seq++, &result);
+        }
+        make_tone(pcm, 4000.0, 1.0f);
+        audio_dsp_process(pcm, seq++, &result);
+    }
+
+    audio_dsp_compensate_gain_change(-10);
+    make_tone(pcm, 2000.0, 1.0f);
+    audio_dsp_process(pcm, seq++, &result);
+
+    zassert_false(result.beat[0], "first frame after a reset must not fire");
+    zassert_equal(result.band_mean[0], 0.0f, "reset must zero the flux mean");
+    zassert_equal(result.band_sigma[0], 0.0f, "reset must zero the flux sigma");
+}
+
 ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, NULL, NULL);

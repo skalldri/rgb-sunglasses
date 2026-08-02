@@ -87,6 +87,23 @@ void audio_dsp_init(void);
 void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_result *out);
 
 /* Reset all internal beat-detection history (flux buffers, refractory counters,
- * previous-frame state).  Must be called after every AGC gain change: the
- * amplitude discontinuity would otherwise look like a beat onset. */
+ * previous-frame state). For AGC gain changes prefer
+ * audio_dsp_compensate_gain_change() below — a full reset blinds the adaptive
+ * threshold for the next HISTORY_LEN frames (~1 s), which was a root cause of
+ * issue #264's poor beat quality (the AGC stepped every few hundred ms during
+ * music, so the detector ran chronically history-less). */
 void audio_dsp_reset_history(void);
+
+/**
+ * @brief Make flux continuous across a PDM gain change of `steps` register
+ * steps (signed; 1 step = 0.5 dB amplitude), instead of resetting history.
+ *
+ * Scales only the previous-frame energy into the new gain domain (exact at all
+ * signal levels — the state is linear power); flux history, threshold
+ * statistics, and refractory counters survive. |steps| > 4 (a > 2 dB jump, e.g.
+ * a manual "sound agc gain" change) falls back to audio_dsp_reset_history().
+ *
+ * Call AFTER writing the new gain to the hardware, before processing the next
+ * block captured at the new gain.
+ */
+void audio_dsp_compensate_gain_change(int steps);

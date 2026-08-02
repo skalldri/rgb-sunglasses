@@ -115,19 +115,54 @@ static float32_t s_hann_window[NUM_FFT_SAMPLES];
 
 static arm_rfft_fast_instance_f32 s_rfft_inst;
 
-/* Level 3 beat detection state. */
+/* Level 3 beat detection state.
+ * s_prev_energy is kept in the LINEAR (power) domain, not log: an AGC gain step
+ * scales every subsequent block's energy by a known constant, so compensating
+ * the previous-frame state is an exact multiply at any signal level (a
+ * log-domain offset would only be exact where γE ≫ 1). See
+ * audio_dsp_compensate_gain_change(). */
 static float32_t s_band_flux_history[NUM_BANDS][HISTORY_LEN];
-static float32_t s_prev_log_energy[NUM_BANDS];
+static float32_t s_prev_energy[NUM_BANDS];
 static uint8_t s_history_idx;
 static uint8_t s_refractory[NUM_BANDS];
 static bool s_first_frame;
 
 void audio_dsp_reset_history(void) {
     memset(s_band_flux_history, 0, sizeof(s_band_flux_history));
-    memset(s_prev_log_energy, 0, sizeof(s_prev_log_energy));
+    memset(s_prev_energy, 0, sizeof(s_prev_energy));
     memset(s_refractory, 0, sizeof(s_refractory));
     s_history_idx = 0;
     s_first_frame = true;
+}
+
+void audio_dsp_compensate_gain_change(int steps) {
+    if (steps == 0) {
+        return;
+    }
+    /* A large jump (manual "sound agc gain" across many steps) is a genuine
+     * discontinuity — the accumulated float error and the changed noise floor
+     * make compensation questionable; fall back to the full reset. */
+    if (steps > 4 || steps < -4) {
+        audio_dsp_reset_history();
+        return;
+    }
+    /* Each PDM gain register step = 0.5 dB of AMPLITUDE; band energy is power
+     * (magnitude²), so one step scales energy by 10^(2·0.5/20) = 10^0.05.
+     * Precomputed constants instead of powf — the DSP thread runs per frame. */
+    const float32_t kStepUp = 1.1220185f;   /* 10^0.05  */
+    const float32_t kStepDown = 0.8912509f; /* 10^-0.05 */
+    float32_t ratio = 1.0f;
+    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
+        ratio *= (steps > 0) ? kStepUp : kStepDown;
+    }
+    /* Scale ONLY the previous-frame energy into the new gain domain so the next
+     * flux difference is gain-continuous. The flux history ring and refractory
+     * counters stay untouched: flux values are log-domain differences (≈ gain-
+     * invariant), and wiping them is exactly what used to collapse the adaptive
+     * threshold after every step (issue #264). */
+    for (int b = 0; b < NUM_BANDS; b++) {
+        s_prev_energy[b] *= ratio;
+    }
 }
 
 void audio_dsp_init(void) {
@@ -185,13 +220,16 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
 
         /* 4b. Log-compress and compute half-wave-rectified spectral flux.
          *     flux = max(0, log1p(GAMMA*energy) - log1p(GAMMA*prev_energy))
-         *     On the first frame there is no previous state, so flux = 0. */
+         *     On the first frame there is no previous state, so flux = 0.
+         *     prev is stored linear (see s_prev_energy above) at the cost of one
+         *     extra log1pf per band per frame. */
         float32_t log_e = log1pf(fluxGamma * energy);
+        float32_t log_prev = log1pf(fluxGamma * s_prev_energy[b]);
         float32_t flux = 0.0f;
-        if (!s_first_frame && log_e > s_prev_log_energy[b]) {
-            flux = log_e - s_prev_log_energy[b];
+        if (!s_first_frame && log_e > log_prev) {
+            flux = log_e - log_prev;
         }
-        s_prev_log_energy[b] = log_e;
+        s_prev_energy[b] = energy;
         out->band_flux[b] = flux;
 
         /* 4c. Adaptive threshold: track flux history, compute mean + alpha*sigma. */
