@@ -66,7 +66,20 @@ class DefaultAudioDspConfigProvider : public AudioDspConfigProvider {
    private:
     /* Defaults (and clamp ranges) mirror the BT-backed AudioConfig in audio_config.cpp. */
     float fluxGamma_ = 1000.0f;
-    float beatFluxFloor_ = 0.005f;
+    /* Retuned 0.005 -> 0.08 (issue #264, post-Phase-3). The floor was measured
+     * as PROVABLY INERT at the old operating point — identical fire counts
+     * across 0.005..0.105 — and that is no longer true, because Phase 3 dropped
+     * alpha 3.5 -> 0.3. A much lower adaptive threshold lets small noise-flux
+     * events through, and an absolute floor is exactly the right tool against
+     * them: it is scale-fixed, so it bites on quiet-room noise without touching
+     * real music, whose band-0 onset flux is >1.0.
+     *
+     * Measured over the corpus (with the gate at its new 0.0006): raising the
+     * floor to 0.08 cut quiet-room beats from 4 to 1 per 40 s with ZERO change
+     * to any music clip's F-score. Above 0.08 it starts clipping real beats
+     * (worst-clip music F 0.291 -> 0.278 at 0.12), so this is the peak, not an
+     * arbitrary safe-looking number. */
+    float beatFluxFloor_ = 0.08f;
     /* Retuned 3.5 -> 0.3 in Phase 3 (issue #264). 3.5 was never measured — it
      * mutes the detector on steady music, because the beats sit in the flux
      * history and inflate sigma.
