@@ -150,6 +150,36 @@ ZTEST(agc_controller, test_silence_gates_release_and_parks) {
                  frames_to_first_park);
 }
 
+/* The noise gate is INPUT-REFERRED: the same absolute RMS is silence at max
+ * gain (where it's just amplified mic noise) but signal at park gain.
+ * Regression for the hardware-found failure where a quiet room's amplified
+ * noise floor sat above an output-domain gate and the release path climbed to
+ * +20 dB with beats firing on noise. */
+ZTEST(agc_controller, test_gate_is_input_referred) {
+    AgcController ctrl;
+    FakeAgcConfig cfg;
+    cfg.gate = 0.001f;
+    cfg.tlow = 0.01f; /* everything below targetLow: only the gate blocks release */
+    cfg.release = 2;
+    cfg.rate = 1;
+
+    /* rms 0.003 at MAX gain: input-referred 0.003 x 10^-1 = 0.0003 < gate →
+     * silent; the release path must NOT step further up. */
+    AgcDecision d = {};
+    for (int i = 0; i < 10; i++) {
+        d = ctrl.update(cfg, 0.003f, 100, AgcController::kGainMax, true);
+        zassert_true(d.silent, "amplified noise floor at max gain must read as silence");
+        zassert_true(d.gain_steps <= 0, "release must never step up while silent");
+    }
+
+    /* The same absolute rms at PARK gain is a real signal: gate open. */
+    ctrl.reset();
+    for (int i = 0; i < AgcController::kHistoryLen; i++) {
+        d = ctrl.update(cfg, 0.003f, 100, AgcController::kGainPark, true);
+    }
+    zassert_false(d.silent, "the same level at 0 dB is signal, not silence");
+}
+
 /* Frozen (allow_adjust = false): levels and silence stay live, never a step. */
 ZTEST(agc_controller, test_frozen_never_steps) {
     AgcController ctrl;

@@ -109,6 +109,12 @@ def main(argv=None):
                     help="recording's PDM gain register value (default 0x28)")
     ap.add_argument("--buckets", action="store_true", help="include display buckets")
     ap.add_argument("--no-build", action="store_true", help="skip the west build step")
+    ap.add_argument("--params-from", metavar="DEVICE_CSV",
+                    help="take gamma/alpha/floor/refractory and the recording gain from a "
+                         "device capture's #PARAMS line, so the replay runs with the exact "
+                         "parameters the device used (explicit flags still override). Use "
+                         "this for every device-vs-host comparison — persisted device "
+                         "values routinely differ from compiled-in defaults")
     ap.add_argument("--sweep", help="grid sweep, e.g. 'alpha=2:5:0.5,floor=0.005:0.05:0.005'")
     ap.add_argument("--ref", help="(sweep) reference annotation file, seconds per line")
     ap.add_argument("--ref-librosa", choices=["beats", "onsets"],
@@ -119,6 +125,21 @@ def main(argv=None):
 
     if not args.no_build:
         build()
+
+    if args.params_from:
+        try:
+            from . import frames
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+            from tools.beat_lab import frames
+        p = frames.parse_dump(args.params_from).params
+        for attr, key in [("gamma", "gamma"), ("alpha", "alpha"), ("floor", "floor"),
+                          ("refractory", "refractory"), ("gain", "gain")]:
+            if getattr(args, attr) is None and key in p:
+                setattr(args, attr, p[key])
+        print(f"# params from {args.params_from}: gamma={args.gamma} alpha={args.alpha} "
+              f"floor={args.floor} refractory={args.refractory} gain={args.gain:#04x}",
+              file=sys.stderr)
 
     fixed = dict(gamma=args.gamma, alpha=args.alpha, floor=args.floor,
                  refractory=args.refractory, agc=args.agc, gain=args.gain,

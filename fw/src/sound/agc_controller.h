@@ -56,7 +56,10 @@ class AgcConfigProvider {
     virtual uint32_t getReleaseFrames() = 0;
     virtual void setReleaseFrames(uint32_t value) = 0;
 
-    /** Smoothed RMS below this = silence: hold/park gain, suppress beats. */
+    /** INPUT-REFERRED (0 dB-gain-normalized) smoothed RMS below this = silence:
+     * hold/park gain, suppress beats. Input-referred so the decision is
+     * independent of the current AGC gain (mic/room noise scales with gain;
+     * the room doesn't get louder because the AGC turned up). */
     virtual float getNoiseGateRms() = 0;
     virtual void setNoiseGateRms(float value) = 0;
 };

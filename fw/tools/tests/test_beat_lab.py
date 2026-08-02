@@ -152,6 +152,21 @@ class TestCompare:
         assert rc == 0
         assert "PASS" in capsys.readouterr().out
 
+    def test_warns_on_params_mismatch(self, tmp_path, capsys):
+        # Device ran alpha=1.5 (0x3fc00000) while the host replay defaulted to
+        # 3.5 (0x40600000): decisions aren't comparable and compare must say so
+        # (regression for a real footgun hit during hardware verification).
+        lines = _make_dump_lines(n=40)
+        host_lines = [lines[0].replace("alpha=40600000", "alpha=3fc00000")] + lines[1:]
+        pd = tmp_path / "d.txt"
+        pd.write_text("\n".join(lines) + "\n")
+        ph = tmp_path / "h.txt"
+        ph.write_text("\n".join(host_lines) + "\n")
+        compare.main(["--device", str(pd), "--host", str(ph)])
+        out = capsys.readouterr().out
+        assert "PARAMS mismatch 'alpha'" in out
+        assert "--params-from" in out
+
 
 @pytest.mark.filterwarnings("ignore")
 class TestWithLibrosa:

@@ -18,7 +18,16 @@ AgcDecision AgcController::update(AgcConfigProvider &cfg, float rms, int16_t pea
     smoothed_ = sum / (float)kHistoryLen;
     frames_since_step_++;
 
-    d.silent = smoothed_ < cfg.getNoiseGateRms();
+    /* Silence detection compares the INPUT-REFERRED level: smoothed RMS
+     * normalized back to the 0 dB park gain. Mic self-noise and room ambience
+     * are input-referred, so whether the room is silent cannot depend on where
+     * the AGC currently sits — hardware-found (issue #264 Phase 2 verify): a
+     * quiet room whose amplified noise floor landed between the output-domain
+     * gate and targetLow let the release path climb to +20 dB with the gate
+     * open, resurrecting the noise-beat failure this gate exists to stop. */
+    float input_ref =
+        smoothed_ * audio_dsp_gain_amplitude_ratio((int)kGainPark - (int)current_gain);
+    d.silent = input_ref < cfg.getNoiseGateRms();
     if (d.silent) {
         silent_frames_++;
     } else {
