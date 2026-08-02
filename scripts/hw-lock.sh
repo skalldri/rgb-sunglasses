@@ -81,11 +81,29 @@ if ! WORKTREE_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
     exit 1
 fi
 
-GIT_COMMON_DIR_RAW="$(git rev-parse --git-common-dir)"
-case "$GIT_COMMON_DIR_RAW" in
-    /*) GIT_COMMON_DIR="$GIT_COMMON_DIR_RAW" ;;
-    *)  GIT_COMMON_DIR="$WORKTREE_ROOT/$GIT_COMMON_DIR_RAW" ;;
-esac
+# The lock root MUST resolve to the same absolute path no matter which
+# directory the script is invoked from — otherwise two agents can each believe
+# they hold the board while writing to different lock namespaces (observed
+# 2026-08-02: a `hold` launched with cwd=fw/ stored its lock in
+# /workspaces/.git/hardware-locks while `status` from the repo root read
+# /workspaces/rgb-sunglasses/.git/hardware-locks and reported FREE).
+#
+# `git rev-parse --git-common-dir` returns a path relative to the CWD, not to
+# the worktree root, so prefixing it with $WORKTREE_ROOT is only correct when
+# the two happen to coincide: from fw/ it yields "../.git", and
+# "$WORKTREE_ROOT/../.git" escapes the repo entirely. --path-format=absolute
+# (git >= 2.31) removes the ambiguity; the fallback resolves against the CWD,
+# which is what the relative form is actually relative to.
+if GIT_COMMON_DIR_ABS="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+        && [ -n "$GIT_COMMON_DIR_ABS" ]; then
+    GIT_COMMON_DIR="$GIT_COMMON_DIR_ABS"
+else
+    GIT_COMMON_DIR_RAW="$(git rev-parse --git-common-dir)"
+    case "$GIT_COMMON_DIR_RAW" in
+        /*) GIT_COMMON_DIR="$GIT_COMMON_DIR_RAW" ;;
+        *)  GIT_COMMON_DIR="$(cd "$GIT_COMMON_DIR_RAW" && pwd)" ;;
+    esac
+fi
 LOCK_ROOT="$GIT_COMMON_DIR/hardware-locks"
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
 
