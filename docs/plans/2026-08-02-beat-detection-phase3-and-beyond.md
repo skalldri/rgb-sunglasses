@@ -308,7 +308,35 @@ evidence. Expected size ~120 LOC + 2 characteristics + tests + sweeps.
 it re-orders the remaining work based on a field report plus measurements the
 earlier phases could not have had.
 
-### 5.5.1 TOP PRIORITY — the noise gate is suppressing real music
+### 5.5.1 ~~TOP PRIORITY~~ **DONE — see PR #283** — the noise gate was suppressing real music
+
+> **RESOLVED (2026-08-02, PR #283).** Shipped as two default changes:
+> `noise_gate_rms` **0.0010 → 0.0006** and `beat_flux_floor` **0.005 → 0.08**.
+> The new configuration **dominates** the old one on every corpus clip — quiet
+> music F 0.088 → 0.195, base60 0.282 → 0.291, loud30 0.280 → 0.291, newbase
+> 0.293 → 0.348, and the quiet room got *quieter* (2 → 1 beats/40 s). Confirmed
+> on hardware by the repo owner watching the Beat animation.
+>
+> Two findings worth carrying forward:
+>
+> 1. **The flux floor is no longer inert, and that is a consequence of Phase 3.**
+>    §4 records it as provably inert (identical fire counts 0.005–0.105) — true
+>    at alpha 3.5, false at 0.3. A lower adaptive threshold lets small
+>    noise-flux events through, and an absolute, scale-fixed floor is the right
+>    tool against them. Raising it to 0.08 cut quiet-room beats 4 → 1 per 40 s at
+>    **zero** cost to any music clip; above 0.08 it starts clipping real beats.
+>    A ztest (`test_flux_floor_rejects_small_onsets`) now pins this so the old
+>    "the floor does nothing" conclusion can't be re-applied.
+> 2. **The structural fix proposed below was evaluated and REJECTED.** Removing
+>    beat suppression entirely (keeping only the gain hold) gives **219**
+>    quiet-room beats — the flux threshold alone cannot reject room noise at
+>    alpha 0.3. A separate, lower beat gate measured within noise of simply
+>    lowering the single threshold, so it was not worth a second characteristic,
+>    a `#PARAMS` field across six consumers, and another knob.
+>
+> The analysis below is kept as the record of how the problem was found.
+
+### The original analysis
 
 **Field symptom (reported by the repo owner, 2026-08-02):** with music playing
 the glasses sometimes do not react at all, and turning the volume up fixes it.
@@ -408,6 +436,21 @@ Recorded so the next session does not re-litigate it:
 starting Phase 5.** If the glasses look locked to the music once they stop
 dropping out, Phase 5 may not be worth its cost. Decide with fresh eyes and, if
 possible, a human A/B rather than an F-score.
+
+> **UPDATE (2026-08-02):** the gate fix shipped (PR #283) and the repo owner's
+> perceptual verdict on the result was **"this looks pretty good to me"** —
+> assessed by watching the Beat animation with music, which is issue #264's
+> actual criterion rather than the F-score proxy.
+>
+> **So Phase 5 is NOT currently justified.** It remains the largest open item,
+> it helps only on strongly periodic music (1 of 3 corpus clips could not be
+> tempo-tracked at all), and the symptom that motivated re-opening this work is
+> now fixed by two parameter changes. Start Phase 5 only if a *new* observation
+> says timing specifically is the problem — e.g. "it fires steadily but on the
+> wrong beats" or "it drifts against the music" — not merely because the
+> F-scores are still ~0.3. Nothing has established that F at ±50 ms tracks
+> perceived quality on this device, and the one time both were measured they
+> disagreed.
 
 ## 6. PHASE 4 + 5 — timing (after Phase 3)
 
