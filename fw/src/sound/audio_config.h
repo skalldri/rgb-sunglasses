@@ -32,6 +32,10 @@ class AudioConfig : public Singleton<AudioConfig>,
     void setBeatAlpha(float value) override;
     uint32_t getBeatRefractoryFrames() override;
     void setBeatRefractoryFrames(uint32_t value) override;
+    float getSfDelta() override;
+    void setSfDelta(float value) override;
+    uint32_t getThresholdMode() override;
+    void setThresholdMode(uint32_t value) override;
 
     // AgcConfigProvider
     float getTargetLow() override;

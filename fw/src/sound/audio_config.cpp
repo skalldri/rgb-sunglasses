@@ -16,7 +16,12 @@ BtGattPersistentCharacteristic<"audio/flux_gamma", "Flux Gamma", true, float, 10
     audioFluxGamma;
 BtGattPersistentCharacteristic<"audio/beat_flux_floor", "Beat Flux Floor", true, float, 0.005f>
     audioBeatFluxFloor;
-BtGattPersistentCharacteristic<"audio/beat_alpha", "Beat Alpha", true, float, 3.5f> audioBeatAlpha;
+/* Default retuned 3.5 -> 0.3 in Phase 3 (issue #264) — derivation in
+ * DefaultAudioDspConfigProvider (audio_dsp.cpp) and the PR body. NOTE this only
+ * affects boards with no persisted value: an already-provisioned board keeps
+ * whatever it stored (the shared dev board carries 1.5 from Phase 1), so
+ * on-device verification must set it explicitly via "sound dsp set alpha". */
+BtGattPersistentCharacteristic<"audio/beat_alpha", "Beat Alpha", true, float, 0.3f> audioBeatAlpha;
 BtGattPersistentCharacteristic<"audio/beat_refractory_frames", "Beat Refractory Frames", true,
                                uint32_t, 5>
     audioBeatRefractoryFrames;
@@ -44,12 +49,33 @@ BtGattPersistentCharacteristic<"audio/agc_release_frames", "AGC Release Frames",
     audioAgcReleaseFrames;
 BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", true, float, 0.001f>
     audioNoiseGateRms;
+/* Phase 3 threshold-shape tunables (issue #264) — appended AFTER the existing
+ * providers for the same positional-UUID reason as the Phase 2 block above.
+ *
+ * notify=true, matching every sibling in this service. It is load-bearing, not
+ * cosmetic: both getters below clamp on read and assign the clamped value back,
+ * and that write-back only reaches the app as a notification. The app's write
+ * path optimistically shows what it wrote and never re-reads, so with
+ * notify=false an out-of-range write (mode=2, sf_delta=5.0) would leave the UI
+ * displaying that value indefinitely while the firmware ran the clamped one.
+ * The write-back happens on the DSP thread's next getter call (~32 ms), not
+ * inside the write handler, so it does not hit the "corrective notify races the
+ * write response" hazard documented in fw/CLAUDE.md.
+ *
+ * CCC cost: two more entries per bonded peer. CONFIG_BT_SETTINGS_CCC_STORE_MAX
+ * is 96 (see fw/prj.conf, which records why it was raised from the stock 48
+ * during Phase 2) and the limit is PER BOND, not global — Zephyr's ccc_save
+ * builds one struct ccc_store[CCC_STORE_MAX] per peer address
+ * (zephyr/subsys/bluetooth/host/gatt.c). */
+BtGattPersistentCharacteristic<"audio/sf_delta", "Beat SF Delta", true, float, 0.10f> audioSfDelta;
+BtGattPersistentCharacteristic<"audio/threshold_mode", "Beat Threshold Mode", true, uint32_t, 0>
+    audioThresholdMode;
 
 BtGattServer audioConfigServer(audioConfigPrimaryService, audioFluxGamma, audioBeatFluxFloor,
                                audioBeatAlpha, audioBeatRefractoryFrames, audioAgcTargetLow,
                                audioAgcTargetHigh, audioAgcRateLimitFrames, audioFftSmoothingCoeff,
                                audioFftEnergyScale, audioAgcAttackFrames, audioAgcReleaseFrames,
-                               audioNoiseGateRms);
+                               audioNoiseGateRms, audioSfDelta, audioThresholdMode);
 BT_GATT_SERVER_REGISTER(audioConfigServerStatic, audioConfigServer);
 
 // Each getter clamps to a sane range and writes the clamped value back, mirroring
@@ -124,6 +150,42 @@ void AudioConfig::setBeatRefractoryFrames(uint32_t value) {
     audioBeatRefractoryFrames = std::clamp<uint32_t>(value, 0, 255);
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
         audioBeatRefractoryFrames.mark_dirty();
+        persistent_value_store::request_save();
+    }
+}
+
+float AudioConfig::getSfDelta() {
+    float value = audioSfDelta;
+    float clamped = std::clamp(value, 0.0f, 2.0f);
+    if (clamped != value) {
+        audioSfDelta = clamped;
+    }
+    return clamped;
+}
+
+void AudioConfig::setSfDelta(float value) {
+    audioSfDelta = std::clamp(value, 0.0f, 2.0f);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioSfDelta.mark_dirty();
+        persistent_value_store::request_save();
+    }
+}
+
+uint32_t AudioConfig::getThresholdMode() {
+    uint32_t value = audioThresholdMode;
+    uint32_t clamped = std::clamp<uint32_t>(value, AUDIO_THRESHOLD_MODE_MEAN_SIGMA,
+                                            AUDIO_THRESHOLD_MODE_MEDIAN_DELTA);
+    if (clamped != value) {
+        audioThresholdMode = clamped;
+    }
+    return clamped;
+}
+
+void AudioConfig::setThresholdMode(uint32_t value) {
+    audioThresholdMode = std::clamp<uint32_t>(value, AUDIO_THRESHOLD_MODE_MEAN_SIGMA,
+                                              AUDIO_THRESHOLD_MODE_MEDIAN_DELTA);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioThresholdMode.mark_dirty();
         persistent_value_store::request_save();
     }
 }

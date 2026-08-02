@@ -21,7 +21,7 @@ def _make_dump_lines(n=40, buckets=False, seq0=100, beat_at=(10, 25)):
     lines = [
         "#PARAMS gamma=447a0000 alpha=40600000 floor=3ba3d70a refractory=5 "
         "agc_frozen=1 gain=28 target_low=3ba3d70a target_high=3c03126f rate_limit=10 "
-        "attack=3 release=15 gate=3a83126f"
+        "attack=3 release=15 gate=3a83126f sf_delta=3dcccccd mode=0"
     ]
     for i in range(n):
         mask = 0x1 if i in beat_at else 0

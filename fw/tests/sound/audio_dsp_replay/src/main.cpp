@@ -18,6 +18,9 @@
  *    BEAT_OUT         output path (default: stdout)
  *    BEAT_GAMMA/BEAT_ALPHA/BEAT_FLOOR/BEAT_REFRACTORY
  *                     DSP params (default: firmware defaults)
+ *    BEAT_SF_DELTA    mode-1 additive offset above the running median
+ *    BEAT_THRESHOLD_MODE
+ *                     0 = mean+alpha*sigma (default), 1 = median+sf_delta
  *    BEAT_AGC         off|sim|sim_reset (default off). "off" = fixed gain,
  *                     matches a freeze-gain device recording. "sim" = mirror
  *                     the AGC loop in sound.cpp (32-frame RMS window, target
@@ -71,6 +74,13 @@ class EnvConfigProvider : public AudioDspConfigProvider {
     void setBeatAlpha(float v) override { alpha_ = clampf(v, 0.1f, 20.0f); }
     uint32_t getBeatRefractoryFrames() override { return refractory_; }
     void setBeatRefractoryFrames(uint32_t v) override { refractory_ = v > 255 ? 255 : v; }
+    float getSfDelta() override { return sfDelta_; }
+    void setSfDelta(float v) override { sfDelta_ = clampf(v, 0.0f, 2.0f); }
+    uint32_t getThresholdMode() override { return thresholdMode_; }
+    void setThresholdMode(uint32_t v) override {
+        thresholdMode_ =
+            v > AUDIO_THRESHOLD_MODE_MEDIAN_DELTA ? AUDIO_THRESHOLD_MODE_MEDIAN_DELTA : v;
+    }
 
     void loadFromEnv() {
         /* Through the setters so env values get the same clamping as the device. */
@@ -84,9 +94,16 @@ class EnvConfigProvider : public AudioDspConfigProvider {
         if (envFloat("BEAT_ALPHA", &v)) {
             setBeatAlpha(v);
         }
+        if (envFloat("BEAT_SF_DELTA", &v)) {
+            setSfDelta(v);
+        }
         const char *r = getenv("BEAT_REFRACTORY");
         if (r != nullptr) {
             setBeatRefractoryFrames((uint32_t)strtoul(r, nullptr, 10));
+        }
+        const char *m = getenv("BEAT_THRESHOLD_MODE");
+        if (m != nullptr) {
+            setThresholdMode((uint32_t)strtoul(m, nullptr, 10));
         }
     }
 
@@ -101,8 +118,10 @@ class EnvConfigProvider : public AudioDspConfigProvider {
     }
     float gamma_ = 1000.0f;
     float floor_ = 0.005f;
-    float alpha_ = 3.5f;
+    float alpha_ = 0.3f; /* Phase 3 retune — mirrors DefaultAudioDspConfigProvider */
     uint32_t refractory_ = 5;
+    float sfDelta_ = 0.10f;
+    uint32_t thresholdMode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
 };
 
 EnvConfigProvider sEnvProvider;
@@ -187,8 +206,8 @@ void emit_params(FILE *out, bool agc_frozen, uint8_t gain, float target_low, flo
     size_t len = audio_tap_format_params(
         sEnvProvider.getFluxGamma(), sEnvProvider.getBeatAlpha(),
         sEnvProvider.getBeatFluxFloor(), sEnvProvider.getBeatRefractoryFrames(), agc_frozen,
-        gain, target_low, target_high, rate_limit, attack, release, gate, s_line,
-        sizeof(s_line));
+        gain, target_low, target_high, rate_limit, attack, release, gate,
+        sEnvProvider.getSfDelta(), sEnvProvider.getThresholdMode(), s_line, sizeof(s_line));
     fwrite(s_line, 1, len, out);
     fputc('\n', out);
 }

@@ -51,7 +51,7 @@ def build(force: bool = False) -> None:
 def run_replay(wav: str, *, gamma=None, alpha=None, floor=None, refractory=None,
                agc: str = "off", gain: int | None = None, buckets: bool = False,
                target_low=None, target_high=None, rate_limit=None, gate=None,
-               attack=None, release=None) -> list[str]:
+               attack=None, release=None, sf_delta=None, threshold_mode=None) -> list[str]:
     """Run one replay; returns the dump lines (banner filtered)."""
     env = dict(os.environ)
     env["BEAT_WAV"] = str(Path(wav).resolve())
@@ -60,7 +60,8 @@ def run_replay(wav: str, *, gamma=None, alpha=None, floor=None, refractory=None,
                       ("BEAT_REFRACTORY", refractory), ("BEAT_GAIN", gain),
                       ("BEAT_TARGET_LOW", target_low), ("BEAT_TARGET_HIGH", target_high),
                       ("BEAT_RATE_LIMIT", rate_limit), ("BEAT_GATE", gate),
-                      ("BEAT_ATTACK", attack), ("BEAT_RELEASE", release)]:
+                      ("BEAT_ATTACK", attack), ("BEAT_RELEASE", release),
+                      ("BEAT_SF_DELTA", sf_delta), ("BEAT_THRESHOLD_MODE", threshold_mode)]:
         if val is not None:
             env[name] = str(val)
     if buckets:
@@ -79,7 +80,7 @@ def parse_sweep(spec: str) -> dict[str, list[float]]:
     for part in spec.split(","):
         name, _, rng = part.partition("=")
         name = name.strip()
-        if name not in ("gamma", "alpha", "floor", "refractory"):
+        if name not in ("gamma", "alpha", "floor", "refractory", "sf_delta", "threshold_mode"):
             raise ValueError(f"unknown sweep parameter '{name}'")
         lo, hi, step = (float(x) for x in rng.split(":"))
         vals, v = [], lo
@@ -98,6 +99,10 @@ def main(argv=None):
     ap.add_argument("--alpha", type=float)
     ap.add_argument("--floor", type=float)
     ap.add_argument("--refractory", type=int)
+    ap.add_argument("--sf-delta", type=float,
+                    help="mode-1 offset above the running median (BEAT_SF_DELTA)")
+    ap.add_argument("--threshold-mode", type=int, choices=(0, 1),
+                    help="0 = mean+alpha*sigma (default), 1 = median+sf_delta")
     ap.add_argument("--agc", choices=["off", "sim", "sim_legacy", "sim_reset"], default="off",
                     help="off = fixed gain; sim = the real AgcController (Phase 2 policy); "
                          "sim_legacy = pre-Phase-2 symmetric window + compensation; "
@@ -142,20 +147,33 @@ def main(argv=None):
                           ("refractory", "refractory"), ("gain", "gain"),
                           ("target_low", "target_low"), ("target_high", "target_high"),
                           ("rate_limit", "rate_limit"), ("attack", "attack"),
-                          ("release", "release"), ("gate", "gate")]:
+                          ("release", "release"), ("gate", "gate"),
+                          ("sf_delta", "sf_delta"), ("threshold_mode", "mode")]:
             if getattr(args, attr) is None and key in p:
                 setattr(args, attr, p[key])
         gain_str = "-" if args.gain is None else f"{args.gain:#04x}"
         print(f"# params from {args.params_from}: gamma={args.gamma} alpha={args.alpha} "
               f"floor={args.floor} refractory={args.refractory} gain={gain_str} "
               f"targets=[{args.target_low},{args.target_high}] rate={args.rate_limit} "
-              f"attack={args.attack} release={args.release} gate={args.gate}",
+              f"attack={args.attack} release={args.release} gate={args.gate} "
+              f"sf_delta={args.sf_delta} mode={args.threshold_mode}",
               file=sys.stderr)
+
+    # sf_delta is read ONLY inside the median branch of audio_dsp.cpp; in mode 0
+    # it is dead. Sweeping it without also selecting mode 1 therefore runs N
+    # identical mode-0 replays whose table shows one repeated row, and prints a
+    # "# best:" naming an arbitrary value that measured nothing. Select mode 1
+    # automatically and say so, rather than silently producing a fake result.
+    if args.sweep and "sf_delta" in parse_sweep(args.sweep) and args.threshold_mode is None:
+        args.threshold_mode = 1
+        print("# sweeping sf_delta implies --threshold-mode 1 (it is inert in mode 0); "
+              "pass --threshold-mode 0 explicitly to override", file=sys.stderr)
 
     fixed = dict(gamma=args.gamma, alpha=args.alpha, floor=args.floor,
                  refractory=args.refractory, agc=args.agc, gain=args.gain,
                  target_low=args.target_low, target_high=args.target_high, gate=args.gate,
-                 attack=args.attack, release=args.release, rate_limit=args.rate_limit)
+                 attack=args.attack, release=args.release, rate_limit=args.rate_limit,
+                 sf_delta=args.sf_delta, threshold_mode=args.threshold_mode)
 
     if not args.sweep:
         lines = run_replay(args.wav, buckets=args.buckets, **fixed)

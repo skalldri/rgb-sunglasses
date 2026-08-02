@@ -24,3 +24,10 @@ site/proto0-user-guide/
 site/proto0-assembly-guide/
 site/proto0-hardware-guide/
 site/developer-setup/
+
+# Beat-detection tuning corpus (issue #264). Deliberately NOT committed: the
+# clips are large (~2 MB per 60 s WAV) and cheap to regenerate — see
+# fw/docs/beat-detection-debugging.md for the record/pull workflow. Keeping
+# them here (untracked) lets one tuning effort span sessions without putting
+# audio in git history.
+fw/testdata/beat-corpus/

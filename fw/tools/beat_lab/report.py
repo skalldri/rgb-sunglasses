@@ -34,7 +34,8 @@ BAND_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # slots 1-4
 BAND_LABELS = ["bass 31-200 Hz", "low-mid 219-781 Hz", "mid 813-1969 Hz", "high 2-6 kHz"]
 
 
-def build_figure(dump: frames.FrameDump, wav: np.ndarray | None, ref_times, alpha: float):
+def build_figure(dump: frames.FrameDump, wav: np.ndarray | None, ref_times, alpha: float,
+                 threshold_mode: int = 0):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -71,7 +72,14 @@ def build_figure(dump: frames.FrameDump, wav: np.ndarray | None, ref_times, alph
     for b in range(frames.NUM_BANDS):
         ax = axes[1 + b]
         color = BAND_COLORS[b]
-        threshold = dump.band_mean[:, b] + alpha * dump.band_sigma[:, b]
+        # Mode-dependent: in mode 1 (median+delta) band_sigma already holds the
+        # threshold itself, so reconstructing it as mean+alpha*sigma would plot
+        # a curve the detector never used. See audio_analysis_result in
+        # fw/src/sound/audio_dsp.h.
+        if threshold_mode == 1:
+            threshold = dump.band_sigma[:, b]
+        else:
+            threshold = dump.band_mean[:, b] + alpha * dump.band_sigma[:, b]
         for rt in ref_times:
             ax.axvline(rt, color=REFERENCE, linewidth=0.8, linestyle="--", alpha=0.6, zorder=1)
         ax.plot(t, dump.band_flux[:, b], color=color, linewidth=1.2, zorder=3)
@@ -148,9 +156,10 @@ def main(argv=None):
     ref_times = []
     if args.ref or args.ref_librosa:
         ref_times = evaluate.load_reference(args.ref, args.ref_librosa, args.wav)
-    alpha = dump.params.get("alpha", 3.5)
+    alpha = dump.params.get("alpha", 0.3)
+    threshold_mode = int(dump.params.get("mode", 0))
 
-    fig = build_figure(dump, wav, ref_times, alpha)
+    fig = build_figure(dump, wav, ref_times, alpha, threshold_mode)
     fig.savefig(args.out, dpi=130, facecolor=SURFACE)
     print(f"wrote {args.out}")
     return 0

@@ -22,7 +22,10 @@ LOG_MODULE_REGISTER(audio_dsp);
  * Reference: Bello et al. 2005 IEEE TSAP; Dixon 2006 DAFx.
  *
  * Per-band flux = max(0, log1p(GAMMA*energy) - log1p(GAMMA*prev_energy))
- * Beat fires when flux > flux_mean + BEAT_ALPHA * flux_sigma AND flux > BEAT_FLUX_FLOOR.
+ * Beat fires when flux > adaptive_threshold AND flux > BEAT_FLUX_FLOOR, where the
+ * threshold shape is selected at runtime by getThresholdMode():
+ *   mode 0: flux_mean + BEAT_ALPHA * flux_sigma  (historical)
+ *   mode 1: flux_median + SF_DELTA               (robust to the beats themselves)
  *
  * Advantages over Level 2 (raw energy threshold):
  *   - Detects onset (change in energy), not sustained loudness → no false beats on held notes.
@@ -51,12 +54,41 @@ class DefaultAudioDspConfigProvider : public AudioDspConfigProvider {
         beatRefractoryFrames_ = std::clamp<uint32_t>(value, 0, 255);
     }
 
+    float getSfDelta() override { return sfDelta_; }
+    void setSfDelta(float value) override { sfDelta_ = std::clamp(value, 0.0f, 2.0f); }
+
+    uint32_t getThresholdMode() override { return thresholdMode_; }
+    void setThresholdMode(uint32_t value) override {
+        thresholdMode_ = std::clamp<uint32_t>(value, AUDIO_THRESHOLD_MODE_MEAN_SIGMA,
+                                              AUDIO_THRESHOLD_MODE_MEDIAN_DELTA);
+    }
+
    private:
     /* Defaults (and clamp ranges) mirror the BT-backed AudioConfig in audio_config.cpp. */
     float fluxGamma_ = 1000.0f;
     float beatFluxFloor_ = 0.005f;
-    float beatAlpha_ = 3.5f;
+    /* Retuned 3.5 -> 0.3 in Phase 3 (issue #264). 3.5 was never measured — it
+     * mutes the detector on steady music, because the beats sit in the flux
+     * history and inflate sigma.
+     *
+     * This value is shared by ALL FOUR bands (it is read once per frame, not
+     * per band), so it was validated on all four rather than on band 0 alone.
+     * F at alpha=0.3 vs each (clip, band) pair's own optimum, over the 3-clip
+     * corpus, gives a max regret of 0.036 — lower than alpha=0.2 (0.042) or
+     * 0.5 (0.079), so 0.3 is the best single value for the whole bank, not
+     * just for bass. Per-band F at 0.3 (base60/loud30/newbase):
+     *   band 0  0.294 / 0.289 / 0.352     band 1  0.222 / 0.201 / 0.277
+     *   band 2  0.199 / 0.276 / 0.187     band 3  0.175 / 0.108 / 0.250
+     * versus 0.014 / 0.000 / 0.129 (band 0) at the old 3.5 — every band
+     * improves. Firing stays clear of saturation: 3.3-4.0 fires/s against the
+     * ~5.2/s ceiling the 5-frame refractory imposes.
+     *
+     * A per-band alpha would buy at most 0.036 F and add four tuning knobs;
+     * not worth it until the Phase 5 beat-grid work changes the picture. */
+    float beatAlpha_ = 0.3f;
     uint32_t beatRefractoryFrames_ = 5;
+    float sfDelta_ = 0.10f;
+    uint32_t thresholdMode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
 };
 
 DefaultAudioDspConfigProvider sDefaultProvider;
@@ -73,7 +105,17 @@ AudioDspConfigProvider *audio_dsp_get_config_provider(void) { return sProvider; 
  * Band 0 bass:    bins  1– 6  →  31– 200 Hz (kick drum)
  * Band 1 low-mid: bins  7–25  → 219– 781 Hz
  * Band 2 mid:     bins 26–63  → 813–1969 Hz
- * Band 3 high:    bins 64–191 → 2.0– 6.0 kHz */
+ * Band 3 high:    bins 64–191 → 2.0– 6.0 kHz
+ *
+ * Band 0 deliberately KEEPS bin 1 (31 Hz). Phase 3 (issue #264) tried starting
+ * at bin 2 on the theory that bin 1 is below the PDM mic's usable response —
+ * the reason the display-bucket table below skips it — and measured the
+ * result: band-0 F got WORSE on every corpus clip (0.294→0.234, 0.294→0.266,
+ * 0.362→0.312). Bin 1 carries real kick energy, so the change was reverted.
+ * Do not "fix" this to {2, ...} without re-running the corpus sweeps: per
+ * fw/docs/beat-detection-debugging.md, any change to these boundaries
+ * invalidates every prior F-measure, including the ones that justify the
+ * beat_alpha default. */
 static const uint16_t band_bin_start[NUM_BANDS] = {1, 7, 26, 64};
 static const uint16_t band_bin_end[NUM_BANDS] = {6, 25, 63, 191};
 
@@ -122,6 +164,11 @@ static arm_rfft_fast_instance_f32 s_rfft_inst;
  * log-domain offset would only be exact where γE ≫ 1). See
  * audio_dsp_compensate_gain_change(). */
 static float32_t s_band_flux_history[NUM_BANDS][HISTORY_LEN];
+/* Scratch copy for the mode-1 median (std::nth_element reorders its input, and
+ * the history ring must survive). File-scope static like every other buffer
+ * here, to keep it off the DSP thread stack. Single-threaded by construction:
+ * audio_dsp_process() is only ever called from the capture thread. */
+static float32_t s_median_scratch[HISTORY_LEN];
 static float32_t s_prev_energy[NUM_BANDS];
 static uint8_t s_history_idx;
 static uint8_t s_refractory[NUM_BANDS];
@@ -208,6 +255,8 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
     const float32_t beatAlpha = sProvider->getBeatAlpha();
     const uint8_t beatRefractory =
         static_cast<uint8_t>(std::min<uint32_t>(sProvider->getBeatRefractoryFrames(), UINT8_MAX));
+    const float32_t sfDelta = sProvider->getSfDelta();
+    const bool medianMode = sProvider->getThresholdMode() == AUDIO_THRESHOLD_MODE_MEDIAN_DELTA;
 
     for (int b = 0; b < NUM_BANDS; b++) {
         /* 4a. Mean power across band bins (same as before; kept in band_energy
@@ -233,21 +282,56 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
         s_prev_energy[b] = energy;
         out->band_flux[b] = flux;
 
-        /* 4c. Adaptive threshold: track flux history, compute mean + alpha*sigma. */
+        /* 4c. Adaptive threshold: track flux history, then derive the threshold
+         *     according to the configured shape. */
         s_band_flux_history[b][s_history_idx] = flux;
 
-        float32_t flux_mean, flux_sigma;
-        arm_mean_f32(s_band_flux_history[b], HISTORY_LEN, &flux_mean);
-        arm_std_f32(s_band_flux_history[b], HISTORY_LEN, &flux_sigma);
+        float32_t threshold;
+        if (medianMode) {
+            /* Mode 1 — running median + delta (Dixon 2006's adaptive median
+             * threshold). The mean+alpha*sigma shape has a structural flaw on
+             * steady music: the beats are themselves in the history window, so
+             * each one inflates sigma and pushes the threshold above the next
+             * beat, muting the detector (issue #264 — measured as 7 fires per
+             * 60 s at alpha=3.5). The median is insensitive to those outliers
+             * by construction, so the threshold tracks the BETWEEN-beat floor
+             * regardless of how strong the beats are.
+             *
+             * nth_element on a copy: it partially reorders its input, and the
+             * ring must survive. HISTORY_LEN is even, so there is no single
+             * middle element — we take the UPPER middle (index HISTORY_LEN/2,
+             * i.e. the 17th smallest of 32) rather than averaging the two
+             * middles: one selection pass instead of two, and the distinction
+             * is immaterial against a history that is mostly zeros between
+             * onsets. ~32-element selection, 4x per frame, is a few microseconds
+             * on a 128 MHz M33F. */
+            memcpy(s_median_scratch, s_band_flux_history[b], sizeof(s_median_scratch));
+            std::nth_element(s_median_scratch, s_median_scratch + HISTORY_LEN / 2,
+                             s_median_scratch + HISTORY_LEN);
+            float32_t flux_median = s_median_scratch[HISTORY_LEN / 2];
+            threshold = flux_median + sfDelta;
 
-        /* Expose flux stats; callers can use these for diagnostic logging. */
-        out->band_mean[b] = flux_mean;
-        out->band_sigma[b] = flux_sigma;
+            /* Mode-dependent reporting — see the struct comment in audio_dsp.h. */
+            out->band_mean[b] = flux_median;
+            out->band_sigma[b] = threshold;
+        } else {
+            float32_t flux_mean, flux_sigma;
+            arm_mean_f32(s_band_flux_history[b], HISTORY_LEN, &flux_mean);
+            arm_std_f32(s_band_flux_history[b], HISTORY_LEN, &flux_sigma);
+            threshold = flux_mean + beatAlpha * flux_sigma;
 
-        /* 4d. Beat: flux spike above adaptive threshold and noise floor. */
+            /* Expose flux stats; callers can use these for diagnostic logging. */
+            out->band_mean[b] = flux_mean;
+            out->band_sigma[b] = flux_sigma;
+        }
+
+        /* 4d. Beat: flux spike above adaptive threshold and noise floor.
+         *     The floor and refractory apply identically in both modes — in
+         *     mode 1 the floor is what keeps silence silent, since the median
+         *     of an all-zero history is 0 and the threshold collapses to
+         *     sfDelta alone. */
         bool beat = false;
-        if (s_refractory[b] == 0 && flux > beatFluxFloor &&
-            flux > flux_mean + beatAlpha * flux_sigma) {
+        if (s_refractory[b] == 0 && flux > beatFluxFloor && flux > threshold) {
             beat = true;
             s_refractory[b] = beatRefractory;
         } else if (s_refractory[b] > 0) {

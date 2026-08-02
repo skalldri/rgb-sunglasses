@@ -158,6 +158,36 @@ class FakeAudioDspConfigProvider : public AudioDspConfigProvider {
     void setBeatAlpha(float) override {}
     uint32_t getBeatRefractoryFrames() override { return 5; }
     void setBeatRefractoryFrames(uint32_t) override {}
+    float getSfDelta() override { return 0.10f; }
+    void setSfDelta(float) override {}
+    uint32_t getThresholdMode() override { return AUDIO_THRESHOLD_MODE_MEAN_SIGMA; }
+    void setThresholdMode(uint32_t) override {}
+};
+
+/* Mutable provider for the Phase 3 threshold-shape tests: lets a test flip
+ * mode/delta/alpha mid-stream, which is exactly what "sound dsp set mode 1"
+ * does on hardware. */
+class TunableAudioDspConfigProvider : public AudioDspConfigProvider {
+   public:
+    float getFluxGamma() override { return gamma_; }
+    void setFluxGamma(float v) override { gamma_ = v; }
+    float getBeatFluxFloor() override { return floor_; }
+    void setBeatFluxFloor(float v) override { floor_ = v; }
+    float getBeatAlpha() override { return alpha_; }
+    void setBeatAlpha(float v) override { alpha_ = v; }
+    uint32_t getBeatRefractoryFrames() override { return refractory_; }
+    void setBeatRefractoryFrames(uint32_t v) override { refractory_ = v; }
+    float getSfDelta() override { return sfDelta_; }
+    void setSfDelta(float v) override { sfDelta_ = v; }
+    uint32_t getThresholdMode() override { return mode_; }
+    void setThresholdMode(uint32_t v) override { mode_ = v; }
+
+    float gamma_ = 1000.0f;
+    float floor_ = 0.005f;
+    float alpha_ = 3.5f;
+    uint32_t refractory_ = 5;
+    float sfDelta_ = 0.10f;
+    uint32_t mode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
 };
 }  // namespace
 
@@ -215,12 +245,19 @@ ZTEST(audio_dsp, test_band_flux_populated) {
     zassert_true(result.beat[0], "onset should fire beat[0]");
     zassert_true(result.band_flux[0] > 1.0f, "onset flux should be large (%f)",
                  (double)result.band_flux[0]);
-    /* The reported flux/mean/sigma triple must reproduce the fire decision
-     * (default alpha = 3.5). */
-    zassert_true(result.band_flux[0] > result.band_mean[0] + 3.5f * result.band_sigma[0],
-                 "flux (%f) should exceed reported threshold (%f)",
-                 (double)result.band_flux[0],
-                 (double)(result.band_mean[0] + 3.5f * result.band_sigma[0]));
+    /* The reported flux/mean/sigma triple must reproduce the fire decision.
+     * Alpha is read from the provider rather than hard-coded: this assertion is
+     * meaningful only when it reconstructs the threshold the detector ACTUALLY
+     * used. Pinning it to the old 3.5 default while the shipped value is 0.3
+     * would make the bound ~11.7x stricter than the real one, which a >1.0
+     * onset flux clears trivially — so a regression where band_mean/band_sigma
+     * stop matching the fire decision (stale pre-update stats, or mode-1 values
+     * reported while mode 0 is active) would pass unnoticed. */
+    const float alpha = audio_dsp_get_config_provider()->getBeatAlpha();
+    const float reported_threshold = result.band_mean[0] + alpha * result.band_sigma[0];
+    zassert_true(result.band_flux[0] > reported_threshold,
+                 "flux (%f) should exceed reported threshold (%f) at alpha %f",
+                 (double)result.band_flux[0], (double)reported_threshold, (double)alpha);
 }
 
 /* ── Test 8: Default provider setters clamp and round-trip ──────────────────
@@ -254,11 +291,304 @@ ZTEST(audio_dsp, test_default_provider_setters_clamp) {
     p->setBeatRefractoryFrames(999); /* above uint8_t counter range → clamps to 255 */
     zassert_equal(p->getBeatRefractoryFrames(), 255, "refractory clamps to 255");
 
-    /* Restore the documented defaults. */
+    p->setSfDelta(0.25f);
+    zassert_within(p->getSfDelta(), 0.25f, 1e-6f, "sf_delta round-trip");
+    p->setSfDelta(-1.0f); /* below range → clamps to 0 */
+    zassert_within(p->getSfDelta(), 0.0f, 1e-6f, "sf_delta clamps low");
+    p->setSfDelta(5.0f); /* above range → clamps to 2.0 */
+    zassert_within(p->getSfDelta(), 2.0f, 1e-6f, "sf_delta clamps high");
+
+    p->setThresholdMode(AUDIO_THRESHOLD_MODE_MEDIAN_DELTA);
+    zassert_equal(p->getThresholdMode(), AUDIO_THRESHOLD_MODE_MEDIAN_DELTA, "mode round-trip");
+    p->setThresholdMode(7); /* above range → clamps to 1 */
+    zassert_equal(p->getThresholdMode(), AUDIO_THRESHOLD_MODE_MEDIAN_DELTA, "mode clamps high");
+
+    /* Restore the documented defaults. Redundant with audio_dsp_after_each()
+     * (which is what makes this safe on the assertion-failure path) — kept so
+     * the test reads correctly in isolation. */
     p->setFluxGamma(1000.0f);
     p->setBeatFluxFloor(0.005f);
-    p->setBeatAlpha(3.5f);
+    p->setBeatAlpha(0.3f);
     p->setBeatRefractoryFrames(5);
+    p->setSfDelta(0.10f);
+    p->setThresholdMode(AUDIO_THRESHOLD_MODE_MEAN_SIGMA);
+}
+
+/* Feed one "beat" — a loud 100 Hz burst frame followed by `gap - 1` silent
+ * frames — through the detector, returning true if band 0 fired on the burst.
+ * 16 frames at 32 ms is ~117 BPM, i.e. a plausible dance-music tempo. */
+static bool run_one_burst(int16_t *tone, int16_t *silence, uint32_t *seq, int gap) {
+    struct audio_analysis_result result;
+    audio_dsp_process(tone, (*seq)++, &result);
+    bool fired = result.beat[0];
+    for (int i = 1; i < gap; i++) {
+        audio_dsp_process(silence, (*seq)++, &result);
+    }
+    return fired;
+}
+
+/* ── Phase 3, Test A: threshold shape on a steady beat train ────────────────
+ * THE motivating case for issue #264's Phase 3. On steady music the detected
+ * beats are themselves inside the 1 s flux history, so they inflate sigma and
+ * push mean+alpha*sigma above the next beat — the detector goes quiet exactly
+ * when the music is most regular (hardware-measured: 7 fires per 60 s at
+ * alpha=3.5). The median is unaffected by those outliers, so mode 1 keeps
+ * firing.
+ *
+ * This test pins BOTH halves: mode 1 fires on essentially every burst after
+ * the history fills, and mode 0 at the compiled default alpha=3.5 does not —
+ * documenting the failure the way test_gain_compensation_misordered_is_harmful
+ * pins the ordering hazard. */
+ZTEST(audio_dsp, test_median_mode_survives_steady_beat_train) {
+    /* Onset spacing is what drives sigma inflation, not tempo per se: with N
+     * onsets of flux f inside the L-frame history, mode 0 mutes once
+     * N/L + alpha*sqrt(p*(1-p)) > 1 (p = N/L). At kGap=8 the 32-frame history
+     * holds 4 onsets, giving 1.28f > f — comfortably muted. (A 16-frame gap
+     * puts a single-frame impulse train at 0.91f, right at the edge; real
+     * captures clear it because onsets there are neither isolated nor
+     * equal-amplitude. Using the unambiguous spacing keeps this test about the
+     * threshold statistic rather than about how lifelike the stimulus is.)
+     * 8 frames = 256 ms, i.e. eighth notes at ~117 BPM. */
+    const int kGap = 8;
+    const int kBursts = 16;         /* 16 * 8 = 128 frames = 4 history lengths */
+    const int kWarmup = 4;          /* bursts ignored while the history fills */
+    int16_t tone[AUDIO_FFT_SIZE], silence[AUDIO_FFT_SIZE];
+    make_100hz_sine(tone);
+    make_silence(silence);
+
+    TunableAudioDspConfigProvider provider;
+    audio_dsp_set_config_provider(&provider);
+
+    /* --- mode 0 (mean + alpha*sigma) at the compiled default alpha --- */
+    provider.mode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
+    provider.alpha_ = 3.5f;
+    audio_dsp_init();
+    uint32_t seq = 0;
+    int mode0_fires = 0;
+    for (int n = 0; n < kBursts; n++) {
+        bool fired = run_one_burst(tone, silence, &seq, kGap);
+        if (n >= kWarmup && fired) {
+            mode0_fires++;
+        }
+    }
+
+    /* --- mode 1 (median + delta), same stimulus --- */
+    provider.mode_ = AUDIO_THRESHOLD_MODE_MEDIAN_DELTA;
+    provider.sfDelta_ = 0.10f;
+    audio_dsp_init();
+    seq = 0;
+    int mode1_fires = 0;
+    for (int n = 0; n < kBursts; n++) {
+        bool fired = run_one_burst(tone, silence, &seq, kGap);
+        if (n >= kWarmup && fired) {
+            mode1_fires++;
+        }
+    }
+
+    audio_dsp_set_config_provider(NULL);
+
+    const int scored = kBursts - kWarmup;
+    zassert_equal(mode1_fires, scored,
+                  "median mode should fire on every burst after warm-up: %d/%d", mode1_fires,
+                  scored);
+    zassert_true(mode0_fires < mode1_fires,
+                 "mean+alpha*sigma should be muted by its own beats (sigma inflation): "
+                 "mode0=%d mode1=%d of %d",
+                 mode0_fires, mode1_fires, scored);
+}
+
+/* ── Phase 3, Test B: the mode switch takes effect mid-stream ───────────────
+ * "sound dsp set mode 1" / a BLE write must change behavior without a restart,
+ * since the whole point of the runtime switch is a no-reflash A/B on hardware.
+ * Runs a beat train until mode 0 has gone quiet, then flips to mode 1 with the
+ * SAME detector state and asserts firing resumes. */
+ZTEST(audio_dsp, test_threshold_mode_switch_applies_mid_stream) {
+    const int kGap = 8; /* same spacing rationale as the beat-train test above */
+    int16_t tone[AUDIO_FFT_SIZE], silence[AUDIO_FFT_SIZE];
+    make_100hz_sine(tone);
+    make_silence(silence);
+
+    TunableAudioDspConfigProvider provider;
+    provider.mode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
+    provider.alpha_ = 3.5f;
+    audio_dsp_set_config_provider(&provider);
+    audio_dsp_init();
+
+    uint32_t seq = 0;
+    for (int n = 0; n < 4; n++) {
+        run_one_burst(tone, silence, &seq, kGap);
+    }
+    bool fired_before_switch = run_one_burst(tone, silence, &seq, kGap);
+
+    /* Flip the mode with no reset — same history, different threshold shape. */
+    provider.mode_ = AUDIO_THRESHOLD_MODE_MEDIAN_DELTA;
+    provider.sfDelta_ = 0.10f;
+    bool fired_after_switch = run_one_burst(tone, silence, &seq, kGap);
+
+    audio_dsp_set_config_provider(NULL);
+
+    zassert_false(fired_before_switch, "mode 0 should be muted by this point in the train");
+    zassert_true(fired_after_switch, "flipping to mode 1 must restore firing without a reset");
+}
+
+/* ── Phase 3, Test C: median value is the documented order statistic ────────
+ * HISTORY_LEN is even, so "the median" needs a convention. audio_dsp.cpp takes
+ * the UPPER middle (index HISTORY_LEN/2 of the sorted history) rather than
+ * averaging the two middles. Pin that: with a history of 16 zeros and 16
+ * distinct positive values, the upper middle is the SMALLEST positive one,
+ * whereas the lower middle would be 0 and mean-of-middles would be half.
+ *
+ * Constructed via the threshold the detector reports (band_mean carries the
+ * median in mode 1), which is also the only way to observe it from outside. */
+ZTEST(audio_dsp, test_median_uses_upper_middle_of_even_history) {
+    int16_t silence[AUDIO_FFT_SIZE], tone[AUDIO_FFT_SIZE];
+    make_silence(silence);
+    make_100hz_sine(tone);
+
+    TunableAudioDspConfigProvider provider;
+    provider.mode_ = AUDIO_THRESHOLD_MODE_MEDIAN_DELTA;
+    provider.sfDelta_ = 0.0f; /* threshold == median exactly */
+    audio_dsp_set_config_provider(&provider);
+    audio_dsp_init();
+
+    struct audio_analysis_result result;
+    uint32_t seq = 0;
+
+    /* Fill the whole history with zero-flux frames (steady silence). */
+    for (int i = 0; i < HISTORY_LEN; i++) {
+        audio_dsp_process(silence, seq++, &result);
+    }
+    zassert_within(result.band_mean[0], 0.0f, 1e-9f,
+                   "median of an all-zero history must be 0, got %f",
+                   (double)result.band_mean[0]);
+
+    /* Now push in HISTORY_LEN/2 positive-flux frames. Alternating tone/silence
+     * yields a positive flux on each tone frame and zero on each silence frame
+     * (half-wave rectification), so the ring ends up half positive, half zero
+     * — the exact even-split case the convention governs. */
+    for (int i = 0; i < HISTORY_LEN; i++) {
+        audio_dsp_process((i % 2 == 0) ? tone : silence, seq++, &result);
+    }
+
+    /* Upper middle of {16 zeros, 16 positives} is the smallest positive value,
+     * so the reported median must be strictly positive. The lower-middle
+     * convention would report exactly 0 here. */
+    zassert_true(result.band_mean[0] > 0.0f,
+                 "upper-middle median of a half-positive history must be > 0, got %f",
+                 (double)result.band_mean[0]);
+
+    audio_dsp_set_config_provider(NULL);
+}
+
+/* ── Phase 3, Test E: mode 1's single delta mutes the upper bands ───────────
+ * A HAZARD test, in the same spirit as
+ * test_gain_compensation_misordered_is_harmful: it pins a known-bad property
+ * so the behavior is visible in CI rather than discovered on hardware.
+ *
+ * sfDelta is an ABSOLUTE flux offset applied identically to all four bands,
+ * but the bands' flux scales differ by more than an order of magnitude. A
+ * delta chosen for band 0 therefore sits near or above the entire dynamic
+ * range of band 3, silencing it. Measured on hardware at sfDelta=0.10: band 3
+ * fired once per 300 frames where mode 0 fired 37 times.
+ *
+ * This is why mode 1 is NOT the shipped default (see getSfDelta() in
+ * audio_dsp.h). If a future change gives sfDelta per-band scaling or
+ * normalizes the flux, THIS TEST SHOULD START FAILING — that is the signal the
+ * hazard is fixed, and the assertion below should then be inverted rather than
+ * deleted. */
+ZTEST(audio_dsp, test_median_mode_threshold_is_band_blind) {
+    int16_t tone[AUDIO_FFT_SIZE], silence[AUDIO_FFT_SIZE];
+    make_100hz_sine(tone);
+    make_silence(silence);
+
+    TunableAudioDspConfigProvider provider;
+    audio_dsp_set_config_provider(&provider);
+
+    const int kGap = 8, kBursts = 8;
+    const float kDelta = 0.10f; /* the shipped sf_delta */
+    struct audio_analysis_result mode0 = {}, mode1 = {};
+
+    for (int mode = 0; mode < 2; mode++) {
+        provider.mode_ = (uint32_t)mode;
+        provider.alpha_ = 0.3f; /* the shipped default */
+        provider.sfDelta_ = kDelta;
+        audio_dsp_init();
+        struct audio_analysis_result result;
+        uint32_t seq = 0;
+        for (int n = 0; n < kBursts; n++) {
+            audio_dsp_process(tone, seq++, &result);
+            for (int i = 1; i < kGap; i++) {
+                audio_dsp_process(silence, seq++, &result);
+            }
+        }
+        /* Snapshot the steady-state reported statistics on an onset frame. */
+        audio_dsp_process(tone, seq++, &result);
+        ((mode == 0) ? mode0 : mode1) = result;
+    }
+
+    audio_dsp_set_config_provider(NULL);
+
+    /* Mode 0 SELF-SCALES: each band's threshold is built from that band's own
+     * mean/sigma, so a loud band and a quiet band get very different bars. */
+    const float thr0_band0 = mode0.band_mean[0] + 0.3f * mode0.band_sigma[0];
+    const float thr0_top = mode0.band_mean[AUDIO_NUM_BANDS - 1]
+                           + 0.3f * mode0.band_sigma[AUDIO_NUM_BANDS - 1];
+    zassert_true(thr0_band0 > thr0_top * 2.0f,
+                 "mode 0's threshold should scale with each band (band0 %f vs top %f)",
+                 (double)thr0_band0, (double)thr0_top);
+
+    /* Mode 1 is BAND-BLIND: band_sigma carries the threshold, and with a
+     * silence-dominated history every band's median is 0, so all four bands sit
+     * at exactly the same absolute bar — sfDelta. That is the defect. A band
+     * whose entire onset flux is below sfDelta can never fire, no matter how
+     * clear its onsets are relative to its own noise floor. Hardware-measured
+     * consequence at this delta: band 3 fired once per 300 frames where mode 0
+     * fired 37 times (see getSfDelta() in audio_dsp.h).
+     *
+     * If a future change gives sfDelta per-band scaling or normalizes the flux,
+     * THIS ASSERTION SHOULD START FAILING — that is the signal the hazard is
+     * fixed; update it to the new contract rather than deleting it. */
+    for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+        zassert_within(mode1.band_sigma[b], kDelta, 1e-6f,
+                       "HAZARD PINNED: mode 1 applies one absolute delta to every band — "
+                       "band %d threshold %f should equal sf_delta %f",
+                       b, (double)mode1.band_sigma[b], (double)kDelta);
+    }
+
+    /* And the consequence, stated directly: the top band's own onset flux is
+     * far below that shared bar, while band 0's is far above it. */
+    zassert_true(mode1.band_flux[0] > kDelta,
+                 "band 0 onset flux (%f) should clear the shared delta (%f)",
+                 (double)mode1.band_flux[0], (double)kDelta);
+    zassert_true(mode1.band_flux[AUDIO_NUM_BANDS - 1] < kDelta,
+                 "top-band onset flux (%f) should fall UNDER the shared delta (%f) — this is "
+                 "why one delta cannot serve all four bands",
+                 (double)mode1.band_flux[AUDIO_NUM_BANDS - 1], (double)kDelta);
+}
+
+/* ── Phase 3, Test D: silence stays silent in mode 1 ────────────────────────
+ * With an all-zero history the median is 0, so the adaptive threshold collapses
+ * to sfDelta alone — the flux floor is what has to keep silence quiet. Mirrors
+ * test_silence_no_beat for the new mode. */
+ZTEST(audio_dsp, test_median_mode_silence_no_beat) {
+    int16_t silence[AUDIO_FFT_SIZE];
+    make_silence(silence);
+
+    TunableAudioDspConfigProvider provider;
+    provider.mode_ = AUDIO_THRESHOLD_MODE_MEDIAN_DELTA;
+    provider.sfDelta_ = 0.0f; /* worst case: threshold is the bare median */
+    audio_dsp_set_config_provider(&provider);
+    audio_dsp_init();
+
+    struct audio_analysis_result result;
+    for (int i = 0; i < HISTORY_LEN * 3; i++) {
+        audio_dsp_process(silence, i, &result);
+        for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+            zassert_false(result.beat[b], "silence fired a beat in band %d at frame %d", b, i);
+        }
+    }
+
+    audio_dsp_set_config_provider(NULL);
 }
 
 /* Helper for the gain-compensation tests: 100 Hz sine at the given amplitude,
@@ -283,6 +613,17 @@ static void make_tone(int16_t *buf, double amplitude, float scale) {
  *   (b) the threshold history SURVIVES (band_mean stays near its value),
  *   (c) a genuine onset right after the step still fires. */
 ZTEST(audio_dsp, test_gain_compensation_preserves_history) {
+    /* Alpha is pinned rather than inherited from the default provider: this
+     * test is about the COMPENSATION contract, and its stimulus is calibrated
+     * against a mean+3.5*sigma threshold (see the flux-magnitude note below).
+     * Phase 3 retuned the shipped default to 0.3, at which the history-building
+     * bumps clear the threshold themselves and leave the per-band refractory
+     * counter non-zero on the final onset frame — the assertion would then fail
+     * for a reason that has nothing to do with gain compensation. */
+    TunableAudioDspConfigProvider provider;
+    provider.alpha_ = 3.5f;
+    provider.mode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
+    audio_dsp_set_config_provider(&provider);
     audio_dsp_init();
 
     int16_t pcm[AUDIO_FFT_SIZE];
@@ -325,7 +666,10 @@ ZTEST(audio_dsp, test_gain_compensation_preserves_history) {
      * must still fire — the detector is neither blinded nor desensitized. */
     make_tone(pcm, 32000.0, STEP_DOWN_AMP);
     audio_dsp_process(pcm, seq++, &result);
-    zassert_true(result.beat[0], "real onset right after a compensated step must fire");
+    bool onset_fired = result.beat[0];
+
+    audio_dsp_set_config_provider(NULL);
+    zassert_true(onset_fired, "real onset right after a compensated step must fire");
 }
 
 /* ── Test 10: Compensation is exact for quiet signals — discriminating form ──
@@ -457,4 +801,36 @@ ZTEST(audio_dsp, test_gain_compensation_large_jump_resets) {
     zassert_equal(result.band_sigma[0], 0.0f, "reset must zero the flux sigma");
 }
 
-ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, NULL, NULL);
+/* Per-test teardown, not per-test cleanup done by hand at the end of each test.
+ *
+ * A zassert failure longjmps straight out of the test body, so any restoration
+ * written after the assertions is SKIPPED on exactly the runs where it matters
+ * most. Two ways that corrupts every later test in the suite:
+ *
+ *   1. A test that installed a stack-local provider leaves &provider installed
+ *      globally after the object's frame is gone — every subsequent
+ *      audio_dsp_process() then reads gamma/floor/alpha/mode off freed stack.
+ *   2. test_default_provider_setters_clamp mutates the process-global default
+ *      provider; bailing early leaves it at sf_delta=2.0 / mode=median.
+ *
+ * Either way one real regression cascades into unrelated failures (or a
+ * native_sim crash) and Twister points at the wrong test. Restoring here runs
+ * on the failure path too, so a failing test stays a single failing test.
+ */
+static void audio_dsp_after_each(void *fixture) {
+    ARG_UNUSED(fixture);
+
+    /* Drop any test-installed provider BEFORE touching the default's values,
+     * so the setters below can't be dispatched to a dangling object. */
+    audio_dsp_set_config_provider(NULL);
+
+    AudioDspConfigProvider *p = audio_dsp_get_config_provider();
+    p->setFluxGamma(1000.0f);
+    p->setBeatFluxFloor(0.005f);
+    p->setBeatAlpha(0.3f);
+    p->setBeatRefractoryFrames(5);
+    p->setSfDelta(0.10f);
+    p->setThresholdMode(AUDIO_THRESHOLD_MODE_MEAN_SIGMA);
+}
+
+ZTEST_SUITE(audio_dsp, NULL, NULL, NULL, audio_dsp_after_each, NULL);
