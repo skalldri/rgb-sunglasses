@@ -837,17 +837,36 @@ config APP_AUDIO_DSP_THREAD_STACK_SIZE
 
 config APP_AUDIO_DEBUG
 	bool "Audio beat-detection debug instrumentation"
-	default y
+	default n
 	depends on AUDIO
 	help
-	  Compiles in the beat-detection debugging surface (issue #264): the
-	  audio tap queue that lets "sound mic record_wav" and "sound dump"
-	  capture the exact PCM frames + analysis results the DSP thread
-	  processed, plus the "sound agc freeze"/"sound agc gain" and
-	  "sound dsp" shell commands. Static RAM cost ~33 KB total: 16-entry
-	  tap queue (~18.5 KB) + sector-aligned WAV/CSV write-batching and
-	  drain buffers (~14.5 KB) in sound.cpp. Disable to reclaim it once
-	  beat detection tuning is finished.
+	  Compiles in the beat-detection MEASUREMENT surface (issue #264): the
+	  audio tap queue that lets "sound mic record_wav" write its per-frame
+	  analysis sidecar CSV and "sound dump" stream live frames, plus the
+	  "sound agc freeze" and "sound agc gain" shell commands.
+
+	  Default n: this is developer instrumentation, not a shipped feature,
+	  and it is the single largest reclaimable block of static RAM in the
+	  application image. Enable it for a beat-detection debugging session:
+
+	    west build --build-dir fw/build fw --board \
+	      rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- \
+	      -DBOARD_ROOT="$(pwd)/fw" -DCONFIG_APP_AUDIO_DEBUG=y
+
+	  NOTE a Kconfig *default* change is ignored by an incremental build
+	  (see fw/CLAUDE.md), so switching this on or off against an existing
+	  fw/build needs "rm fw/build/fw/zephyr/.config" first, or --pristine.
+	  Verify it landed in build/fw/zephyr/include/generated/zephyr/autoconf.h
+	  before drawing conclusions from a capture.
+
+	  What stays available when this is OFF: "sound dsp params"/"sound dsp
+	  set" (every detector tunable), "sound agc status"/"gate"/"rate"/
+	  "attack"/"release", "sound rms", and "sound mic record_wav" itself —
+	  which falls back to a direct raw capture, so you still get a WAV, just
+	  without the analysis sidecar. Field tuning therefore does not need this
+	  option; only device-vs-host replay comparison does.
+
+	  See fw/docs/beat-detection-debugging.md.
 
 config APP_CHARGER_STATUS_THREAD_PRIORITY
 	int "Charger status thread priority"

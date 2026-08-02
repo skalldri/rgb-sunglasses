@@ -7,9 +7,40 @@ computed for it, replay the same audio through the identical DSP code on the
 host at build-of-a-few-seconds iteration speed, and score detections against a
 reference with a MIREX-standard F-measure.
 
-Everything firmware-side is gated by `CONFIG_APP_AUDIO_DEBUG` (default y on
-proto0; disable to reclaim ~33 KB of static RAM — 16-entry tap queue ~18.5 KB
-plus WAV/CSV batching and drain buffers ~14.5 KB — once tuning is done).
+## Enabling the rig — it is OFF by default
+
+The firmware-side measurement surface is gated by `CONFIG_APP_AUDIO_DEBUG`,
+which is **`default n`**. It is the largest reclaimable block of static RAM in
+the application image — measured on the linker's region table, not estimated:
+
+| | `=y` | `=n` (shipped) | Δ |
+|---|---|---|---|
+| appcore RAM | 414,688 B (92.04%) | 381,248 B (84.62%) | **−33,440 B / −7.42 pts** |
+| appcore FLASH | 742,236 B (82.41%) | 738,776 B (82.03%) | −3,460 B |
+
+Turn it on for a debugging session:
+
+```bash
+west build --build-dir fw/build fw --board rgb_sunglasses_proto0/nrf5340/cpuapp \
+    --sysbuild -- -DBOARD_ROOT="$(pwd)/fw" -DCONFIG_APP_AUDIO_DEBUG=y
+```
+
+**A Kconfig `default` change is ignored by an incremental build** (see
+fw/CLAUDE.md), so flipping this against an existing `fw/build` needs
+`rm fw/build/fw/zephyr/.config` first, or `--pristine`. Always confirm before
+trusting a capture:
+
+```bash
+grep CONFIG_APP_AUDIO_DEBUG fw/build/fw/zephyr/include/generated/zephyr/autoconf.h
+```
+
+**What still works with it OFF** — the whole tuning surface, just not the
+measurement one: `sound dsp params` / `sound dsp set` (every detector tunable),
+`sound agc status|gate|rate|attack|release`, `sound rms`, the BLE `audio/`
+characteristics, and `sound mic record_wav` itself (it falls back to a direct
+raw capture, so you still get a WAV — without the analysis sidecar). What you
+lose: `sound dump`, `sound agc freeze`, `sound agc gain`, and the sidecar CSV —
+i.e. only device-vs-host replay comparison needs `=y`.
 
 ## Pieces
 
