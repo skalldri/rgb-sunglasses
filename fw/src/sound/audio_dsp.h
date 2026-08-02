@@ -99,12 +99,33 @@ void audio_dsp_reset_history(void);
  * register steps: 10^(0.025·steps). One register step = 0.5 dB of amplitude —
  * this pair of helpers is the single authoritative encoding of that fact;
  * every consumer (detector compensation, AGC RMS-window rescale, the replay
- * simulator) must use them instead of re-deriving constants.
+ * simulator) must use them instead of re-deriving constants. Header-inline so
+ * Zephyr-free consumers (AgcController and its standalone test suite) get them
+ * without linking audio_dsp.cpp/CMSIS-DSP. Loop-multiplied per-step constants,
+ * no powf (float pow/printf support is compiled out firmware-wide).
  */
-float audio_dsp_gain_amplitude_ratio(int steps);
+static inline float audio_dsp_gain_amplitude_ratio(int steps) {
+    const float kStepUp = 1.0592537f;   /* 10^0.025  */
+    const float kStepDown = 0.9440609f; /* 10^-0.025 */
+    float ratio = 1.0f;
+    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
+        ratio *= (steps > 0) ? kStepUp : kStepDown;
+    }
+    return ratio;
+}
 
-/** @brief Power (energy/magnitude²-domain) scale factor: 10^(0.05·steps). */
-float audio_dsp_gain_power_ratio(int steps);
+/** @brief Power (energy/magnitude²-domain) scale factor: 10^(0.05·steps) —
+ * band energy is power (magnitude²), so one 0.5 dB amplitude step scales it by
+ * 10^(2·0.5/20). */
+static inline float audio_dsp_gain_power_ratio(int steps) {
+    const float kStepUp = 1.1220185f;   /* 10^0.05  */
+    const float kStepDown = 0.8912509f; /* 10^-0.05 */
+    float ratio = 1.0f;
+    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
+        ratio *= (steps > 0) ? kStepUp : kStepDown;
+    }
+    return ratio;
+}
 
 /**
  * @brief Make flux continuous across a PDM gain change of `steps` register

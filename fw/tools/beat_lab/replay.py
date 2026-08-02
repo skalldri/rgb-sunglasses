@@ -50,7 +50,8 @@ def build(force: bool = False) -> None:
 
 def run_replay(wav: str, *, gamma=None, alpha=None, floor=None, refractory=None,
                agc: str = "off", gain: int | None = None, buckets: bool = False,
-               target_low=None, target_high=None, rate_limit=None) -> list[str]:
+               target_low=None, target_high=None, rate_limit=None, gate=None,
+               attack=None, release=None) -> list[str]:
     """Run one replay; returns the dump lines (banner filtered)."""
     env = dict(os.environ)
     env["BEAT_WAV"] = str(Path(wav).resolve())
@@ -58,7 +59,8 @@ def run_replay(wav: str, *, gamma=None, alpha=None, floor=None, refractory=None,
     for name, val in [("BEAT_GAMMA", gamma), ("BEAT_ALPHA", alpha), ("BEAT_FLOOR", floor),
                       ("BEAT_REFRACTORY", refractory), ("BEAT_GAIN", gain),
                       ("BEAT_TARGET_LOW", target_low), ("BEAT_TARGET_HIGH", target_high),
-                      ("BEAT_RATE_LIMIT", rate_limit)]:
+                      ("BEAT_RATE_LIMIT", rate_limit), ("BEAT_GATE", gate),
+                      ("BEAT_ATTACK", attack), ("BEAT_RELEASE", release)]:
         if val is not None:
             env[name] = str(val)
     if buckets:
@@ -96,13 +98,26 @@ def main(argv=None):
     ap.add_argument("--alpha", type=float)
     ap.add_argument("--floor", type=float)
     ap.add_argument("--refractory", type=int)
-    ap.add_argument("--agc", choices=["off", "sim", "sim_reset"], default="off",
-                    help="off = fixed gain; sim = firmware AGC with Phase-1 gain "
-                         "compensation; sim_reset = legacy full-reset-per-step (A/B)")
+    ap.add_argument("--agc", choices=["off", "sim", "sim_legacy", "sim_reset"], default="off",
+                    help="off = fixed gain; sim = the real AgcController (Phase 2 policy); "
+                         "sim_legacy = pre-Phase-2 symmetric window + compensation; "
+                         "sim_reset = pre-Phase-1 full-reset-per-step (A/B chain)")
+    ap.add_argument("--target-low", type=float, help="AGC sim targetLow (BEAT_TARGET_LOW)")
+    ap.add_argument("--target-high", type=float, help="AGC sim targetHigh (BEAT_TARGET_HIGH)")
+    ap.add_argument("--gate", type=float, help="AGC sim noise-gate RMS (BEAT_GATE)")
+    ap.add_argument("--attack", type=int, help="AGC sim attack frames (BEAT_ATTACK)")
+    ap.add_argument("--release", type=int, help="AGC sim release frames (BEAT_RELEASE)")
+    ap.add_argument("--rate-limit", type=int, help="AGC sim min-gap frames (BEAT_RATE_LIMIT)")
     ap.add_argument("--gain", type=lambda s: int(s, 0),
                     help="recording's PDM gain register value (default 0x28)")
     ap.add_argument("--buckets", action="store_true", help="include display buckets")
     ap.add_argument("--no-build", action="store_true", help="skip the west build step")
+    ap.add_argument("--params-from", metavar="DEVICE_CSV",
+                    help="take gamma/alpha/floor/refractory and the recording gain from a "
+                         "device capture's #PARAMS line, so the replay runs with the exact "
+                         "parameters the device used (explicit flags still override). Use "
+                         "this for every device-vs-host comparison — persisted device "
+                         "values routinely differ from compiled-in defaults")
     ap.add_argument("--sweep", help="grid sweep, e.g. 'alpha=2:5:0.5,floor=0.005:0.05:0.005'")
     ap.add_argument("--ref", help="(sweep) reference annotation file, seconds per line")
     ap.add_argument("--ref-librosa", choices=["beats", "onsets"],
@@ -114,8 +129,33 @@ def main(argv=None):
     if not args.no_build:
         build()
 
+    if args.params_from:
+        try:
+            from . import frames
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+            from tools.beat_lab import frames
+        p = frames.parse_dump(args.params_from).params
+        # Copy EVERY parameter the #PARAMS line carries — omitting any of them
+        # makes the replay trajectory silently diverge from the device's.
+        for attr, key in [("gamma", "gamma"), ("alpha", "alpha"), ("floor", "floor"),
+                          ("refractory", "refractory"), ("gain", "gain"),
+                          ("target_low", "target_low"), ("target_high", "target_high"),
+                          ("rate_limit", "rate_limit"), ("attack", "attack"),
+                          ("release", "release"), ("gate", "gate")]:
+            if getattr(args, attr) is None and key in p:
+                setattr(args, attr, p[key])
+        gain_str = "-" if args.gain is None else f"{args.gain:#04x}"
+        print(f"# params from {args.params_from}: gamma={args.gamma} alpha={args.alpha} "
+              f"floor={args.floor} refractory={args.refractory} gain={gain_str} "
+              f"targets=[{args.target_low},{args.target_high}] rate={args.rate_limit} "
+              f"attack={args.attack} release={args.release} gate={args.gate}",
+              file=sys.stderr)
+
     fixed = dict(gamma=args.gamma, alpha=args.alpha, floor=args.floor,
-                 refractory=args.refractory, agc=args.agc, gain=args.gain)
+                 refractory=args.refractory, agc=args.agc, gain=args.gain,
+                 target_low=args.target_low, target_high=args.target_high, gate=args.gate,
+                 attack=args.attack, release=args.release, rate_limit=args.rate_limit)
 
     if not args.sweep:
         lines = run_replay(args.wav, buckets=args.buckets, **fixed)

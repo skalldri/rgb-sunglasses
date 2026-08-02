@@ -20,7 +20,8 @@ def _make_dump_lines(n=40, buckets=False, seq0=100, beat_at=(10, 25)):
     rng = np.random.default_rng(42)
     lines = [
         "#PARAMS gamma=447a0000 alpha=40600000 floor=3ba3d70a refractory=5 "
-        "agc_frozen=1 gain=28 target_low=3ba3d70a target_high=3c03126f rate_limit=10"
+        "agc_frozen=1 gain=28 target_low=3ba3d70a target_high=3c03126f rate_limit=10 "
+        "attack=3 release=15 gate=3a83126f"
     ]
     for i in range(n):
         mask = 0x1 if i in beat_at else 0
@@ -45,6 +46,8 @@ class TestCodec:
         assert d.params["alpha"] == pytest.approx(3.5)
         assert d.params["floor"] == pytest.approx(0.005, rel=1e-6)
         assert d.params["gain"] == 0x28
+        assert d.params["attack"] == 3 and d.params["release"] == 15
+        assert d.params["gate"] == pytest.approx(0.001, rel=1e-5)
         assert d.frames_reported == 40 and d.dropped == 0
         assert d.beat[10, 0] and d.beat[25, 0] and not d.beat[11, 0]
         assert d.buckets is None
@@ -151,6 +154,75 @@ class TestCompare:
         rc = compare.main(["--device", str(p), "--host", str(p)])
         assert rc == 0
         assert "PASS" in capsys.readouterr().out
+
+    def test_warns_on_params_mismatch(self, tmp_path, capsys):
+        # Device ran alpha=1.5 (0x3fc00000) while the host replay defaulted to
+        # 3.5 (0x40600000): decisions aren't comparable and compare must say so
+        # (regression for a real footgun hit during hardware verification).
+        lines = _make_dump_lines(n=40)
+        host_lines = [lines[0].replace("alpha=40600000", "alpha=3fc00000")] + lines[1:]
+        pd = tmp_path / "d.txt"
+        pd.write_text("\n".join(lines) + "\n")
+        ph = tmp_path / "h.txt"
+        ph.write_text("\n".join(host_lines) + "\n")
+        compare.main(["--device", str(pd), "--host", str(ph)])
+        out = capsys.readouterr().out
+        assert "PARAMS mismatch 'alpha'" in out
+        assert "--params-from" in out
+
+
+class TestReplayCli:
+    def test_params_from_without_gain_does_not_crash(self, tmp_path, monkeypatch, capsys):
+        # A #PARAMS line without a gain field (older captures, hand-trimmed
+        # dumps) must not crash the summary print (PR #279 review: NoneType
+        # format TypeError).
+        from tools.beat_lab import replay as replay_mod
+
+        lines = _make_dump_lines(n=3)
+        lines[0] = lines[0].replace(" gain=28", "")
+        src = tmp_path / "old.csv"
+        src.write_text("\n".join(lines) + "\n")
+        wav = tmp_path / "in.wav"
+        samples, _ = frames.synth_click_track(1.0, 120)
+        frames.write_wav(str(wav), samples)
+
+        monkeypatch.setattr(replay_mod, "build", lambda force=False: None)
+        monkeypatch.setattr(replay_mod, "run_replay",
+                            lambda *a, **k: _make_dump_lines(n=3))
+        out = tmp_path / "out.txt"
+        rc = replay_mod.main(["--wav", str(wav), "--params-from", str(src),
+                              "--out", str(out)])
+        assert rc == 0
+        assert "gain=-" in capsys.readouterr().err
+
+    def test_params_from_copies_agc_targets(self, tmp_path, monkeypatch):
+        # --params-from must reproduce the device's FULL AGC configuration —
+        # omitting targets made offline sims follow a trajectory no board runs
+        # (PR #279 review).
+        from tools.beat_lab import replay as replay_mod
+
+        src = tmp_path / "dev.csv"
+        src.write_text("\n".join(_make_dump_lines(n=3)) + "\n")
+        wav = tmp_path / "in.wav"
+        samples, _ = frames.synth_click_track(1.0, 120)
+        frames.write_wav(str(wav), samples)
+
+        captured = {}
+
+        def fake_run(*a, **k):
+            captured.update(k)
+            return _make_dump_lines(n=3)
+
+        monkeypatch.setattr(replay_mod, "build", lambda force=False: None)
+        monkeypatch.setattr(replay_mod, "run_replay", fake_run)
+        replay_mod.main(["--wav", str(wav), "--params-from", str(src),
+                        "--out", str(tmp_path / "o.txt")])
+        assert captured["target_low"] == pytest.approx(0.005, rel=1e-5)
+        assert captured["target_high"] == pytest.approx(0.008, rel=1e-5)
+        assert captured["rate_limit"] == 10
+        assert captured["attack"] == 3
+        assert captured["release"] == 15
+        assert captured["gate"] == pytest.approx(0.001, rel=1e-5)
 
 
 @pytest.mark.filterwarnings("ignore")

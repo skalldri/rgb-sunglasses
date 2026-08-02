@@ -60,6 +60,23 @@ def main(argv=None):
 
     dev = frames.parse_dump(args.device)
     host = frames.parse_dump(args.host)
+
+    # A device-vs-host comparison is only meaningful if both ran the same
+    # detector parameters — persisted device values routinely differ from the
+    # replay's compiled-in defaults (hardware-observed: a device alpha of 1.5 vs
+    # the default 3.5 produced 175 spurious beat-mask "mismatches").
+    params_mismatch = False
+    for key in ("gamma", "alpha", "floor", "refractory", "gain", "target_low", "target_high",
+                "rate_limit", "attack", "release", "gate"):
+        dv, hv = dev.params.get(key), host.params.get(key)
+        if dv is not None and hv is not None and abs(float(dv) - float(hv)) > 1e-6 * max(
+                abs(float(dv)), 1.0):
+            print(f"WARNING: #PARAMS mismatch '{key}': device={dv} host={hv}")
+            params_mismatch = True
+    if params_mismatch:
+        print(f"         beat decisions are NOT comparable - re-run the replay with "
+              f"--params-from {args.device}")
+
     di, hi = align(dev, host)
     if len(di) == 0:
         print("FAIL: no aligned frames", file=sys.stderr)

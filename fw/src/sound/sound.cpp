@@ -22,15 +22,19 @@
 #include "sound.h"
 
 /* ── Adaptive Gain Control ───────────────────────────────────────────────────
- * Adjusts PDM hardware gain to keep the RMS signal level inside a target
- * window.  Gain steps are rate-limited to prevent pumping.  After every
- * adjustment audio_dsp_reset_history() is called because the amplitude
- * discontinuity would otherwise look like a beat onset.
+ * Decision policy lives in AgcController (agc_controller.{h,cpp}): asymmetric
+ * attack/release with a near-clip fast path, a noise gate that suppresses beat
+ * output in silence, and a silence-park drift back to 0 dB. This file applies
+ * the controller's decisions to the PDM GAINL/GAINR registers and carries the
+ * beat detector's state across each step (audio_dsp_compensate_gain_change —
+ * an amplitude discontinuity would otherwise look like a beat onset).
  *
- * Thresholds calibrated to the actual microphone output. RMS measured with
- * active music: 0.015–0.025 (sparse due to gaps between notes).
- * Target window [0.005, 0.008] keeps signal quiet to prevent FFT saturation.
- * All threshold values are tunable via shell commands and (see audio_config.cpp) BT. */
+ * Historical note: the original symmetric [0.005, 0.008] target window sat
+ * BELOW real music levels ("prevent FFT saturation" was a misdiagnosis — the
+ * FFT is float; only int16 capture clips, which the peak path now handles), so
+ * the AGC stepped every few hundred ms during music. Current targets are
+ * derived from real captures — see DefaultAgcConfigProvider below.
+ * All values are tunable via shell commands and (see audio_config.cpp) BT. */
 #define AGC_GAIN_MIN 0x00 /* −20 dB (PDM GAINL/GAINR register floor)   */
 #define AGC_GAIN_MAX 0x50 /* +20 dB (PDM GAINL/GAINR register ceiling) */
 
@@ -84,17 +88,50 @@ class DefaultAgcConfigProvider : public AgcConfigProvider {
     void setTargetLow(float value) override { targetLow_ = std::clamp(value, 0.001f, 0.1f); }
 
     float getTargetHigh() override { return targetHigh_; }
-    void setTargetHigh(float value) override { targetHigh_ = std::clamp(value, 0.001f, 0.2f); }
+    /* Clamp [0.02, 0.5]: the raised floor is deliberate settings migration for
+     * Phase 2's semantic change (attack compares INSTANTANEOUS RMS now) — see
+     * AudioConfig::getTargetHigh() in audio_config.cpp for the full rationale. */
+    void setTargetHigh(float value) override { targetHigh_ = std::clamp(value, 0.02f, 0.5f); }
 
     uint32_t getRateLimitFrames() override { return rateLimitFrames_; }
     void setRateLimitFrames(uint32_t value) override {
         rateLimitFrames_ = std::clamp<uint32_t>(value, 1, 100);
     }
 
+    uint32_t getAttackFrames() override { return attackFrames_; }
+    void setAttackFrames(uint32_t value) override {
+        attackFrames_ = std::clamp<uint32_t>(value, 1, 20);
+    }
+
+    uint32_t getReleaseFrames() override { return releaseFrames_; }
+    void setReleaseFrames(uint32_t value) override {
+        releaseFrames_ = std::clamp<uint32_t>(value, 1, 100);
+    }
+
+    float getNoiseGateRms() override { return noiseGateRms_; }
+    void setNoiseGateRms(float value) override {
+        noiseGateRms_ = std::clamp(value, 0.0f, 0.02f);
+    }
+
    private:
-    float targetLow_ = 0.005f;
-    float targetHigh_ = 0.008f;
+    /* Defaults (and clamps) mirror the BT-backed AudioConfig in audio_config.cpp.
+     * Targets derived from the ABGT 250 baseline captures (Phase 2 PR):
+     *  - targetLow 0.002: release creep stops where mic self-noise meets it
+     *    (~+11 dB), instead of ramping to +20 dB; music smoothed RMS at the
+     *    converged gain (median 0.0045) sits well above it → 0 steps in 60 s
+     *    of music (was 22).
+     *  - targetHigh 0.05: attack headroom ~11 dB above music's p99
+     *    instantaneous RMS at listening volume — attack only engages on
+     *    genuinely loud (festival) input; the near-clip peak path is the
+     *    hard ceiling.
+     *  - noiseGate 0.001: true-silence detector at parked/low gains (room
+     *    noise ≈ 0.0006 at 0 dB); gates only 0.2% of music frames. */
+    float targetLow_ = 0.002f;
+    float targetHigh_ = 0.05f;
     uint32_t rateLimitFrames_ = 10;
+    uint32_t attackFrames_ = 3;
+    uint32_t releaseFrames_ = 15;
+    float noiseGateRms_ = 0.001f;
 };
 
 DefaultAgcConfigProvider sDefaultAgcProvider;
@@ -109,17 +146,16 @@ void sound_set_agc_config_provider(AgcConfigProvider *provider) {
 static volatile uint32_t *s_gain_l;
 static volatile uint32_t *s_gain_r;
 
-static uint8_t s_agc_gain = 0x28;   /* current gain register value (0 dB) */
-static bool s_agc_frozen = false;   /* debug: "sound agc freeze" halts gain adjustment */
-static int s_agc_frames_since = 0;  /* frames elapsed since last adjustment */
-static float s_latest_rms = 0.0f;   /* latest instantaneous RMS */
-static float s_smoothed_rms = 0.0f; /* 1-second averaged RMS for AGC decisions */
-static int16_t s_latest_peak = 0;   /* latest peak sample magnitude */
+static uint8_t s_agc_gain = 0x28; /* current gain register value (0 dB) */
+static bool s_agc_frozen = false; /* debug: "sound agc freeze" halts gain adjustment */
+static float s_latest_rms = 0.0f; /* latest instantaneous RMS */
+static int16_t s_latest_peak = 0; /* latest peak sample magnitude */
+static bool s_agc_silent = false; /* latest noise-gate state (for status + beat gating) */
 
-/* 1-second RMS history (32 frames at 32 ms/frame) */
-#define AGC_HISTORY_LEN 32
-static float s_rms_history[AGC_HISTORY_LEN];
-static uint8_t s_rms_history_idx = 0;
+/* Decision logic (RMS window, attack/release/gate/park policy) lives in the
+ * BT-free AgcController so the native_sim suite and the WAV-replay harness run
+ * the identical code — see agc_controller.h. */
+static AgcController s_agc_controller;
 
 /* Serializes agc_apply_gain() between its two callers (DSP thread's AGC loop,
  * shell thread's "sound agc gain") — the steps computation and the RMS-window
@@ -139,9 +175,15 @@ K_MUTEX_DEFINE(s_agc_apply_mutex);
  *
  * ORDERING: the caller must invoke this only AFTER audio_dsp_process() has
  * consumed the last block captured at the old gain — see the contract on
- * audio_dsp_compensate_gain_change(). */
-static void agc_apply_gain(uint8_t new_gain) {
+ * audio_dsp_compensate_gain_change().
+ *
+ * Takes an int and clamps INSIDE the lock: callers compute relative targets
+ * (s_agc_gain + steps) from an unsynchronized read of s_agc_gain, and a
+ * concurrent manual gain change could otherwise wrap the arithmetic past the
+ * register range (e.g. 0x00 + (-1) as uint8_t = 0xFF written to GAINL/GAINR). */
+static void agc_apply_gain(int requested_gain) {
     k_mutex_lock(&s_agc_apply_mutex, K_FOREVER);
+    uint8_t new_gain = (uint8_t)std::clamp(requested_gain, (int)AGC_GAIN_MIN, (int)AGC_GAIN_MAX);
     int steps = (int)new_gain - (int)s_agc_gain;
     if (steps == 0 || s_gain_l == NULL || s_gain_r == NULL) {
         k_mutex_unlock(&s_agc_apply_mutex);
@@ -154,21 +196,10 @@ static void agc_apply_gain(uint8_t new_gain) {
      * ~30% of all frames during music (issue #264, hardware-measured: 16 steps
      * in 30 s of ABGT at listening volume). */
     audio_dsp_compensate_gain_change(steps);
-    if (steps > 4 || steps < -4) {
-        /* Same rule as the detector side: a big manual jump is a genuine
-         * discontinuity. Extrapolating the RMS window across e.g. +40 steps
-         * would fabricate impossible levels (RMS is bounded by 1.0; ×10 scaling
-         * would then drive the unfrozen loop right back down). Flush instead —
-         * it refills within one second. */
-        memset(s_rms_history, 0, sizeof(s_rms_history));
-        s_smoothed_rms = 0.0f;
-    } else {
-        float amp = audio_dsp_gain_amplitude_ratio(steps);
-        for (int i = 0; i < AGC_HISTORY_LEN; i++) {
-            s_rms_history[i] *= amp;
-        }
-        s_smoothed_rms *= amp;
-    }
+    /* The controller's RMS window is in the old gain domain — single rescale
+     * path for AGC-decided and manual gain changes alike (the |steps| > 4
+     * flush rule lives inside notifyGainChange, mirroring the detector side). */
+    s_agc_controller.notifyGainChange(steps);
     k_mutex_unlock(&s_agc_apply_mutex);
 }
 
@@ -438,8 +469,10 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
                     LOG_WRN("PDM reconfigure+restart: %d", ret);
                 }
                 consecutive_failures = 0;
-                /* The restart gap is an amplitude discontinuity like a gain step. */
+                /* The restart gap is an amplitude discontinuity like a gain step;
+                 * the controller's RMS window spans the dead time too. */
                 audio_dsp_reset_history();
+                s_agc_controller.reset();
             }
             continue;
         }
@@ -447,18 +480,36 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
 
         const int16_t *pcm = static_cast<const int16_t *>(buffer);
 
-        /* AGC levels for this block. */
+        /* AGC: the controller ingests this block's levels and DECIDES here, but
+         * the decision is APPLIED only after audio_dsp_process() below — this
+         * block was captured at the CURRENT gain, and applying the step first
+         * would feed an old-domain block against new-domain detector state (a
+         * false flux of ~0.115/step, i.e. a spurious beat per AGC step — PR
+         * #277 review). "sound agc freeze" (debug) sets allow_adjust=false so
+         * recordings can be made at a known fixed gain while levels/gate stay
+         * live for status. */
         float rms = agc_compute_rms(pcm, AUDIO_FFT_SIZE);
         s_latest_rms = rms; /* Instantaneous RMS for diagnostics */
 
-        /* Process THIS block before any gain change is applied: the block was
-         * captured at the CURRENT gain, so the detector's previous-frame state
-         * (same domain) stays consistent. Applying the step first fed an
-         * old-domain block against new-domain state — a false flux of
-         * ~0.115/step, i.e. a spurious beat on every AGC step (PR #277 review).
-         * The gain decision therefore moves BELOW audio_dsp_process(). */
+        AgcDecision agc =
+            s_agc_controller.update(*sAgcProvider, rms, s_latest_peak, s_agc_gain, !s_agc_frozen);
+        if (agc.silent != s_agc_silent) {
+            LOG_DBG("AGC noise gate %s", agc.silent ? "closed (silence)" : "open");
+            s_agc_silent = agc.silent;
+        }
+
         struct audio_analysis_result result;
         audio_dsp_process(pcm, seq++, &result);
+
+        /* Noise gate: in silence the detector could only fire on amplified
+         * mic/room noise — suppress beat output entirely (issue #264's
+         * quiet-room complaint). Skipped while frozen so debug captures see the
+         * raw detector output (device-vs-host replay comparison depends on it). */
+        if (s_agc_silent && !s_agc_frozen) {
+            for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+                result.beat[b] = false;
+            }
+        }
 
 #if defined(CONFIG_APP_AUDIO_DEBUG)
         if (atomic_get(&s_tap_armed)) {
@@ -477,47 +528,19 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
 
         k_mem_slab_free(&mem_slab, buffer);
 
-        /* AGC decision + application — AFTER the block was processed (see the
-         * ordering note above). The register write lands mid-capture of the
-         * next DMA block, so that one transitional block is a bounded mix of
-         * old/new gain (≤ 0.5 dB across it) — far below the full-step error
-         * this ordering removes.
-         *
-         * Update the 1-second RMS window (same ring structure as the beat
-         * detector's flux history). */
-        s_rms_history[s_rms_history_idx] = rms;
-        s_rms_history_idx = (s_rms_history_idx + 1) % AGC_HISTORY_LEN;
-        float sum_rms = 0.0f;
-        for (int i = 0; i < AGC_HISTORY_LEN; i++) {
-            sum_rms += s_rms_history[i];
-        }
-        s_smoothed_rms = sum_rms / (float)AGC_HISTORY_LEN;
-
-        /* Check for gain adjustment every getRateLimitFrames() frames.
-         * "sound agc freeze" (debug) skips adjustment entirely so recordings can be
-         * made at a known fixed gain. */
-        s_agc_frames_since++;
-        if (!s_agc_frozen &&
-            static_cast<uint32_t>(s_agc_frames_since) >= sAgcProvider->getRateLimitFrames()) {
-            uint8_t target_gain = s_agc_gain;
-
-            /* Use smoothed RMS (1-second average) for stable decisions. */
-            if (s_smoothed_rms < sAgcProvider->getTargetLow() && s_agc_gain < AGC_GAIN_MAX) {
-                target_gain++;
-            } else if (s_smoothed_rms > sAgcProvider->getTargetHigh() &&
-                       s_agc_gain > AGC_GAIN_MIN) {
-                target_gain--;
-            }
-
-            if (target_gain != s_agc_gain) {
-                agc_apply_gain(target_gain);
-                s_agc_frames_since = 0;
-                int db10 = agc_gain_db10(s_agc_gain);
-                char rms_buf[16];
-                LOG_DBG("AGC: gain=0x%02x (%s%d.%u dB) smoothed_rms=%s", s_agc_gain,
-                        db10 < 0 ? "-" : "", abs(db10) / 10, (unsigned)(abs(db10) % 10),
-                        fmt_fixed4(s_smoothed_rms, rms_buf, sizeof(rms_buf)));
-            }
+        /* Apply the gain decision AFTER the old-domain block was processed (see
+         * the ordering note above). The register write lands mid-capture of the
+         * next DMA block, so that one transitional block is a bounded old/new
+         * mix (≤ 0.5 dB across it) — far below the full-step error this
+         * ordering removes. */
+        if (agc.gain_steps != 0) {
+            agc_apply_gain((int)s_agc_gain + agc.gain_steps);
+            int db10 = agc_gain_db10(s_agc_gain);
+            char rms_buf[16];
+            LOG_DBG("AGC: gain=0x%02x (%s%d.%u dB)%s smoothed_rms=%s", s_agc_gain,
+                    db10 < 0 ? "-" : "", abs(db10) / 10, (unsigned)(abs(db10) % 10),
+                    agc.clipped ? " [near-clip]" : "",
+                    fmt_fixed4(s_agc_controller.smoothedRms(), rms_buf, sizeof(rms_buf)));
         }
 
         // Log beats including noise-floor stats for threshold tuning
@@ -687,7 +710,10 @@ static size_t tap_params_format(char *buf, size_t cap) {
                                    dsp->getBeatFluxFloor(), dsp->getBeatRefractoryFrames(),
                                    s_agc_frozen, s_agc_gain, sAgcProvider->getTargetLow(),
                                    sAgcProvider->getTargetHigh(),
-                                   sAgcProvider->getRateLimitFrames(), buf, cap);
+                                   sAgcProvider->getRateLimitFrames(),
+                                   sAgcProvider->getAttackFrames(),
+                                   sAgcProvider->getReleaseFrames(),
+                                   sAgcProvider->getNoiseGateRms(), buf, cap);
 }
 
 /* Shell-side drain buffers, shared by record_wav and dump: too big for the shell
@@ -1209,7 +1235,7 @@ static int cmd_sound_agc_status(const struct shell *shell, size_t argc, char **a
     shell_print(shell, "AGC gain: 0x%02x (%s%d.%u dB)", s_agc_gain, db10 < 0 ? "-" : "",
                 abs(db10) / 10, (unsigned)(abs(db10) % 10));
     shell_print(shell, "  Smoothed RMS (1s): %s | Instantaneous: %s",
-                fmt_fixed4(s_smoothed_rms, b1, sizeof(b1)),
+                fmt_fixed4(s_agc_controller.smoothedRms(), b1, sizeof(b1)),
                 fmt_fixed4(s_latest_rms, b2, sizeof(b2)));
     shell_print(shell, "  Peak: %d (%s norm)", s_latest_peak,
                 fmt_fixed4(peak_norm, b1, sizeof(b1)));
@@ -1217,6 +1243,18 @@ static int cmd_sound_agc_status(const struct shell *shell, size_t argc, char **a
                 fmt_fixed4(sAgcProvider->getTargetLow(), b1, sizeof(b1)),
                 fmt_fixed4(sAgcProvider->getTargetHigh(), b2, sizeof(b2)),
                 sAgcProvider->getRateLimitFrames());
+    /* The gate operates on the INPUT-REFERRED level (smoothed RMS normalized to
+     * 0 dB gain) — print that value too so operators tune against the number
+     * the controller actually compares, not the output-domain smoothed RMS. */
+    float input_ref = s_agc_controller.smoothedRms() *
+                      audio_dsp_gain_amplitude_ratio((int)0x28 - (int)s_agc_gain);
+    char b3[16];
+    shell_print(shell, "  Attack: %u frames | Release: %u frames | Gate: %s input-referred "
+                       "(now %s) -> %s",
+                sAgcProvider->getAttackFrames(), sAgcProvider->getReleaseFrames(),
+                fmt_fixed4(sAgcProvider->getNoiseGateRms(), b1, sizeof(b1)),
+                fmt_fixed4(input_ref, b3, sizeof(b3)),
+                s_agc_silent ? "SILENT - beats gated" : "open");
     return 0;
 }
 
@@ -1254,8 +1292,10 @@ static int cmd_sound_agc_target_high(const struct shell *shell, size_t argc, cha
         return -EINVAL;
     }
     float val;
-    if (!parse_finite_float(argv[1], &val) || val < 0.001f || val > 0.2f) {
-        shell_error(shell, "Value must be a number in range [0.001, 0.2]");
+    /* Range matches the Phase 2 clamp incl. the migration floor (see
+     * AudioConfig::setTargetHigh). */
+    if (!parse_finite_float(argv[1], &val) || val < 0.02f || val > 0.5f) {
+        shell_error(shell, "Value must be a number in range [0.02, 0.5]");
         return -EINVAL;
     }
     sAgcProvider->setTargetHigh(val);
@@ -1329,7 +1369,7 @@ static int cmd_sound_agc_gain(const struct shell *shell, size_t argc, char **arg
     /* Registers + detector compensation + RMS-window rescale in one place;
      * small nudges compensate exactly, jumps of more than 4 steps fall back to
      * the full history/window reset inside the call. */
-    agc_apply_gain((uint8_t)v);
+    agc_apply_gain((int)v);
     int db10 = agc_gain_db10(s_agc_gain);
     shell_print(shell, "AGC gain set to 0x%02x (%s%d.%u dB), freeze forced on", s_agc_gain,
                 db10 < 0 ? "-" : "", abs(db10) / 10, (unsigned)(abs(db10) % 10));
@@ -1393,13 +1433,67 @@ static int cmd_sound_dsp_set(const struct shell *shell, size_t argc, char **argv
     return 0;
 }
 
+static int cmd_sound_agc_attack(const struct shell *shell, size_t argc, char **argv) {
+    if (argc == 1) {
+        shell_print(shell, "AGC attack: %u frames (~%u ms over target-high before -1 step)",
+                    sAgcProvider->getAttackFrames(), sAgcProvider->getAttackFrames() * 32);
+        return 0;
+    }
+    uint32_t val = (uint32_t)strtoul(argv[1], NULL, 10);
+    if (val < 1 || val > 20) {
+        shell_error(shell, "Value must be in range [1, 20] frames");
+        return -EINVAL;
+    }
+    sAgcProvider->setAttackFrames(val);
+    shell_print(shell, "AGC attack set to %u frames", val);
+    return 0;
+}
+
+static int cmd_sound_agc_release(const struct shell *shell, size_t argc, char **argv) {
+    if (argc == 1) {
+        shell_print(shell, "AGC release: %u frames (~%u ms under target-low before +1 step)",
+                    sAgcProvider->getReleaseFrames(), sAgcProvider->getReleaseFrames() * 32);
+        return 0;
+    }
+    uint32_t val = (uint32_t)strtoul(argv[1], NULL, 10);
+    if (val < 1 || val > 100) {
+        shell_error(shell, "Value must be in range [1, 100] frames");
+        return -EINVAL;
+    }
+    sAgcProvider->setReleaseFrames(val);
+    shell_print(shell, "AGC release set to %u frames", val);
+    return 0;
+}
+
+static int cmd_sound_agc_gate(const struct shell *shell, size_t argc, char **argv) {
+    char buf[16];
+    if (argc == 1) {
+        shell_print(shell,
+                    "AGC noise gate: INPUT-REFERRED RMS (normalized to 0 dB gain) < %s = "
+                    "silence (hold/park gain, no beats). 0 disables the gate entirely, "
+                    "restoring the pre-Phase-2 chase-quiet-sources behavior.",
+                    fmt_fixed4(sAgcProvider->getNoiseGateRms(), buf, sizeof(buf)));
+        return 0;
+    }
+    float val;
+    if (!parse_finite_float(argv[1], &val) || val < 0.0f || val > 0.02f) {
+        shell_error(shell, "Value must be a number in range [0, 0.02]");
+        return -EINVAL;
+    }
+    sAgcProvider->setNoiseGateRms(val);
+    shell_print(shell, "AGC noise gate set to %s (input-referred)",
+                fmt_fixed4(val, buf, sizeof(buf)));
+    return 0;
+}
+
 static int cmd_sound_rms(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
     float peak_norm = (float)s_latest_peak / 32768.0f;
     char b1[16], b2[16];
-    shell_print(shell, "Smoothed RMS (1s): %s", fmt_fixed4(s_smoothed_rms, b1, sizeof(b1)));
+    shell_print(shell, "Smoothed RMS (1s): %s",
+                fmt_fixed4(s_agc_controller.smoothedRms(), b1, sizeof(b1)));
     shell_print(shell, "Instantaneous RMS: %s | Peak: %d (%s norm)",
                 fmt_fixed4(s_latest_rms, b1, sizeof(b1)), s_latest_peak,
                 fmt_fixed4(peak_norm, b2, sizeof(b2)));
@@ -1416,6 +1510,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_agc,
                                SHELL_CMD_ARG(target-high, NULL, "Get/set AGC target-high threshold", cmd_sound_agc_target_high, 0, 1),
                                SHELL_CMD_ARG(status, NULL, "Show current AGC status", cmd_sound_agc_status, 0, 0),
                                SHELL_CMD_ARG(rate, NULL, "Get/set AGC rate limit (frames)", cmd_sound_agc_rate, 0, 1),
+                               SHELL_CMD_ARG(attack, NULL, "Get/set AGC attack frames", cmd_sound_agc_attack, 0, 1),
+                               SHELL_CMD_ARG(release, NULL, "Get/set AGC release frames", cmd_sound_agc_release, 0, 1),
+                               SHELL_CMD_ARG(gate, NULL, "Get/set AGC noise-gate RMS", cmd_sound_agc_gate, 0, 1),
 #if defined(CONFIG_APP_AUDIO_DEBUG)
                                SHELL_CMD_ARG(freeze, NULL, "Get/set AGC freeze (halt gain adjustment)", cmd_sound_agc_freeze, 0, 1),
                                SHELL_CMD_ARG(gain, NULL, "Get/set PDM gain register directly (implies freeze)", cmd_sound_agc_gain, 0, 1),

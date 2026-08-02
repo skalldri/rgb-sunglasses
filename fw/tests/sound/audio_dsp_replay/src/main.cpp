@@ -44,6 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "agc_controller.h" /* the REAL firmware AGC policy, compiled in for sim mode */
 #include "audio_dsp.h"
 #include "audio_tap_format.h" /* shared D-line/#PARAMS format — single source of truth */
 
@@ -106,6 +107,69 @@ class EnvConfigProvider : public AudioDspConfigProvider {
 
 EnvConfigProvider sEnvProvider;
 
+/* Env-driven AGC tunables for the closed-loop sim, mirroring the firmware
+ * defaults/clamps (DefaultAgcConfigProvider in sound.cpp). */
+class EnvAgcProvider : public AgcConfigProvider {
+   public:
+    EnvAgcProvider() {
+        float f;
+        if (envFloat("BEAT_TARGET_LOW", &f)) {
+            setTargetLow(f);
+        }
+        if (envFloat("BEAT_TARGET_HIGH", &f)) {
+            setTargetHigh(f);
+        }
+        if (envFloat("BEAT_GATE", &f)) {
+            setNoiseGateRms(f);
+        }
+        envU32("BEAT_RATE_LIMIT", [this](uint32_t v) { setRateLimitFrames(v); });
+        envU32("BEAT_ATTACK", [this](uint32_t v) { setAttackFrames(v); });
+        envU32("BEAT_RELEASE", [this](uint32_t v) { setReleaseFrames(v); });
+    }
+
+    float getTargetLow() override { return tlow_; }
+    void setTargetLow(float v) override { tlow_ = clampf(v, 0.001f, 0.1f); }
+    float getTargetHigh() override { return thigh_; }
+    /* Floor 0.02 mirrors the firmware's semantic-migration clamp (see
+     * AudioConfig::setTargetHigh). */
+    void setTargetHigh(float v) override { thigh_ = clampf(v, 0.02f, 0.5f); }
+    uint32_t getRateLimitFrames() override { return rate_; }
+    void setRateLimitFrames(uint32_t v) override { rate_ = v < 1 ? 1 : (v > 100 ? 100 : v); }
+    uint32_t getAttackFrames() override { return attack_; }
+    void setAttackFrames(uint32_t v) override { attack_ = v < 1 ? 1 : (v > 20 ? 20 : v); }
+    uint32_t getReleaseFrames() override { return release_; }
+    void setReleaseFrames(uint32_t v) override { release_ = v < 1 ? 1 : (v > 100 ? 100 : v); }
+    float getNoiseGateRms() override { return gate_; }
+    void setNoiseGateRms(float v) override { gate_ = clampf(v, 0.0f, 0.02f); }
+
+   private:
+    static bool envFloat(const char *name, float *out) {
+        const char *s = getenv(name);
+        if (s == nullptr) {
+            return false;
+        }
+        *out = strtof(s, nullptr);
+        return true;
+    }
+    template <typename F>
+    static void envU32(const char *name, F set) {
+        const char *s = getenv(name);
+        if (s != nullptr) {
+            set((uint32_t)strtoul(s, nullptr, 10));
+        }
+    }
+    /* Defaults MUST track DefaultAgcConfigProvider in sound.cpp — a stale copy
+     * here makes `--agc sim` simulate a policy no board runs (PR #279 review:
+     * the old 0.008 targetHigh made the sim ratchet gain to the floor on music
+     * the real firmware holds steady on). */
+    float tlow_ = 0.002f;
+    float thigh_ = 0.05f;
+    uint32_t rate_ = 10;
+    uint32_t attack_ = 3;
+    uint32_t release_ = 15;
+    float gate_ = 0.001f;
+};
+
 /* ── D-line emission — field order comes from the shared audio_tap_format.h,
  *    the same header sound.cpp's producers compile ────────────────────────── */
 
@@ -119,11 +183,12 @@ void emit_frame(FILE *out, const struct audio_analysis_result *r, float rms, uin
 }
 
 void emit_params(FILE *out, bool agc_frozen, uint8_t gain, float target_low, float target_high,
-                 uint32_t rate_limit) {
+                 uint32_t rate_limit, uint32_t attack, uint32_t release, float gate) {
     size_t len = audio_tap_format_params(
         sEnvProvider.getFluxGamma(), sEnvProvider.getBeatAlpha(),
         sEnvProvider.getBeatFluxFloor(), sEnvProvider.getBeatRefractoryFrames(), agc_frozen,
-        gain, target_low, target_high, rate_limit, s_line, sizeof(s_line));
+        gain, target_low, target_high, rate_limit, attack, release, gate, s_line,
+        sizeof(s_line));
     fwrite(s_line, 1, len, out);
     fputc('\n', out);
 }
@@ -250,15 +315,33 @@ int run_replay(const char *wav_path) {
         }
     }
 
+    /* Modes:
+     *   off        — fixed gain, no gate: matches a freeze-gain device capture
+     *   sim        — the REAL AgcController (agc_controller.cpp, same TU as the
+     *                firmware): closed-loop policy incl. attack/release, clip
+     *                fast path, noise gate (beats cleared while silent) and
+     *                Phase-1 gain compensation
+     *   sim_legacy — pre-Phase-2 symmetric window policy + Phase-1 compensation
+     *   sim_reset  — pre-Phase-1 behavior (full history reset per step)
+     * The legacy modes exist so each phase's improvement stays A/B-measurable
+     * offline on the same WAV. */
+    enum class AgcMode { kOff, kSim, kSimLegacy, kSimReset };
+    AgcMode mode = AgcMode::kOff;
     const char *agc_env = getenv("BEAT_AGC");
-    const bool agc_legacy_reset = (agc_env != nullptr && strcmp(agc_env, "sim_reset") == 0);
-    const bool agc_sim =
-        agc_legacy_reset || (agc_env != nullptr && strcmp(agc_env, "sim") == 0);
-    if (agc_env != nullptr && !agc_sim && strcmp(agc_env, "off") != 0) {
-        fprintf(stderr, "replay: BEAT_AGC must be off|sim|sim_reset\n");
-        free(wav.samples);
-        return 1;
+    if (agc_env != nullptr) {
+        if (strcmp(agc_env, "sim") == 0) {
+            mode = AgcMode::kSim;
+        } else if (strcmp(agc_env, "sim_legacy") == 0) {
+            mode = AgcMode::kSimLegacy;
+        } else if (strcmp(agc_env, "sim_reset") == 0) {
+            mode = AgcMode::kSimReset;
+        } else if (strcmp(agc_env, "off") != 0) {
+            fprintf(stderr, "replay: BEAT_AGC must be off|sim|sim_legacy|sim_reset\n");
+            free(wav.samples);
+            return 1;
+        }
     }
+    const bool any_sim = mode != AgcMode::kOff;
 
     uint8_t gain = 0x28;
     const char *gain_env = getenv("BEAT_GAIN");
@@ -267,34 +350,28 @@ int run_replay(const char *wav_path) {
     }
     const uint8_t start_gain = gain;
 
-    float target_low = 0.005f, target_high = 0.008f;
-    uint32_t rate_limit = 10;
-    if (const char *s = getenv("BEAT_TARGET_LOW")) {
-        target_low = strtof(s, nullptr);
-    }
-    if (const char *s = getenv("BEAT_TARGET_HIGH")) {
-        target_high = strtof(s, nullptr);
-    }
-    if (const char *s = getenv("BEAT_RATE_LIMIT")) {
-        rate_limit = (uint32_t)strtoul(s, nullptr, 10);
-    }
+    EnvAgcProvider agc_cfg; /* targets/rate/attack/release/gate from env */
     const bool buckets = (getenv("BEAT_BUCKETS") != nullptr &&
                           strcmp(getenv("BEAT_BUCKETS"), "1") == 0);
 
     audio_dsp_init();
-    emit_params(out, !agc_sim, gain, target_low, target_high, rate_limit);
+    emit_params(out, !any_sim, gain, agc_cfg.getTargetLow(), agc_cfg.getTargetHigh(),
+                agc_cfg.getRateLimitFrames(), agc_cfg.getAttackFrames(),
+                agc_cfg.getReleaseFrames(), agc_cfg.getNoiseGateRms());
 
-    /* AGC sim state — mirrors sound.cpp's audio_dsp_thread_func() loop. */
+    /* Legacy-mode sim state — mirrors the pre-Phase-2 inline loop in sound.cpp. */
     float rms_history[32] = {0};
     uint8_t rms_idx = 0;
     int frames_since = 0;
+
+    AgcController ctrl; /* kSim mode */
 
     int16_t block[AUDIO_FFT_SIZE];
     struct audio_analysis_result result;
     uint32_t seq = 0;
 
     for (uint32_t off = 0; off + AUDIO_FFT_SIZE <= wav.num_samples; off += AUDIO_FFT_SIZE) {
-        if (agc_sim && gain != start_gain) {
+        if (any_sim && gain != start_gain) {
             /* Each register step = 0.5 dB of amplitude. The recording was made at
              * start_gain; simulate the hardware applying `gain` instead, clipping
              * to int16 exactly as the PDM front-end would. */
@@ -308,16 +385,45 @@ int run_replay(const char *wav_path) {
         }
 
         float rms = compute_rms(block, AUDIO_FFT_SIZE);
+        bool silent = false;
+        AgcDecision d = {0, false, false};
 
-        /* Process FIRST, decide after — the same ordering as the fixed
-         * firmware loop: this block is in the current gain domain, and a step
-         * decided now only affects the NEXT block's digital scaling (in
-         * hardware, the next DMA block). Emit before the step too, so the
-         * D-line's gain column is the gain this block was "captured" at. */
+        if (mode == AgcMode::kSim) {
+            /* Mirror the fixed firmware loop: DECIDE before processing (the
+             * silent flag gates this frame's beats) but APPLY the step only
+             * after — this block is in the current gain domain. */
+            int16_t peak = 0;
+            for (int i = 0; i < AUDIO_FFT_SIZE; i++) {
+                int16_t a = (int16_t)(block[i] < 0 ? -block[i] : block[i]);
+                if (a > peak) {
+                    peak = a;
+                }
+            }
+            d = ctrl.update(agc_cfg, rms, peak, gain, true);
+            silent = d.silent;
+        }
+
         audio_dsp_process(block, seq++, &result);
+        if (silent) {
+            /* Mirror sound.cpp's noise gate: no beat output during silence. */
+            for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+                result.beat[b] = false;
+            }
+        }
+        /* Emit before any step so the D-line's gain column is the gain this
+         * block was "captured" at — same as the firmware tap. */
         emit_frame(out, &result, rms, gain, buckets);
 
-        if (agc_sim) {
+        if (mode == AgcMode::kSim) {
+            if (d.gain_steps != 0) {
+                /* Same apply sequence as sound.cpp's agc_apply_gain(). */
+                gain = (uint8_t)((int)gain + d.gain_steps);
+                audio_dsp_compensate_gain_change(d.gain_steps);
+                ctrl.notifyGainChange(d.gain_steps);
+            }
+        } else if (mode == AgcMode::kSimLegacy || mode == AgcMode::kSimReset) {
+            /* Legacy inline policy — decided and applied AFTER processing (the
+             * fixed ordering); a step only affects the NEXT block's scaling. */
             rms_history[rms_idx] = rms;
             rms_idx = (uint8_t)((rms_idx + 1) % 32);
             float smoothed = 0.0f;
@@ -327,17 +433,17 @@ int run_replay(const char *wav_path) {
             smoothed /= 32.0f;
 
             frames_since++;
-            if ((uint32_t)frames_since >= rate_limit) {
+            if ((uint32_t)frames_since >= agc_cfg.getRateLimitFrames()) {
                 int step = 0;
-                if (smoothed < target_low && gain < 0x50) {
+                if (smoothed < agc_cfg.getTargetLow() && gain < 0x50) {
                     gain++;
                     step = 1;
-                } else if (smoothed > target_high && gain > 0x00) {
+                } else if (smoothed > agc_cfg.getTargetHigh() && gain > 0x00) {
                     gain--;
                     step = -1;
                 }
                 if (step != 0) {
-                    /* BOTH modes rescale the RMS window so their AGC
+                    /* BOTH legacy modes rescale the RMS window so their AGC
                      * trajectories are identical on the same WAV — the A/B then
                      * isolates the ONLY intended difference (detector-history
                      * handling); previously sim_reset skipped the rescale and
@@ -346,13 +452,13 @@ int run_replay(const char *wav_path) {
                     for (int i = 0; i < 32; i++) {
                         rms_history[i] *= amp;
                     }
-                    if (agc_legacy_reset) {
+                    if (mode == AgcMode::kSimReset) {
                         /* Pre-Phase-1 firmware behavior: full history reset per
                          * gain step — kept for offline A/B against the fix. */
                         audio_dsp_reset_history();
                     } else {
-                        /* Mirrors the firmware: carry detector state across the
-                         * step (audio_dsp_compensate_gain_change). */
+                        /* Phase-1 firmware behavior: carry detector state across
+                         * the step (audio_dsp_compensate_gain_change). */
                         audio_dsp_compensate_gain_change(step);
                     }
                     frames_since = 0;

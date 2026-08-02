@@ -13,7 +13,7 @@
  *
  *   #PARAMS gamma=<hex8> alpha=<hex8> floor=<hex8> refractory=<u> \
  *           agc_frozen=<0|1> gain=<hex2> target_low=<hex8> target_high=<hex8> \
- *           rate_limit=<u>
+ *           rate_limit=<u> attack=<u> release=<u> gate=<hex8>
  *   D,<seq>,<gain hex2>,<beatmask hex1>,<rms>,<e0..e3>,<f0..f3>,<m0..m3>,<s0..s3>[,<d0..d19>]
  *   #DONE frames=<u> dropped=<u>
  *
@@ -81,12 +81,16 @@ static inline size_t audio_tap_format_frame(const struct audio_analysis_result *
 static inline size_t audio_tap_format_params(float gamma, float alpha, float flux_floor,
                                              uint32_t refractory, bool agc_frozen, uint8_t gain,
                                              float target_low, float target_high,
-                                             uint32_t rate_limit, char *buf, size_t cap) {
+                                             uint32_t rate_limit, uint32_t attack_frames,
+                                             uint32_t release_frames, float noise_gate,
+                                             char *buf, size_t cap) {
     int n = snprintf(buf, cap,
                      "#PARAMS gamma=%08x alpha=%08x floor=%08x refractory=%u agc_frozen=%d "
-                     "gain=%02x target_low=%08x target_high=%08x rate_limit=%u",
+                     "gain=%02x target_low=%08x target_high=%08x rate_limit=%u attack=%u "
+                     "release=%u gate=%08x",
                      audio_tap_f32_bits(gamma), audio_tap_f32_bits(alpha),
                      audio_tap_f32_bits(flux_floor), refractory, agc_frozen ? 1 : 0, gain,
-                     audio_tap_f32_bits(target_low), audio_tap_f32_bits(target_high), rate_limit);
+                     audio_tap_f32_bits(target_low), audio_tap_f32_bits(target_high), rate_limit,
+                     attack_frames, release_frames, audio_tap_f32_bits(noise_gate));
     return (n < 0) ? 0 : ((size_t)n < cap ? (size_t)n : cap - 1);
 }

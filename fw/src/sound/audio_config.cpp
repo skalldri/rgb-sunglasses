@@ -20,9 +20,11 @@ BtGattPersistentCharacteristic<"audio/beat_alpha", "Beat Alpha", true, float, 3.
 BtGattPersistentCharacteristic<"audio/beat_refractory_frames", "Beat Refractory Frames", true,
                                uint32_t, 5>
     audioBeatRefractoryFrames;
-BtGattPersistentCharacteristic<"audio/agc_target_low", "AGC Target Low", true, float, 0.005f>
+/* Target defaults retuned in Phase 2 (issue #264) from the ABGT 250 baseline
+ * captures — derivation in DefaultAgcConfigProvider (sound.cpp) and the PR. */
+BtGattPersistentCharacteristic<"audio/agc_target_low", "AGC Target Low", true, float, 0.002f>
     audioAgcTargetLow;
-BtGattPersistentCharacteristic<"audio/agc_target_high", "AGC Target High", true, float, 0.008f>
+BtGattPersistentCharacteristic<"audio/agc_target_high", "AGC Target High", true, float, 0.05f>
     audioAgcTargetHigh;
 BtGattPersistentCharacteristic<"audio/agc_rate_limit_frames", "AGC Rate Limit Frames", true,
                                uint32_t, 10>
@@ -32,11 +34,22 @@ BtGattPersistentCharacteristic<"audio/fft_smoothing_coeff", "FFT Smoothing Coeff
     audioFftSmoothingCoeff;
 BtGattPersistentCharacteristic<"audio/fft_energy_scale", "FFT Energy Scale", true, float, 20.0f>
     audioFftEnergyScale;
+/* Phase 2 AGC tunables (issue #264) — appended AFTER the existing providers:
+ * BtGattServer assigns UUIDs positionally, so appending preserves every
+ * existing characteristic's UUID. */
+BtGattPersistentCharacteristic<"audio/agc_attack_frames", "AGC Attack Frames", true, uint32_t, 3>
+    audioAgcAttackFrames;
+BtGattPersistentCharacteristic<"audio/agc_release_frames", "AGC Release Frames", true, uint32_t,
+                               15>
+    audioAgcReleaseFrames;
+BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", true, float, 0.001f>
+    audioNoiseGateRms;
 
 BtGattServer audioConfigServer(audioConfigPrimaryService, audioFluxGamma, audioBeatFluxFloor,
                                audioBeatAlpha, audioBeatRefractoryFrames, audioAgcTargetLow,
                                audioAgcTargetHigh, audioAgcRateLimitFrames, audioFftSmoothingCoeff,
-                               audioFftEnergyScale);
+                               audioFftEnergyScale, audioAgcAttackFrames, audioAgcReleaseFrames,
+                               audioNoiseGateRms);
 BT_GATT_SERVER_REGISTER(audioConfigServerStatic, audioConfigServer);
 
 // Each getter clamps to a sane range and writes the clamped value back, mirroring
@@ -137,7 +150,18 @@ void AudioConfig::setTargetLow(float value) {
 
 float AudioConfig::getTargetHigh() {
     float value = audioAgcTargetHigh;
-    float clamped = std::clamp(value, 0.001f, 0.2f);
+    /* Clamp range changed with Phase 2's SEMANTIC change: targetHigh is now
+     * compared against INSTANTANEOUS RMS by the attack path (it used to be
+     * smoothed RMS in a symmetric window), so any value below 0.02 is invalid
+     * by construction — real music's p99 instantaneous RMS is ~0.014, and a
+     * stale persisted Phase-1 value (0.008) would make the attack rule fire on
+     * nearly every music frame, ratcheting gain to the -20 dB floor. The
+     * raised clamp FLOOR (0.001 → 0.02) is deliberate settings migration:
+     * already-tuned boards get their stale value corrected on first read via
+     * this getter's write-back, with no boot-ordering hazard. Ceiling widened
+     * 0.2 → 0.5 (targetHigh is a comfort band, not the loudness ceiling —
+     * that's the near-clip peak path). */
+    float clamped = std::clamp(value, 0.02f, 0.5f);
     if (clamped != value) {
         audioAgcTargetHigh = clamped;
     }
@@ -145,9 +169,60 @@ float AudioConfig::getTargetHigh() {
 }
 
 void AudioConfig::setTargetHigh(float value) {
-    audioAgcTargetHigh = std::clamp(value, 0.001f, 0.2f);
+    audioAgcTargetHigh = std::clamp(value, 0.02f, 0.5f);
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
         audioAgcTargetHigh.mark_dirty();
+        persistent_value_store::request_save();
+    }
+}
+
+uint32_t AudioConfig::getAttackFrames() {
+    uint32_t value = audioAgcAttackFrames;
+    uint32_t clamped = std::clamp<uint32_t>(value, 1, 20);
+    if (clamped != value) {
+        audioAgcAttackFrames = clamped;
+    }
+    return clamped;
+}
+
+void AudioConfig::setAttackFrames(uint32_t value) {
+    audioAgcAttackFrames = std::clamp<uint32_t>(value, 1, 20);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioAgcAttackFrames.mark_dirty();
+        persistent_value_store::request_save();
+    }
+}
+
+uint32_t AudioConfig::getReleaseFrames() {
+    uint32_t value = audioAgcReleaseFrames;
+    uint32_t clamped = std::clamp<uint32_t>(value, 1, 100);
+    if (clamped != value) {
+        audioAgcReleaseFrames = clamped;
+    }
+    return clamped;
+}
+
+void AudioConfig::setReleaseFrames(uint32_t value) {
+    audioAgcReleaseFrames = std::clamp<uint32_t>(value, 1, 100);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioAgcReleaseFrames.mark_dirty();
+        persistent_value_store::request_save();
+    }
+}
+
+float AudioConfig::getNoiseGateRms() {
+    float value = audioNoiseGateRms;
+    float clamped = std::clamp(value, 0.0f, 0.02f);
+    if (clamped != value) {
+        audioNoiseGateRms = clamped;
+    }
+    return clamped;
+}
+
+void AudioConfig::setNoiseGateRms(float value) {
+    audioNoiseGateRms = std::clamp(value, 0.0f, 0.02f);
+    if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        audioNoiseGateRms.mark_dirty();
         persistent_value_store::request_save();
     }
 }

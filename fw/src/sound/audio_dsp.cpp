@@ -135,31 +135,6 @@ void audio_dsp_reset_history(void) {
     s_first_frame = true;
 }
 
-float audio_dsp_gain_amplitude_ratio(int steps) {
-    /* Each PDM gain register step = 0.5 dB of amplitude → 10^(0.025·steps).
-     * Precomputed per-step constants instead of powf (float pow/printf support
-     * is compiled out firmware-wide). */
-    const float kStepUp = 1.0592537f;   /* 10^0.025  */
-    const float kStepDown = 0.9440609f; /* 10^-0.025 */
-    float ratio = 1.0f;
-    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
-        ratio *= (steps > 0) ? kStepUp : kStepDown;
-    }
-    return ratio;
-}
-
-float audio_dsp_gain_power_ratio(int steps) {
-    /* Band energy is power (magnitude²): one 0.5 dB amplitude step scales it by
-     * 10^(2·0.5/20) = 10^0.05. */
-    const float kStepUp = 1.1220185f;   /* 10^0.05  */
-    const float kStepDown = 0.8912509f; /* 10^-0.05 */
-    float ratio = 1.0f;
-    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
-        ratio *= (steps > 0) ? kStepUp : kStepDown;
-    }
-    return ratio;
-}
-
 void audio_dsp_compensate_gain_change(int steps) {
     if (steps == 0) {
         return;
