@@ -66,7 +66,8 @@ def main(argv=None):
     # replay's compiled-in defaults (hardware-observed: a device alpha of 1.5 vs
     # the default 3.5 produced 175 spurious beat-mask "mismatches").
     params_mismatch = False
-    for key in ("gamma", "alpha", "floor", "refractory", "gain"):
+    for key in ("gamma", "alpha", "floor", "refractory", "gain", "target_low", "target_high",
+                "rate_limit", "attack", "release", "gate"):
         dv, hv = dev.params.get(key), host.params.get(key)
         if dv is not None and hv is not None and abs(float(dv) - float(hv)) > 1e-6 * max(
                 abs(float(dv)), 1.0):

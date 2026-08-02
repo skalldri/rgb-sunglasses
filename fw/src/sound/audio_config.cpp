@@ -150,9 +150,18 @@ void AudioConfig::setTargetLow(float value) {
 
 float AudioConfig::getTargetHigh() {
     float value = audioAgcTargetHigh;
-    /* Clamp widened 0.2 → 0.5 in Phase 2: targetHigh is now the attack comfort
-     * band, not the loudness ceiling (that's the near-clip peak path). */
-    float clamped = std::clamp(value, 0.001f, 0.5f);
+    /* Clamp range changed with Phase 2's SEMANTIC change: targetHigh is now
+     * compared against INSTANTANEOUS RMS by the attack path (it used to be
+     * smoothed RMS in a symmetric window), so any value below 0.02 is invalid
+     * by construction — real music's p99 instantaneous RMS is ~0.014, and a
+     * stale persisted Phase-1 value (0.008) would make the attack rule fire on
+     * nearly every music frame, ratcheting gain to the -20 dB floor. The
+     * raised clamp FLOOR (0.001 → 0.02) is deliberate settings migration:
+     * already-tuned boards get their stale value corrected on first read via
+     * this getter's write-back, with no boot-ordering hazard. Ceiling widened
+     * 0.2 → 0.5 (targetHigh is a comfort band, not the loudness ceiling —
+     * that's the near-clip peak path). */
+    float clamped = std::clamp(value, 0.02f, 0.5f);
     if (clamped != value) {
         audioAgcTargetHigh = clamped;
     }
@@ -160,7 +169,7 @@ float AudioConfig::getTargetHigh() {
 }
 
 void AudioConfig::setTargetHigh(float value) {
-    audioAgcTargetHigh = std::clamp(value, 0.001f, 0.5f);
+    audioAgcTargetHigh = std::clamp(value, 0.02f, 0.5f);
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
         audioAgcTargetHigh.mark_dirty();
         persistent_value_store::request_save();

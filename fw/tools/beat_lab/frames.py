@@ -93,7 +93,7 @@ def _parse_params(line: str) -> dict:
     out = {}
     for tok in line.split()[1:]:
         key, _, val = tok.partition("=")
-        if key in ("gamma", "alpha", "floor", "target_low", "target_high"):
+        if key in ("gamma", "alpha", "floor", "target_low", "target_high", "gate"):
             out[key] = hex_to_f32(val)
         elif key == "gain":
             out[key] = int(val, 16)

@@ -130,7 +130,9 @@ class EnvAgcProvider : public AgcConfigProvider {
     float getTargetLow() override { return tlow_; }
     void setTargetLow(float v) override { tlow_ = clampf(v, 0.001f, 0.1f); }
     float getTargetHigh() override { return thigh_; }
-    void setTargetHigh(float v) override { thigh_ = clampf(v, 0.001f, 0.5f); }
+    /* Floor 0.02 mirrors the firmware's semantic-migration clamp (see
+     * AudioConfig::setTargetHigh). */
+    void setTargetHigh(float v) override { thigh_ = clampf(v, 0.02f, 0.5f); }
     uint32_t getRateLimitFrames() override { return rate_; }
     void setRateLimitFrames(uint32_t v) override { rate_ = v < 1 ? 1 : (v > 100 ? 100 : v); }
     uint32_t getAttackFrames() override { return attack_; }
@@ -156,8 +158,12 @@ class EnvAgcProvider : public AgcConfigProvider {
             set((uint32_t)strtoul(s, nullptr, 10));
         }
     }
-    float tlow_ = 0.005f;
-    float thigh_ = 0.008f;
+    /* Defaults MUST track DefaultAgcConfigProvider in sound.cpp — a stale copy
+     * here makes `--agc sim` simulate a policy no board runs (PR #279 review:
+     * the old 0.008 targetHigh made the sim ratchet gain to the floor on music
+     * the real firmware holds steady on). */
+    float tlow_ = 0.002f;
+    float thigh_ = 0.05f;
     uint32_t rate_ = 10;
     uint32_t attack_ = 3;
     uint32_t release_ = 15;
@@ -177,11 +183,12 @@ void emit_frame(FILE *out, const struct audio_analysis_result *r, float rms, uin
 }
 
 void emit_params(FILE *out, bool agc_frozen, uint8_t gain, float target_low, float target_high,
-                 uint32_t rate_limit) {
+                 uint32_t rate_limit, uint32_t attack, uint32_t release, float gate) {
     size_t len = audio_tap_format_params(
         sEnvProvider.getFluxGamma(), sEnvProvider.getBeatAlpha(),
         sEnvProvider.getBeatFluxFloor(), sEnvProvider.getBeatRefractoryFrames(), agc_frozen,
-        gain, target_low, target_high, rate_limit, s_line, sizeof(s_line));
+        gain, target_low, target_high, rate_limit, attack, release, gate, s_line,
+        sizeof(s_line));
     fwrite(s_line, 1, len, out);
     fputc('\n', out);
 }
@@ -349,7 +356,8 @@ int run_replay(const char *wav_path) {
 
     audio_dsp_init();
     emit_params(out, !any_sim, gain, agc_cfg.getTargetLow(), agc_cfg.getTargetHigh(),
-                agc_cfg.getRateLimitFrames());
+                agc_cfg.getRateLimitFrames(), agc_cfg.getAttackFrames(),
+                agc_cfg.getReleaseFrames(), agc_cfg.getNoiseGateRms());
 
     /* Legacy-mode sim state — mirrors the pre-Phase-2 inline loop in sound.cpp. */
     float rms_history[32] = {0};

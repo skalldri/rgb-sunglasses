@@ -105,6 +105,9 @@ def main(argv=None):
     ap.add_argument("--target-low", type=float, help="AGC sim targetLow (BEAT_TARGET_LOW)")
     ap.add_argument("--target-high", type=float, help="AGC sim targetHigh (BEAT_TARGET_HIGH)")
     ap.add_argument("--gate", type=float, help="AGC sim noise-gate RMS (BEAT_GATE)")
+    ap.add_argument("--attack", type=int, help="AGC sim attack frames (BEAT_ATTACK)")
+    ap.add_argument("--release", type=int, help="AGC sim release frames (BEAT_RELEASE)")
+    ap.add_argument("--rate-limit", type=int, help="AGC sim min-gap frames (BEAT_RATE_LIMIT)")
     ap.add_argument("--gain", type=lambda s: int(s, 0),
                     help="recording's PDM gain register value (default 0x28)")
     ap.add_argument("--buckets", action="store_true", help="include display buckets")
@@ -133,17 +136,26 @@ def main(argv=None):
             sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
             from tools.beat_lab import frames
         p = frames.parse_dump(args.params_from).params
+        # Copy EVERY parameter the #PARAMS line carries — omitting any of them
+        # makes the replay trajectory silently diverge from the device's.
         for attr, key in [("gamma", "gamma"), ("alpha", "alpha"), ("floor", "floor"),
-                          ("refractory", "refractory"), ("gain", "gain")]:
+                          ("refractory", "refractory"), ("gain", "gain"),
+                          ("target_low", "target_low"), ("target_high", "target_high"),
+                          ("rate_limit", "rate_limit"), ("attack", "attack"),
+                          ("release", "release"), ("gate", "gate")]:
             if getattr(args, attr) is None and key in p:
                 setattr(args, attr, p[key])
+        gain_str = "-" if args.gain is None else f"{args.gain:#04x}"
         print(f"# params from {args.params_from}: gamma={args.gamma} alpha={args.alpha} "
-              f"floor={args.floor} refractory={args.refractory} gain={args.gain:#04x}",
+              f"floor={args.floor} refractory={args.refractory} gain={gain_str} "
+              f"targets=[{args.target_low},{args.target_high}] rate={args.rate_limit} "
+              f"attack={args.attack} release={args.release} gate={args.gate}",
               file=sys.stderr)
 
     fixed = dict(gamma=args.gamma, alpha=args.alpha, floor=args.floor,
                  refractory=args.refractory, agc=args.agc, gain=args.gain,
-                 target_low=args.target_low, target_high=args.target_high, gate=args.gate)
+                 target_low=args.target_low, target_high=args.target_high, gate=args.gate,
+                 attack=args.attack, release=args.release, rate_limit=args.rate_limit)
 
     if not args.sweep:
         lines = run_replay(args.wav, buckets=args.buckets, **fixed)

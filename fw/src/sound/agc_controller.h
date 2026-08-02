@@ -16,11 +16,23 @@
  *    frames → −1 step (subject to the min-gap).
  *  - Release: smoothed (1 s) RMS below targetLow for releaseFrames consecutive
  *    frames → +1 step (subject to the min-gap), never while silent.
- *  - Silence hold: smoothed RMS below noiseGateRms → hold gain (a quiet room
- *    must not ramp to +20 dB amplifying the mic's own noise — the issue #264
- *    complaint); after ~10 s of sustained silence, drift one step every ~2 s
- *    toward the 0 dB park value so the next song starts from a sane gain.
+ *  - Silence hold: INPUT-REFERRED smoothed RMS below noiseGateRms → hold gain
+ *    (a quiet room must not ramp to +20 dB amplifying the mic's own noise —
+ *    the issue #264 complaint); after ~10 s of sustained silence, drift one
+ *    step every ~2 s toward the 0 dB park value so the next song starts from a
+ *    sane gain.
  *  - The `silent` flag also lets the caller suppress beat output entirely.
+ *
+ * DELIBERATE TRADE-OFF: because the gate is input-referred (gain-invariant),
+ * a source quieter than noiseGateRms at the input is never chased — no amount
+ * of AGC gain changes its verdict, so release stays blocked and beats stay
+ * suppressed. This is the point: "chasing" such sources is exactly what
+ * amplified mic noise into false beats (hardware-measured: +20 dB and 711
+ * noise-beats/90 s in a quiet room). The margin between room noise (~0.0006
+ * input-referred) and barely-audible music (~0.0008) is genuinely thin — no
+ * threshold separates them robustly. For high-sensitivity environments, lower
+ * the gate at runtime, or set it to 0 to disable gating entirely and restore
+ * the pre-Phase-2 chase behavior.
  */
 
 #include <stdint.h>
