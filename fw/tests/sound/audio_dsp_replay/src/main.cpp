@@ -18,11 +18,15 @@
  *    BEAT_OUT         output path (default: stdout)
  *    BEAT_GAMMA/BEAT_ALPHA/BEAT_FLOOR/BEAT_REFRACTORY
  *                     DSP params (default: firmware defaults)
- *    BEAT_AGC         off|sim (default off). "off" = fixed gain, matches a
- *                     freeze-gain device recording. "sim" = mirror the AGC
- *                     loop in sound.cpp (32-frame RMS window, target window,
- *                     rate limit, history reset on step), applying gain
- *                     digitally relative to the recording gain.
+ *    BEAT_AGC         off|sim|sim_reset (default off). "off" = fixed gain,
+ *                     matches a freeze-gain device recording. "sim" = mirror
+ *                     the AGC loop in sound.cpp (32-frame RMS window, target
+ *                     window, rate limit, gain-step COMPENSATION via
+ *                     audio_dsp_compensate_gain_change), applying gain
+ *                     digitally relative to the recording gain. "sim_reset" =
+ *                     the pre-Phase-1 behavior (full history reset per step),
+ *                     kept so Phase 1's improvement is A/B-measurable offline
+ *                     on the same WAV.
  *    BEAT_GAIN        recording's PDM gain register value (default 0x28);
  *                     sim mode starts from here
  *    BEAT_TARGET_LOW/BEAT_TARGET_HIGH/BEAT_RATE_LIMIT
@@ -247,9 +251,11 @@ int run_replay(const char *wav_path) {
     }
 
     const char *agc_env = getenv("BEAT_AGC");
-    const bool agc_sim = (agc_env != nullptr && strcmp(agc_env, "sim") == 0);
+    const bool agc_legacy_reset = (agc_env != nullptr && strcmp(agc_env, "sim_reset") == 0);
+    const bool agc_sim =
+        agc_legacy_reset || (agc_env != nullptr && strcmp(agc_env, "sim") == 0);
     if (agc_env != nullptr && !agc_sim && strcmp(agc_env, "off") != 0) {
-        fprintf(stderr, "replay: BEAT_AGC must be off|sim\n");
+        fprintf(stderr, "replay: BEAT_AGC must be off|sim|sim_reset\n");
         free(wav.samples);
         return 1;
     }
@@ -301,8 +307,17 @@ int run_replay(const char *wav_path) {
             memcpy(block, &wav.samples[off], sizeof(block));
         }
 
+        float rms = compute_rms(block, AUDIO_FFT_SIZE);
+
+        /* Process FIRST, decide after — the same ordering as the fixed
+         * firmware loop: this block is in the current gain domain, and a step
+         * decided now only affects the NEXT block's digital scaling (in
+         * hardware, the next DMA block). Emit before the step too, so the
+         * D-line's gain column is the gain this block was "captured" at. */
+        audio_dsp_process(block, seq++, &result);
+        emit_frame(out, &result, rms, gain, buckets);
+
         if (agc_sim) {
-            float rms = compute_rms(block, AUDIO_FFT_SIZE);
             rms_history[rms_idx] = rms;
             rms_idx = (uint8_t)((rms_idx + 1) % 32);
             float smoothed = 0.0f;
@@ -313,27 +328,37 @@ int run_replay(const char *wav_path) {
 
             frames_since++;
             if ((uint32_t)frames_since >= rate_limit) {
-                bool changed = false;
+                int step = 0;
                 if (smoothed < target_low && gain < 0x50) {
                     gain++;
-                    changed = true;
+                    step = 1;
                 } else if (smoothed > target_high && gain > 0x00) {
                     gain--;
-                    changed = true;
+                    step = -1;
                 }
-                if (changed) {
-                    /* Mirrors the firmware's current behavior (full history reset per
-                     * gain step) so the replay reproduces the AGC/detector interaction
-                     * under investigation. */
-                    audio_dsp_reset_history();
+                if (step != 0) {
+                    /* BOTH modes rescale the RMS window so their AGC
+                     * trajectories are identical on the same WAV — the A/B then
+                     * isolates the ONLY intended difference (detector-history
+                     * handling); previously sim_reset skipped the rescale and
+                     * the two modes fed different PCM into the detector. */
+                    float amp = audio_dsp_gain_amplitude_ratio(step);
+                    for (int i = 0; i < 32; i++) {
+                        rms_history[i] *= amp;
+                    }
+                    if (agc_legacy_reset) {
+                        /* Pre-Phase-1 firmware behavior: full history reset per
+                         * gain step — kept for offline A/B against the fix. */
+                        audio_dsp_reset_history();
+                    } else {
+                        /* Mirrors the firmware: carry detector state across the
+                         * step (audio_dsp_compensate_gain_change). */
+                        audio_dsp_compensate_gain_change(step);
+                    }
                     frames_since = 0;
                 }
             }
         }
-
-        float rms = compute_rms(block, AUDIO_FFT_SIZE);
-        audio_dsp_process(block, seq++, &result);
-        emit_frame(out, &result, rms, gain, buckets);
     }
 
     fprintf(out, "#DONE frames=%u dropped=0\n", seq);
