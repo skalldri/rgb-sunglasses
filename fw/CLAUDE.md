@@ -61,6 +61,19 @@ twister -T fw/tests/animations/animation_registry -p native_sim
 
 Commands above are relative to the repo root (or worktree root) — always run them from there, not from inside `fw/`.
 
+**Agent sessions: the shell cwd PERSISTS across tool calls, and a stale cwd makes
+these commands fail in ways that look like success.** Observed 2026-08-02 (three
+times in one session): `west build ... fw` from inside `fw/` prints `ERROR: fw
+doesn't contain a CMakeLists.txt` yet the wrapping command can still exit 0; a
+backgrounded `twister -T fw/tests` from inside `fw/` dies with "No testsuites
+found" while a **stale** `fw/twister-out/twister.json` from the previous run reads
+as a plausible all-green result; `pytest tools/tests/` collects zero tests. Rules:
+prefix every `west`/`twister`/`pytest` invocation with an explicit
+`cd /workspaces/rgb-sunglasses &&` (never rely on a previous call's cwd, especially
+for `run_in_background` commands, which capture the cwd at launch); after any
+supposedly-green re-run, verify freshness (artifact mtime, or a suite/test-count
+that reflects what was just added) before trusting it.
+
 ### An incremental build IGNORES a changed Kconfig `default`
 
 Zephyr loads the existing `fw/build/fw/zephyr/.config` as the **base** for each configure pass, so editing a `default` in `fw/Kconfig` (or a driver `Kconfig`) and rebuilding incrementally silently keeps the **old** value. The build succeeds, so nothing warns you — verified 2026-08-01 while retuning thread priorities for issue #267: `default 3` → `default 2` rebuilt clean and `autoconf.h` still read `3`, and the flashed board ran the old priority.

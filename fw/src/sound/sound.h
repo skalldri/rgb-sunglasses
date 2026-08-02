@@ -3,34 +3,15 @@
 
 #include <cstdint>
 
+/* AgcConfigProvider moved to agc_controller.h (issue #264 Phase 2) so the
+ * Zephyr-free AgcController and its native_sim/replay consumers can see it
+ * without dragging in this header's kernel dependencies. The seam rationale
+ * (decoupling sound.cpp from the BT/Settings-backed implementation, with both
+ * getters and setters for the "sound agc" shell commands) is documented there. */
+#include "agc_controller.h"
 #include "audio_dsp.h"
 
 extern struct k_msgq audio_result_q;
-
-/**
- * @brief Runtime-tunable AGC parameters. Decouples sound.cpp from any concrete
- * BT/Settings-backed implementation - see AudioDspConfigProvider in audio_dsp.h for the
- * full rationale (same seam, applied to the AGC loop + its shell commands instead of
- * audio_dsp_process()). Like AudioDspConfigProvider, this interface has setters:
- * the existing "sound agc target-low/target-high/rate" shell commands both read *and*
- * write through whichever provider is currently set.
- */
-class AgcConfigProvider {
-   public:
-    virtual ~AgcConfigProvider() = default;
-
-    /** Increase gain when smoothed RMS falls below this. */
-    virtual float getTargetLow() = 0;
-    virtual void setTargetLow(float value) = 0;
-
-    /** Decrease gain when smoothed RMS exceeds this. */
-    virtual float getTargetHigh() = 0;
-    virtual void setTargetHigh(float value) = 0;
-
-    /** Minimum frames between gain adjustments. */
-    virtual uint32_t getRateLimitFrames() = 0;
-    virtual void setRateLimitFrames(uint32_t value) = 0;
-};
 
 /**
  * @brief Sets the provider the AGC loop and shell commands read/write through.

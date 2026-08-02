@@ -7,5 +7,6 @@ project(audio_dsp_replay)
 # on-device — see fw/docs/beat-detection-debugging.md for the workflow.
 target_sources(app PRIVATE src/main.cpp)
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/sound/audio_dsp.cpp)
+target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/sound/agc_controller.cpp)
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src)
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/sound)

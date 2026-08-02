@@ -40,6 +40,12 @@ class AudioConfig : public Singleton<AudioConfig>,
     void setTargetHigh(float value) override;
     uint32_t getRateLimitFrames() override;
     void setRateLimitFrames(uint32_t value) override;
+    uint32_t getAttackFrames() override;
+    void setAttackFrames(uint32_t value) override;
+    uint32_t getReleaseFrames() override;
+    void setReleaseFrames(uint32_t value) override;
+    float getNoiseGateRms() override;
+    void setNoiseGateRms(float value) override;
 
     // FftVisualizationConfigSource
     float getSmoothingCoeff() const override;
