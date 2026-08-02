@@ -1,6 +1,6 @@
 # Beat detection & AGC (issue #264): Phase 3+ handoff plan
 
-**Status date: 2026-08-02.** This document is a complete handoff for continuing
+**Status date: 2026-08-02 (revised same day, after Phases 1-3 merged).** This document is a complete handoff for continuing
 issue #264. It assumes the reader has NO prior session context. Read this fully
 before writing code, alongside `fw/CLAUDE.md` (workflow traps) and
 `fw/docs/beat-detection-debugging.md` (the measurement rig's user guide).
@@ -30,10 +30,21 @@ before writing code, alongside `fw/CLAUDE.md` (workflow traps) and
   `test_gain_compensation_misordered_is_harmful` ztest. On-device result:
   threshold-history retention across a gain step went from 3% to 98–102%.
 
+- **PR #281 — Phase 3: threshold shape + alpha retune (MERGED).** Added a
+  runtime threshold-mode switch (0 = `mean + α·σ`, 1 = `median + sf_delta`) and
+  retuned the shipped `beat_alpha` **3.5 → 0.3**, which was the actual win —
+  band-0 F roughly tripled. Mode 1 ships **defaulted off**: it wins per-clip but
+  loses on the single-shared-setting criterion, because `sf_delta` is an
+  absolute offset while per-band flux scales differ >20×. Also **rejected by
+  measurement**: moving band 0 off bin 1 (cost F on every clip) and a floor
+  retune (floor is provably inert). See §5's OUTCOME block.
+
 ### Open
 
-- **PR #279 — Phase 2: AgcController** (branch `beat-phase2-agc`, rebased onto
-  main, MERGEABLE, review round 1 fully addressed). Extracts AGC decision logic
+- **Nothing is open.** Phases 1-3 are all merged. **Read §5.5 for what to do
+  next** — the priority order changed after a field report.
+
+- **PR #279 — Phase 2: AgcController (MERGED).** Extracts AGC decision logic
   into BT-free/Zephyr-free `fw/src/sound/agc_controller.{h,cpp}` compiled
   identically into firmware + unit suite (`fw/tests/sound/agc`) + replay
   harness. Policy: near-clip fast path (peak ≥ 32000 → −2 steps, no rate
@@ -42,11 +53,8 @@ before writing code, alongside `fw/CLAUDE.md` (workflow traps) and
   silent), **input-referred noise gate** (smoothed RMS normalized to 0 dB park
   gain; silence → hold gain, suppress all `beat[]` output, park to 0 dB after
   ~10 s). Targets derived from captures: targetLow 0.002, targetHigh 0.05,
-  gate 0.001. Hardware-verified 4/4 tests (see §4 numbers).
-  - If #279 has merged by the time you read this: branch Phase 3 off `main`.
-  - If still open: stack Phase 3 on `beat-phase2-agc` and expect the same
-    post-squash-merge rebase dance (`git rebase --onto origin/main
-    <old-base-ref> <branch>`; it has been needed after every squash merge).
+  gate 0.001. Hardware-verified 4/4 tests (see §4 numbers). **That gate default
+  is now known to be too high for normal-volume music — see §5.5.1.**
 
 ### The problem, one paragraph
 
@@ -72,12 +80,19 @@ All in `fw/src/sound/`:
 | `audio_config.{h,cpp}` | BT/settings-backed provider (12 persistent characteristics under `audio/`). NOTE `getTargetHigh` clamps to **[0.02, 0.5]** as deliberate settings *migration* — the raised floor corrects stale Phase-1 values whose semantics changed. Follow this pattern if Phase 3 changes a key's meaning. |
 | `audio_tap_format.h` | Shared D-line/#PARAMS text format (firmware + replay + `frames.py` decoder must stay in sync — this header is the single source of truth for field order). |
 
-Runtime tunables (BLE `audio/` keys + `sound dsp` / `sound agc` shell):
-`flux_gamma` 1000, `beat_flux_floor` 0.005 (provably inert — see §4),
-`beat_alpha` 3.5 (device currently has **1.5 persisted** — see the caveat in
-§6), `beat_refractory_frames` 5, `agc_target_low` 0.002, `agc_target_high`
-0.05, `agc_rate_limit_frames` 10, `agc_attack_frames` 3,
-`agc_release_frames` 15, `noise_gate_rms` 0.001, plus 2 FFT-display values.
+Runtime tunables (BLE `audio/` keys + `sound dsp` / `sound agc` shell), **as of
+Phase 3**: `flux_gamma` 1000, `beat_flux_floor` 0.005 (provably inert — see §4),
+`beat_alpha` **0.3** (retuned from 3.5 in Phase 3; the shared dev board also has
+0.3 persisted), `beat_refractory_frames` 5, `sf_delta` 0.10 and
+`threshold_mode` **0** (Phase 3, mode 1 = median+delta available but not
+default), `agc_target_low` 0.002, `agc_target_high` 0.05,
+`agc_rate_limit_frames` 10, `agc_attack_frames` 3, `agc_release_frames` 15,
+`noise_gate_rms` 0.001 (**suspect — see §5.5.1**), plus 2 FFT-display values.
+14 persistent characteristics under `audio/`.
+
+**Persisted values override compiled defaults on a provisioned board.** After
+any default change, set it explicitly via `sound dsp set` before testing, or you
+will measure the old value.
 
 ---
 
@@ -115,10 +130,23 @@ The AGC closed loop is also simulated offline: `--agc sim` runs the REAL
 behaviors for A/B chains. All sim modes share the gain trajectory so A/Bs
 isolate a single variable.
 
-### CRITICAL: the capture corpus is ephemeral
+### The capture corpus (updated after Phase 3)
 
-All captures so far lived in the session scratchpad, WHICH IS GONE. The clips
-are NOT precious — the rig regenerates everything in minutes with any music.
+A corpus now lives at **`fw/testdata/beat-corpus/`** — 5 clips recorded
+2026-08-02 (`base60`, `loud30`, `newbase`, `quiet40`, `verify30`; see the table
+in `fw/docs/beat-detection-debugging.md`). It is **gitignored by deliberate
+decision of the repo owner**, so it survives across sessions on this machine but
+is absent from every fresh checkout, and the numbers in this document are
+re-derivable but not re-runnable by someone else. `phase3_table.py` checks for
+the clips up front and points at the record workflow rather than failing deep in
+a run.
+
+If the directory is empty, re-record — it takes minutes with any music. Note
+§5.5.2's prerequisite: the current 5 clips are too few (and too same-y — two are
+the same track) to tune a tempo tracker.
+
+Historical note: the original captures lived in a session scratchpad and were
+lost, which is why this section used to say the corpus was ephemeral.
 **First hardware session of Phase 3: record a fresh corpus** (recommended: one
 60 s frozen-gain EDM clip at moderate volume for the primary baseline, one 40 s
 quiet-room unfrozen, one 30 s at a different volume/genre). Consider committing
@@ -274,6 +302,156 @@ evidence. Expected size ~120 LOC + 2 characteristics + tests + sweeps.
 
 ---
 
+## 5.5 WHAT TO DO NEXT (added 2026-08-02, after Phase 3 merged)
+
+**Phases 1-3 are merged** (PRs #277, #279, #281). Read this section before §6:
+it re-orders the remaining work based on a field report plus measurements the
+earlier phases could not have had.
+
+### 5.5.1 ~~TOP PRIORITY~~ **DONE — see PR #283** — the noise gate was suppressing real music
+
+> **RESOLVED (2026-08-02, PR #283).** Shipped as two default changes:
+> `noise_gate_rms` **0.0010 → 0.0006** and `beat_flux_floor` **0.005 → 0.08**.
+> The new configuration **dominates** the old one on every corpus clip — quiet
+> music F 0.088 → 0.195, base60 0.282 → 0.291, loud30 0.280 → 0.291, newbase
+> 0.293 → 0.348, and the quiet room got *quieter* (2 → 1 beats/40 s). Confirmed
+> on hardware by the repo owner watching the Beat animation.
+>
+> Two findings worth carrying forward:
+>
+> 1. **The flux floor is no longer inert, and that is a consequence of Phase 3.**
+>    §4 records it as provably inert (identical fire counts 0.005–0.105) — true
+>    at alpha 3.5, false at 0.3. A lower adaptive threshold lets small
+>    noise-flux events through, and an absolute, scale-fixed floor is the right
+>    tool against them. Raising it to 0.08 cut quiet-room beats 4 → 1 per 40 s at
+>    **zero** cost to any music clip; above 0.08 it starts clipping real beats.
+>    A ztest (`test_flux_floor_rejects_small_onsets`) now pins this so the old
+>    "the floor does nothing" conclusion can't be re-applied.
+> 2. **The structural fix proposed below was evaluated and REJECTED.** Removing
+>    beat suppression entirely (keeping only the gain hold) gives **219**
+>    quiet-room beats — the flux threshold alone cannot reject room noise at
+>    alpha 0.3. A separate, lower beat gate measured within noise of simply
+>    lowering the single threshold, so it was not worth a second characteristic,
+>    a `#PARAMS` field across six consumers, and another knob.
+>
+> The analysis below is kept as the record of how the problem was found.
+
+### The original analysis
+
+**Field symptom (reported by the repo owner, 2026-08-02):** with music playing
+the glasses sometimes do not react at all, and turning the volume up fixes it.
+
+This is NOT a threshold or timing problem. It is the Phase 2 input-referred
+noise gate (`audio/noise_gate_rms`, default 0.0010) suppressing **all** `beat[]`
+output. Measured over the corpus, as smoothed input-referred RMS — the exact
+quantity the gate compares against:
+
+| Clip | Condition | p5 | p50 | p95 | frames below the 0.0010 gate |
+|---|---|---|---|---|---|
+| `quiet40` | quiet room | 0.00013 | 0.00017 | 0.00049 | 98.3% (correct) |
+| `verify30` | **music, normal volume** | 0.00061 | 0.00099 | 0.00114 | **52.9%** |
+| `newbase` | music | 0.00092 | 0.00129 | 0.00248 | 11.3% |
+| `base60` | music | 0.00094 | 0.00146 | 0.00170 | 7.5% |
+| `loud30` | music, volume raised | 0.00299 | 0.00322 | 0.00354 | 0.0% |
+
+The gate threshold sits **above the bottom half of real music**: quiet-room p95
+is 0.00049 while music p5 is 0.00061-0.00094. Over half of a normal-volume
+capture is gated off entirely, and raising the volume lifts the signal clear —
+precisely the reported symptom. §8 item 7 predicted this trade-off ("glasses
+don't react to quiet TV ... it's a knob, not a bug"); the field report says the
+knob is simply set wrong for normal listening levels.
+
+**Do this before any Phase 4/5 work.** It is a parameter change plus
+measurement (hours, not days), it is fully measurable offline against the
+existing corpus with `--agc sim`, and it addresses the actual complaint. Points
+to consider while doing it:
+
+- The obvious move is lowering `noise_gate_rms` to ~0.0006. Careful: room noise
+  is NOT stationary across sessions (§4 records 0.00057-0.0016 input-referred on
+  earlier nights, versus p95 0.00049 in `quiet40`). A single global threshold
+  may not separate "quiet room" from "quiet music" at all — the distributions
+  genuinely overlap.
+- Better structural fix to evaluate: the gate currently does two jobs — (a) hold
+  the AGC gain so it stops chasing room noise, and (b) suppress `beat[]` output.
+  Only (a) needs to be conservative. Decoupling them (keep the gain hold, drop
+  or greatly lower the beat suppression, and let the flux threshold + floor
+  reject noise on their own) would likely fix quiet music without reopening the
+  quiet-room false-beat problem Phase 2 solved. Measure both options against
+  `quiet40` (must stay at 0 beats) and the music clips.
+- Whatever ships, re-verify `quiet40` shows **zero** beats — that is Phase 2's
+  success criterion and issue #264's criterion (a).
+
+### 5.5.2 Phase 5 feasibility — prototyped offline, results mixed
+
+Autocorrelation tempo induction was prototyped in Python against the corpus
+before committing to firmware. Findings that change the §6 plan:
+
+1. **§6's tau range is wrong for this hardware.** It specifies `tau in [37,125]`,
+   which assumes a 125 Hz ODF (`fw/docs/audio-fft.md` Level 4 says the same).
+   Our ODF runs at **31.25 Hz** (512-sample hop, no overlap), so the correct
+   range is **`tau in [9, 31]`** for 200-60 BPM. Anyone building to the old
+   numbers will search entirely the wrong band.
+2. **It works, and 31.25 Hz is sufficient** — with parabolic interpolation of
+   the autocorrelation peak, which is needed because integer lags quantize to
+   7-8 BPM at EDM tempos. With a realistic 4 s window updating every 250 ms:
+   `base60` 82% of windows within 5 BPM of truth, `loud30` 100%.
+3. **The ACF peak height is a well-separated confidence signal**: 0.45-0.56 when
+   the estimate is right, 0.17-0.18 when wrong. This is the piece §6 lacked —
+   phase locking must be **gated** on it, falling back to current per-onset
+   behavior when confidence is low. A wrong beat grid looks far worse to a human
+   than no grid.
+4. **One of three clips cannot be tempo-tracked at all.** `newbase`'s band-0 ACF
+   is flat (top peaks 0.105/0.102/0.093; the true tau=12 is not even top-5). The
+   120 BPM log-Gaussian prior was suspected and **exonerated** — removing it
+   changes nothing. That clip's ODF simply is not periodic enough.
+
+**Prerequisite before Phase 5:** expand the corpus. Three clips, two of which
+are the same track, is too thin to tune a tempo tracker — finding 4 is exactly
+how that bites. Target 6-8 clips spanning 100-160 BPM, genre, and kick
+prominence.
+
+**If Phase 5 proceeds, split it:**
+- **5a — induction only.** ACF + interpolation + confidence, BPM and confidence
+  exposed via a characteristic and `sound dsp`. **No change to beat firing.**
+  Standalone observability win, fully testable offline, de-risks 5b.
+- **5b — confidence-gated phase locking.** Below threshold, behave exactly as
+  today.
+
+### 5.5.3 Honest cost/benefit on Phase 5
+
+Recorded so the next session does not re-litigate it:
+
+- The F-score plateau (0.29-0.38) is **partly a measurement artifact**. The
+  reference is librosa's beat tracker, not human annotation, and the window is
+  +/-50 ms. `base60` scores F=0.29 while a human observer already describes beat
+  matching as improved. Chasing F is not the same as chasing perceived quality,
+  and nothing in this project has yet validated that they correlate here.
+- Phase 5 is the **largest remaining item** by far, and 1 of 3 corpus clips
+  cannot be tracked at all — so it would ship as "helps on strongly periodic
+  music, inert otherwise".
+- After Phase 3, the owner's remaining complaint was **not** timing — it was the
+  detector not firing at all (see 5.5.1). Sensitivity, not phase.
+
+**Recommendation: fix the gate (5.5.1), then re-assess perceptually before
+starting Phase 5.** If the glasses look locked to the music once they stop
+dropping out, Phase 5 may not be worth its cost. Decide with fresh eyes and, if
+possible, a human A/B rather than an F-score.
+
+> **UPDATE (2026-08-02):** the gate fix shipped (PR #283) and the repo owner's
+> perceptual verdict on the result was **"this looks pretty good to me"** —
+> assessed by watching the Beat animation with music, which is issue #264's
+> actual criterion rather than the F-score proxy.
+>
+> **So Phase 5 is NOT currently justified.** It remains the largest open item,
+> it helps only on strongly periodic music (1 of 3 corpus clips could not be
+> tempo-tracked at all), and the symptom that motivated re-opening this work is
+> now fixed by two parameter changes. Start Phase 5 only if a *new* observation
+> says timing specifically is the problem — e.g. "it fires steadily but on the
+> wrong beats" or "it drifts against the music" — not merely because the
+> F-scores are still ~0.3. Nothing has established that F at ±50 ms tracks
+> perceived quality on this device, and the one time both were measured they
+> disagreed.
+
 ## 6. PHASE 4 + 5 — timing (after Phase 3)
 
 The baseline data says this matters more than originally weighted: at the
@@ -305,7 +483,9 @@ detector fires on assorted onsets, not the beat grid. Two stages:
    > detector then turns out to be resolution-limited.
 2. **Phase 5 — tempo/beat-grid tracking** (the likely real fix for "in time
    with the music"): autocorrelation over a ~4 s ODF ring every ~250 ms,
-   τ ∈ [37, 125] @ 31.25 Hz (200–60 BPM), log-Gaussian prior at 120 BPM;
+   **τ ∈ [9, 31] @ 31.25 Hz** (200–60 BPM — the τ ∈ [37, 125] originally written
+   here, and in `fw/docs/audio-fft.md` Level 4, assumes a 125 Hz ODF and is
+   WRONG for this firmware; see §5.5.2), log-Gaussian prior at 120 BPM;
    predicted-beat phase gates/aligns the raw detections. Design NOT yet
    detailed — write a design section (or mini plan doc) before implementing,
    and re-read `fw/docs/audio-fft.md` Phase 5 + the references there
@@ -366,10 +546,13 @@ the expensive ones):
    Phase 3.
 6. Near-clip fast path has never fired at real festival SPL (unit-tested
    only) — worth one deliberately-loud test someday.
-7. The input-referred noise gate deliberately never chases sources below the
+7. ~~The input-referred noise gate deliberately never chases sources below the
    gate at input (documented trade-off; `sound agc gate 0` = escape hatch).
    If the user reports "glasses don't react to quiet TV", this is why — it's
-   a knob, not a bug.
+   a knob, not a bug.~~ **PROMOTED TO TOP PRIORITY — see §5.5.1.** This
+   prediction came true in the field, but for *normal-volume music*, not just
+   quiet TV: 52.9% of a normal-volume capture is below the gate. The knob is
+   set wrong, and it is no longer a "non-blocking" follow-up.
 
 ## 9. Success criteria for issue #264 overall
 
