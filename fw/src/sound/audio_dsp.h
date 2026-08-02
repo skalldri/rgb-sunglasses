@@ -95,6 +95,18 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
 void audio_dsp_reset_history(void);
 
 /**
+ * @brief Amplitude (RMS-domain) scale factor for a PDM gain change of `steps`
+ * register steps: 10^(0.025·steps). One register step = 0.5 dB of amplitude —
+ * this pair of helpers is the single authoritative encoding of that fact;
+ * every consumer (detector compensation, AGC RMS-window rescale, the replay
+ * simulator) must use them instead of re-deriving constants.
+ */
+float audio_dsp_gain_amplitude_ratio(int steps);
+
+/** @brief Power (energy/magnitude²-domain) scale factor: 10^(0.05·steps). */
+float audio_dsp_gain_power_ratio(int steps);
+
+/**
  * @brief Make flux continuous across a PDM gain change of `steps` register
  * steps (signed; 1 step = 0.5 dB amplitude), instead of resetting history.
  *
@@ -103,7 +115,11 @@ void audio_dsp_reset_history(void);
  * statistics, and refractory counters survive. |steps| > 4 (a > 2 dB jump, e.g.
  * a manual "sound agc gain" change) falls back to audio_dsp_reset_history().
  *
- * Call AFTER writing the new gain to the hardware, before processing the next
- * block captured at the new gain.
+ * ORDERING CONTRACT: call AFTER processing the last block captured at the OLD
+ * gain and after writing the new gain to the hardware — i.e. between
+ * audio_dsp_process() of the pre-step block and of the first post-step block.
+ * Calling it before processing an old-gain block injects a false flux of
+ * ln(10^(0.05·|steps|)) ≈ 0.115/step on that frame (a spurious beat per gain
+ * step — the exact failure this API exists to remove).
  */
 void audio_dsp_compensate_gain_change(int steps);

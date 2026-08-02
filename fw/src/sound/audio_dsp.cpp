@@ -135,6 +135,31 @@ void audio_dsp_reset_history(void) {
     s_first_frame = true;
 }
 
+float audio_dsp_gain_amplitude_ratio(int steps) {
+    /* Each PDM gain register step = 0.5 dB of amplitude → 10^(0.025·steps).
+     * Precomputed per-step constants instead of powf (float pow/printf support
+     * is compiled out firmware-wide). */
+    const float kStepUp = 1.0592537f;   /* 10^0.025  */
+    const float kStepDown = 0.9440609f; /* 10^-0.025 */
+    float ratio = 1.0f;
+    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
+        ratio *= (steps > 0) ? kStepUp : kStepDown;
+    }
+    return ratio;
+}
+
+float audio_dsp_gain_power_ratio(int steps) {
+    /* Band energy is power (magnitude²): one 0.5 dB amplitude step scales it by
+     * 10^(2·0.5/20) = 10^0.05. */
+    const float kStepUp = 1.1220185f;   /* 10^0.05  */
+    const float kStepDown = 0.8912509f; /* 10^-0.05 */
+    float ratio = 1.0f;
+    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
+        ratio *= (steps > 0) ? kStepUp : kStepDown;
+    }
+    return ratio;
+}
+
 void audio_dsp_compensate_gain_change(int steps) {
     if (steps == 0) {
         return;
@@ -146,20 +171,21 @@ void audio_dsp_compensate_gain_change(int steps) {
         audio_dsp_reset_history();
         return;
     }
-    /* Each PDM gain register step = 0.5 dB of AMPLITUDE; band energy is power
-     * (magnitude²), so one step scales energy by 10^(2·0.5/20) = 10^0.05.
-     * Precomputed constants instead of powf — the DSP thread runs per frame. */
-    const float32_t kStepUp = 1.1220185f;   /* 10^0.05  */
-    const float32_t kStepDown = 0.8912509f; /* 10^-0.05 */
-    float32_t ratio = 1.0f;
-    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
-        ratio *= (steps > 0) ? kStepUp : kStepDown;
-    }
     /* Scale ONLY the previous-frame energy into the new gain domain so the next
-     * flux difference is gain-continuous. The flux history ring and refractory
-     * counters stay untouched: flux values are log-domain differences (≈ gain-
-     * invariant), and wiping them is exactly what used to collapse the adaptive
-     * threshold after every step (issue #264). */
+     * flux difference is gain-continuous. Wiping it (the pre-Phase-1 behavior)
+     * is what collapsed the adaptive threshold after every step (issue #264).
+     *
+     * The flux history ring and refractory counters stay untouched. Caveat
+     * (regime-dependent): flux values are gain-invariant only where γ·E ≫ 1 —
+     * in quiet passages (γ·E ≲ 1, upper bands especially) log1p is nearly
+     * linear and retained history entries are effectively in the old gain
+     * domain, biasing mean+ασ low by up to ~1.4× after 3 rapid up-steps.
+     * Accepted because: steps are ±1 and rate-limited (≥320 ms apart, so the
+     * ring largely refreshes between steps); the Phase 2 AGC's noise gate stops
+     * exactly the quiet-regime stepping that triggers this; and the Phase 3
+     * median threshold is robust to a biased tail. Revisit if quiet-intro false
+     * positives persist after Phases 2-3. */
+    float32_t ratio = audio_dsp_gain_power_ratio(steps);
     for (int b = 0; b < NUM_BANDS; b++) {
         s_prev_energy[b] *= ratio;
     }

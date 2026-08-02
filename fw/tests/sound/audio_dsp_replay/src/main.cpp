@@ -307,8 +307,17 @@ int run_replay(const char *wav_path) {
             memcpy(block, &wav.samples[off], sizeof(block));
         }
 
+        float rms = compute_rms(block, AUDIO_FFT_SIZE);
+
+        /* Process FIRST, decide after — the same ordering as the fixed
+         * firmware loop: this block is in the current gain domain, and a step
+         * decided now only affects the NEXT block's digital scaling (in
+         * hardware, the next DMA block). Emit before the step too, so the
+         * D-line's gain column is the gain this block was "captured" at. */
+        audio_dsp_process(block, seq++, &result);
+        emit_frame(out, &result, rms, gain, buckets);
+
         if (agc_sim) {
-            float rms = compute_rms(block, AUDIO_FFT_SIZE);
             rms_history[rms_idx] = rms;
             rms_idx = (uint8_t)((rms_idx + 1) % 32);
             float smoothed = 0.0f;
@@ -328,28 +337,28 @@ int run_replay(const char *wav_path) {
                     step = -1;
                 }
                 if (step != 0) {
+                    /* BOTH modes rescale the RMS window so their AGC
+                     * trajectories are identical on the same WAV — the A/B then
+                     * isolates the ONLY intended difference (detector-history
+                     * handling); previously sim_reset skipped the rescale and
+                     * the two modes fed different PCM into the detector. */
+                    float amp = audio_dsp_gain_amplitude_ratio(step);
+                    for (int i = 0; i < 32; i++) {
+                        rms_history[i] *= amp;
+                    }
                     if (agc_legacy_reset) {
                         /* Pre-Phase-1 firmware behavior: full history reset per
                          * gain step — kept for offline A/B against the fix. */
                         audio_dsp_reset_history();
                     } else {
                         /* Mirrors the firmware: carry detector state across the
-                         * step, and scale the AGC's own RMS window into the new
-                         * gain domain (same as sound.cpp). */
+                         * step (audio_dsp_compensate_gain_change). */
                         audio_dsp_compensate_gain_change(step);
-                        float amp = (step > 0) ? 1.0592537f : 0.9440609f;
-                        for (int i = 0; i < 32; i++) {
-                            rms_history[i] *= amp;
-                        }
                     }
                     frames_since = 0;
                 }
             }
         }
-
-        float rms = compute_rms(block, AUDIO_FFT_SIZE);
-        audio_dsp_process(block, seq++, &result);
-        emit_frame(out, &result, rms, gain, buckets);
     }
 
     fprintf(out, "#DONE frames=%u dropped=0\n", seq);

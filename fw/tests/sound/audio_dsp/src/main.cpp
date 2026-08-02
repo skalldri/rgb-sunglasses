@@ -328,10 +328,15 @@ ZTEST(audio_dsp, test_gain_compensation_preserves_history) {
     zassert_true(result.beat[0], "real onset right after a compensated step must fire");
 }
 
-/* ── Test 10: Compensation is exact for quiet signals too ────────────────────
+/* ── Test 10: Compensation is exact for quiet signals — discriminating form ──
  * The previous-frame state is LINEAR energy, so the correction is an exact
- * multiply at any level — including γE ≪ 1 where a log-domain offset would be
- * wrong. A quiet tone across a compensated step must produce ~zero flux. */
+ * multiply at any level — including γE ≪ 1 where a log-domain offset (adding
+ * ln(10^(0.05·steps)) ≈ ±0.115 to the stored log) would be wrong. A steady
+ * tone can't discriminate the two (half-wave rectification hides the error in
+ * both directions), so this test crosses a LEVEL CHANGE and a gain step
+ * together and asserts the flux against its computed exact value: at
+ * γE ≈ 0.05→0.16 the exact form gives ~0.105 while the log-offset form gives
+ * ~0.215 — an order of magnitude beyond the tolerance below. */
 ZTEST(audio_dsp, test_gain_compensation_exact_when_quiet) {
     audio_dsp_init();
 
@@ -339,19 +344,88 @@ ZTEST(audio_dsp, test_gain_compensation_exact_when_quiet) {
     struct audio_analysis_result result;
     uint32_t seq = 0;
 
-    make_tone(pcm, 300.0, 1.0f); /* γ·E lands around 0.01-0.1 for band 0 */
+    make_tone(pcm, 300.0, 1.0f); /* γ·E lands around 0.05 for band 0 */
+    for (int i = 0; i < 8; i++) {
+        audio_dsp_process(pcm, seq++, &result);
+    }
+    float e_a = result.band_energy[0];
+
+    /* Gain steps down; the next block is a LOUDER tone captured at the new
+     * gain. Its flux must equal the pure musical change, with the gain step
+     * fully cancelled. */
+    audio_dsp_compensate_gain_change(-1);
+    make_tone(pcm, 600.0, STEP_DOWN_AMP);
+    audio_dsp_process(pcm, seq++, &result);
+    float e_b = result.band_energy[0];
+
+    const float gamma = 1000.0f; /* default provider's fluxGamma */
+    const float power_down = 0.8912509f; /* 10^-0.05, one step in power */
+    float expected = log1pf(gamma * e_b) - log1pf(gamma * e_a * power_down);
+    zassert_true(expected > 0.05f, "test setup must produce meaningful flux (%f)",
+                 (double)expected);
+    zassert_within(result.band_flux[0], expected, 0.01f,
+                   "flux must match the exact-compensation value (got %f, expected %f)",
+                   (double)result.band_flux[0], (double)expected);
+}
+
+/* ── Test 10b: The full production sequence around an AGC step is clean ──────
+ * Mirrors the fixed audio_dsp_thread_func() ordering exactly: the block
+ * captured at the old gain is PROCESSED FIRST, then the gain step +
+ * compensation land, then blocks captured at the new gain arrive. No frame in
+ * the sequence may fire a beat or show non-trivial flux. */
+ZTEST(audio_dsp, test_gain_step_production_sequence) {
+    audio_dsp_init();
+
+    int16_t pcm[AUDIO_FFT_SIZE];
+    struct audio_analysis_result result;
+    uint32_t seq = 0;
+
+    make_tone(pcm, 8000.0, 1.0f);
+    for (int i = 0; i < HISTORY_LEN; i++) {
+        audio_dsp_process(pcm, seq++, &result);
+    }
+
+    /* Decision frame: processed at the old gain, THEN the step is applied. */
+    audio_dsp_process(pcm, seq++, &result);
+    zassert_false(result.beat[0]);
+    audio_dsp_compensate_gain_change(-1);
+
+    /* Post-step frames arrive in the new gain domain. */
+    make_tone(pcm, 8000.0, STEP_DOWN_AMP);
+    for (int i = 0; i < 3; i++) {
+        audio_dsp_process(pcm, seq++, &result);
+        zassert_false(result.beat[0], "no beat may fire around a compensated step (frame %d)",
+                      i);
+        zassert_true(result.band_flux[0] < 0.01f,
+                     "flux around a compensated step must be ~0 (frame %d: %f)", i,
+                     (double)result.band_flux[0]);
+    }
+}
+
+/* ── Test 10c: The misordering hazard is real (contract documentation) ───────
+ * Compensating BEFORE the last old-gain block is processed — the pre-fix
+ * firmware ordering — produces a false flux of ln(10^0.05) ≈ 0.115 on that
+ * frame. This test pins the hazard the ordering contract in audio_dsp.h guards
+ * against; if it ever stops failing-the-old-way, the contract text is stale. */
+ZTEST(audio_dsp, test_gain_compensation_misordered_is_harmful) {
+    audio_dsp_init();
+
+    int16_t pcm[AUDIO_FFT_SIZE];
+    struct audio_analysis_result result;
+    uint32_t seq = 0;
+
+    make_tone(pcm, 8000.0, 1.0f); /* loud: γE ≫ 1, log-domain shift ≈ exact */
     for (int i = 0; i < 8; i++) {
         audio_dsp_process(pcm, seq++, &result);
     }
 
+    /* WRONG order: compensate, then process a block still at the OLD gain. */
     audio_dsp_compensate_gain_change(-1);
-    make_tone(pcm, 300.0, STEP_DOWN_AMP);
     audio_dsp_process(pcm, seq++, &result);
 
-    zassert_false(result.beat[0], "quiet compensated step must not fire");
-    zassert_true(result.band_flux[0] < 0.005f,
-                 "flux across a compensated step on a quiet tone should be ~0 (%f)",
-                 (double)result.band_flux[0]);
+    zassert_within(result.band_flux[0], 0.1151f, 0.02f,
+                   "misordered compensation must inject ~ln(10^0.05) of false flux (got %f)",
+                   (double)result.band_flux[0]);
 }
 
 /* ── Test 11: A large jump falls back to the full reset ─────────────────────

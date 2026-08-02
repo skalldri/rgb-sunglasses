@@ -121,6 +121,13 @@ static int16_t s_latest_peak = 0;   /* latest peak sample magnitude */
 static float s_rms_history[AGC_HISTORY_LEN];
 static uint8_t s_rms_history_idx = 0;
 
+/* Serializes agc_apply_gain() between its two callers (DSP thread's AGC loop,
+ * shell thread's "sound agc gain") — the steps computation and the RMS-window
+ * rescale are a multi-word read-modify-write that must not interleave, or the
+ * detector compensation is fed a step count that doesn't match the real
+ * amplitude change. */
+K_MUTEX_DEFINE(s_agc_apply_mutex);
+
 /* Apply a new AGC gain register value as one atomic operation: write the
  * hardware registers, carry the beat detector's previous-frame state across the
  * amplitude discontinuity (audio_dsp_compensate_gain_change; falls back to a
@@ -128,10 +135,16 @@ static uint8_t s_rms_history_idx = 0;
  * into the new gain domain so the smoothed RMS tracks the change instantly
  * instead of lagging it for up to a second and triggering over-stepping.
  * Shared by the AGC loop (±1 steps) and the manual "sound agc gain" command
- * (arbitrary jumps). No-op if the gain is unchanged or PDM isn't configured. */
+ * (arbitrary jumps). No-op if the gain is unchanged or PDM isn't configured.
+ *
+ * ORDERING: the caller must invoke this only AFTER audio_dsp_process() has
+ * consumed the last block captured at the old gain — see the contract on
+ * audio_dsp_compensate_gain_change(). */
 static void agc_apply_gain(uint8_t new_gain) {
+    k_mutex_lock(&s_agc_apply_mutex, K_FOREVER);
     int steps = (int)new_gain - (int)s_agc_gain;
     if (steps == 0 || s_gain_l == NULL || s_gain_r == NULL) {
+        k_mutex_unlock(&s_agc_apply_mutex);
         return;
     }
     s_agc_gain = new_gain;
@@ -141,19 +154,22 @@ static void agc_apply_gain(uint8_t new_gain) {
      * ~30% of all frames during music (issue #264, hardware-measured: 16 steps
      * in 30 s of ABGT at listening volume). */
     audio_dsp_compensate_gain_change(steps);
-    /* Each register step = 0.5 dB of amplitude; RMS scales by 10^(0.025·steps).
-     * Loop-multiply the per-step constant — no powf (float printf/pow support
-     * is compiled out project-wide). */
-    const float amp_step = (steps > 0) ? 1.0592537f /* 10^0.025 */
-                                       : 0.9440609f /* 10^-0.025 */;
-    float amp = 1.0f;
-    for (int i = 0; i < (steps > 0 ? steps : -steps); i++) {
-        amp *= amp_step;
+    if (steps > 4 || steps < -4) {
+        /* Same rule as the detector side: a big manual jump is a genuine
+         * discontinuity. Extrapolating the RMS window across e.g. +40 steps
+         * would fabricate impossible levels (RMS is bounded by 1.0; ×10 scaling
+         * would then drive the unfrozen loop right back down). Flush instead —
+         * it refills within one second. */
+        memset(s_rms_history, 0, sizeof(s_rms_history));
+        s_smoothed_rms = 0.0f;
+    } else {
+        float amp = audio_dsp_gain_amplitude_ratio(steps);
+        for (int i = 0; i < AGC_HISTORY_LEN; i++) {
+            s_rms_history[i] *= amp;
+        }
+        s_smoothed_rms *= amp;
     }
-    for (int i = 0; i < AGC_HISTORY_LEN; i++) {
-        s_rms_history[i] *= amp;
-    }
-    s_smoothed_rms *= amp;
+    k_mutex_unlock(&s_agc_apply_mutex);
 }
 
 static float agc_compute_rms(const int16_t *pcm, uint32_t n) {
@@ -431,15 +447,46 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
 
         const int16_t *pcm = static_cast<const int16_t *>(buffer);
 
-        /* AGC: 1-second history window for stable gain control. */
+        /* AGC levels for this block. */
         float rms = agc_compute_rms(pcm, AUDIO_FFT_SIZE);
         s_latest_rms = rms; /* Instantaneous RMS for diagnostics */
 
-        /* Update RMS history (same structure as beat detection flux history). */
+        /* Process THIS block before any gain change is applied: the block was
+         * captured at the CURRENT gain, so the detector's previous-frame state
+         * (same domain) stays consistent. Applying the step first fed an
+         * old-domain block against new-domain state — a false flux of
+         * ~0.115/step, i.e. a spurious beat on every AGC step (PR #277 review).
+         * The gain decision therefore moves BELOW audio_dsp_process(). */
+        struct audio_analysis_result result;
+        audio_dsp_process(pcm, seq++, &result);
+
+#if defined(CONFIG_APP_AUDIO_DEBUG)
+        if (atomic_get(&s_tap_armed)) {
+            /* Static, not stack: the frame is ~1.2 KB and this thread's stack is 2 KB.
+             * Safe because this thread is the only producer. */
+            static struct audio_tap_frame tap;
+            memcpy(tap.pcm, pcm, sizeof(tap.pcm));
+            tap.result = result;
+            tap.rms = rms;
+            tap.gain = s_agc_gain; /* pre-step: the gain this block was captured at */
+            if (k_msgq_put(&audio_tap_q, &tap, K_NO_WAIT) != 0) {
+                atomic_inc(&s_tap_dropped);
+            }
+        }
+#endif
+
+        k_mem_slab_free(&mem_slab, buffer);
+
+        /* AGC decision + application — AFTER the block was processed (see the
+         * ordering note above). The register write lands mid-capture of the
+         * next DMA block, so that one transitional block is a bounded mix of
+         * old/new gain (≤ 0.5 dB across it) — far below the full-step error
+         * this ordering removes.
+         *
+         * Update the 1-second RMS window (same ring structure as the beat
+         * detector's flux history). */
         s_rms_history[s_rms_history_idx] = rms;
         s_rms_history_idx = (s_rms_history_idx + 1) % AGC_HISTORY_LEN;
-
-        /* Compute mean RMS over the 1-second window. */
         float sum_rms = 0.0f;
         for (int i = 0; i < AGC_HISTORY_LEN; i++) {
             sum_rms += s_rms_history[i];
@@ -472,26 +519,6 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
                         fmt_fixed4(s_smoothed_rms, rms_buf, sizeof(rms_buf)));
             }
         }
-
-        struct audio_analysis_result result;
-        audio_dsp_process(pcm, seq++, &result);
-
-#if defined(CONFIG_APP_AUDIO_DEBUG)
-        if (atomic_get(&s_tap_armed)) {
-            /* Static, not stack: the frame is ~1.2 KB and this thread's stack is 2 KB.
-             * Safe because this thread is the only producer. */
-            static struct audio_tap_frame tap;
-            memcpy(tap.pcm, pcm, sizeof(tap.pcm));
-            tap.result = result;
-            tap.rms = rms;
-            tap.gain = s_agc_gain;
-            if (k_msgq_put(&audio_tap_q, &tap, K_NO_WAIT) != 0) {
-                atomic_inc(&s_tap_dropped);
-            }
-        }
-#endif
-
-        k_mem_slab_free(&mem_slab, buffer);
 
         // Log beats including noise-floor stats for threshold tuning
         for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
@@ -1294,12 +1321,15 @@ static int cmd_sound_agc_gain(const struct shell *shell, size_t argc, char **arg
         shell_error(shell, "PDM not configured; gain registers unavailable");
         return -ENOEXEC;
     }
+    /* Freeze FIRST: it stops the DSP thread's loop from initiating new steps,
+     * shrinking the concurrent-apply window before our own apply (the mutex in
+     * agc_apply_gain serializes whatever remains). Manual gain implies freeze
+     * anyway - the point is a known, fixed gain for recordings. */
+    s_agc_frozen = true;
     /* Registers + detector compensation + RMS-window rescale in one place;
      * small nudges compensate exactly, jumps of more than 4 steps fall back to
-     * the full history reset inside the call. */
+     * the full history/window reset inside the call. */
     agc_apply_gain((uint8_t)v);
-    /* Manual gain implies freeze - the point is a known, fixed gain for recordings. */
-    s_agc_frozen = true;
     int db10 = agc_gain_db10(s_agc_gain);
     shell_print(shell, "AGC gain set to 0x%02x (%s%d.%u dB), freeze forced on", s_agc_gain,
                 db10 < 0 ? "-" : "", abs(db10) / 10, (unsigned)(abs(db10) % 10));
