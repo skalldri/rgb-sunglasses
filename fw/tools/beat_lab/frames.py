@@ -58,8 +58,17 @@ class FrameDump:
 
     @property
     def times(self) -> np.ndarray:
-        """Frame timestamps in seconds, relative to the first captured frame."""
-        return (self.seq - self.seq[0]) * FRAME_PERIOD_S
+        """Frame timestamps in seconds on the WAV timeline (capture-index based).
+
+        Deliberately NOT derived from the device seq counter: the WAV contains
+        only the frames that were actually captured, so when frames were dropped
+        the seq-derived wall-clock timeline diverges from the audio — and every
+        consumer of these times (librosa references computed from the WAV,
+        spectrograms, host replay output) is WAV-relative. Use seq_gaps() /
+        contiguous_runs() to reason about drops; a gapped capture's timeline is
+        compressed relative to wall clock by 32 ms per dropped frame.
+        """
+        return np.arange(len(self.seq)) * FRAME_PERIOD_S
 
     def beat_times(self, band: int | None = None) -> np.ndarray:
         """Times of frames where a beat fired (any band, or one band)."""

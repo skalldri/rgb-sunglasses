@@ -314,21 +314,33 @@ async def handle_sound_record(state: SerialState, args: dict) -> dict:
     if "set to" not in freeze_out:
         return _err("agc_gain_failed", freeze_out or "no response to 'sound agc gain'")
 
+    async def _restore_agc() -> bool:
+        # 'sound agc gain' force-froze the AGC; leaving it frozen would silently
+        # kill gain adaptation (and beat-reactive animations) for the rest of the
+        # board's uptime. Always unfreeze, on success and failure paths alike.
+        out = await _run_command(state, connection_id, "sound agc freeze off")
+        return "off" in out
+
     # The recording itself blocks the shell for duration_s; wait generously.
     output = await _run_command(
         state, connection_id, f"sound mic record_wav {duration_s} {path}",
         timeout_ms=(duration_s + 10) * 1000, max_rounds=10,
     )
     if "Wrote" not in output:
-        return _err("record_failed", output or "no response from record_wav")
+        restored = await _restore_agc()
+        # An aborted capture prints "ABORTED: capture incomplete - N of M frames".
+        return _err("record_failed",
+                    (output[-500:] if output else "no response from record_wav")
+                    + f" (agc_restored={restored})")
 
+    restored = await _restore_agc()
     m = re.search(r"Wrote (\d+) bytes of PCM to (\S+) \((\d+) frames, (\d+) dropped,"
                   r" (\d+) io retries\)", output)
     if not m:
-        return _ok(raw=output)
+        return _ok(raw=output, agc_restored=restored)
     return _ok(bytes=int(m.group(1)), wav_path=m.group(2), csv_path=m.group(2) + ".csv",
                frames=int(m.group(3)), dropped=int(m.group(4)), io_retries=int(m.group(5)),
-               contiguous=(int(m.group(4)) == 0))
+               contiguous=(int(m.group(4)) == 0), agc_restored=restored)
 
 
 async def handle_sound_dump(state: SerialState, args: dict) -> dict:

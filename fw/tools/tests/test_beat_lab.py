@@ -70,6 +70,16 @@ class TestCodec:
         runs = d.contiguous_runs()
         assert len(runs) == 2
 
+    def test_times_are_wav_relative_across_gaps(self):
+        # Dropped frames are absent from the WAV, so times must advance one
+        # frame period per CAPTURED frame (capture index), not per seq step —
+        # a seq-based timeline would leave a 64 ms hole the audio doesn't have.
+        lines = _make_dump_lines(10)
+        del lines[5]
+        d = frames.parse_dump(lines)
+        assert len(d.times) == 9
+        assert np.allclose(np.diff(d.times), frames.FRAME_PERIOD_S)
+
     def test_wav_roundtrip(self, tmp_path):
         samples, _ = frames.synth_click_track(2.0, 120)
         p = str(tmp_path / "t.wav")
@@ -100,6 +110,18 @@ class TestEvaluate:
     def test_empty_detections(self):
         p, r, f = evaluate.score(np.array([]), np.array([1.0]))
         assert (p, r, f) == (0.0, 0.0, 0.0)
+
+    def test_dense_reference_all_matched(self):
+        # Several reference events inside one window: the greedy matcher must
+        # scan every in-window candidate, not a fixed 2-candidate lookahead
+        # (regression for the PR #275 review finding). Tests the fallback
+        # matcher directly — score() would route to mir_eval when installed.
+        ref = np.array([1.00, 1.02, 1.04])
+        det = np.array([1.00, 1.01, 1.03])
+        p, r, f = evaluate._score_greedy(det, ref, window=0.05)
+        assert (p, r, f) == (1.0, 1.0, 1.0)
+        p, r, f = evaluate.score(det, ref, window=0.05)
+        assert (p, r, f) == (1.0, 1.0, 1.0)
 
     def test_ref_file(self, tmp_path):
         p = tmp_path / "ref.txt"
@@ -153,5 +175,6 @@ class TestWithLibrosa:
 
         f_m, p_m, r_m = mir_eval.onset.f_measure(ref, det, window=0.05)
         # sanity only: both implementations agree loosely on a random case
-        p_f, r_f, f_f = evaluate.score(det, ref)
+        # (_score_greedy directly — score() routes to mir_eval when installed)
+        p_f, r_f, f_f = evaluate._score_greedy(det, ref, 0.05)
         assert abs(f_m - f_f) < 0.1

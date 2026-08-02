@@ -50,34 +50,49 @@ extern "C" void posix_exit(int exit_code);
 
 namespace {
 
-/* Env-driven provider mirroring DefaultAudioDspConfigProvider's defaults/clamps. */
+float clampf(float v, float lo, float hi) { return fminf(fmaxf(v, lo), hi); }
+
+/* Env-driven provider mirroring DefaultAudioDspConfigProvider's defaults AND
+ * clamps — the device silently clamps out-of-range values (AudioConfig and the
+ * default provider agree on the ranges), so the replay must clamp identically
+ * or a parameter sweep could report a "best" value the hardware cannot run. */
 class EnvConfigProvider : public AudioDspConfigProvider {
    public:
     float getFluxGamma() override { return gamma_; }
-    void setFluxGamma(float v) override { gamma_ = v; }
+    void setFluxGamma(float v) override { gamma_ = clampf(v, 1.0f, 100000.0f); }
     float getBeatFluxFloor() override { return floor_; }
-    void setBeatFluxFloor(float v) override { floor_ = v; }
+    void setBeatFluxFloor(float v) override { floor_ = clampf(v, 0.0f, 1.0f); }
     float getBeatAlpha() override { return alpha_; }
-    void setBeatAlpha(float v) override { alpha_ = v; }
+    void setBeatAlpha(float v) override { alpha_ = clampf(v, 0.1f, 20.0f); }
     uint32_t getBeatRefractoryFrames() override { return refractory_; }
-    void setBeatRefractoryFrames(uint32_t v) override { refractory_ = v; }
+    void setBeatRefractoryFrames(uint32_t v) override { refractory_ = v > 255 ? 255 : v; }
 
     void loadFromEnv() {
-        envFloat("BEAT_GAMMA", &gamma_);
-        envFloat("BEAT_FLOOR", &floor_);
-        envFloat("BEAT_ALPHA", &alpha_);
+        /* Through the setters so env values get the same clamping as the device. */
+        float v;
+        if (envFloat("BEAT_GAMMA", &v)) {
+            setFluxGamma(v);
+        }
+        if (envFloat("BEAT_FLOOR", &v)) {
+            setBeatFluxFloor(v);
+        }
+        if (envFloat("BEAT_ALPHA", &v)) {
+            setBeatAlpha(v);
+        }
         const char *r = getenv("BEAT_REFRACTORY");
         if (r != nullptr) {
-            refractory_ = (uint32_t)strtoul(r, nullptr, 10);
+            setBeatRefractoryFrames((uint32_t)strtoul(r, nullptr, 10));
         }
     }
 
    private:
-    static void envFloat(const char *name, float *out) {
+    static bool envFloat(const char *name, float *out) {
         const char *s = getenv(name);
-        if (s != nullptr) {
-            *out = strtof(s, nullptr);
+        if (s == nullptr) {
+            return false;
         }
+        *out = strtof(s, nullptr);
+        return true;
     }
     float gamma_ = 1000.0f;
     float floor_ = 0.005f;

@@ -685,35 +685,35 @@ static int16_t s_wav_batch[TAP_WAV_BATCH_FRAMES * AUDIO_FFT_SIZE];
 #define TAP_CSV_CHUNK 4096
 static char s_csv_batch[TAP_CSV_CHUNK + sizeof(s_tap_line)];
 
-static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char **argv,
-                                    void *data) {
+/* Tap-based recording: the DSP thread stays the sole dmic_read() consumer and we
+ * drain its tap (see the audio_tap_frame comment block), capturing the exact
+ * frames the detector analyzed plus the per-frame sidecar CSV. */
+static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const char *path) {
     int ret;
 
-    // argv[1] = optional duration in seconds, argv[2] = optional output path
-    uint32_t duration_s = DEFAULT_RECORD_DURATION_S;
-    const char *path = DEFAULT_WAV_PATH;
+    const uint32_t total_frames = (duration_s * MSEC_PER_SEC) / BLOCK_CAPTURE_TIME_MS;
 
-    if (argc > 1) {
-        duration_s = (uint32_t)strtoul(argv[1], NULL, 10);
-        /* Upper bound: the ~6.9 MB NAND caps a recording near 3 minutes anyway,
-         * and an unbounded value would overflow the total_frames arithmetic. */
-        if (duration_s == 0 || duration_s > 300) {
-            shell_error(shell, "Duration must be in [1, 300] seconds");
-            return -EINVAL;
+    /* Fail early if the volume can't hold the whole capture: WAV (1024 B/frame)
+     * + sidecar CSV (~175 B/frame) + both prologues + 64 KB slack for FAT
+     * metadata and whatever else writes to the disk meanwhile. Running out
+     * mid-capture would burn the write-retry path on -ENOSPC (which can never
+     * clear) and leave the NAND full. */
+    struct fs_statvfs vfs;
+    if (fs_statvfs("/NAND:", &vfs) == 0) {
+        uint64_t free_bytes = (uint64_t)vfs.f_bfree * vfs.f_frsize;
+        uint64_t needed = (uint64_t)total_frames * (BLOCK_SIZE + 175) + WAV_DATA_OFFSET +
+                          TAP_CSV_CHUNK + 64 * 1024;
+        if (needed > free_bytes) {
+            uint32_t max_s =
+                (uint32_t)((free_bytes > WAV_DATA_OFFSET + TAP_CSV_CHUNK + 64 * 1024)
+                               ? (free_bytes - WAV_DATA_OFFSET - TAP_CSV_CHUNK - 64 * 1024) /
+                                     ((BLOCK_SIZE + 175) * (MSEC_PER_SEC / BLOCK_CAPTURE_TIME_MS))
+                               : 0);
+            shell_error(shell, "Not enough free space for %u s (max ~%u s free)", duration_s,
+                        max_s);
+            return -ENOSPC;
         }
     }
-    if (argc > 2) {
-        path = argv[2];
-    }
-
-    /* The DSP thread is the sole dmic_read() consumer; we drain its tap instead of
-     * touching the PDM stream ourselves (see the audio_tap_frame comment block). */
-    if (!atomic_get(&s_dsp_running)) {
-        shell_error(shell, "Audio DSP thread is not streaming; cannot record");
-        return -ENOEXEC;
-    }
-
-    const uint32_t total_frames = (duration_s * MSEC_PER_SEC) / BLOCK_CAPTURE_TIME_MS;
 
     char csv_path[96];
     int n = snprintf(csv_path, sizeof(csv_path), "%s.csv", path);
@@ -817,16 +817,27 @@ static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char
 
     uint32_t total_bytes = 0;
     uint32_t frames_captured = 0;
-    uint32_t wav_batched = 0; /* frames accumulated in s_wav_batch */
-    size_t csv_pos = 0;       /* bytes accumulated in s_csv_batch */
+    uint32_t wav_batched = 0;          /* frames accumulated in s_wav_batch */
+    size_t csv_pos = 0;                /* bytes accumulated in s_csv_batch */
+    uint32_t consecutive_timeouts = 0; /* tap-empty polls in a row */
     bool io_error = false;
 
-    for (uint32_t i = 0; i < total_frames; i++) {
+    while (frames_captured < total_frames) {
         ret = k_msgq_get(&audio_tap_q, &s_tap_drain, K_MSEC(1000));
         if (ret != 0) {
-            shell_error(shell, "Tap timed out at frame %u (%d)", i, ret);
-            break;
+            /* The producer can legitimately stall for a moment (flash-erase
+             * lockouts, the PDM self-heal restart) — dropped frames are already
+             * accounted by the tap, so ride it out and only abort when the
+             * stream looks genuinely dead. */
+            if (++consecutive_timeouts >= 5) {
+                shell_error(shell, "Tap produced nothing for 5 s - aborting at frame %u (%d)",
+                            frames_captured, ret);
+                io_error = true;
+                break;
+            }
+            continue;
         }
+        consecutive_timeouts = 0;
 
         memcpy(&s_wav_batch[wav_batched * AUDIO_FFT_SIZE], s_tap_drain.pcm,
                sizeof(s_tap_drain.pcm));
@@ -834,7 +845,8 @@ static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char
         if (wav_batched == TAP_WAV_BATCH_FRAMES) {
             if (tap_write_at_retry(&f, path, wav_pos, s_wav_batch, sizeof(s_wav_batch),
                                    &io_retries) != 0) {
-                shell_error(shell, "WAV write failed at frame %u (after retries)", i);
+                shell_error(shell, "WAV write failed at frame %u (after retries)",
+                            frames_captured);
                 io_error = true;
                 break;
             }
@@ -852,7 +864,8 @@ static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char
              * may straddle the boundary — that's fine, it's one byte stream. */
             if (tap_write_at_retry(&fcsv, csv_path, csv_file_pos, s_csv_batch, TAP_CSV_CHUNK,
                                    &io_retries) != 0) {
-                shell_error(shell, "CSV write failed at frame %u (after retries)", i);
+                shell_error(shell, "CSV write failed at frame %u (after retries)",
+                            frames_captured);
                 io_error = true;
                 break;
             }
@@ -906,6 +919,18 @@ static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char
         shell_error(shell, "CSV #DONE trailer write failed");
     }
     fs_close(&fcsv);
+
+    /* A capture that aborted must not look like a success: the files above were
+     * finalized (headers patched, #DONE written) so what WAS captured stays
+     * parseable, but the caller — including the MCP plugin, which keys on the
+     * "Wrote ..." line — has to see a failure. */
+    if (io_error) {
+        shell_error(shell,
+                    "ABORTED: capture incomplete - %u of %u frames saved to %s "
+                    "(%u dropped, %u io retries)",
+                    frames_captured, total_frames, path, dropped, io_retries);
+        return -EIO;
+    }
 
     shell_print(shell, "Wrote %u bytes of PCM to %s (%u frames, %u dropped, %u io retries)",
                 total_bytes, path, frames_captured, dropped, io_retries);
@@ -966,15 +991,154 @@ static int cmd_sound_dump(const struct shell *shell, size_t argc, char **argv) {
 }
 #endif /* CONFIG_APP_AUDIO_DEBUG */
 
+/* Direct-capture fallback: used when the DSP thread is not streaming (e.g. it
+ * failed at boot and you want raw mic data to diagnose why, or the tap recorder
+ * is compiled out via CONFIG_APP_AUDIO_DEBUG=n). Configures and drives the PDM
+ * stream itself — safe exactly because no other dmic_read() consumer exists —
+ * and writes a plain 44-byte-header WAV with no analysis sidecar (nothing is
+ * computing analysis). Keeps mic capture available in every build/failure
+ * combination instead of gating the board's only capture command on the debug
+ * tap. */
+static int record_wav_direct(const struct shell *shell, uint32_t duration_s, const char *path) {
+    int ret;
+    const uint32_t total_blocks = (duration_s * MSEC_PER_SEC) / BLOCK_CAPTURE_TIME_MS;
+
+    if (!device_is_ready(pdm0)) {
+        shell_error(shell, "%s is not ready", pdm0->name);
+        return -ENOEXEC;
+    }
+    ret = configure_pdm();
+    if (ret < 0) {
+        shell_error(shell, "Failed to configure the driver: %d", ret);
+        return ret;
+    }
+
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    ret = fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
+    if (ret < 0) {
+        shell_error(shell, "Failed to open %s: %d", path, ret);
+        return ret;
+    }
+
+    // Placeholder header; sizes patched after recording (canonical 44-byte
+    // layout — no sector-alignment JUNK chunk: this path has no CSV competing
+    // for the FatFS window and diagnostic captures tolerate slower writes).
+    struct wav_header hdr = {
+        .riff_id = {'R', 'I', 'F', 'F'},
+        .file_size = 0,
+        .wave_id = {'W', 'A', 'V', 'E'},
+        .fmt_id = {'f', 'm', 't', ' '},
+        .fmt_size = 16,
+        .audio_format = 1,
+        .num_channels = NUM_AUDIO_CHANNELS,
+        .sample_rate = SAMPLE_RATE_HZ,
+        .byte_rate = SAMPLE_RATE_HZ * NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
+        .block_align = NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
+        .bits_per_sample = SAMPLE_BIT_WIDTH,
+        .data_id = {'d', 'a', 't', 'a'},
+        .data_size = 0,
+    };
+    ret = fs_write(&f, &hdr, sizeof(hdr));
+    if (ret != sizeof(hdr)) {
+        shell_error(shell, "Failed to write WAV header: %d", ret);
+        fs_close(&f);
+        return -EIO;
+    }
+
+    ret = dmic_trigger(pdm0, DMIC_TRIGGER_START);
+    if (ret < 0) {
+        shell_error(shell, "START trigger failed: %d", ret);
+        fs_close(&f);
+        return ret;
+    }
+
+    shell_print(shell, "Recording %u s to %s (direct capture, no analysis sidecar) ...",
+                duration_s, path);
+
+    uint32_t total_bytes = 0;
+    for (uint32_t i = 0; i < total_blocks; i++) {
+        void *buffer = NULL;
+        uint32_t size = 0;
+
+        ret = dmic_read(pdm0, 0, &buffer, &size, READ_TIMEOUT);
+        if (ret) {
+            shell_error(shell, "Failed to read block %u: %d", i, ret);
+            if (buffer != NULL) {
+                k_mem_slab_free(&mem_slab, buffer);
+            }
+            continue;
+        }
+
+        ssize_t written = fs_write(&f, buffer, size);
+        if (written != (ssize_t)size) {
+            shell_error(shell, "Short write on block %u (%d of %u bytes)", i, (int)written,
+                        size);
+        } else {
+            total_bytes += size;
+        }
+
+        k_mem_slab_free(&mem_slab, buffer);
+    }
+
+    dmic_trigger(pdm0, DMIC_TRIGGER_STOP);
+
+    // Patch the two size fields in the header
+    hdr.data_size = total_bytes;
+    hdr.file_size = sizeof(hdr) - 8 + total_bytes;  // -8: RIFF id + file_size itself
+    fs_seek(&f, 0, FS_SEEK_SET);
+    fs_write(&f, &hdr, sizeof(hdr));
+    fs_close(&f);
+
+    shell_print(shell, "Wrote %u bytes of PCM to %s", total_bytes, path);
+    return 0;
+}
+
+static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char **argv,
+                                    void *data) {
+    // argv[1] = optional duration in seconds, argv[2] = optional output path
+    uint32_t duration_s = DEFAULT_RECORD_DURATION_S;
+    const char *path = DEFAULT_WAV_PATH;
+
+    if (argc > 1) {
+        duration_s = (uint32_t)strtoul(argv[1], NULL, 10);
+        /* Upper bound: WAV + sidecar CSV together consume ~37 KB/s against the
+         * ~6.9 MB volume, so ~180 s is the honest ceiling; the free-space check
+         * in record_wav_tap() enforces the actual headroom. */
+        if (duration_s == 0 || duration_s > 180) {
+            shell_error(shell, "Duration must be in [1, 180] seconds");
+            return -EINVAL;
+        }
+    }
+    if (argc > 2) {
+        path = argv[2];
+    }
+
+#if defined(CONFIG_APP_AUDIO_DEBUG)
+    if (atomic_get(&s_dsp_running)) {
+        return record_wav_tap(shell, duration_s, path);
+    }
+    shell_warn(shell,
+               "DSP thread not streaming - falling back to direct capture (no analysis "
+               "sidecar)");
+#else
+    if (atomic_get(&s_dsp_running)) {
+        shell_error(shell, "DSP thread owns the PDM stream and the tap recorder is compiled "
+                           "out - rebuild with CONFIG_APP_AUDIO_DEBUG=y");
+        return -ENOTSUP;
+    }
+#endif
+    return record_wav_direct(shell, duration_s, path);
+}
+
 // Subcommands for "sound mic"
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_sound_mic,
     /*SHELL_CMD(record, NULL, "Record sound to console (hex)", cmd_sound_mic_record),*/
-#if defined(CONFIG_APP_AUDIO_DEBUG)
     SHELL_CMD_ARG(record_wav, NULL,
-                  "Record DSP-tapped sound to WAV + sidecar .csv [duration_s] [path]",
+                  "Record sound to WAV file [duration_s] [path] (+ analysis .csv sidecar "
+                  "when the DSP tap is available)",
                   cmd_sound_mic_record_wav, 0, 2),
-#endif
     SHELL_SUBCMD_SET_END);
 
 static int cmd_sound_agc_status(const struct shell *shell, size_t argc, char **argv) {

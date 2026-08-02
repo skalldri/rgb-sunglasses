@@ -69,9 +69,15 @@ def score(detected: np.ndarray, reference: np.ndarray,
                                            window=window)
         return p, r, f
     except ImportError:
-        pass
+        return _score_greedy(detected, reference, window)
 
-    # Greedy one-to-one matcher, equivalent to mir_eval's for our purposes.
+
+def _score_greedy(detected, reference, window: float) -> tuple[float, float, float]:
+    # Greedy one-to-one matcher, the documented degraded path when mir_eval is
+    # not installed (kept separate so tests exercise it even when mir_eval is).
+    # Scans EVERY reference candidate inside the window (not a fixed lookahead):
+    # dense references can put several events within one window of a detection,
+    # and stopping early under-counts matches.
     det = sorted(detected)
     ref = sorted(reference)
     if not det or not ref:
@@ -82,11 +88,13 @@ def score(detected: np.ndarray, reference: np.ndarray,
     for t in det:
         while j < len(ref) and ref[j] < t - window:
             j += 1
-        for k in (j, j + 1):
-            if k < len(ref) and not used[k] and abs(ref[k] - t) <= window:
+        k = j
+        while k < len(ref) and ref[k] <= t + window:
+            if not used[k]:
                 used[k] = True
                 matched += 1
                 break
+            k += 1
     p = matched / len(det)
     r = matched / len(ref)
     f = 2 * p * r / (p + r) if p + r > 0 else 0.0

@@ -16,7 +16,7 @@ plus WAV/CSV batching and drain buffers ~14.5 KB — once tuning is done).
 | Piece | Where | What |
 |---|---|---|
 | Audio tap | `sound.cpp` (`audio_tap_q`) | DSP thread tees each 512-sample PCM block + `audio_analysis_result` into a 16-deep queue when armed; `record_wav`/`dump` drain it. The DSP thread stays the only `dmic_read()` consumer. |
-| `sound mic record_wav [s] [path]` | shell | Writes WAV (+ sidecar `.csv` with one D-line per frame) to `/NAND:` from the tap. Sector-aligned batched writes (JUNK-chunk-padded WAV header) — a 30 s capture runs at 0 dropped frames; transient QSPI errors are retried (close/reopen clears FatFS's sticky error flag). ~3 min max (NAND size); 30–60 s is the working size. |
+| `sound mic record_wav [s] [path]` | shell | Writes WAV (+ sidecar `.csv` with one D-line per frame) to `/NAND:` from the tap. Sector-aligned batched writes (JUNK-chunk-padded WAV header) — a 30 s capture runs at 0 dropped frames; transient QSPI errors are retried (close/reopen clears FatFS's sticky error flag). 180 s hard cap + an upfront free-space check; 30–60 s is the working size. An aborted capture prints `ABORTED: capture incomplete` and returns an error (the MCP tool reports `record_failed`). When the DSP thread isn't streaming (boot failure diagnosis) — or with `CONFIG_APP_AUDIO_DEBUG=n` — it falls back to a direct raw capture (WAV only, no sidecar), so mic capture exists in every build. |
 | `sound dump <frames> [buckets]` | shell | Streams live D-lines to the console (no MSC roundtrip). |
 | `sound agc freeze [on\|off]` / `sound agc gain <0..0x50>` | shell | Freeze AGC / set PDM gain directly (gain implies freeze). **Record with frozen gain** — a mid-capture gain step makes device-vs-host comparison impossible. |
 | `sound dsp params` / `sound dsp set <gamma\|floor\|alpha\|refractory> <v>` | shell | Read/write the detector parameters (same values as the BLE `audio/` characteristics; persisted). |
@@ -70,6 +70,12 @@ line; Audacity label-track exports work).
 
 ## Interpreting compare.py
 
+- Frames are paired **positionally** (device CSV row k ↔ host replay frame k):
+  both describe the k-th 512-sample block of the same WAV. Likewise all
+  `FrameDump.times` are capture-index based (the WAV timeline) — the device seq
+  counter keeps counting across dropped frames, so seq is used only to *detect*
+  gaps, never to align or timestamp. A gapped capture's timeline is compressed
+  vs wall clock by 32 ms per dropped frame.
 - The first 32 frames (and 32 frames after any seq gap) are excluded from
   beat-mask scoring: the device's detector history is warm when the tap arms,
   the host replica starts cold.

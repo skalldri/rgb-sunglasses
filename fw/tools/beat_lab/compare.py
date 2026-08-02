@@ -29,12 +29,19 @@ WARMUP_FRAMES = 32  # HISTORY_LEN in audio_dsp.cpp
 
 
 def align(device: frames.FrameDump, host: frames.FrameDump):
-    """Map host seqs (0-based) onto device seqs (DSP-thread lifetime)."""
-    offset = int(device.seq[0]) - int(host.seq[0])
-    host_by_seq = {int(s) + offset: i for i, s in enumerate(host.seq)}
-    pairs = [(i, host_by_seq[int(s)]) for i, s in enumerate(device.seq)
-             if int(s) in host_by_seq]
-    return np.array([p[0] for p in pairs]), np.array([p[1] for p in pairs])
+    """Pair frames positionally, not by seq offset.
+
+    Device CSV row k and host replay frame k both describe the k-th 512-sample
+    block of the same WAV: record_wav writes exactly the tapped frames, in
+    order, and the replay walks that WAV front to back. The seq counter is the
+    WRONG join key — it keeps counting across dropped frames, so a seq-offset
+    map would slide every post-gap device frame onto a later host frame (the
+    dropped frames' audio simply isn't in the WAV). Seq is used only for gap
+    detection/exclusion.
+    """
+    n = min(len(device.seq), len(host.seq))
+    idx = np.arange(n)
+    return idx, idx
 
 
 def main(argv=None):
