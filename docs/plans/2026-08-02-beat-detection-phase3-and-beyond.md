@@ -18,8 +18,10 @@ before writing code, alongside `fw/CLAUDE.md` (workflow traps) and
   native_sim WAV-replay harness (`fw/tests/sound/audio_dsp_replay/` — compiles
   the REAL `audio_dsp.cpp`), and `fw/tools/beat_lab/` (frames codec, replay
   wrapper with `--sweep`, device-vs-host `compare` gate, mir_eval `evaluate`,
-  matplotlib `report`). All firmware pieces gated by `CONFIG_APP_AUDIO_DEBUG`
-  (default y, ~33 KB RAM, reclaimable).
+  matplotlib `report`). All firmware pieces gated by `CONFIG_APP_AUDIO_DEBUG`,
+  which is now **default n** (reclaims a measured 33,440 B of appcore RAM,
+  92.04% -> 84.62%). Rebuild with `-DCONFIG_APP_AUDIO_DEBUG=y` for a
+  measurement session — see fw/docs/beat-detection-debugging.md.
 - **PR #277 — Phase 1: gain-step compensation.** AGC gain steps no longer wipe
   the detector's 1 s adaptive-threshold history;
   `audio_dsp_compensate_gain_change(steps)` scales the linear-domain
