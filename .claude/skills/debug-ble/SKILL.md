@@ -35,6 +35,14 @@ Bash) on that file when you don't hold a lock.
 
 Trigger: firmware GATT-layout change (add/remove/reorder) + already-bonded phone.
 
+**Flipping a characteristic's `Notify` to false is a GATT-layout change.** This is the
+non-obvious trigger and it has bitten this repo: `bt_service_cpp.h` emits the CCC
+descriptor only under `if constexpr (Notify)`, so dropping notify deletes an attribute
+and shifts every handle after it — exactly like removing a characteristic. PR #285
+de-notified ~50 characteristics at once, which is a full-database shift for anyone
+bonded to an earlier build. Expect the recovery below after that OTA on a
+non-compliant stack, and check for it before concluding a post-update hang is a new bug.
+
 Diagnose from the firmware shell (source of truth; board lock — see "Hardware-side
 verification"): run `bt_state`. **`ATT MTU: 23` on a CONNECTED/encrypted (L4) link is
 the signature** (healthy is `ATT MTU: 498`). If `bt_state` doesn't exist on the running
@@ -54,8 +62,11 @@ timeout — isolated swallowed `read()` errors inside an otherwise successful di
 loop (`app/hooks/use-ble-connection.ts`) are transient ATT failures, not issue #115
 (details: `references/stale-gatt-cache.md`).
 
-Keep the app's `refreshGatt: "OnConnected"` — fixes `GATT_INVALID_HANDLE` on compliant
-stacks (same reference).
+Do NOT reach for the app's `refreshGatt: "OnConnected"` — it was tried and **removed**
+(`app/hooks/use-ble-connection.ts`, see the numbered rationale above `connectToDevice`).
+Hardware testing showed it does not rescue the stale-cache hang on a non-compliant stack
+while forcing a full re-discovery on every healthy connect, so it cost throughput and
+bought nothing.
 
 **Prevention:** the GATT table layout is a compatibility surface — append, never
 insert/remove/reorder, in shipped firmware. See the `add-gatt-characteristic` skill

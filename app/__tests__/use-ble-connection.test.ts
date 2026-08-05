@@ -62,6 +62,7 @@ function makeMockBluetooth() {
         setSelectedDevice: jest.fn(),
         updateCharValue: jest.fn(),
         updateServiceCharacteristicValue: jest.fn(),
+        updateServiceCharacteristicFields: jest.fn(),
         setDiscoveryProgress: jest.fn(),
         get connectingDevice() { return state.connectingDevice; },
         setConnectingDevice,
@@ -389,11 +390,30 @@ describe('useBleConnection', () => {
         act(() => { monitorCallback(null, { value: btoa('\x05\x00\x00\x00') }); });
 
         expect(ctx.updateCharValue).toHaveBeenCalledWith(UUID_ACTIVE_ANIMATION, btoa('\x05\x00\x00\x00'));
-        expect(ctx.updateServiceCharacteristicValue).toHaveBeenCalledWith(rainbowSvcUuid, UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x01'));
-        expect(ctx.updateServiceCharacteristicValue).toHaveBeenCalledWith(zigzagSvcUuid, UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x00'));
+
+        // The fan-out patches through the FUNCTION form, so a service whose toggle is
+        // already correct keeps its state object identity (the updater returns null).
+        // Asserting on the updater's behaviour rather than on a flat value argument is
+        // what pins that down — a plain value write would look identical here.
+        const patchFor = (svcUuid: string) =>
+            (ctx.updateServiceCharacteristicFields as jest.Mock).mock.calls
+                .find(([svc, char]) => svc === svcUuid && char === UUID_IS_ACTIVE_CHARACTERISTIC)?.[2];
+
+        // lastWriteError clears only alongside a real value change (issue #92, care
+        // point 1) — a service the switch didn't touch keeps its write-error indicator.
+        const rainbowPatch = patchFor(rainbowSvcUuid);
+        expect(rainbowPatch).toBeDefined();
+        expect(rainbowPatch({ value: btoa('\x00') })).toEqual({ value: btoa('\x01'), lastWriteError: null });
+        expect(rainbowPatch({ value: btoa('\x01') })).toBeNull();
+
+        const zigzagPatch = patchFor(zigzagSvcUuid);
+        expect(zigzagPatch).toBeDefined();
+        expect(zigzagPatch({ value: btoa('\x01') })).toEqual({ value: btoa('\x00'), lastWriteError: null });
+        expect(zigzagPatch({ value: btoa('\x00') })).toBeNull();
+
         // The non-animation Core Config service holds no Is Active characteristic and
         // must not receive a fan-out write.
-        expect(ctx.updateServiceCharacteristicValue).not.toHaveBeenCalledWith('svc-core-config', UUID_IS_ACTIVE_CHARACTERISTIC, expect.anything());
+        expect(patchFor('svc-core-config')).toBeUndefined();
     });
 
     it('monitor callback calls updateCharValue when a notification arrives', async () => {
