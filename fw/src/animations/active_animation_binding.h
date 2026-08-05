@@ -35,10 +35,24 @@ class ActiveAnimationBinding {
         return &instance;
     }
 
-    /** @brief Registers the BT-side setter (called from core_config.cpp). */
+    /**
+     * @brief Registers the BT-side setter (called from core_config.cpp at
+     * static-init time).
+     *
+     * @param setter Callback invoked with every activation change. Replaces any
+     * previously registered setter; nullptr disables the push.
+     */
     static void registerSetter(SetterCallback setter) { getInstance()->setter_ = setter; }
 
-    /** @brief Pushes a locally-originated activation change to the BT side. */
+    /**
+     * @brief Pushes a locally-originated activation change to the BT side.
+     *
+     * No-op when no setter has been registered (e.g. a test binary or a build
+     * without the Core Config service). See the threading note above: this runs
+     * on the caller's thread of pattern_controller_change_to_animation().
+     *
+     * @param animation The animation now active; Animation::None when nothing is.
+     */
     static void setLocalActiveAnimation(Animation animation) {
         if (getInstance()->setter_) {
             getInstance()->setter_(animation);

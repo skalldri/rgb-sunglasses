@@ -46,10 +46,17 @@ using extension_host::kMaxExtensions;
 /* Characteristics per service: Animation Name + Is Active + Include in Shuffle
  * (issue #243) + params. */
 constexpr size_t kMaxChars = 3 + RGBX_MAX_PARAMS;
-/* Attrs per characteristic: declaration + value + CUD + CPF; +2 for the CCCs
- * on Is Active and Include in Shuffle (the two notifying characteristics);
- * +2 for the bulk metadata characteristic (declaration + value), gated the
- * same way BtGattServer's compile-time equivalent is (issue #90). */
+/* Attrs per characteristic: declaration + value + CUD + CPF; +2 for CCCs, of
+ * which only ONE is used now — Is Active is the sole notifying characteristic
+ * here since Include in Shuffle lost its CCC to the Android
+ * notification-budget fix (see its declaration in extension_bt_register).
+ * Deliberately left at +2 rather than tightened to +1: the spare slot is one
+ * bt_gatt_attr per extension and shrinking it measurably GREW the image
+ * (+2684 B FLASH / +2368 B RAM, reproduced by stashing the one-character
+ * change), which the per-object linker-map delta (-36 B) does not explain — so
+ * the headroom stays until that is understood. +2 for the bulk metadata
+ * characteristic (declaration + value), gated the same way BtGattServer's
+ * compile-time equivalent is (issue #90). */
 constexpr size_t kMaxAttrs = 1 /* primary service */ + 4 * kMaxChars + 2 +
                              (IS_ENABLED(CONFIG_APP_BT_METADATA_CHARACTERISTIC) ? 2 : 0);
 

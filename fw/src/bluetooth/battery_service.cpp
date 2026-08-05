@@ -220,8 +220,11 @@ void battery_service_set_charger_comm_error(void) {
 void battery_service_update(int32_t vbat_mv, int32_t ibat_ma, int32_t vbus_mv, int32_t ibus_ma,
                             uint8_t chg_stat) {
     /* 10 mV / 10 mA steps — see battery_quantize() for why raw readings would
-     * spam notifications. Assignment only notifies when the quantized value
-     * actually changed. */
+     * spam notifications. Only chargeStatus and batteryPercent still notify (and
+     * only when the value actually changed); the four raw telemetry fields are
+     * plain stores now that they're read-only (their operator= compiles the
+     * notify out via `if constexpr (Notify)`), read on demand by the app's
+     * battery detail page. */
     batteryVoltageMv = battery_quantize(vbat_mv, 10);
     batteryCurrentMa = battery_quantize(ibat_ma, 10);
     vbusVoltageMv    = battery_quantize(vbus_mv, 10);
