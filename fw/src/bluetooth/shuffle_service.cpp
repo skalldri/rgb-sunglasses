@@ -21,11 +21,15 @@ BtGattPrimaryService<kShuffleServiceUuid> shufflePrimaryService;
 // abandoned; the orphaned NVS entries have no registry entry and are ignored).
 // min > max is a tolerated state (swapped at pick time by ShuffleController) — the two
 // durations are written one at a time over BLE, so no write is ever rejected here.
+// Enabled keeps Notify: shuffle_service_set_enabled() below flips it device-side
+// (shell / future button binding), so the app's toggle needs the push. The two
+// durations are app-written only — Notify=false, saving two of Android's ~15
+// notification-registration slots (BTA_GATTC_NOTIF_REG_MAX).
 BtGattPersistentCharacteristic<"shuffle/enabled", "Shuffle Enabled", true, bool, false>
     shuffleEnabled;
-BtGattPersistentCharacteristic<"shuffle/min_s", "Shuffle Min Duration (s)", true, uint32_t, 30>
+BtGattPersistentCharacteristic<"shuffle/min_s", "Shuffle Min Duration (s)", false, uint32_t, 30>
     shuffleMinS;
-BtGattPersistentCharacteristic<"shuffle/max_s", "Shuffle Max Duration (s)", true, uint32_t, 120>
+BtGattPersistentCharacteristic<"shuffle/max_s", "Shuffle Max Duration (s)", false, uint32_t, 120>
     shuffleMaxS;
 
 BtGattServer shuffleServer(shufflePrimaryService, shuffleEnabled, shuffleMinS, shuffleMaxS);

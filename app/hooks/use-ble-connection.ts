@@ -1,13 +1,16 @@
 import {
+    animationServiceUuidForId,
     BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
     getCharacteristicName,
     getDescriptorName,
     getServiceName,
+    UUID_ACTIVE_ANIMATION,
     UUID_ANIMATION_NAME_CHARACTERISTIC,
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
     UUID_IS_ACTIVE_CHARACTERISTIC,
+    UUID_MCUBOOT_UPDATER_STATUS,
     UUID_METADATA_CHARACTERISTIC,
     UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
 } from "@/constants/bluetooth";
@@ -18,7 +21,7 @@ import {
     stopConnectionService,
     updateConnectionNotification,
 } from "@/services/ble-foreground-service";
-import { decodeUtf8FromBase64, MetadataBlobEntry, parseMetadataBlob } from "@/services/ble-value-codec";
+import { decodeUint32FromBase64, decodeUtf8FromBase64, MetadataBlobEntry, parseMetadataBlob } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
@@ -474,8 +477,13 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 serviceDisplayNames,
             });
 
-            // Set up monitors for all notifiable characteristics except SMP
-            // (SMP has its own monitoring managed by McuMgrClient)
+            // Set up monitors for all notifiable characteristics except SMP and the
+            // MCUboot Updater Status char — both are monitored by their own modal-scoped
+            // clients (McuMgrClient / McubootUpdaterClient), and a bulk-loop copy would
+            // burn one of Android's ~15 notification-registration slots
+            // (BTA_GATTC_NOTIF_REG_MAX) for a feed nothing here consumes. The firmware
+            // keeps the total notifiable count small for the same budget reason — see
+            // the SMP-timeout root-cause notes in fw/src/core_config.cpp.
             console.log('Setting up characteristic monitors...');
             Object.entries(characteristicsByService).forEach(([serviceUuid, chars]) => {
                 const serviceName = getServiceName(serviceUuid);
@@ -483,7 +491,8 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                     const charName = charInfo.name || getCharacteristicName(charUuid);
                     if (
                         charInfo.characteristic.isNotifiable &&
-                        !(serviceUuid === SMP_SERVICE_UUID && charUuid === SMP_CHARACTERISTIC_UUID)
+                        !(serviceUuid === SMP_SERVICE_UUID && charUuid === SMP_CHARACTERISTIC_UUID) &&
+                        charUuid !== UUID_MCUBOOT_UPDATER_STATUS
                     ) {
                         console.log(`Setting up monitor for notifiable characteristic: ${serviceName} > ${charName}`);
 
@@ -526,8 +535,27 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                     // Reused identically across every animation service, so they're
                                     // excluded from the flat characteristics map (see the
                                     // discovery loop above) - update via the service-aware
-                                    // path, keyed by this specific service, instead.
+                                    // path, keyed by this specific service, instead. (Only
+                                    // extension services still notify Is Active — the sandbox
+                                    // fault push; built-ins report through Active Animation.)
                                     updateServiceCharacteristicValue(serviceUuid, charUuid, characteristic.value);
+                                } else if (charUuid === UUID_ACTIVE_ANIMATION) {
+                                    // The single firmware notification for "which animation is
+                                    // active" (Android's ~15-slot registration budget replaced
+                                    // the per-animation Is Active notifies with this). Mirror it
+                                    // into every animation service's Is Active toggle: exactly
+                                    // one service is active at a time.
+                                    updateCharValue(charUuid, characteristic.value);
+                                    const activeId = decodeUint32FromBase64(characteristic.value);
+                                    const activeServiceUuid = animationServiceUuidForId(activeId);
+                                    Object.keys(characteristicsByService).forEach(svcUuid => {
+                                        if (characteristicsByService[svcUuid][UUID_IS_ACTIVE_CHARACTERISTIC]) {
+                                            updateServiceCharacteristicValue(
+                                                svcUuid,
+                                                UUID_IS_ACTIVE_CHARACTERISTIC,
+                                                svcUuid === activeServiceUuid ? 'AQ==' : 'AA==');
+                                        }
+                                    });
                                 } else {
                                     updateCharValue(charUuid, characteristic.value);
                                 }

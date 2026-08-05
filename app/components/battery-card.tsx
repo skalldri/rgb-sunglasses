@@ -13,7 +13,7 @@ import {
 } from "@/services/battery";
 import { decodeSint32FromBase64, decodeUint8FromBase64 } from "@/services/ble-value-codec";
 import { useThemeColors } from "@/hooks/use-theme-color";
-import { Link } from "expo-router";
+import { Link, useFocusEffect } from "expo-router";
 import React from "react";
 import { Pressable, StyleSheet, View, ViewStyle } from "react-native";
 
@@ -54,10 +54,26 @@ function chargeStatusTone(chgStat: number): 'success' | 'info' | 'neutral' | 'wa
  * for older firmware that only exposes raw voltage.
  */
 export function BatteryCard({ style }: { style?: ViewStyle }) {
-    const { selectedDevice } = useBluetooth();
+    const { selectedDevice, updateCharValue } = useBluetooth();
     const c = useThemeColors();
 
     const chars = selectedDevice?.characteristics;
+
+    // Power Flags (the "No Battery" badge input) stopped notifying with the Android
+    // notification-budget fix; it changes rarely (battery physically inserted or
+    // removed), so a one-shot read whenever this screen regains focus keeps the
+    // badge honest without holding a notification-registration slot.
+    const powerFlagsInfo = chars?.[UUID_POWER_FLAGS];
+    useFocusEffect(React.useCallback(() => {
+        if (powerFlagsInfo && !powerFlagsInfo.characteristic.isNotifiable) {
+            powerFlagsInfo.characteristic.read()
+                .then(read => {
+                    if (read.value) updateCharValue(UUID_POWER_FLAGS, read.value);
+                })
+                .catch(err => console.log('Power Flags focus read failed:', err));
+        }
+        return undefined;
+    }, [powerFlagsInfo, updateCharValue]));
     const fwPercent = decodeUint8OrNull(chars?.[UUID_BATTERY_PERCENT]?.value);
     const vbatMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VOLTAGE]?.value);
     const chgStat = decodeUint8OrNull(chars?.[UUID_BATTERY_CHARGE_STATUS]?.value);

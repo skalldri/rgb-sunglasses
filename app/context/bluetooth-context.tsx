@@ -227,6 +227,27 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     // waiting a full write+notify round-trip for any UI feedback), pass the exact canonical value
     // you know the device will store (e.g. the dropdown list locally reordered selected-first). The
     // UI updates instantly and the eventual notify just re-affirms the identical value.
+    // Non-notifiable characteristics can't push the firmware's canonical value back to the
+    // app. Several config getters clamp on read and assign the clamped value back (~32 ms
+    // after an out-of-range write, on the DSP thread's next getter call — see
+    // fw/src/sound/audio_config.cpp), and before the Android notification-budget fix that
+    // write-back arrived as a notification. Now that app-written tunables don't notify,
+    // re-read shortly after a successful write so the UI settles on the value the firmware
+    // actually runs. Fire-and-forget: a read failing after a disconnect just logs.
+    const CLAMP_READBACK_DELAY_MS = 150;
+    const scheduleClampReadBack = useCallback((charInfo: CharacteristicInfo, apply: (value: string) => void) => {
+        if (charInfo.characteristic.isNotifiable) {
+            return;  // notifying characteristics push their own canonical value
+        }
+        setTimeout(() => {
+            charInfo.characteristic.read()
+                .then(read => {
+                    if (read.value) apply(read.value);
+                })
+                .catch(err => console.log(`Post-write read-back failed for ${charInfo.characteristic.uuid}:`, err));
+        }, CLAMP_READBACK_DELAY_MS);
+    }, []);
+
     const writeToCharacteristic = useCallback(async (
         charUuid: string,
         newEncodedValue: string,
@@ -259,6 +280,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
+            scheduleClampReadBack(charInfo, readValue => updateCharValue(charUuid, readValue));
             return true;
         } catch (error) {
             // Revert the optimistic value — but only if it's still what we wrote. A device
@@ -274,7 +296,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         } finally {
             setCharUpdateInProgress(charUuid, false);
         }
-    }, [getCharacteristicInfo, setCharUpdateInProgress, updateCharValue, updateCharFields]);
+    }, [getCharacteristicInfo, setCharUpdateInProgress, updateCharValue, updateCharFields, scheduleClampReadBack]);
 
     // Service-aware lookup for characteristics whose UUID is reused across services (e.g. "Is
     // Active"), where the flat characteristics map can only ever hold one (ambiguous) entry.
@@ -369,6 +391,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
+            scheduleClampReadBack(charInfo,
+                readValue => updateServiceCharacteristicValue(serviceUuid, charUuid, readValue));
             return true;
         } catch (error) {
             // Compare-and-swap revert: only undo our optimistic value if nothing else (a device
@@ -383,7 +407,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         } finally {
             setServiceCharUpdateInProgress(serviceUuid, charUuid, false);
         }
-    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue, updateServiceCharacteristicFields]);
+    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue, updateServiceCharacteristicFields, scheduleClampReadBack]);
 
     const contextValue = useMemo(() => ({
         selectedDevice,

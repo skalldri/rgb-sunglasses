@@ -239,10 +239,12 @@ static void exercise_tick(BaseAnimation *animation) {
 }
 
 /* Issue #243: every adapter appends an "Include in Shuffle" characteristic (fixed
- * kShuffleIncludeCharacteristicUuid, notify, default true) as its LAST provider, with
+ * kShuffleIncludeCharacteristicUuid, default true) as its LAST provider, with
  * an AnimationShuffleIncludeBinding getter registered by the adapter's registrar at
- * static init. Verifies UUID + NOTIFY + default + write round trip + that the BT-free
- * binding pulls the characteristic's live value; leaves the value back at 1. */
+ * static init. NOT notifiable (Android registration-budget fix: app-written only,
+ * no device-side setter for built-ins). Verifies UUID + no-NOTIFY + default + write
+ * round trip + that the BT-free binding pulls the characteristic's live value;
+ * leaves the value back at 1. */
 template <Animation A>
 static void check_shuffle_include(const bt_uuid_128 &svcUuid, size_t index) {
     const bt_gatt_service_static *svc = find_service(svcUuid);
@@ -252,7 +254,9 @@ static void check_shuffle_include(const bt_uuid_128 &svcUuid, size_t index) {
     zassert_equal(memcmp(BT_UUID_128(attr->uuid)->val, kShuffleIncludeCharacteristicUuid.val,
                          sizeof(kShuffleIncludeCharacteristicUuid.val)),
                   0, "Include in Shuffle must use the fixed 0xdddd-group UUID");
-    zassert_true(chrc_has_notify(svc, attr), "Include in Shuffle must expose NOTIFY");
+    zassert_false(chrc_has_notify(svc, attr),
+                  "Include in Shuffle must NOT expose NOTIFY (Android's ~15-slot "
+                  "notification-registration budget, BTA_GATTC_NOTIF_REG_MAX)");
     zassert_equal(read_u8(attr), 1, "Include in Shuffle must default to true (included)");
     zassert_true(AnimationShuffleIncludeBinding<A>::included());
 

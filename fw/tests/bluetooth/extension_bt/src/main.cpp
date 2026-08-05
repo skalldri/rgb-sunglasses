@@ -337,10 +337,9 @@ ZTEST(extension_bt, test_register_uuid_and_is_active_lifecycle) {
     uint8_t incl = 1;
     zassert_equal(do_write(shuffleAttr, &incl, sizeof(incl)), sizeof(incl));
     zassert_true(extension_host::shuffleIncluded(slot));
-    /* Device-side notify path: no subscribers here, must simply not crash
-     * (registered slot, unregistered slot, out-of-range slot). */
-    extension_bt_notify_shuffle_include(slot);
-    extension_bt_notify_shuffle_include(extension_host::kMaxExtensions);
+    /* No device-side notify path anymore: the characteristic is not notifiable
+     * (Android registration-budget fix) — shell-side changes are picked up by
+     * the app's next read. */
 
     /* Wire the is-active mirror into the registry, same order the real boot
      * path uses (proxy registration before the bind call). */

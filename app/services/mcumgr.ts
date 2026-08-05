@@ -536,6 +536,13 @@ export class McuMgrClient {
                 if (this.responseResolver) {
                     this.responseResolver = null;
                     this.responseRejecter = null;
+                    // Drop any partial response along with the resolver: a late or
+                    // fragmented response landing after this timeout must not be
+                    // prepended to the NEXT request's response (handleResponse
+                    // accumulates into these fields and would otherwise resolve the
+                    // next exchange with a stale expectedLength and mixed bytes).
+                    this.responseBuffer = new Uint8Array(0);
+                    this.expectedLength = 0;
                     reject(new Error(`SMP request timeout after ${timeout}ms`));
                 }
             }, timeout);

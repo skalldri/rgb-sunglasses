@@ -75,8 +75,6 @@ struct BtSlot {
     bt_gatt_attr attrs[kMaxAttrs] = {};
     bt_gatt_ccc_managed_user_data isActiveCcc = {};
     const bt_gatt_attr *isActiveValueAttr = nullptr;  // notify target
-    bt_gatt_ccc_managed_user_data shuffleCcc = {};
-    const bt_gatt_attr *shuffleValueAttr = nullptr;  // notify target (issue #243)
     bt_gatt_service svc = {};
 #if defined(CONFIG_APP_BT_METADATA_CHARACTERISTIC)
     /* Bulk metadata blob (issue #90), built once per extension_bt_register()
@@ -138,8 +136,9 @@ ssize_t read_shuffle_include(struct bt_conn *conn, const struct bt_gatt_attr *at
 
 /* Storing a bool has no fallible side effect, so unlike write_is_active there is no
  * rejection path; and like the built-ins' remote-write path, no notify — the writing
- * app already knows the value (device-side changes notify via
- * extension_bt_notify_shuffle_include()). */
+ * app already knows the value. (The characteristic is not notifiable at all since the
+ * Android registration-budget fix; a rare shell-side `ext shuffle` change is picked up
+ * by the app's next read.) */
 ssize_t write_shuffle_include(struct bt_conn *, const struct bt_gatt_attr *attr, const void *buf,
                               uint16_t len, uint16_t offset, uint8_t) {
     bt_conn_activity_note();
@@ -409,8 +408,12 @@ int extension_bt_register(size_t slot) {
 
     /* Is Active — fixed UUID, read/write/notify, drives activation. The
      * notify path lets the firmware push Is Active = false when a sandbox
-     * dies or a write is rejected, so the app disables the toggle (built-ins
-     * notify too, via IsActiveCharacteristic). CCC follows CPF, mirroring
+     * dies, so the app disables the toggle. This is deliberately the ONE
+     * per-extension notify kept under the Android registration budget: a
+     * fault does NOT change pattern_controller's currentAnimation (the slot
+     * keeps rendering the FAULT banner), so Core Config's Active Animation
+     * characteristic — which replaced the built-ins' Is Active notifies —
+     * cannot carry the fault signal. CCC follows CPF, mirroring
      * BtGattCharacteristicCommon's attribute order. */
     const size_t isActiveChrc = chrcIdx;
     attrIdx = append_characteristic(
@@ -428,9 +431,12 @@ int extension_bt_register(size_t slot) {
         .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
     };
 
-    /* Include in Shuffle (issue #243) — fixed UUID, read/write/notify, mirroring the
+    /* Include in Shuffle (issue #243) — fixed UUID, read/write, mirroring the
      * built-in adapters' ShuffleIncludeCharacteristic so the app lifts it onto the
-     * Controls row identically for extensions. Same CCC-after-CPF shape as Is Active.
+     * Controls row identically for extensions. NOT notifiable (matching the
+     * built-ins): Android caps notification registrations at ~15 per app
+     * (BTA_GATTC_NOTIF_REG_MAX), and the only device-side setter is the rare
+     * `ext shuffle` shell command — the app re-reads on its next connect.
      * Positioned with the other fixed-UUID standard characteristics (Name, Is Active)
      * BEFORE the param loop — unlike the built-in adapters, which append it last under
      * the append-only rule. That rule protects bonded phones' cached handles in STATIC
@@ -439,23 +445,11 @@ int extension_bt_register(size_t slot) {
      * index (p + 1 below), never from table position, and the app addresses
      * everything by UUID + the metadata blob (fed in handle order by
      * append_characteristic), so mid-table position is safe here. */
-    const size_t shuffleChrc = chrcIdx;
     attrIdx = append_characteristic(
         bs, attrIdx, chrcIdx++,
         reinterpret_cast<const bt_uuid *>(&kShuffleIncludeCharacteristicUuid),
         /*writable=*/true, read_shuffle_include, write_shuffle_include, bs, "Include in Shuffle",
         &kCpfBool);
-    bs->chrcs[shuffleChrc].properties |= BT_GATT_CHRC_NOTIFY;
-    bs->shuffleValueAttr = &bs->attrs[attrIdx - 3];  // value attr of the 4 just appended
-    bs->shuffleCcc = BT_GATT_CCC_MANAGED_USER_DATA_INIT(nullptr, nullptr, nullptr);
-    bs->attrs[attrIdx++] = {
-        .uuid = BT_UUID_GATT_CCC,
-        .read = bt_gatt_attr_read_ccc,
-        .write = bt_gatt_attr_write_ccc,
-        .user_data = &bs->shuffleCcc,
-        .handle = 0,
-        .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
-    };
 
     /* One characteristic per manifest parameter, auto-UUID'd with the same
      * compose scheme BtGattServer uses (characteristic id in the UUID's low
@@ -530,17 +524,6 @@ int extension_bt_register(size_t slot) {
     LOG_INF("registered BLE service for extension '%s' (%zu attrs)",
             extension_host::name(slot), attrIdx);
     return 0;
-}
-
-void extension_bt_notify_shuffle_include(size_t slot) {
-    if (slot >= kMaxExtensions) {
-        return;
-    }
-    BtSlot *bs = &sBtSlots[slot];
-    if (bs->registered && bs->shuffleValueAttr != nullptr) {
-        const uint8_t value = extension_host::shuffleIncluded(slot) ? 1 : 0;
-        (void)bt_gatt_notify(nullptr, bs->shuffleValueAttr, &value, sizeof(value));
-    }
 }
 
 int extension_bt_bind_is_active(size_t slot) {
