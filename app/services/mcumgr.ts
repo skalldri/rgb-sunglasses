@@ -301,6 +301,9 @@ export class McuMgrClient {
     private expectedLength: number = 0;
     private responseResolver: ((data: Uint8Array) => void) | null = null;
     private responseRejecter: ((error: Error) => void) | null = null;
+    // Sequence number of the request currently awaiting a response, so a response that
+    // raced a timeout can be recognised as stale instead of resolving the next request.
+    private pendingSequence: number | null = null;
     private monitorSubscription: any = null;
     private isDestroyed: boolean = false;
     // Serializes every SMP exchange. The device (and this class) can only track one
@@ -411,6 +414,7 @@ export class McuMgrClient {
         // Clear buffers
         this.responseBuffer = new Uint8Array(0);
         this.expectedLength = 0;
+        this.pendingSequence = null;
     }
 
     /**
@@ -439,17 +443,42 @@ export class McuMgrClient {
         //console.log(`Buffer now has ${this.responseBuffer.length}/${this.expectedLength} bytes`);
 
         // Check if we have the complete response
-        if (this.responseBuffer.length >= this.expectedLength && this.responseResolver) {
-            //console.log(`Response complete, resolving promise`);
-            const completeResponse = this.responseBuffer.slice(0, this.expectedLength);
-            this.responseBuffer = new Uint8Array(0);
-            this.expectedLength = 0;
-            this.responseResolver(completeResponse);
-            this.responseResolver = null;
-            this.responseRejecter = null;
-        } else if (this.responseBuffer.length >= this.expectedLength) {
-            console.log(`Response complete but no resolver!`);
+        if (this.responseBuffer.length < this.expectedLength) {
+            return;  // still reassembling
         }
+
+        const completeResponse = this.responseBuffer.slice(0, this.expectedLength);
+        // ALWAYS reset before deciding what to do with the frame. A complete response
+        // that we then discard (no resolver, or wrong sequence) must not be left in the
+        // buffer: the next request's first fragment would be appended to it, the stale
+        // expectedLength would already be satisfied, and that request's promise would
+        // resolve with THIS response's bytes while its own were dropped. Worse for a
+        // partial late fragment — mid-payload bytes get parsed as an SMP header and
+        // poison expectedLength outright.
+        this.responseBuffer = new Uint8Array(0);
+        this.expectedLength = 0;
+
+        if (!this.responseResolver) {
+            // The request this belongs to already timed out and gave up.
+            console.log('Discarding an SMP response that arrived with no pending request');
+            return;
+        }
+
+        // The device tracks one in-flight request, but a response that raced a timeout
+        // can still show up after the NEXT request was issued. parseSmpHeader gives us
+        // the sequence number the firmware echoes back, so match it rather than assuming
+        // whatever arrives belongs to the request currently waiting.
+        const header = parseSmpHeader(completeResponse);
+        if (this.pendingSequence !== null && header.sequence !== this.pendingSequence) {
+            console.log(
+                `Discarding stale SMP response: sequence ${header.sequence}, awaiting ${this.pendingSequence}`);
+            return;
+        }
+
+        this.responseResolver(completeResponse);
+        this.responseResolver = null;
+        this.responseRejecter = null;
+        this.pendingSequence = null;
     }
 
     /**
@@ -512,6 +541,8 @@ export class McuMgrClient {
         packet.set(header);
         packet.set(cborPayload, header.length);
 
+        this.pendingSequence = sequence & 0xFF;  // header carries one byte
+
         // Create response promise with proper timeout handling
         let timeoutId: ReturnType<typeof setTimeout> | null = null;
         const responsePromise = new Promise<Uint8Array>((resolve, reject) => {
@@ -536,11 +567,14 @@ export class McuMgrClient {
                 if (this.responseResolver) {
                     this.responseResolver = null;
                     this.responseRejecter = null;
+                    this.pendingSequence = null;
                     // Drop any partial response along with the resolver: a late or
                     // fragmented response landing after this timeout must not be
                     // prepended to the NEXT request's response (handleResponse
                     // accumulates into these fields and would otherwise resolve the
                     // next exchange with a stale expectedLength and mixed bytes).
+                    // handleResponse clears these too — belt and braces, because a
+                    // fragment can arrive between this timeout and the next send.
                     this.responseBuffer = new Uint8Array(0);
                     this.expectedLength = 0;
                     reject(new Error(`SMP request timeout after ${timeout}ms`));

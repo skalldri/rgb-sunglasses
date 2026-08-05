@@ -115,6 +115,29 @@ structure used for v1.0.0:
 generates (the curated notes overwrite the CI body, so the QR must be included) —
 use the exact markdown template in `references/app-notes-download.md`.
 
+### 4a. Firmware notes must call out GATT layout changes and old-app breakage
+
+Firmware and the app release independently, so every firmware release has two
+audiences the notes must serve explicitly. Check both against the diff since the
+last `fw-v*` tag; if either applies, the notes need a prominent **Upgrading** section
+(not a buried bullet), because the user's first symptom is an app that appears broken.
+
+1. **Did any service, characteristic, or CCC descriptor get added, removed, or
+   reordered?** Every `Notify=true→false` flip deletes a CCC attribute, which shifts
+   every handle after it (`bt_service_cpp.h` only emits the CCC under
+   `if constexpr (Notify)`) — so this triggers on far more than obvious GATT edits.
+   A phone whose stack ignores Service Changed (OxygenOS and friends, issue #115)
+   then resolves its cached handles to the wrong attributes and hangs. Say plainly
+   that upgrading users may need to **forget the device in Bluetooth settings and
+   re-pair** after the OTA, and that stock-Android phones recover on their own.
+2. **Did any characteristic the shipped app depends on stop notifying?** The
+   released app binary keeps whatever behaviour it shipped with — it will not gain a
+   read-on-focus or a read-back-after-write just because the firmware changed. Note
+   which surfaces go stale on an older app and which app version restores them.
+
+Confirm the check ran even when the answer is no ("GATT layout unchanged since
+fw-vX.Y.Z") so the omission is a decision rather than an oversight.
+
 **App releases additionally need a ≤500-character Google Play "what's new" summary.**
 It ships as the **annotated tag message** (see step 6) — the Play upload runs during
 CI, before the curated GitHub notes are attached, so the tag message is the only

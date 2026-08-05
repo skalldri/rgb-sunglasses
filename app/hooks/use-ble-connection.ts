@@ -91,6 +91,7 @@ const RECONNECT_BACKOFF_MS = [2000, 5000, 10000, 30000];
 export function useBleConnection(macAddress: string, deviceName: string): UseBleConnectionResult {
     const {
         setSelectedDevice, updateCharValue, updateServiceCharacteristicValue,
+        updateServiceCharacteristicFields,
         monitorSubscriptions, disconnectSubscription, setDiscoveryProgress, setConnectingDevice,
         setReconnectingDevice, reconnectGeneration, intentionalDisconnectRef, connectPromises,
         // The CONTEXT-level live ref, not a hook-local one: the disconnect handler
@@ -637,12 +638,28 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                     updateCharValue(charUuid, characteristic.value);
                                     const activeId = decodeUint32FromBase64(characteristic.value);
                                     const activeServiceUuid = animationServiceUuidForId(activeId);
+                                    // Patch only the services whose toggle actually changes.
+                                    // The unconditional form rewrote every animation service on
+                                    // every switch, and each write mints new object identities
+                                    // for that service's characteristics — with ~20 services
+                                    // that is a burst of renders (and invalidated useCallback
+                                    // deps, the read-loop hazard in app/CLAUDE.md) to express a
+                                    // change that touches at most two toggles. Returning null
+                                    // from the updater leaves the previous state object intact.
                                     Object.keys(characteristicsByService).forEach(svcUuid => {
                                         if (characteristicsByService[svcUuid][UUID_IS_ACTIVE_CHARACTERISTIC]) {
-                                            updateServiceCharacteristicValue(
+                                            const nextValue = svcUuid === activeServiceUuid ? 'AQ==' : 'AA==';
+                                            updateServiceCharacteristicFields(
                                                 svcUuid,
                                                 UUID_IS_ACTIVE_CHARACTERISTIC,
-                                                svcUuid === activeServiceUuid ? 'AQ==' : 'AA==');
+                                                (current: CharacteristicInfo) => current.value === nextValue
+                                                    ? null
+                                                    // lastWriteError clears only where a fresh device
+                                                    // value actually arrived (issue #92, care point 1).
+                                                    // The unconditional form cleared it on every
+                                                    // animation service, wiping write-error indicators
+                                                    // on services this switch never touched.
+                                                    : { value: nextValue, lastWriteError: null });
                                         }
                                     });
                                     syncActiveExtensionMonitor(activeId, activeServiceUuid,

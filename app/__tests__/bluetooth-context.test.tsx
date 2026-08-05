@@ -310,6 +310,64 @@ describe('BluetoothProvider', () => {
     }
   });
 
+  it('read-back never clobbers a newer value that landed during its delay', async () => {
+    // The read-back callback outlives its write. If a notification (or a second write)
+    // changes the value while it is in flight, applying the read unconditionally snaps
+    // the control backwards to a pre-write reading — visible to the user as a control
+    // that jumps back on its own. It compare-and-swaps against what the write left on
+    // screen instead, mirroring the write-error revert path.
+    jest.useFakeTimers();
+    try {
+      const getApi = setupProvider();
+      const writeWithResponse = jest.fn().mockResolvedValue(undefined);
+      const device = buildSelectedDevice(writeWithResponse, btoa('old'));
+      device.characteristics['char-1'].characteristic.isNotifiable = false;
+      device.characteristics['char-1'].characteristic.read = jest
+        .fn()
+        .mockResolvedValue({ value: btoa('stale-read') });
+
+      act(() => { getApi().setSelectedDevice(device); });
+      await act(async () => { await getApi().writeToCharacteristic('char-1', btoa('written')); });
+      // Something newer arrives before the read-back's timer fires.
+      act(() => { getApi().updateCharValue('char-1', btoa('newer')); });
+      await act(async () => { jest.advanceTimersByTime(2000); });
+
+      expect(getApi().getCharacteristicInfo('char-1')?.value).toBe(btoa('newer'));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('makes a second read-back pass for a clamp that lands after the first one', async () => {
+    // The firmware clamps on its owning thread's next getter call, which is usually
+    // ~32 ms but can be far longer under load. A single fixed read would then return the
+    // pre-clamp value and leave the UI showing a number the device never runs.
+    jest.useFakeTimers();
+    try {
+      const getApi = setupProvider();
+      const writeWithResponse = jest.fn().mockResolvedValue(undefined);
+      const device = buildSelectedDevice(writeWithResponse, btoa('old'));
+      device.characteristics['char-1'].characteristic.isNotifiable = false;
+      const read = jest
+        .fn()
+        .mockResolvedValueOnce({ value: btoa('9999') })     // clamp hasn't happened yet
+        .mockResolvedValue({ value: btoa('1000') });        // clamped by the second pass
+      device.characteristics['char-1'].characteristic.read = read;
+
+      act(() => { getApi().setSelectedDevice(device); });
+      await act(async () => { await getApi().writeToCharacteristic('char-1', btoa('9999')); });
+
+      await act(async () => { jest.advanceTimersByTime(200); });
+      expect(getApi().getCharacteristicInfo('char-1')?.value).toBe(btoa('9999'));
+
+      await act(async () => { jest.advanceTimersByTime(1500); });
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(getApi().getCharacteristicInfo('char-1')?.value).toBe(btoa('1000'));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('does NOT re-read a notifiable characteristic after a write (it pushes its own value)', async () => {
     jest.useFakeTimers();
     try {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, waitFor } from '@testing-library/react-native';
+import { act, render, waitFor } from '@testing-library/react-native';
 
 // Override the global expo-router mock (useFocusEffect is a no-op jest.fn() there) so the
 // focus callback actually runs — that is what drives the Power Flags re-read this card
@@ -232,6 +232,42 @@ describe('BatteryCard (slim tile)', () => {
 
     // Still exactly one read: re-renders must not re-arm the focus effect.
     expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps polling Power Flags while focused, so the No Battery badge tracks a battery being removed', async () => {
+    // This card lives on the Controls tab, which the app can sit on for a whole session
+    // — "read once per focus" there means "read once, ever", and the badge then freezes
+    // through a battery being physically inserted or removed. The poll is slow (a minute)
+    // because presence only changes when someone opens the enclosure.
+    jest.useFakeTimers();
+    try {
+      const read = jest
+        .fn()
+        .mockResolvedValueOnce({ value: uint8Value(0x01) })  // battery present
+        .mockResolvedValue({ value: uint8Value(0x02) });     // removed
+      const flags = charInfo(uint8Value(0x01), 0x04);
+      (flags.characteristic as Record<string, unknown>).isNotifiable = false;
+      (flags.characteristic as Record<string, unknown>).read = read;
+      const updateCharValue = jest.fn();
+
+      jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+        selectedDevice: buildDevice({
+          [UUID_BATTERY_PERCENT]: charInfo(uint8Value(50), 0x04),
+          [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(7500), 0x10),
+          [UUID_POWER_FLAGS]: flags,
+        }),
+        updateCharValue,
+      } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>);
+
+      render(<BatteryCard />);
+      expect(read).toHaveBeenCalledTimes(1);
+
+      await act(async () => { jest.advanceTimersByTime(60000); });
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(updateCharValue).toHaveBeenLastCalledWith(UUID_POWER_FLAGS, uint8Value(0x02));
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('does NOT re-read Power Flags on focus while it is still notifiable', async () => {

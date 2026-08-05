@@ -94,6 +94,13 @@ type BluetoothContextType = {
     // exist alongside (not instead of) the bare-UUID methods above.
     getServiceCharacteristicInfo: (serviceUuid: string, charUuid: string) => CharacteristicInfo | null;
     updateServiceCharacteristicValue: (serviceUuid: string, charUuid: string, newValue: string) => void;
+    // Function form patches conditionally: return null from the updater to leave the
+    // characteristic (and the surrounding state object's identity) untouched.
+    updateServiceCharacteristicFields: (
+        serviceUuid: string,
+        charUuid: string,
+        fields: Partial<CharacteristicInfo> | ((current: CharacteristicInfo) => Partial<CharacteristicInfo> | null)
+    ) => void;
     writeServiceCharacteristic: (
         serviceUuid: string,
         charUuid: string,
@@ -235,19 +242,28 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     // re-read shortly after a successful write so the UI settles on the value the firmware
     // actually runs. The delay lets that device-side write-back land first; reading
     // immediately would race it.
-    const CLAMP_READBACK_DELAY_MS = 150;
-    const scheduleClampReadBack = useCallback((charInfo: CharacteristicInfo, apply: (value: string) => void) => {
+    // Two passes, not one. The clamp write-back happens whenever the owning thread next
+    // runs its getter — normally ~32 ms, but a busy owner (e.g. the audio DSP thread
+    // during a PDM overrun self-heal) can push it well past 150 ms, and a single fixed
+    // read would then return the still-unclamped value, leaving the UI showing a number
+    // the firmware never runs with no correction channel until the next connect. The
+    // second pass costs one read only on writes to non-notifiable characteristics.
+    const CLAMP_READBACK_DELAYS_MS = [150, 1200];
+    // `baselineValue` is what the app believes the characteristic holds as this write
+    // settles; `apply` is expected to compare-and-swap against it (see the call sites).
+    const scheduleClampReadBack = useCallback((charInfo: CharacteristicInfo, baselineValue: string,
+                                               apply: (readValue: string, baseline: string) => void) => {
         if (charInfo.characteristic.isNotifiable) {
             return;  // notifying characteristics push their own canonical value
         }
-        // Fire-and-forget, and deliberately defensive: this callback outlives the write by
-        // 150 ms, so by the time it runs the link may be gone, the client torn down, or the
+        // Fire-and-forget, and deliberately defensive: these callbacks outlive the write,
+        // so by the time one runs the link may be gone, the client torn down, or the
         // characteristic object no longer readable. read() can therefore throw
         // SYNCHRONOUSLY (not just reject) — a plain .catch() misses that and the TypeError
         // escapes as an unhandled error with no call stack pointing back here. Nothing in
         // the UI depends on this read succeeding: the optimistic value is already applied,
         // and the next connect re-reads everything.
-        setTimeout(() => {
+        const runPass = () => {
             try {
                 const pending = charInfo.characteristic.read?.();
                 if (!pending) {
@@ -255,13 +271,20 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
                 }
                 pending
                     .then(read => {
-                        if (read.value) apply(read.value);
+                        if (read.value) apply(read.value, baselineValue);
                     })
                     .catch(err => console.log(`Post-write read-back failed for ${charInfo.characteristic.uuid}:`, err));
             } catch (err) {
                 console.log(`Post-write read-back could not start for ${charInfo.characteristic.uuid}:`, err);
             }
-        }, CLAMP_READBACK_DELAY_MS);
+        };
+        // Both passes compare-and-swap against the SAME baseline, which is correct for
+        // every ordering: if pass 1 already applied a clamp, pass 2's CAS fails and skips
+        // (the value is already canonical); if pass 1 read back the unclamped value, that
+        // read equals the baseline so applying it was a no-op and the baseline still
+        // holds; and if a newer write landed meanwhile, both passes skip rather than
+        // snapping the control backwards to a pre-write read.
+        CLAMP_READBACK_DELAYS_MS.forEach(delay => setTimeout(runPass, delay));
     }, []);
 
     const writeToCharacteristic = useCallback(async (
@@ -296,7 +319,13 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
-            scheduleClampReadBack(charInfo, readValue => updateCharValue(charUuid, readValue));
+            // Baseline for the read-back's compare-and-swap: what the UI shows now that this
+            // write has settled — the optimistic value, or the untouched previous value when
+            // the caller opted out of optimism.
+            scheduleClampReadBack(charInfo,
+                options?.skipOptimisticUpdate ? previousValue : optimisticValue,
+                (readValue, baseline) => updateCharFields(charUuid,
+                    current => current.value === baseline ? { value: readValue } : null));
             return true;
         } catch (error) {
             // Revert the optimistic value — but only if it's still what we wrote. A device
@@ -407,8 +436,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
+            // Compare-and-swap against what this write left on screen — see writeToCharacteristic.
             scheduleClampReadBack(charInfo,
-                readValue => updateServiceCharacteristicValue(serviceUuid, charUuid, readValue));
+                options?.skipOptimisticUpdate ? previousValue : optimisticValue,
+                (readValue, baseline) => updateServiceCharacteristicFields(serviceUuid, charUuid,
+                    current => current.value === baseline ? { value: readValue } : null));
             return true;
         } catch (error) {
             // Compare-and-swap revert: only undo our optimistic value if nothing else (a device
@@ -444,13 +476,15 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         updateCharValue,
         getServiceCharacteristicInfo,
         updateServiceCharacteristicValue,
+        updateServiceCharacteristicFields,
         writeServiceCharacteristic,
         monitorSubscriptions,
         disconnectSubscription,
         selectedDeviceRef,
     }), [
         selectedDevice, isScanning, connectingDevice, reconnectingDevice, discoveryProgress, writeToCharacteristic, getCharacteristicInfo, updateCharValue,
-        getServiceCharacteristicInfo, updateServiceCharacteristicValue, writeServiceCharacteristic,
+        getServiceCharacteristicInfo, updateServiceCharacteristicValue, updateServiceCharacteristicFields,
+        writeServiceCharacteristic,
     ]);
 
     return (

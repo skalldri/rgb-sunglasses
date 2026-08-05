@@ -297,6 +297,69 @@ describe('McuMgrClient protocol behavior', () => {
     await expect(requestPromise).rejects.toThrow('Client destroyed');
     expect(internal.characteristic.writeWithoutResponse).not.toHaveBeenCalled();
   });
+
+  // The two tests below cover the same hazard from both ends: a response that arrives
+  // after its own request gave up must not be handed to a LATER request. The DFU flow
+  // makes this concrete — a stale `image upload` reply resolving the next chunk's
+  // request would advance the offset without the firmware having taken those bytes,
+  // silently corrupting the uploaded image rather than failing loudly.
+  it('discards a response that arrives with no request pending, without poisoning the next one', async () => {
+    jest.useFakeTimers();
+
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 120;
+
+    // A late reply from a request that already timed out: nothing is pending, so the
+    // buffer must be left empty. Before the fix it stayed in responseBuffer and the
+    // NEXT request's own reply was appended to it, producing a mixed frame.
+    internal.handleResponse(buildSmpPacket({ stale: true }));
+    expect(internal.responseBuffer).toHaveLength(0);
+    expect(internal.expectedLength).toBe(0);
+
+    const freshPacket = buildSmpPacket({ images: [{ slot: 0, version: '9.9.9' }] }, { sequence: 0 });
+    internal.characteristic = {
+      writeWithoutResponse: jest.fn(async () => { internal.handleResponse(freshPacket); }),
+    };
+
+    const result = await internal.sendRequest(
+      SmpOp.READ_REQUEST,
+      SmpGroup.IMAGE,
+      ImageCmd.STATE,
+      {},
+      1000
+    );
+    expect(result).toEqual({ images: [{ slot: 0, version: '9.9.9' }] });
+  });
+
+  it('discards a response whose sequence number does not match the pending request', async () => {
+    jest.useFakeTimers();
+
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 120;
+    // The client stamps its first request with sequence 0, so 7 can only be an older
+    // exchange's reply arriving late.
+    internal.characteristic = {
+      writeWithoutResponse: jest.fn(async () => {
+        internal.handleResponse(buildSmpPacket({ images: ['stale'] }, { sequence: 7 }));
+      }),
+    };
+
+    const requestPromise = internal.sendRequest(
+      SmpOp.READ_REQUEST,
+      SmpGroup.IMAGE,
+      ImageCmd.STATE,
+      {},
+      25
+    );
+
+    // The mismatched frame is dropped, so the request runs out its timeout rather than
+    // resolving with another exchange's payload.
+    const assertion = expect(requestPromise).rejects.toThrow('SMP request timeout');
+    await jest.advanceTimersByTimeAsync(30);
+    await assertion;
+  });
 });
 
 describe('McuMgrClient upload behavior', () => {
