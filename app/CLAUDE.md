@@ -388,7 +388,19 @@ of Controls).
 
 ### Device-Free Validation Loop
 
-For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) now gates all three — the `test` job runs jest, and a separate `typecheck-lint` job runs `tsc --noEmit` and `eslint --max-warnings 0` (added for issue #130, since a green CI used to mean only jest passed and tsc/lint debt drifted in undetected). Still run them locally before pushing so you're not waiting on CI to catch a type error or a new lint warning (any warning now fails CI).
+For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) now gates all three — the `test` job runs jest, and a separate `typecheck-lint` job runs `tsc --noEmit` and `eslint --max-warnings 0` (added for issue #130, since a green CI used to mean only jest passed and tsc/lint debt drifted in undetected). Still run them locally before pushing so you're not waiting on CI to catch a type error or a new lint warning (any warning now fails CI). **Green here is not "verified"** — see the next section for the class of bug this loop is structurally blind to.
+
+### What the device-free loop CANNOT catch: feedback between a write and the state it produces
+
+Jest suites here mock `useBluetooth`, so `updateCharValue`/`updateServiceCharacteristicValue` are `jest.fn()`s that **never produce a new context object**. That breaks the loop between "code writes/reads a characteristic" and "context re-renders with fresh objects" — so any bug living in that loop is structurally invisible to green tests, no matter how many you add. Two such bugs shipped into a PR and were caught only on hardware (2026-08-05, PR #285):
+
+1. **Unbounded BLE read loop.** A `useFocusEffect(useCallback(fn, [charInfo, updateCharValue]))` re-read a characteristic, called `updateCharValue`, got back a new `charInfo` identity, invalidated the callback, and re-ran the effect — measured at **110 reads in 10 s**, continuously, saturating the GATT queue. **Rule: any effect that both reads a characteristic and writes the result into context must take its inputs from `useRef` and declare `[]` deps**, so its identity is stable and it fires once per focus. Precedent: `components/battery-card.tsx` and `app/(tabs)/device-state/battery.tsx`.
+2. **Deferred callback outliving its context.** A `setTimeout` read-back fired 150 ms after a write, by which time the characteristic could be torn down — `read()` then throws **synchronously**, which a bare `.catch()` does not handle, so a `TypeError` escaped as an unhandled error attributed to an unrelated test. **Rule: in any fire-and-forget deferred BLE callback, optional-call (`read?.()`) AND wrap in `try/catch`, not just `.catch()`.** Precedent: `scheduleClampReadBack` in `context/bluetooth-context.tsx`.
+
+Two practical consequences:
+
+- **A test asserting "the read happened" proves nothing about how many times it happens.** When adding a read-on-focus/interval path, also assert it does NOT re-fire: re-render with a *fresh* device object (mock `useBluetooth` with `mockImplementation`, not `mockReturnValue`, so each render returns new identities) and assert the read count is unchanged. Both suites above carry that test.
+- **Anything in this class needs a real device before merge.** `adb logcat | grep -c "Read from Characteristic"` over a fixed window is the cheap check — steady-state BLE traffic should be near zero when the UI is idle. `/submit-pr` step 5 already mandates on-device verification for device↔app changes; this is one of the things to actually look for while there.
 
 ### App-Update Modal Auto-Opens After Force-Stop + Relaunch
 
