@@ -1,5 +1,23 @@
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { render, waitFor } from '@testing-library/react-native';
+
+// Override the global expo-router mock (useFocusEffect is a no-op jest.fn() there) so the
+// focus callback actually runs — that is what drives the Power Flags re-read this card
+// relies on since Power Flags stopped notifying (Android notification-budget fix).
+// Same technique as use-disconnect-redirect.test.tsx.
+jest.mock('expo-router', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.mock factories cannot reference imports
+  const ReactActual = require('react');
+  return {
+    Link: ({ children }: { children: React.ReactNode }) =>
+      ReactActual.createElement(ReactActual.Fragment, null, children),
+    useRouter: jest.fn(),
+    useFocusEffect: (cb: () => void | (() => void)) => {
+      ReactActual.useEffect(() => cb(), [cb]);
+    },
+    useLocalSearchParams: jest.fn(() => ({})),
+  };
+});
 
 import { BatteryCard } from '@/components/battery-card';
 import {
@@ -152,6 +170,72 @@ describe('BatteryCard (slim tile)', () => {
     // The stale percent still renders — Error is the staleness signal.
     expect(getByText('68%')).toBeTruthy();
     expect(queryByText('Unknown (255)')).toBeNull();
+  });
+
+  it('re-reads Power Flags on focus when it is not notifiable, and applies the fresh value', async () => {
+    // Power Flags drives the "No Battery" badge but stopped notifying with the
+    // notification-budget fix, so the card re-reads it whenever the screen regains
+    // focus. Device returns VBAT_PRESENT clear (0x02) → badge must appear.
+    const read = jest.fn().mockResolvedValue({ value: uint8Value(0x02) });
+    const updateCharValue = jest.fn();
+    const flags = charInfo(uint8Value(0x01), 0x04);
+    (flags.characteristic as Record<string, unknown>).isNotifiable = false;
+    (flags.characteristic as Record<string, unknown>).read = read;
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(50), 0x04),
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(7500), 0x10),
+        [UUID_BATTERY_CHARGE_STATUS]: charInfo(uint8Value(0), 0x04),
+        [UUID_POWER_FLAGS]: flags,
+      }),
+      updateCharValue,
+    } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>);
+
+    render(<BatteryCard />);
+
+    await waitFor(() => {
+      expect(read).toHaveBeenCalled();
+      expect(updateCharValue).toHaveBeenCalledWith(UUID_POWER_FLAGS, uint8Value(0x02));
+    });
+  });
+
+  it('does NOT re-read Power Flags on focus while it is still notifiable', async () => {
+    const read = jest.fn().mockResolvedValue({ value: uint8Value(0x02) });
+    const flags = charInfo(uint8Value(0x01), 0x04);
+    (flags.characteristic as Record<string, unknown>).isNotifiable = true;
+    (flags.characteristic as Record<string, unknown>).read = read;
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(50), 0x04),
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(7500), 0x10),
+        [UUID_POWER_FLAGS]: flags,
+      }),
+      updateCharValue: jest.fn(),
+    } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>);
+
+    render(<BatteryCard />);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('survives a focus read that rejects (mid-disconnect) without throwing', async () => {
+    const read = jest.fn().mockRejectedValue(new Error('disconnected'));
+    const flags = charInfo(uint8Value(0x01), 0x04);
+    (flags.characteristic as Record<string, unknown>).isNotifiable = false;
+    (flags.characteristic as Record<string, unknown>).read = read;
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      selectedDevice: buildDevice({
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(50), 0x04),
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(7500), 0x10),
+        [UUID_POWER_FLAGS]: flags,
+      }),
+      updateCharValue: jest.fn(),
+    } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>);
+
+    expect(() => render(<BatteryCard />)).not.toThrow();
+    await waitFor(() => expect(read).toHaveBeenCalled());
   });
 
   it('Error outranks No Battery: presence flags are stale during a comm outage', () => {

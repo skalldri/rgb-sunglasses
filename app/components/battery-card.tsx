@@ -63,14 +63,23 @@ export function BatteryCard({ style }: { style?: ViewStyle }) {
     // notification-budget fix; it changes rarely (battery physically inserted or
     // removed), so a one-shot read whenever this screen regains focus keeps the
     // badge honest without holding a notification-registration slot.
+    // read() is optional-called and try/caught: on a link that dropped between render and
+    // focus the characteristic object may no longer be readable, and it can then throw
+    // SYNCHRONOUSLY rather than reject — which a bare .catch() would miss, turning a stale
+    // badge into a render-time crash. Nothing depends on this read succeeding; the badge
+    // just keeps its last value until the next focus or reconnect.
     const powerFlagsInfo = chars?.[UUID_POWER_FLAGS];
     useFocusEffect(React.useCallback(() => {
         if (powerFlagsInfo && !powerFlagsInfo.characteristic.isNotifiable) {
-            powerFlagsInfo.characteristic.read()
-                .then(read => {
-                    if (read.value) updateCharValue(UUID_POWER_FLAGS, read.value);
-                })
-                .catch(err => console.log('Power Flags focus read failed:', err));
+            try {
+                powerFlagsInfo.characteristic.read?.()
+                    ?.then(read => {
+                        if (read.value) updateCharValue(UUID_POWER_FLAGS, read.value);
+                    })
+                    .catch(err => console.log('Power Flags focus read failed:', err));
+            } catch (err) {
+                console.log('Power Flags focus read could not start:', err);
+            }
         }
         return undefined;
     }, [powerFlagsInfo, updateCharValue]));
