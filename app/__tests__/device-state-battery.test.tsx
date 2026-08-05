@@ -358,6 +358,37 @@ describe('BatteryDetailScreen', () => {
     });
   });
 
+  it('does not re-arm the refresh pass on every context update (feedback-loop regression)', async () => {
+    // Same regression as BatteryCard's: depending on [selectedDevice, updateCharValue]
+    // turns each read's updateCharValue into a fresh device object, recreating
+    // refreshTelemetry and re-running the focus effect — a continuous read loop instead
+    // of the 2 s interval. Re-renders here stand in for those context updates.
+    const read = jest.fn(async () => ({ value: sint32Value(1234) }));
+    function freshDevice() {
+      const d = buildDevice({ vbatMv: 7910, ibatMa: -350, vbusMv: 0, ibusMa: 0, chgStat: 0 });
+      for (const uuid of [UUID_BATTERY_VOLTAGE, UUID_BATTERY_CURRENT, UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VBUS_CURRENT]) {
+        const info = d.characteristics[uuid] as any;
+        info.characteristic.isNotifiable = false;
+        info.characteristic.read = read;
+      }
+      return d;
+    }
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockImplementation(() => ({
+      selectedDevice: freshDevice(),   // new object identity on every render
+      writeToCharacteristic: jest.fn(async () => true),
+      writeServiceCharacteristic: jest.fn(async () => true),
+      updateCharValue: jest.fn(),
+    } as any));
+
+    const { rerender } = render(<BatteryDetailScreen />);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(4)); // one pass, four characteristics
+
+    rerender(<BatteryDetailScreen />);
+    rerender(<BatteryDetailScreen />);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(4)); // still one pass
+  });
+
   it('stops the focus refresh pass at the first failing read instead of throwing', async () => {
     // A read failing mid-pass means the link is going away; the page must not crash and
     // must not keep hammering the remaining characteristics.

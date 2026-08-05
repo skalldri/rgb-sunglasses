@@ -86,11 +86,23 @@ export default function BatteryDetailScreen() {
     // allows one outstanding GATT op per connection) on a short interval, so the
     // page keeps its live feel. Values land in context via updateCharValue, the
     // same sink the old notifications used.
+    // Both the device and the update sink are read through refs, and refreshTelemetry has
+    // EMPTY deps, so its identity is stable. Depending on [selectedDevice, updateCharValue]
+    // instead is a feedback loop: each read calls updateCharValue, the context hands back a
+    // fresh device object, refreshTelemetry is recreated, and the focus effect re-runs —
+    // re-reading continuously instead of on the interval (hardware-observed 2026-08-05 in
+    // the sibling BatteryCard, ~11 reads/second; unit tests miss it because a mocked
+    // updateCharValue never produces a new context object).
     const refreshInFlight = React.useRef(false);
+    const deviceRef = React.useRef(selectedDevice);
+    deviceRef.current = selectedDevice;
+    const updateCharValueRef = React.useRef(updateCharValue);
+    updateCharValueRef.current = updateCharValue;
+
     const refreshTelemetry = React.useCallback(async () => {
         if (refreshInFlight.current) return;
         refreshInFlight.current = true;
-        const device = selectedDevice;
+        const device = deviceRef.current;
         const telemetryUuids = [
             UUID_BATTERY_VOLTAGE, UUID_BATTERY_CURRENT,
             UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VBUS_CURRENT,
@@ -101,8 +113,8 @@ export default function BatteryDetailScreen() {
                 const info = device?.characteristics?.[uuid];
                 if (!info || info.characteristic.isNotifiable) continue;
                 try {
-                    const read = await info.characteristic.read();
-                    if (read.value) updateCharValue(uuid, read.value);
+                    const read = await info.characteristic.read?.();
+                    if (read?.value) updateCharValueRef.current(uuid, read.value);
                 } catch (err) {
                     // A single failed read (e.g. mid-disconnect) ends this pass; the
                     // interval retries, and the disconnect redirect handles teardown.
@@ -113,7 +125,7 @@ export default function BatteryDetailScreen() {
         } finally {
             refreshInFlight.current = false;
         }
-    }, [selectedDevice, updateCharValue]);
+    }, []);
 
     useFocusEffect(React.useCallback(() => {
         refreshTelemetry();

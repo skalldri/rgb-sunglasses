@@ -200,6 +200,40 @@ describe('BatteryCard (slim tile)', () => {
     });
   });
 
+  it('reads Power Flags ONCE per focus even as context updates hand back fresh objects', async () => {
+    // Regression (hardware-observed 2026-08-05): depending on [powerFlagsInfo,
+    // updateCharValue] made this a feedback loop — the read calls updateCharValue, the
+    // context returns a new characteristics object, the useCallback is invalidated, the
+    // focus effect re-runs. Measured at ~11 reads/second against the real device, which
+    // saturates the GATT queue. Each re-render below simulates one such context update.
+    const read = jest.fn().mockResolvedValue({ value: uint8Value(0x02) });
+    function freshDevice() {
+      const flags = charInfo(uint8Value(0x01), 0x04);
+      (flags.characteristic as Record<string, unknown>).isNotifiable = false;
+      (flags.characteristic as Record<string, unknown>).read = read;
+      return buildDevice({
+        [UUID_BATTERY_PERCENT]: charInfo(uint8Value(50), 0x04),
+        [UUID_BATTERY_VOLTAGE]: charInfo(sint32Value(7500), 0x10),
+        [UUID_POWER_FLAGS]: flags,
+      });
+    }
+
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockImplementation(() => ({
+      selectedDevice: freshDevice(),   // new object identity on every render
+      updateCharValue: jest.fn(),
+    } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>));
+
+    const { rerender } = render(<BatteryCard />);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+
+    rerender(<BatteryCard />);
+    rerender(<BatteryCard />);
+    rerender(<BatteryCard />);
+
+    // Still exactly one read: re-renders must not re-arm the focus effect.
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it('does NOT re-read Power Flags on focus while it is still notifiable', async () => {
     const read = jest.fn().mockResolvedValue({ value: uint8Value(0x02) });
     const flags = charInfo(uint8Value(0x01), 0x04);

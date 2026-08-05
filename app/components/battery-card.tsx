@@ -63,18 +63,30 @@ export function BatteryCard({ style }: { style?: ViewStyle }) {
     // notification-budget fix; it changes rarely (battery physically inserted or
     // removed), so a one-shot read whenever this screen regains focus keeps the
     // badge honest without holding a notification-registration slot.
+    // Read through refs, with EMPTY callback deps, so this fires once per focus.
+    // Depending on [powerFlagsInfo, updateCharValue] instead is a feedback loop: the read
+    // calls updateCharValue, the context hands back a fresh characteristics object, that
+    // changes powerFlagsInfo's identity, the useCallback is invalidated and the focus
+    // effect re-runs — measured at ~11 reads/second, forever, saturating the GATT queue
+    // (hardware-observed 2026-08-05; unit tests can't see it because a mocked
+    // updateCharValue never produces a new context object).
+    const powerFlagsRef = React.useRef(chars?.[UUID_POWER_FLAGS]);
+    powerFlagsRef.current = chars?.[UUID_POWER_FLAGS];
+    const updateCharValueRef = React.useRef(updateCharValue);
+    updateCharValueRef.current = updateCharValue;
+
     // read() is optional-called and try/caught: on a link that dropped between render and
     // focus the characteristic object may no longer be readable, and it can then throw
     // SYNCHRONOUSLY rather than reject — which a bare .catch() would miss, turning a stale
     // badge into a render-time crash. Nothing depends on this read succeeding; the badge
     // just keeps its last value until the next focus or reconnect.
-    const powerFlagsInfo = chars?.[UUID_POWER_FLAGS];
     useFocusEffect(React.useCallback(() => {
-        if (powerFlagsInfo && !powerFlagsInfo.characteristic.isNotifiable) {
+        const info = powerFlagsRef.current;
+        if (info && !info.characteristic.isNotifiable) {
             try {
-                powerFlagsInfo.characteristic.read?.()
+                info.characteristic.read?.()
                     ?.then(read => {
-                        if (read.value) updateCharValue(UUID_POWER_FLAGS, read.value);
+                        if (read.value) updateCharValueRef.current(UUID_POWER_FLAGS, read.value);
                     })
                     .catch(err => console.log('Power Flags focus read failed:', err));
             } catch (err) {
@@ -82,7 +94,7 @@ export function BatteryCard({ style }: { style?: ViewStyle }) {
             }
         }
         return undefined;
-    }, [powerFlagsInfo, updateCharValue]));
+    }, []));
     const fwPercent = decodeUint8OrNull(chars?.[UUID_BATTERY_PERCENT]?.value);
     const vbatMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VOLTAGE]?.value);
     const chgStat = decodeUint8OrNull(chars?.[UUID_BATTERY_CHARGE_STATUS]?.value);
