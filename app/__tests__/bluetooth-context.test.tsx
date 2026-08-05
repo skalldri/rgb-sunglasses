@@ -271,6 +271,66 @@ describe('BluetoothProvider', () => {
     });
   });
 
+  it('re-reads a non-notifiable characteristic after a successful write, and survives a characteristic with no read()', async () => {
+    // Non-notifiable characteristics get a delayed read-back (the firmware's clamp
+    // write-back used to arrive as a notification; it doesn't since the Android
+    // notification-budget fix). The callback fires ~150 ms LATER, so by then the link
+    // may be gone and read() can throw synchronously rather than reject — which is
+    // exactly what broke CI: an unhandled TypeError escaping a torn-down test.
+    jest.useFakeTimers();
+    try {
+      const getApi = setupProvider();
+      const writeWithResponse = jest.fn().mockResolvedValue(undefined);
+
+      // 1. Happy path: read-back applies the device's canonical value.
+      const device = buildSelectedDevice(writeWithResponse, btoa('old'));
+      device.characteristics['char-1'].characteristic.isNotifiable = false;
+      device.characteristics['char-1'].characteristic.read = jest
+        .fn()
+        .mockResolvedValue({ value: btoa('clamped') });
+
+      act(() => { getApi().setSelectedDevice(device); });
+      await act(async () => { await getApi().writeToCharacteristic('char-1', btoa('9999')); });
+      await act(async () => { jest.advanceTimersByTime(200); });
+
+      await waitFor(() => {
+        expect(getApi().getCharacteristicInfo('char-1')?.value).toBe(btoa('clamped'));
+      });
+
+      // 2. Robustness: a characteristic object with no read() must not throw when the
+      //    timer fires (the CI failure mode).
+      const bare = buildSelectedDevice(writeWithResponse, btoa('old'));
+      bare.characteristics['char-1'].characteristic.isNotifiable = false;
+      act(() => { getApi().setSelectedDevice(bare); });
+      await act(async () => { await getApi().writeToCharacteristic('char-1', btoa('new')); });
+
+      expect(() => { jest.advanceTimersByTime(200); }).not.toThrow();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does NOT re-read a notifiable characteristic after a write (it pushes its own value)', async () => {
+    jest.useFakeTimers();
+    try {
+      const getApi = setupProvider();
+      const writeWithResponse = jest.fn().mockResolvedValue(undefined);
+      const device = buildSelectedDevice(writeWithResponse, btoa('old'));
+      const read = jest.fn().mockResolvedValue({ value: btoa('unexpected') });
+      device.characteristics['char-1'].characteristic.isNotifiable = true;
+      device.characteristics['char-1'].characteristic.read = read;
+
+      act(() => { getApi().setSelectedDevice(device); });
+      await act(async () => { await getApi().writeToCharacteristic('char-1', btoa('new')); });
+      await act(async () => { jest.advanceTimersByTime(500); });
+
+      expect(read).not.toHaveBeenCalled();
+      expect(getApi().getCharacteristicInfo('char-1')?.value).toBe(btoa('new'));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('clears lastWriteError at the start of the next write attempt (issue #92, care point a)', async () => {
     const getApi = setupProvider();
     const writeWithResponse = jest

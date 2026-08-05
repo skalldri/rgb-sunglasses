@@ -165,18 +165,22 @@ size_t GlimSelectionCharacteristic::sSelectedIndex = 0;
 
 GlimSelectionCharacteristic glimSelection;
 
-// Notify=true (like GlimSelectionCharacteristic above): after onWrite() reorders storage to the
-// canonical selected-first list, the change-detecting notify pushes it to the app. The companion
-// app's dropdown writes the bare option text with skipOptimisticUpdate and relies ENTIRELY on this
-// notification to update its UI (components/characteristic-dropdown.tsx) — without it the write
-// still takes effect on-device but the picker never reflects the new mode. Don't set this back to
-// false.
+// Notify=false, unlike GlimSelectionCharacteristic above: loop mode only ever changes because
+// the app wrote it (the `glim set_loop_mode` shell command is a developer tool, not a
+// user-visible scenario), so it does not earn one of Android's ~15 notification-registration
+// slots (BTA_GATTC_NOTIF_REG_MAX — see fw/src/core_config.cpp).
+//
+// The app's dropdown still settles on the canonical selected-first list without a notify: it
+// applies a reordered optimistic value immediately (components/characteristic-dropdown.tsx
+// passes `optimisticValue`), and the read-back-after-write that context/bluetooth-context.tsx
+// performs for every non-notifiable characteristic re-affirms what the device actually stored.
+// Selection above keeps its notify because buttons and clip auto-advance change it device-side.
 class GlimLoopModeCharacteristic
-    : public BtGattAutoCharacteristicExt<GlimLoopModeCharacteristic, "Loop Mode", true, false,
+    : public BtGattAutoCharacteristicExt<GlimLoopModeCharacteristic, "Loop Mode", false, false,
                                          BtGattDropdownList<kGlimLoopModeMaxLen>,
                                          BtGattDropdownList<kGlimLoopModeMaxLen>{}> {
    public:
-    using Base = BtGattAutoCharacteristicExt<GlimLoopModeCharacteristic, "Loop Mode", true, false,
+    using Base = BtGattAutoCharacteristicExt<GlimLoopModeCharacteristic, "Loop Mode", false, false,
                                              BtGattDropdownList<kGlimLoopModeMaxLen>,
                                              BtGattDropdownList<kGlimLoopModeMaxLen>{}>;
     using Base::operator=;

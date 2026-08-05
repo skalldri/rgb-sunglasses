@@ -233,18 +233,34 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     // fw/src/sound/audio_config.cpp), and before the Android notification-budget fix that
     // write-back arrived as a notification. Now that app-written tunables don't notify,
     // re-read shortly after a successful write so the UI settles on the value the firmware
-    // actually runs. Fire-and-forget: a read failing after a disconnect just logs.
+    // actually runs. The delay lets that device-side write-back land first; reading
+    // immediately would race it.
     const CLAMP_READBACK_DELAY_MS = 150;
     const scheduleClampReadBack = useCallback((charInfo: CharacteristicInfo, apply: (value: string) => void) => {
         if (charInfo.characteristic.isNotifiable) {
             return;  // notifying characteristics push their own canonical value
         }
+        // Fire-and-forget, and deliberately defensive: this callback outlives the write by
+        // 150 ms, so by the time it runs the link may be gone, the client torn down, or the
+        // characteristic object no longer readable. read() can therefore throw
+        // SYNCHRONOUSLY (not just reject) — a plain .catch() misses that and the TypeError
+        // escapes as an unhandled error with no call stack pointing back here. Nothing in
+        // the UI depends on this read succeeding: the optimistic value is already applied,
+        // and the next connect re-reads everything.
         setTimeout(() => {
-            charInfo.characteristic.read()
-                .then(read => {
-                    if (read.value) apply(read.value);
-                })
-                .catch(err => console.log(`Post-write read-back failed for ${charInfo.characteristic.uuid}:`, err));
+            try {
+                const pending = charInfo.characteristic.read?.();
+                if (!pending) {
+                    return;  // no read() on this object (torn down, or a test double)
+                }
+                pending
+                    .then(read => {
+                        if (read.value) apply(read.value);
+                    })
+                    .catch(err => console.log(`Post-write read-back failed for ${charInfo.characteristic.uuid}:`, err));
+            } catch (err) {
+                console.log(`Post-write read-back could not start for ${charInfo.characteristic.uuid}:`, err);
+            }
         }, CLAMP_READBACK_DELAY_MS);
     }, []);
 

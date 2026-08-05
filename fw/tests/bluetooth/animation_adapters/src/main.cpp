@@ -583,13 +583,16 @@ ZTEST(animation_adapters, test_glim_player) {
     zassert_not_null(loopModeAttr);
     zassert_true(read_str(loopModeAttr, buf, sizeof(buf)) == "");
 
-    /* Regression: the app's Loop Mode dropdown writes with skipOptimisticUpdate and relies
-     * ENTIRELY on the notify to update its UI, so this characteristic MUST be notifiable. It
-     * previously wasn't (Notify=false) — the write took effect on-device but the picker never
-     * moved. GlimSelection has always been notifiable; assert both, so a regression to false
-     * on either is caught here. */
-    zassert_true(chrc_has_notify(svc, loopModeAttr), "Loop Mode characteristic must expose NOTIFY");
-    zassert_true(chrc_has_notify(svc, selectionAttr), "Glim Selection must expose NOTIFY");
+    /* Notification budget (Android's ~15-slot BTA_GATTC_NOTIF_REG_MAX): Selection notifies
+     * because buttons and clip auto-advance change it DEVICE-side; Loop Mode does not,
+     * because only the app (or the developer-only `glim set_loop_mode` shell command) ever
+     * changes it — the dropdown's optimistic value plus the app's read-back-after-write on
+     * non-notifiable characteristics settle its UI. Assert both directions so a regression
+     * either way is caught here. */
+    zassert_false(chrc_has_notify(svc, loopModeAttr),
+                  "Loop Mode must NOT expose NOTIFY (app-written only; notification budget)");
+    zassert_true(chrc_has_notify(svc, selectionAttr),
+                 "Glim Selection must expose NOTIFY (buttons/auto-advance change it device-side)");
 
     const bt_gatt_attr *isActiveAttr = nth_char_value(svc, 2);
     zassert_not_null(isActiveAttr);

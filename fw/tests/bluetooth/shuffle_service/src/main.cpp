@@ -50,6 +50,24 @@ static ssize_t do_write(const struct bt_gatt_attr *attr, const void *data, size_
     return attr->write(NULL, attr, data, len, 0 /* offset */, 0 /* flags */);
 }
 
+/* The CHRC declaration attr sits immediately before its value attr; used to assert the
+ * notification-budget contract below. */
+static bool chrc_has_notify(const struct bt_gatt_attr *valueAttr) {
+    STRUCT_SECTION_FOREACH(bt_gatt_service_static, svc) {
+        for (size_t i = 1; i < svc->attr_count; i++) {
+            if (&svc->attrs[i] == valueAttr) {
+                const struct bt_gatt_attr *prev = &svc->attrs[i - 1];
+                if (prev->uuid == NULL || bt_uuid_cmp(prev->uuid, BT_UUID_GATT_CHRC) != 0) {
+                    return false;
+                }
+                return (static_cast<const struct bt_gatt_chrc *>(prev->user_data)->properties &
+                        BT_GATT_CHRC_NOTIFY) != 0;
+            }
+        }
+    }
+    return false;
+}
+
 /* settings_read_cb feeding a persisted value into the registry's load dispatch,
  * the same way settings_load() would after a reboot. */
 static ssize_t read_persisted_bool(void *cb_arg, void *data, size_t len) {
@@ -133,6 +151,13 @@ ZTEST(shuffle_service, test_defaults_writes_and_shell_setter) {
     zassert_false(shuffle_service_get_enabled());
     shuffle_service_set_enabled(true);
     zassert_true(shuffle_service_get_enabled());
+
+    /* Notification budget (Android's ~15-slot BTA_GATTC_NOTIF_REG_MAX): none of the three
+     * notify. All are app-written; the only device-side writer is the developer-only
+     * `anim shuffle` shell command above, which is not a user-visible scenario. */
+    zassert_false(chrc_has_notify(enabledAttr), "Shuffle Enabled must NOT expose NOTIFY");
+    zassert_false(chrc_has_notify(minAttr), "Shuffle Min Duration must NOT expose NOTIFY");
+    zassert_false(chrc_has_notify(maxAttr), "Shuffle Max Duration must NOT expose NOTIFY");
 }
 
 ZTEST(shuffle_service, test_persisted_keys_registered_and_loaded) {
