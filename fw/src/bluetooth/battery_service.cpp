@@ -193,7 +193,29 @@ BtGattPrimaryService<kBatteryServiceUuid> batteryPrimaryService;
  * notifies on an actual change, so a resting pack is silent rather than
  * spamming a notification per ADC sample. Charge Status and Battery Percent
  * additionally stay subscribed app-wide, since the always-visible battery card
- * renders them. */
+ * renders them.
+ *
+ * UPDATE ORDER IS LOAD-BEARING: install the app update BEFORE this firmware.
+ * That is a deliberate, accepted trade-off, not an oversight. An app build that
+ * predates scoped subscriptions bulk-subscribes to EVERY notifiable
+ * characteristic, so these four push such a build from ~12 concurrent
+ * registrations to ~16 — past BTA_GATTC_NOTIF_REG_MAX, where the overflow
+ * (SMP included) is dropped silently and firmware updates hang exactly as they
+ * did in fw-v2.1.0. The scoping that makes these four safe lives in the APP, so
+ * only an app carrying it is protected. The count also grows by one per
+ * installed extension, so the margin is smaller than it looks.
+ *
+ * Consequences to keep in mind when touching this:
+ *   - Release notes for any firmware release containing this MUST state the
+ *     ordering (/release step 4a exists for exactly this).
+ *   - The new-app-on-old-firmware combination is therefore the EXPECTED
+ *     intermediate state, and the app must stay correct against firmware where
+ *     these are read-only — useScopedCharacteristicMonitors polls any target it
+ *     finds non-notifiable for that reason. Don't delete that fallback.
+ *   - Re-adding these CCC descriptors also shifts every later attribute handle
+ *     relative to the previous build, so a bonded phone whose stack ignores
+ *     Service Changed (OxygenOS, issue #115) needs forget + /re-pair after the
+ *     OTA. A Pixel re-discovers on its own (verified 2026-08-05). */
 BtGattAutoReadNotifyCharacteristic<"Battery Voltage (mV)", int32_t, 0> batteryVoltageMv;
 BtGattAutoReadNotifyCharacteristic<"Battery Current (mA)", int32_t, 0> batteryCurrentMa;
 BtGattAutoReadNotifyCharacteristic<"VBUS Voltage (mV)", int32_t, 0> vbusVoltageMv;

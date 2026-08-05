@@ -80,17 +80,14 @@ export default function BatteryDetailScreen() {
 
     const chars = selectedDevice?.characteristics;
 
-    // The raw telemetry rendered here (battery/VBUS volts+amps, the Power Debug
-    // section) stopped notifying with the Android notification-budget fix — only
-    // Battery Percent and Charge Status still push (they feed the always-visible
-    // card). Re-read the rest while this screen is focused, sequentially (Android
-    // allows one outstanding GATT op per connection) on a short interval, so the
-    // page keeps its live feel. Values land in context via updateCharValue, the
-    // same sink the old notifications used.
     // The four raw telemetry values are notifiable and pushed by the charger thread
     // (quantized to 10 mV / 10 mA, so a resting pack is silent). Subscribe to them only
     // while this page is focused — that is what keeps the app inside Android's ~15-slot
     // concurrent-registration budget while still getting instant updates here.
+    // Against firmware that predates the notify restoration these are read-only; the
+    // hook polls them instead, so this page behaves the same on either build. That
+    // combination is not hypothetical — the app is expected to be updated BEFORE the
+    // firmware (see the compatibility note in fw/src/bluetooth/battery_service.cpp).
     useScopedCharacteristicMonitors(React.useMemo(() => [
         { serviceUuid: UUID_BATTERY_SERVICE, charUuid: UUID_BATTERY_VOLTAGE },
         { serviceUuid: UUID_BATTERY_SERVICE, charUuid: UUID_BATTERY_CURRENT },

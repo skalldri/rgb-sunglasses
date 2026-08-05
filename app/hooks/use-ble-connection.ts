@@ -120,8 +120,15 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     // animations need nothing here: their toggles come from the Active Animation
     // fan-out above.
     const activeExtensionMonitor = useRef<{ serviceUuid: string; subscription: { remove: () => void } } | null>(null);
+    // rxandroidble's teardown is fire-and-forget, so a callback queued by the OLD
+    // subscription can still fire after remove() — and it would write Is Active=1
+    // for the extension we just switched AWAY from, leaving two toggles on at once.
+    // Each subscription captures this counter and ignores its own late callbacks.
+    // Same technique as the scoped-monitor hook and the scan-generation token.
+    const activeExtensionGeneration = useRef(0);
 
     const clearActiveExtensionMonitor = useCallback(() => {
+        activeExtensionGeneration.current++;
         if (!activeExtensionMonitor.current) return;
         try {
             activeExtensionMonitor.current.subscription.remove();
@@ -147,8 +154,10 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         const info = charsByService?.[activeServiceUuid]?.[UUID_IS_ACTIVE_CHARACTERISTIC];
         if (!info?.characteristic.isNotifiable) return;
 
+        const generation = activeExtensionGeneration.current;
         try {
             const subscription = info.characteristic.monitor((error, characteristic) => {
+                if (activeExtensionGeneration.current !== generation) return;  // superseded
                 if (error) {
                     const errorStr = error?.message || String(error);
                     // remove() delivers OperationCancelled here; a dropped link delivers
@@ -675,6 +684,24 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 });
             });
             console.log(`Set up ${monitorSubscriptions.current.length} characteristic monitors`);
+
+            // Arm the sandbox-fault monitor for an extension that is ALREADY the
+            // active animation at connect time. syncActiveExtensionMonitor is
+            // otherwise reached only from the Active Animation notification callback,
+            // which never fires on a connection where the value doesn't change — so
+            // reconnecting (or relaunching) while an extension is running would leave
+            // that push unarmed. A fault would then flip Is Active off device-side
+            // with no Active Animation change, the app would never hear it, and the
+            // Controls toggle would keep showing the extension as running while the
+            // panel is actually scrolling its FAULT banner. The old bulk-subscribe
+            // loop covered this case for free; scoping has to do it explicitly.
+            const activeAnimationValue = characteristics[UUID_ACTIVE_ANIMATION]?.value;
+            if (activeAnimationValue) {
+                const bootActiveId = decodeUint32FromBase64(activeAnimationValue);
+                syncActiveExtensionMonitor(bootActiveId,
+                                           animationServiceUuidForId(bootActiveId),
+                                           characteristicsByService);
+            }
 
             // Register the disconnect listener using selectedDeviceRef so the callback
             // always reads the current mcuMgrClient, not a stale closure snapshot.

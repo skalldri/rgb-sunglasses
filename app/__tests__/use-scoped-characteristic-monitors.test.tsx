@@ -203,7 +203,7 @@ describe('useScopedCharacteristicMonitors', () => {
     expect(updateCharValue).not.toHaveBeenCalledWith(UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x01'));
   });
 
-  it('skips non-notifiable characteristics and survives one with no read()', async () => {
+  it('never subscribes to a non-notifiable characteristic, and survives one with no read()', async () => {
     const monitor = jest.fn(() => ({ remove: jest.fn() }));
     const info = makeCharInfo({ notifiable: false, monitor });
     mockContext(info);
@@ -215,5 +215,106 @@ describe('useScopedCharacteristicMonitors', () => {
     (bare.characteristic as Record<string, unknown>).read = undefined;
     mockContext(bare);
     expect(() => render(<Harness targets={TARGETS} />)).not.toThrow();
+  });
+
+  it('polls a non-notifiable target instead of leaving it frozen, and stops on blur', async () => {
+    // The app ships ahead of the firmware, so "new app, old firmware" — where these
+    // characteristics are still read-only — is an expected state, not an edge case.
+    // Subscribing is impossible there; without this fallback the page would render
+    // the connect-time snapshot forever.
+    jest.useFakeTimers();
+    try {
+      const read = jest.fn(async () => ({ value: btoa('polled') }));
+      const info = makeCharInfo({ notifiable: false, read });
+      const { updateCharValue } = mockContext(info);
+
+      const { rerender } = render(<Harness targets={TARGETS} />);
+      const afterMount = read.mock.calls.length;
+
+      await act(async () => { jest.advanceTimersByTime(2000); });
+      expect(read.mock.calls.length).toBeGreaterThan(afterMount);
+      expect(updateCharValue).toHaveBeenCalledWith(CHAR, btoa('polled'));
+
+      // Blur must stop the interval — a leaked timer would keep reading forever.
+      // rerender (not a fresh render) so the SAME tree runs its cleanup.
+      focusState.focused = false;
+      rerender(<Harness targets={TARGETS} />);
+      const afterBlur = read.mock.calls.length;
+      await act(async () => { jest.advanceTimersByTime(6000); });
+      expect(read.mock.calls.length).toBe(afterBlur);
+    } finally {
+      focusState.focused = true;
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not let the seed read overwrite a notification that arrived first', async () => {
+    // The seed read and the subscription are issued together, so a notification can
+    // land while the read is still in flight. That notification is strictly fresher;
+    // applying the read afterwards would snap the value backwards (app/CLAUDE.md,
+    // "A deferred read must compare-and-swap before it applies").
+    let resolveRead: (v: { value: string }) => void = () => {};
+    const read = jest.fn(() => new Promise<{ value: string }>(res => { resolveRead = res; }));
+    let notify: (e: unknown, c: unknown) => void = () => {};
+    const monitor = jest.fn((cb: (e: unknown, c: unknown) => void) => { notify = cb; return { remove: jest.fn() }; });
+    const info = makeCharInfo({ read: read as unknown as jest.Mock, monitor });
+    const { updateCharValue } = mockContext(info);
+
+    render(<Harness targets={TARGETS} />);
+
+    // Notification wins the race...
+    act(() => { notify(null, { value: btoa('fresh') }); });
+    // ...then the older seed read finally resolves.
+    await act(async () => { resolveRead({ value: btoa('stale-seed') }); });
+
+    expect(updateCharValue).toHaveBeenCalledWith(CHAR, btoa('fresh'));
+    expect(updateCharValue).not.toHaveBeenCalledWith(CHAR, btoa('stale-seed'));
+  });
+
+  it('survives a dropdown re-read whose read() throws synchronously', async () => {
+    // A deferred BLE call can throw synchronously once the link is gone, which a bare
+    // .catch() does not handle — the exception would escape the native monitor callback
+    // as an unhandled error (app/CLAUDE.md).
+    let notify: (e: unknown, c: unknown) => void = () => {};
+    const monitor = jest.fn((cb: (e: unknown, c: unknown) => void) => { notify = cb; return { remove: jest.fn() }; });
+    const info = makeCharInfo({ cpfFormat: BLE_GATT_CPF_FORMAT_DROPDOWN_LIST, monitor });
+    mockContext(info);
+
+    render(<Harness targets={TARGETS} />);
+
+    const torndown = {
+      value: btoa('x'),
+      read: () => { throw new TypeError('read is not a function'); },
+    };
+    expect(() => act(() => { notify(null, torndown); })).not.toThrow();
+  });
+
+  it('arms late when the device only appears after the screen is focused', async () => {
+    // The effect takes no context deps by design (that is the read-loop hazard), so
+    // without a retry a screen focused during connect would subscribe to nothing and
+    // never try again until the user navigated away and back.
+    jest.useFakeTimers();
+    try {
+      const monitor = jest.fn(() => ({ remove: jest.fn() }));
+      const info = makeCharInfo({ monitor });
+
+      // Focus with no device in context yet.
+      jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+        selectedDevice: null,
+        updateCharValue: jest.fn(),
+        updateServiceCharacteristicValue: jest.fn(),
+      } as unknown as ReturnType<typeof BluetoothContext.useBluetooth>);
+      const { rerender } = render(<Harness targets={TARGETS} />);
+      expect(monitor).not.toHaveBeenCalled();
+
+      // Connect completes while the screen stays focused (no blur/refocus).
+      mockContext(info);
+      rerender(<Harness targets={TARGETS} />);
+      await act(async () => { jest.advanceTimersByTime(1600); });
+
+      expect(monitor).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
