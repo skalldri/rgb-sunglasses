@@ -6,6 +6,8 @@ import {
     getServiceName,
     UUID_ACTIVE_ANIMATION,
     UUID_ANIMATION_NAME_CHARACTERISTIC,
+    UUID_BATTERY_CHARGE_STATUS,
+    UUID_BATTERY_PERCENT,
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
@@ -23,9 +25,24 @@ import {
 } from "@/services/ble-foreground-service";
 import { decodeUint32FromBase64, decodeUtf8FromBase64, MetadataBlobEntry, parseMetadataBlob } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { ConnectionPriority } from "react-native-ble-plx";
+
+/**
+ * The only notifications held open for the whole session. Each drives UI reachable
+ * from anywhere in the app, so scoping them to a screen would be wrong. Everything
+ * else notifiable is subscribed on demand — see the comment at the monitor loop in
+ * connect(), and the budget rule in fw/src/core_config.cpp.
+ *
+ * Keep this list short: it is the floor of the ~15-slot Android budget that every
+ * screen-scoped subscription is added on top of.
+ */
+const ALWAYS_ON_MONITOR_UUIDS: string[] = [
+    UUID_ACTIVE_ANIMATION,
+    UUID_BATTERY_PERCENT,
+    UUID_BATTERY_CHARGE_STATUS,
+];
 
 interface UseBleConnectionResult {
     isConnecting: boolean;
@@ -91,6 +108,68 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     // Guards against calling setIsConnecting after the component unmounts.
     const isMountedRef = useRef(true);
     useEffect(() => () => { isMountedRef.current = false; }, []);
+
+    // The ONE extension Is Active subscription, re-pointed as the active animation
+    // changes. Extension Is Active is the only remaining per-instance notification:
+    // with kMaxExtensions = 16, subscribing to every installed extension would blow
+    // Android's ~15-slot budget on its own. It is only needed for the sandbox-fault
+    // push (firmware flips Is Active off with no Active Animation change), and a
+    // sandbox can only fault while it is the animation actually running — so
+    // tracking just the active one is complete, not a heuristic. Built-in
+    // animations need nothing here: their toggles come from the Active Animation
+    // fan-out above.
+    const activeExtensionMonitor = useRef<{ serviceUuid: string; subscription: { remove: () => void } } | null>(null);
+
+    const clearActiveExtensionMonitor = useCallback(() => {
+        if (!activeExtensionMonitor.current) return;
+        try {
+            activeExtensionMonitor.current.subscription.remove();
+        } catch (err) {
+            console.log('Failed to remove active-extension monitor:', err);
+        }
+        activeExtensionMonitor.current = null;
+    }, []);
+
+    const syncActiveExtensionMonitor = useCallback((
+        activeId: number,
+        activeServiceUuid: string,
+        charsByService: Record<string, Record<string, CharacteristicInfo>>,
+    ) => {
+        // Extension animation ids start at 0x40 (fw/src/extensions/extension_limits.h).
+        const isExtension = activeId >= 0x40;
+        if (activeExtensionMonitor.current?.serviceUuid === activeServiceUuid && isExtension) {
+            return;  // already pointed at the right slot
+        }
+        clearActiveExtensionMonitor();
+        if (!isExtension) return;
+
+        const info = charsByService?.[activeServiceUuid]?.[UUID_IS_ACTIVE_CHARACTERISTIC];
+        if (!info?.characteristic.isNotifiable) return;
+
+        try {
+            const subscription = info.characteristic.monitor((error, characteristic) => {
+                if (error) {
+                    const errorStr = error?.message || String(error);
+                    // remove() delivers OperationCancelled here; a dropped link delivers
+                    // a disconnect error. Both are normal endings, not failures.
+                    if (errorStr.includes('cancel') || errorStr.includes('Cancel') ||
+                        errorStr.includes('disconnect') || errorStr.includes('Disconnect')) {
+                        return;
+                    }
+                    console.error('Active-extension Is Active notification error:', error);
+                    return;
+                }
+                if (characteristic?.value) {
+                    updateServiceCharacteristicValue(
+                        activeServiceUuid, UUID_IS_ACTIVE_CHARACTERISTIC, characteristic.value);
+                }
+            });
+            activeExtensionMonitor.current = { serviceUuid: activeServiceUuid, subscription };
+            console.log(`Tracking sandbox faults for active extension ${activeServiceUuid}`);
+        } catch (err) {
+            console.log('Could not monitor active extension Is Active:', err);
+        }
+    }, [clearActiveExtensionMonitor, updateServiceCharacteristicValue]);
 
     // Re-entrancy guard AND result-sharing, checked synchronously (unlike
     // isConnecting state, which is async - a second onPress delivered before the
@@ -477,13 +556,22 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                 serviceDisplayNames,
             });
 
-            // Set up monitors for all notifiable characteristics except SMP and the
-            // MCUboot Updater Status char — both are monitored by their own modal-scoped
-            // clients (McuMgrClient / McubootUpdaterClient), and a bulk-loop copy would
-            // burn one of Android's ~15 notification-registration slots
-            // (BTA_GATTC_NOTIF_REG_MAX) for a feed nothing here consumes. The firmware
-            // keeps the total notifiable count small for the same budget reason — see
-            // the SMP-timeout root-cause notes in fw/src/core_config.cpp.
+            // Subscribe ONLY to the always-on set — the handful of notifications that
+            // drive UI visible from anywhere in the app:
+            //
+            //   Active Animation   which animation is running (Controls list toggles)
+            //   Battery Percent    the always-visible battery card
+            //   Charge Status      same card's badge
+            //
+            // Everything else notifiable is subscribed on demand: screen-scoped via
+            // useScopedCharacteristicMonitors (battery detail, animation detail), or
+            // state-scoped (the active extension's Is Active, below), or owned by a
+            // modal-scoped client (SMP via McuMgrClient, MCUboot Status via
+            // McubootUpdaterClient — hence their exclusions here, which also stop a
+            // bulk-loop copy from burning a slot on a feed nothing here consumes).
+            //
+            // This is what keeps concurrent registrations inside Android's ~15-slot
+            // BTA_GATTC_NOTIF_REG_MAX; see the rule block in fw/src/core_config.cpp.
             console.log('Setting up characteristic monitors...');
             Object.entries(characteristicsByService).forEach(([serviceUuid, chars]) => {
                 const serviceName = getServiceName(serviceUuid);
@@ -491,6 +579,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                     const charName = charInfo.name || getCharacteristicName(charUuid);
                     if (
                         charInfo.characteristic.isNotifiable &&
+                        ALWAYS_ON_MONITOR_UUIDS.includes(charUuid) &&
                         !(serviceUuid === SMP_SERVICE_UUID && charUuid === SMP_CHARACTERISTIC_UUID) &&
                         charUuid !== UUID_MCUBOOT_UPDATER_STATUS
                     ) {
@@ -556,6 +645,8 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                                 svcUuid === activeServiceUuid ? 'AQ==' : 'AA==');
                                         }
                                     });
+                                    syncActiveExtensionMonitor(activeId, activeServiceUuid,
+                                                               characteristicsByService);
                                 } else {
                                     updateCharValue(charUuid, characteristic.value);
                                 }
@@ -587,6 +678,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                     console.log(`Cleaning up ${monitorSubscriptions.current.length} characteristic monitors on disconnect`);
                     monitorSubscriptions.current.forEach(sub => sub.remove());
                     monitorSubscriptions.current = [];
+                    clearActiveExtensionMonitor();
 
                     if (selectedDeviceRef.current?.mcuMgrClient) {
                         try {
@@ -734,6 +826,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         disconnectSubscription.current = null;
         monitorSubscriptions.current.forEach(sub => sub.remove());
         monitorSubscriptions.current = [];
+        clearActiveExtensionMonitor();
         if (current.mcuMgrClient) {
             try {
                 current.mcuMgrClient.destroy();
@@ -767,6 +860,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             console.log(`Cleaning up ${monitorSubscriptions.current.length} characteristic monitors`);
             monitorSubscriptions.current.forEach(sub => sub.remove());
             monitorSubscriptions.current = [];
+            clearActiveExtensionMonitor();
 
             // Tolerate a "not connected" rejection here. Disconnect's goal is a
             // disconnected app state, and the app can legitimately believe it's

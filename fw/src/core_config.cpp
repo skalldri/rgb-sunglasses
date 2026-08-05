@@ -10,10 +10,36 @@ constexpr bt_uuid_128 kCoreConfigServiceUuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, CoreConfig::kServiceIdNum, 0x56789abc0000));
 
 BtGattPrimaryService<kCoreConfigServiceUuid> coreConfigPrimaryService;
-// Notify=false on the four config values (they used to be true): Android caps GATT
-// notification registrations at ~15 per app (BTA_GATTC_NOTIF_REG_MAX); these are
-// app-written tunables, and the clamp write-back in the getters below reaches the
-// app via its read-back-after-write on non-notifiable characteristics.
+
+// ---------------------------------------------------------------------------
+// THE NOTIFICATION-BUDGET RULE (this comment is the reference other services
+// point at; keep it here, don't duplicate it)
+//
+// Android caps GATT notification registrations at ~15 per app
+// (BTA_GATTC_NOTIF_REG_MAX) and SILENTLY drops the overflow — the CCC write
+// still succeeds, so firmware notifies into a void. That is what broke every
+// companion-app firmware update in fw-v2.1.0 (diagnosis: /debug-ble section 4a).
+//
+// The cap is on CONCURRENT REGISTRATIONS, not on how many characteristics are
+// declared notifiable. So the division of responsibility is:
+//
+//   FIRMWARE declares Notify=true wherever a genuine DEVICE-SIDE push exists
+//   (a shell command, a button, a sensor/charger thread, a fault) — and
+//   Notify=false where only the app ever changes the value, because there the
+//   app's own read-back-after-write already tells it what the device stored.
+//
+//   THE APP decides WHEN to register: a tiny always-on set, plus subscriptions
+//   scoped to the focused screen or to the active animation
+//   (app/hooks/use-scoped-characteristic-monitors.ts).
+//
+// So do NOT reach for Notify=false to save budget on a value the device really
+// does push — scope it app-side instead. Reserve Notify=false for
+// app-written-only values.
+// ---------------------------------------------------------------------------
+
+// These four are app-written tunables with no device-side writer, so Notify=false
+// is correct on its own terms: the clamp write-back in the getters below reaches
+// the app via its read-back-after-write on non-notifiable characteristics.
 BtGattPersistentCharacteristic<"core/brightness", "Brightness (0-1000)", false, uint32_t, 20>
     coreBrightness;
 BtGattPersistentCharacteristic<"core/display_thread_rate_ms", "Display Thread Rate * 1000 (ms)",

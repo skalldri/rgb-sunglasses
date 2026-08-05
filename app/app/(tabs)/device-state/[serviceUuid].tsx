@@ -8,11 +8,12 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { ListRow } from "@/components/ui/list-row";
 import { Section } from "@/components/ui/section";
-import { getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERISTIC } from "@/constants/bluetooth";
+import { getCharacteristicName, getServiceName, UUID_ANIMATION_NAME_CHARACTERISTIC, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useCharacteristicEditor } from "@/hooks/use-characteristic-editor";
 import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
+import { useScopedCharacteristicMonitors } from "@/hooks/use-scoped-characteristic-monitors";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { encodeUint32ToBase64 } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
@@ -35,6 +36,32 @@ export default function DeviceStateDetailScreen() {
 
     const serviceCharacteristics = selectedDevice?.characteristicsByService?.[serviceUuid] ?? null;
     const title = selectedDevice?.serviceDisplayNames?.[serviceUuid] ?? getServiceName(serviceUuid);
+
+    // Subscribe to THIS service's notifiable characteristics only while this screen is
+    // focused — Glim Selection (buttons / clip auto-advance) and the slot-playlist
+    // Up Next / Now Playing (advanced by the animation itself). They are rendered
+    // nowhere else in the app, so holding them open app-wide would spend Android's
+    // ~15-slot notification budget on values nobody is looking at; that budget is what
+    // the SMP/DFU characteristic competes for (see fw/src/core_config.cpp).
+    //
+    // Is Active and Shuffle Include are deliberately excluded: the Controls list renders
+    // them for EVERY service, and they are already kept correct app-wide by the Active
+    // Animation fan-out in use-ble-connection.ts (plus, for the running extension only,
+    // its sandbox-fault monitor there).
+    const scopedTargets = React.useMemo(() => {
+        if (!serviceCharacteristics) return [];
+        return Object.entries(serviceCharacteristics)
+            .filter(([charUuid, info]) =>
+                info.characteristic.isNotifiable &&
+                charUuid !== UUID_IS_ACTIVE_CHARACTERISTIC &&
+                charUuid !== UUID_SHUFFLE_INCLUDE_CHARACTERISTIC)
+            .map(([charUuid]) => ({ serviceUuid, charUuid }));
+        // Keyed on the characteristic UUIDs present, NOT on serviceCharacteristics
+        // itself: that object gets a new identity on every context update, which would
+        // rebuild this array constantly. The hook reads targets through a ref, so churn
+        // here is harmless, but a stable identity keeps the intent obvious.
+    }, [serviceUuid, serviceCharacteristics]);
+    useScopedCharacteristicMonitors(scopedTargets);
 
     const header = (
         <View style={styles.header}>

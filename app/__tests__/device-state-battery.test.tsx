@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Animated } from 'react-native';
 
 import BatteryDetailScreen from '@/app/(tabs)/device-state/battery';
@@ -23,9 +23,9 @@ jest.mock('@react-navigation/bottom-tabs', () => ({
 }));
 
 // Override the global expo-router mock (useFocusEffect is a no-op jest.fn() there) so the
-// focus callback actually runs. This page's raw telemetry stopped notifying with the
-// Android notification-budget fix, so it re-reads on focus instead — that loop only exists
-// under a live focus effect. Same technique as use-disconnect-redirect.test.tsx.
+// focus callback actually runs. This page subscribes to the raw telemetry only while
+// focused and polls Power Debug on focus — neither exists without a live focus effect.
+// Same technique as use-disconnect-redirect.test.tsx.
 jest.mock('expo-router', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.mock factories cannot reference imports
   const ReactActual = require('react');
@@ -324,19 +324,21 @@ describe('BatteryDetailScreen', () => {
     expect(getByText('Power Flags')).toBeTruthy();
   });
 
-  it('re-reads the non-notifiable raw telemetry on focus and applies the fresh values', async () => {
-    // Battery/VBUS volts+amps stopped notifying (Android notification-budget fix); this
-    // page keeps its live feel by re-reading them while focused. Reads are sequential —
-    // Android allows one outstanding GATT op per connection.
+  it('subscribes to the raw telemetry while focused and applies notified values', async () => {
+    // Battery/VBUS volts+amps are notifiable and charger-thread-driven; the page holds
+    // those subscriptions only while focused, which is what keeps the app inside
+    // Android's ~15-slot concurrent-registration budget.
     const device = buildDevice({ vbatMv: 7910, ibatMa: -350, vbusMv: 0, ibusMa: 0, chgStat: 0 });
-    const reads: string[] = [];
+    const removes: jest.Mock[] = [];
+    const monitors: Record<string, jest.Mock> = {};
     for (const uuid of [UUID_BATTERY_VOLTAGE, UUID_BATTERY_CURRENT, UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VBUS_CURRENT]) {
       const info = device.characteristics[uuid] as any;
-      info.characteristic.isNotifiable = false;
-      info.characteristic.read = jest.fn(async () => {
-        reads.push(uuid);
-        return { value: sint32Value(1234) };
-      });
+      info.characteristic.isNotifiable = true;
+      info.characteristic.read = jest.fn(async () => ({ value: sint32Value(1111) }));
+      const remove = jest.fn();
+      removes.push(remove);
+      monitors[uuid] = jest.fn(() => ({ remove }));
+      info.characteristic.monitor = monitors[uuid];
     }
     const updateCharValue = jest.fn();
 
@@ -347,62 +349,73 @@ describe('BatteryDetailScreen', () => {
       updateCharValue,
     } as any);
 
-    render(<BatteryDetailScreen />);
+    const { unmount } = render(<BatteryDetailScreen />);
 
+    // Seeded by the read-then-monitor pass (a focused screen gets no notification
+    // until something changes, so subscribe-only would show stale values).
     await waitFor(() => {
-      expect(reads).toEqual([
-        UUID_BATTERY_VOLTAGE, UUID_BATTERY_CURRENT,
-        UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VBUS_CURRENT,
-      ]);
-      expect(updateCharValue).toHaveBeenCalledWith(UUID_BATTERY_VOLTAGE, sint32Value(1234));
+      expect(updateCharValue).toHaveBeenCalledWith(UUID_BATTERY_VOLTAGE, sint32Value(1111));
     });
+    for (const uuid of Object.keys(monitors)) {
+      expect(monitors[uuid]).toHaveBeenCalledTimes(1);
+    }
+
+    // A notification routes straight into context.
+    const cb = monitors[UUID_BATTERY_CURRENT].mock.calls[0][0] as any;
+    act(() => { cb(null, { value: sint32Value(-222) }); });
+    expect(updateCharValue).toHaveBeenCalledWith(UUID_BATTERY_CURRENT, sint32Value(-222));
+
+    // Leaving the screen must free every slot — a leak here silently rebuilds the
+    // registration-cap bug that broke firmware updates.
+    unmount();
+    removes.forEach(remove => expect(remove).toHaveBeenCalled());
   });
 
-  it('does not re-arm the refresh pass on every context update (feedback-loop regression)', async () => {
-    // Same regression as BatteryCard's: depending on [selectedDevice, updateCharValue]
-    // turns each read's updateCharValue into a fresh device object, recreating
-    // refreshTelemetry and re-running the focus effect — a continuous read loop instead
-    // of the 2 s interval. Re-renders here stand in for those context updates.
-    const read = jest.fn(async () => ({ value: sint32Value(1234) }));
+  it('does not re-subscribe on every context update (feedback-loop regression)', async () => {
+    // Depending on context-derived values would recreate the focus effect on each
+    // update and re-register the same notifications. Re-renders here stand in for
+    // those updates; hardware showed the read-loop version of this at ~11/second.
+    const monitor = jest.fn(() => ({ remove: jest.fn() }));
     function freshDevice() {
       const d = buildDevice({ vbatMv: 7910, ibatMa: -350, vbusMv: 0, ibusMa: 0, chgStat: 0 });
       for (const uuid of [UUID_BATTERY_VOLTAGE, UUID_BATTERY_CURRENT, UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VBUS_CURRENT]) {
         const info = d.characteristics[uuid] as any;
-        info.characteristic.isNotifiable = false;
-        info.characteristic.read = read;
+        info.characteristic.isNotifiable = true;
+        info.characteristic.read = jest.fn(async () => ({ value: sint32Value(1) }));
+        info.characteristic.monitor = monitor;
       }
       return d;
     }
 
     jest.spyOn(BluetoothContext, 'useBluetooth').mockImplementation(() => ({
-      selectedDevice: freshDevice(),   // new object identity on every render
+      selectedDevice: freshDevice(),   // new object identity every render
       writeToCharacteristic: jest.fn(async () => true),
       writeServiceCharacteristic: jest.fn(async () => true),
       updateCharValue: jest.fn(),
     } as any));
 
     const { rerender } = render(<BatteryDetailScreen />);
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(4)); // one pass, four characteristics
+    await waitFor(() => expect(monitor).toHaveBeenCalledTimes(4));
 
     rerender(<BatteryDetailScreen />);
     rerender(<BatteryDetailScreen />);
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(4)); // still one pass
+    expect(monitor).toHaveBeenCalledTimes(4);
   });
 
-  it('stops the focus refresh pass at the first failing read instead of throwing', async () => {
-    // A read failing mid-pass means the link is going away; the page must not crash and
-    // must not keep hammering the remaining characteristics.
-    const device = buildDevice({ vbatMv: 7910, ibatMa: -350, vbusMv: 0, ibusMa: 0, chgStat: 0 });
-    const laterRead = jest.fn(async () => ({ value: sint32Value(1) }));
-    (device.characteristics[UUID_BATTERY_VOLTAGE] as any).characteristic.isNotifiable = false;
-    (device.characteristics[UUID_BATTERY_VOLTAGE] as any).characteristic.read = jest.fn(async () => {
-      throw new Error('disconnected');
-    });
-    for (const uuid of [UUID_BATTERY_CURRENT, UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VBUS_CURRENT]) {
+  it('stops the Power Debug refresh pass at the first failing read instead of throwing', async () => {
+    // Power Debug stays on read-on-focus (slow-changing PD/ICO data), so it keeps the
+    // stop-at-first-failure behaviour; a failing read means the link is going away.
+    const device = buildDevice({ vbatMv: 7910, ibatMa: -350, vbusMv: 0, ibusMa: 0, chgStat: 0, withPowerDebug: true });
+    const pdUuids = Object.keys(device.characteristicsByService[UUID_POWER_DEBUG_SERVICE] ?? {});
+    expect(pdUuids.length).toBeGreaterThan(1);
+    const laterRead = jest.fn(async () => ({ value: uint8Value(1) }));
+    pdUuids.forEach((uuid, i) => {
       const info = device.characteristics[uuid] as any;
       info.characteristic.isNotifiable = false;
-      info.characteristic.read = laterRead;
-    }
+      info.characteristic.read = i === 0
+        ? jest.fn(async () => { throw new Error('disconnected'); })
+        : laterRead;
+    });
 
     jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
       selectedDevice: device,
@@ -413,7 +426,7 @@ describe('BatteryDetailScreen', () => {
 
     expect(() => render(<BatteryDetailScreen />)).not.toThrow();
     await waitFor(() => {
-      expect((device.characteristics[UUID_BATTERY_VOLTAGE] as any).characteristic.read).toHaveBeenCalled();
+      expect((device.characteristics[pdUuids[0]] as any).characteristic.read).toHaveBeenCalled();
     });
     expect(laterRead).not.toHaveBeenCalled();
   });

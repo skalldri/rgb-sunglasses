@@ -6,6 +6,7 @@ import {
     BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
     BLE_GATT_CPF_FORMAT_UTF8S,
     UUID_ACTIVE_ANIMATION,
+    UUID_BATTERY_PERCENT,
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
@@ -320,17 +321,25 @@ describe('useBleConnection', () => {
         expect(payload.characteristics['char-1']).toBe(payload.characteristicsByService['svc-1']['char-1']);
     });
 
-    it('connect() sets up a monitor for notifiable characteristics', async () => {
-        const char = makeCharacteristic('char-notify', { notifiable: true, readValue: null });
-        const service = makeService('svc-1', [char]);
-        const deviceConn = makeDeviceConnection([service]);
+    it('connect() subscribes ONLY to the always-on set, not every notifiable characteristic', async () => {
+        // Android caps concurrent notification registrations at ~15 per app and silently
+        // drops the overflow, so connect() holds open only the notifications that drive
+        // app-wide UI. Everything else is subscribed on demand (screen-scoped via
+        // useScopedCharacteristicMonitors, or the active-extension monitor below).
+        const alwaysOn = makeCharacteristic(UUID_ACTIVE_ANIMATION, { notifiable: true, readValue: null });
+        const scoped = makeCharacteristic('char-notify', { notifiable: true, readValue: null });
+        const deviceConn = makeDeviceConnection([
+            makeService('svc-core', [alwaysOn]),
+            makeService('svc-1', [scoped]),
+        ]);
         (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
 
         const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
 
         await act(async () => { await result.current.connect(); });
 
-        expect(char.monitor).toHaveBeenCalledTimes(1);
+        expect(alwaysOn.monitor).toHaveBeenCalledTimes(1);
+        expect(scoped.monitor).not.toHaveBeenCalled();
         expect(ctx.monitorSubscriptions.current).toHaveLength(1);
     });
 
@@ -397,8 +406,10 @@ describe('useBleConnection', () => {
     });
 
     it('monitor callback calls updateCharValue when a notification arrives', async () => {
-        const char = makeCharacteristic('char-notify', { notifiable: true });
-        const service = makeService('svc-1', [char]);
+        // Uses an always-on characteristic (Battery Percent): only those are subscribed
+        // at connect now — see the always-on-set test above.
+        const char = makeCharacteristic(UUID_BATTERY_PERCENT, { notifiable: true });
+        const service = makeService('svc-battery', [char]);
         const deviceConn = makeDeviceConnection([service]);
         (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
 
@@ -411,48 +422,14 @@ describe('useBleConnection', () => {
 
         act(() => { monitorCallback(null, { value: btoa('new-value') }); });
 
-        expect(ctx.updateCharValue).toHaveBeenCalledWith('char-notify', btoa('new-value'));
+        expect(ctx.updateCharValue).toHaveBeenCalledWith(UUID_BATTERY_PERCENT, btoa('new-value'));
     });
 
-    it('monitor callback re-reads dropdown-list characteristics instead of trusting the notified value', async () => {
-        const char = makeCharacteristic('char-dropdown', {
-            notifiable: true,
-            readValue: btoa('Option B\nOption A'),
-        });
-        char.read = jest.fn(async () => ({ value: btoa('Option A\nOption B') }));
-        const service = makeService('svc-1', [char], {
-            'char-dropdown': [
-                {
-                    uuid: UUID_CPF_DESCRIPTOR,
-                    read: jest.fn(async () => ({
-                        value: btoa(String.fromCharCode(BLE_GATT_CPF_FORMAT_DROPDOWN_LIST, 0, 0, 0, 0, 0, 0)),
-                    })),
-                },
-            ],
-        });
-        const deviceConn = makeDeviceConnection([service]);
-        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
-
-        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
-
-        await act(async () => { await result.current.connect(); });
-
-        const monitorCallback = char.monitor.mock.calls[0][0];
-
-        // The notified value is just the bare new selection (no separators) - not the full
-        // canonical list. The callback must re-read rather than pass this straight through.
-        // The real react-native-ble-plx monitor callback passes back the same Characteristic
-        // instance (with .read() available), just with an updated .value - mirror that here.
-        await act(async () => { await monitorCallback(null, { ...char, value: btoa('Option A') }); });
-
-        expect(char.read).toHaveBeenCalled();
-        await waitFor(() => {
-            expect(ctx.updateCharValue).toHaveBeenCalledWith('char-dropdown', btoa('Option A\nOption B'));
-        });
-        expect(ctx.updateCharValue).not.toHaveBeenCalledWith('char-dropdown', btoa('Option A'));
-    });
-
-    it('excludes UUID_IS_ACTIVE_CHARACTERISTIC from the flat map and routes its notifications through updateServiceCharacteristicValue', async () => {
+    it('excludes UUID_IS_ACTIVE_CHARACTERISTIC from the flat map (reused across every service)', async () => {
+        // The routing of ITS notifications now lives in useScopedCharacteristicMonitors /
+        // the active-extension monitor, not here — connect() no longer subscribes to it.
+        // What still belongs to the discovery loop is the flat-map exclusion, since a
+        // UUID reused across services could only ever resolve to one ambiguous entry.
         const isActiveChar = makeCharacteristic(UUID_IS_ACTIVE_CHARACTERISTIC, { notifiable: true, readValue: btoa('\x00') });
         const service = makeService('svc-1', [isActiveChar]);
         const deviceConn = makeDeviceConnection([service]);
@@ -466,16 +443,13 @@ describe('useBleConnection', () => {
         expect(payload.characteristics[UUID_IS_ACTIVE_CHARACTERISTIC]).toBeUndefined();
         expect(payload.serviceCharacteristics['svc-1']).toEqual([]);
         expect(payload.characteristicsByService['svc-1'][UUID_IS_ACTIVE_CHARACTERISTIC]).toBeDefined();
-
-        const monitorCallback = isActiveChar.monitor.mock.calls[0][0];
-        act(() => { monitorCallback(null, { value: btoa('\x01') }); });
-
-        expect(ctx.updateServiceCharacteristicValue).toHaveBeenCalledWith('svc-1', UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x01'));
-        expect(ctx.updateCharValue).not.toHaveBeenCalledWith(UUID_IS_ACTIVE_CHARACTERISTIC, btoa('\x01'));
+        expect(isActiveChar.monitor).not.toHaveBeenCalled();
     });
 
-    it('excludes UUID_SHUFFLE_INCLUDE_CHARACTERISTIC from the flat map and routes its notifications through updateServiceCharacteristicValue (issue #243)', async () => {
-        const shuffleChar = makeCharacteristic(UUID_SHUFFLE_INCLUDE_CHARACTERISTIC, { notifiable: true, readValue: btoa('\x01') });
+    it('excludes UUID_SHUFFLE_INCLUDE_CHARACTERISTIC from the flat map (issue #243)', async () => {
+        // Same as Is Active above: flat-map exclusion still belongs here; it is not
+        // notifiable in firmware any more, and connect() does not subscribe to it.
+        const shuffleChar = makeCharacteristic(UUID_SHUFFLE_INCLUDE_CHARACTERISTIC, { notifiable: false, readValue: btoa('\x01') });
         const service = makeService('svc-1', [shuffleChar]);
         const deviceConn = makeDeviceConnection([service]);
         (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
@@ -488,12 +462,7 @@ describe('useBleConnection', () => {
         expect(payload.characteristics[UUID_SHUFFLE_INCLUDE_CHARACTERISTIC]).toBeUndefined();
         expect(payload.serviceCharacteristics['svc-1']).toEqual([]);
         expect(payload.characteristicsByService['svc-1'][UUID_SHUFFLE_INCLUDE_CHARACTERISTIC]).toBeDefined();
-
-        const monitorCallback = shuffleChar.monitor.mock.calls[0][0];
-        act(() => { monitorCallback(null, { value: btoa('\x00') }); });
-
-        expect(ctx.updateServiceCharacteristicValue).toHaveBeenCalledWith('svc-1', UUID_SHUFFLE_INCLUDE_CHARACTERISTIC, btoa('\x00'));
-        expect(ctx.updateCharValue).not.toHaveBeenCalledWith(UUID_SHUFFLE_INCLUDE_CHARACTERISTIC, btoa('\x00'));
+        expect(shuffleChar.monitor).not.toHaveBeenCalled();
     });
 
     it('connect() registers a disconnect listener', async () => {
@@ -514,9 +483,9 @@ describe('useBleConnection', () => {
 
     it('disconnect listener cleans up monitors and calls setSelectedDevice(null)', async () => {
         const monitorRemove = jest.fn();
-        const char = makeCharacteristic('char-notify', { notifiable: true });
+        const char = makeCharacteristic(UUID_BATTERY_PERCENT, { notifiable: true });
         char.monitor.mockReturnValue({ remove: monitorRemove, _cb: null });
-        const service = makeService('svc-1', [char]);
+        const service = makeService('svc-battery', [char]);
         const deviceConn = makeDeviceConnection([service]);
         (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
 
