@@ -301,3 +301,53 @@ ZTEST(battery_service_tests, test_comm_error_cleared_by_next_update) {
     zassert_equal(chg_attr->read(NULL, chg_attr, &chg, sizeof(chg), 0), 1);
     zassert_equal(chg, 3, "real CHG_STAT must replace the sentinel, got %u", chg);
 }
+
+/* The CHRC declaration attr sits immediately before its value attr; returns it so
+ * callers can inspect bt_gatt_chrc properties (e.g. NOTIFY). */
+static bool chrc_has_notify(const struct bt_gatt_attr *valueAttr) {
+    STRUCT_SECTION_FOREACH(bt_gatt_service_static, svc) {
+        for (size_t i = 1; i < svc->attr_count; i++) {
+            if (&svc->attrs[i] == valueAttr) {
+                const struct bt_gatt_attr *prev = &svc->attrs[i - 1];
+                if (prev->uuid == NULL || bt_uuid_cmp(prev->uuid, BT_UUID_GATT_CHRC) != 0) {
+                    return false;
+                }
+                return (static_cast<const struct bt_gatt_chrc *>(prev->user_data)->properties &
+                        BT_GATT_CHRC_NOTIFY) != 0;
+            }
+        }
+    }
+    return false;
+}
+
+ZTEST(battery_service_tests, test_notify_properties_match_the_budget_rule) {
+    /* Android caps concurrent notification registrations at ~15 per app
+     * (BTA_GATTC_NOTIF_REG_MAX) and silently drops the overflow, so which
+     * characteristics may notify is a contract, not an implementation detail —
+     * see the rule block in src/core_config.cpp.
+     *
+     * Notify: every charger-thread-driven value (positions 0-4, 7). The app
+     * holds the two card values (Charge Status, Battery Percent) subscribed
+     * app-wide and subscribes to the raw telemetry only while its battery
+     * detail page is focused, so declaring notify here costs no steady-state
+     * budget.
+     *
+     * No notify: the two app-written settings (positions 5-6). Bad writes are
+     * ATT-rejected and rolled back, so there is no device-side change to push;
+     * the app learns the stored value from its read-back-after-write. */
+    const size_t notifying[] = {0, 1, 2, 3, 4, 7};
+    for (size_t i = 0; i < ARRAY_SIZE(notifying); i++) {
+        const struct bt_gatt_attr *attr = find_value_attr(notifying[i]);
+        zassert_not_null(attr, "value attr %zu not found", notifying[i]);
+        zassert_true(chrc_has_notify(attr),
+                     "characteristic %zu must expose NOTIFY (device-side push)", notifying[i]);
+    }
+
+    const size_t silent[] = {5, 6};
+    for (size_t i = 0; i < ARRAY_SIZE(silent); i++) {
+        const struct bt_gatt_attr *attr = find_value_attr(silent[i]);
+        zassert_not_null(attr, "value attr %zu not found", silent[i]);
+        zassert_false(chrc_has_notify(attr),
+                      "characteristic %zu is app-written and must NOT expose NOTIFY", silent[i]);
+    }
+}

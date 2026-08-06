@@ -181,16 +181,45 @@ class ChargeCurrentCharacteristic
 };
 
 BtGattPrimaryService<kBatteryServiceUuid> batteryPrimaryService;
-/* Only Charge Status and Battery Percent stay notifiable — the two values the
- * always-visible battery card renders live. The raw telemetry below is shown
- * only on the battery detail page, which re-reads on focus (Android caps
- * notification registrations at ~15 per app, BTA_GATTC_NOTIF_REG_MAX, and
- * these four were costing a third of that budget). battery_service_update()
- * still stores fresh values every sample, so reads always see current data. */
-BtGattAutoReadOnlyCharacteristic<"Battery Voltage (mV)", int32_t, 0> batteryVoltageMv;
-BtGattAutoReadOnlyCharacteristic<"Battery Current (mA)", int32_t, 0> batteryCurrentMa;
-BtGattAutoReadOnlyCharacteristic<"VBUS Voltage (mV)", int32_t, 0> vbusVoltageMv;
-BtGattAutoReadOnlyCharacteristic<"VBUS Current (mA)", int32_t, 0> vbusCurrentMa;
+/* All charger-thread-driven values here notify. The app does NOT hold these
+ * registrations open: it subscribes only while the battery detail page is
+ * focused and unsubscribes on blur (useScopedCharacteristicMonitors), which is
+ * what keeps it inside Android's ~15 concurrent-registration cap
+ * (BTA_GATTC_NOTIF_REG_MAX). See the rule in core_config.cpp — declare notify
+ * where a device-side push exists; the app scopes when it registers.
+ *
+ * Notify is the right mechanism for these specifically because
+ * battery_service_update() quantizes to 10 mV / 10 mA steps: assignment only
+ * notifies on an actual change, so a resting pack is silent rather than
+ * spamming a notification per ADC sample. Charge Status and Battery Percent
+ * additionally stay subscribed app-wide, since the always-visible battery card
+ * renders them.
+ *
+ * UPDATE ORDER IS LOAD-BEARING: install the app update BEFORE this firmware.
+ * That is a deliberate, accepted trade-off, not an oversight. An app build that
+ * predates scoped subscriptions bulk-subscribes to EVERY notifiable
+ * characteristic, so these four push such a build from ~12 concurrent
+ * registrations to ~16 — past BTA_GATTC_NOTIF_REG_MAX, where the overflow
+ * (SMP included) is dropped silently and firmware updates hang exactly as they
+ * did in fw-v2.1.0. The scoping that makes these four safe lives in the APP, so
+ * only an app carrying it is protected. The count also grows by one per
+ * installed extension, so the margin is smaller than it looks.
+ *
+ * Consequences to keep in mind when touching this:
+ *   - Release notes for any firmware release containing this MUST state the
+ *     ordering (/release step 4a exists for exactly this).
+ *   - The new-app-on-old-firmware combination is therefore the EXPECTED
+ *     intermediate state, and the app must stay correct against firmware where
+ *     these are read-only — useScopedCharacteristicMonitors polls any target it
+ *     finds non-notifiable for that reason. Don't delete that fallback.
+ *   - Re-adding these CCC descriptors also shifts every later attribute handle
+ *     relative to the previous build, so a bonded phone whose stack ignores
+ *     Service Changed (OxygenOS, issue #115) needs forget + /re-pair after the
+ *     OTA. A Pixel re-discovers on its own (verified 2026-08-05). */
+BtGattAutoReadNotifyCharacteristic<"Battery Voltage (mV)", int32_t, 0> batteryVoltageMv;
+BtGattAutoReadNotifyCharacteristic<"Battery Current (mA)", int32_t, 0> batteryCurrentMa;
+BtGattAutoReadNotifyCharacteristic<"VBUS Voltage (mV)", int32_t, 0> vbusVoltageMv;
+BtGattAutoReadNotifyCharacteristic<"VBUS Current (mA)", int32_t, 0> vbusCurrentMa;
 BtGattAutoReadNotifyCharacteristic<"Charge Status", uint8_t, 0> chargeStatus;
 ChargeEnableCharacteristic chargingEnabled;
 /* Position 6 — APPEND-ONLY: UUIDs are positional (suffix ...0006); the app's
@@ -220,11 +249,10 @@ void battery_service_set_charger_comm_error(void) {
 void battery_service_update(int32_t vbat_mv, int32_t ibat_ma, int32_t vbus_mv, int32_t ibus_ma,
                             uint8_t chg_stat) {
     /* 10 mV / 10 mA steps — see battery_quantize() for why raw readings would
-     * spam notifications. Only chargeStatus and batteryPercent still notify (and
-     * only when the value actually changed); the four raw telemetry fields are
-     * plain stores now that they're read-only (their operator= compiles the
-     * notify out via `if constexpr (Notify)`), read on demand by the app's
-     * battery detail page. */
+     * spam notifications. Every assignment below notifies only when the
+     * quantized value actually changed, and only to centrals that subscribed;
+     * the four raw telemetry fields normally have no subscriber at all (the app
+     * subscribes to them only while its battery detail page is focused). */
     batteryVoltageMv = battery_quantize(vbat_mv, 10);
     batteryCurrentMa = battery_quantize(ibat_ma, 10);
     vbusVoltageMv    = battery_quantize(vbus_mv, 10);

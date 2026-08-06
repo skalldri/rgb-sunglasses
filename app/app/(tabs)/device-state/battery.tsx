@@ -21,6 +21,7 @@ import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useCharacteristicEditor } from "@/hooks/use-characteristic-editor";
 import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
+import { useScopedCharacteristicMonitors } from "@/hooks/use-scoped-characteristic-monitors";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import {
     batteryPresent, batteryWatts, chargeDirection, chargeStatusLabel, formatVolts, formatWatts,
@@ -79,37 +80,41 @@ export default function BatteryDetailScreen() {
 
     const chars = selectedDevice?.characteristics;
 
-    // The raw telemetry rendered here (battery/VBUS volts+amps, the Power Debug
-    // section) stopped notifying with the Android notification-budget fix — only
-    // Battery Percent and Charge Status still push (they feed the always-visible
-    // card). Re-read the rest while this screen is focused, sequentially (Android
-    // allows one outstanding GATT op per connection) on a short interval, so the
-    // page keeps its live feel. Values land in context via updateCharValue, the
-    // same sink the old notifications used.
-    // Both the device and the update sink are read through refs, and refreshTelemetry has
-    // EMPTY deps, so its identity is stable. Depending on [selectedDevice, updateCharValue]
-    // instead is a feedback loop: each read calls updateCharValue, the context hands back a
-    // fresh device object, refreshTelemetry is recreated, and the focus effect re-runs —
-    // re-reading continuously instead of on the interval (hardware-observed 2026-08-05 in
-    // the sibling BatteryCard, ~11 reads/second; unit tests miss it because a mocked
-    // updateCharValue never produces a new context object).
+    // The four raw telemetry values are notifiable and pushed by the charger thread
+    // (quantized to 10 mV / 10 mA, so a resting pack is silent). Subscribe to them only
+    // while this page is focused — that is what keeps the app inside Android's ~15-slot
+    // concurrent-registration budget while still getting instant updates here.
+    // Against firmware that predates the notify restoration these are read-only; the
+    // hook polls them instead, so this page behaves the same on either build. That
+    // combination is not hypothetical — the app is expected to be updated BEFORE the
+    // firmware (see the compatibility note in fw/src/bluetooth/battery_service.cpp).
+    useScopedCharacteristicMonitors(React.useMemo(() => [
+        { serviceUuid: UUID_BATTERY_SERVICE, charUuid: UUID_BATTERY_VOLTAGE },
+        { serviceUuid: UUID_BATTERY_SERVICE, charUuid: UUID_BATTERY_CURRENT },
+        { serviceUuid: UUID_BATTERY_SERVICE, charUuid: UUID_BATTERY_VBUS_VOLTAGE },
+        { serviceUuid: UUID_BATTERY_SERVICE, charUuid: UUID_BATTERY_VBUS_CURRENT },
+    ], []));
+
+    // The Power Debug section stays on read-on-focus: it is slow-changing PD contract /
+    // ICO data, so polling it costs nothing and leaves those notification slots free.
+    // Refs + EMPTY deps are mandatory here — depending on [selectedDevice,
+    // updateCharValue] is a feedback loop (each read updates context, context hands back
+    // a fresh device object, the callback is recreated, the focus effect re-runs);
+    // hardware-observed at ~11 reads/second in the sibling BatteryCard, and invisible to
+    // unit tests because a mocked updateCharValue never produces a new context object.
     const refreshInFlight = React.useRef(false);
     const deviceRef = React.useRef(selectedDevice);
     deviceRef.current = selectedDevice;
     const updateCharValueRef = React.useRef(updateCharValue);
     updateCharValueRef.current = updateCharValue;
 
-    const refreshTelemetry = React.useCallback(async () => {
+    const refreshPowerDebug = React.useCallback(async () => {
         if (refreshInFlight.current) return;
         refreshInFlight.current = true;
         const device = deviceRef.current;
-        const telemetryUuids = [
-            UUID_BATTERY_VOLTAGE, UUID_BATTERY_CURRENT,
-            UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VBUS_CURRENT,
-            ...Object.keys(device?.characteristicsByService?.[UUID_POWER_DEBUG_SERVICE] ?? {}),
-        ];
+        const uuids = Object.keys(device?.characteristicsByService?.[UUID_POWER_DEBUG_SERVICE] ?? {});
         try {
-            for (const uuid of telemetryUuids) {
+            for (const uuid of uuids) {
                 const info = device?.characteristics?.[uuid];
                 if (!info || info.characteristic.isNotifiable) continue;
                 try {
@@ -118,7 +123,7 @@ export default function BatteryDetailScreen() {
                 } catch (err) {
                     // A single failed read (e.g. mid-disconnect) ends this pass; the
                     // interval retries, and the disconnect redirect handles teardown.
-                    console.log(`Battery telemetry refresh stopped at ${uuid}:`, err);
+                    console.log(`Power Debug refresh stopped at ${uuid}:`, err);
                     break;
                 }
             }
@@ -128,10 +133,10 @@ export default function BatteryDetailScreen() {
     }, []);
 
     useFocusEffect(React.useCallback(() => {
-        refreshTelemetry();
-        const interval = setInterval(refreshTelemetry, 2000);
+        refreshPowerDebug();
+        const interval = setInterval(refreshPowerDebug, 2000);
         return () => clearInterval(interval);
-    }, [refreshTelemetry]));
+    }, [refreshPowerDebug]));
     const vbatMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VOLTAGE]?.value);
     const ibatMa = decodeSint32OrNull(chars?.[UUID_BATTERY_CURRENT]?.value);
     const vbusMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VBUS_VOLTAGE]?.value);
