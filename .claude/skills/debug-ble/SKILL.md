@@ -24,6 +24,7 @@ Bash) on that file when you don't hold a lock.
 | UI shows stale/default values after reconnect | Client subscribed without an initial read (PR #78) | 2 |
 | Switch/toggle snaps back mid-write, then corrects | Optimistic update applied after the `await` (PR #98, issue #91) | 3 |
 | `SMP request timeout after 5000ms` when two SMP calls overlap | Requests not serialized through `requestChain` (PR #55) | 4 |
+| EVERY SMP call times out (5000 ms) while the rest of the app works fine | Android's ~15-slot notification-registration cap exceeded; the SMP monitor is silently dropped | 4a |
 | Write fails, `androidErrorCode: 252`, `attErrorCode: null` | Firmware rejected the write — this is deliberate, not a bug per se | 5 |
 | Discovery/connect takes many seconds | Too many sequential ATT ops — do NOT parallelize, do NOT blame the JS bridge (issue #41) | 6 |
 | Device vanished from scans after an app reload or a discovery throw | Orphaned native BLE link — force-stop the app | 7 |
@@ -33,6 +34,14 @@ Bash) on that file when you don't hold a lock.
 ## 1. Split-brain / stale Android GATT cache
 
 Trigger: firmware GATT-layout change (add/remove/reorder) + already-bonded phone.
+
+**Flipping a characteristic's `Notify` to false is a GATT-layout change.** This is the
+non-obvious trigger and it has bitten this repo: `bt_service_cpp.h` emits the CCC
+descriptor only under `if constexpr (Notify)`, so dropping notify deletes an attribute
+and shifts every handle after it — exactly like removing a characteristic. PR #285
+de-notified ~50 characteristics at once, which is a full-database shift for anyone
+bonded to an earlier build. Expect the recovery below after that OTA on a
+non-compliant stack, and check for it before concluding a post-update hang is a new bug.
 
 Diagnose from the firmware shell (source of truth; board lock — see "Hardware-side
 verification"): run `bt_state`. **`ATT MTU: 23` on a CONNECTED/encrypted (L4) link is
@@ -53,8 +62,11 @@ timeout — isolated swallowed `read()` errors inside an otherwise successful di
 loop (`app/hooks/use-ble-connection.ts`) are transient ATT failures, not issue #115
 (details: `references/stale-gatt-cache.md`).
 
-Keep the app's `refreshGatt: "OnConnected"` — fixes `GATT_INVALID_HANDLE` on compliant
-stacks (same reference).
+Do NOT reach for the app's `refreshGatt: "OnConnected"` — it was tried and **removed**
+(`app/hooks/use-ble-connection.ts`, see the numbered rationale above `connectToDevice`).
+Hardware testing showed it does not rescue the stale-cache hang on a non-compliant stack
+while forcing a full re-discovery on every healthy connect, so it cost throughput and
+bought nothing.
 
 **Prevention:** the GATT table layout is a compatibility surface — append, never
 insert/remove/reorder, in shipped firmware. See the `add-gatt-characteristic` skill
@@ -92,6 +104,45 @@ only because the chain guarantees one in-flight exchange at a time; two overlapp
 calls clobber the first's resolver (PR #55). Don't "fix" a client with a
 per-sequence-number queue instead: the device itself only tracks one in-flight request.
 A failed request must not poison the chain, and `destroy()` fail-fasts queued requests.
+
+## 4a. EVERY SMP call times out, but the rest of the app is healthy
+
+Distinct from §4 (which needs overlapping calls): here *no* SMP exchange ever completes —
+image state, slot info, board detect, an OTA upload — while discovery, characteristic
+reads/writes and every other notification work normally on the same connection.
+
+**Cause: Android's Bluetooth stack has a fixed per-app GATT notification-registration
+table (`BTA_GATTC_NOTIF_REG_MAX`, 15 entries in AOSP). Registrations past the cap fail
+SILENTLY — the CCC descriptor write still returns success, so the firmware believes the
+phone is subscribed and sends response notifications the phone's stack then drops.** The
+SMP monitor is registered last (when the firmware-update modal opens), so it is always
+the one that falls off the table. Root-caused 2026-08-05: the firmware had grown to 66
+notifiable characteristics and the app auto-monitored all of them (67 CCC writes observed
+on the wire).
+
+Diagnose in this order — each step rules out a layer:
+
+1. `mcumgr --conntype serial --connstring dev=/dev/ttyACM<N>,baud=115200 echo hi` +
+   `image list`. Working = the SMP server, its handlers and the priority-3 workqueue are
+   all alive, and the fault is BLE-transport-specific. (Board lock required.)
+2. Count the app's registrations: `adb logcat | grep -c "setCharacteristicNotification.*enable: true"`
+   and the app's own `Set up N characteristic monitors` line. **N + 2 (SMP + MCUboot
+   Status, both modal-scoped) must stay ≤ 15.**
+3. If you need proof the responses reach the phone: enable HCI snoop (Settings →
+   Developer options → Bluetooth HCI snoop log → Enabled, then toggle Bluetooth),
+   reproduce, `adb bugreport`, and parse
+   `FS/data/misc/bluetooth/logs/btsnoop_hci.log` for ATT notifications on the SMP
+   handle. Responses present in snoop but absent from `RxBle#Characteristic:
+   Notification from ... da2e7828-…` in logcat *is* this bug — the stack received and
+   discarded them.
+
+**Prevention (the fix):** keep the firmware's notifiable count small. Only values that
+change device-side and drive always-visible UI should notify; app-written tunables use
+the app's read-back-after-write, and detail-screen telemetry re-reads on focus. Device
+activation changes ride on Core Config's single **Active Animation** characteristic
+(`fw/src/core_config.cpp` + `fw/src/animations/active_animation_binding.h`) rather than
+one notify per animation — `fw/tests/bluetooth/core_config` pins that contract. Before
+making anything else notifiable, re-count the budget.
 
 ## 5. Write rejected with androidErrorCode 252
 

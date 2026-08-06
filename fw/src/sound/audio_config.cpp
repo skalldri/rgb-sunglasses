@@ -12,68 +12,69 @@ constexpr bt_uuid_128 kAudioConfigServiceUuid = BT_UUID_INIT_128(
 
 BtGattPrimaryService<kAudioConfigServiceUuid> audioConfigPrimaryService;
 
-BtGattPersistentCharacteristic<"audio/flux_gamma", "Flux Gamma", true, float, 1000.0f>
+/* Notify=false on every characteristic in this service (it used to be true):
+ * Android caps GATT notification registrations at ~15 per app
+ * (BTA_GATTC_NOTIF_REG_MAX) and this service alone consumed 15 slots, silently
+ * starving the SMP/DFU characteristic's registration (all app firmware-update
+ * calls timed out). These values are app-written tunables; the clamp
+ * write-back that notify used to carry (getters clamp on read and assign the
+ * clamped value back) now reaches the app via its read-back-after-write on
+ * non-notifiable characteristics (app/context/bluetooth-context.tsx). */
+BtGattPersistentCharacteristic<"audio/flux_gamma", "Flux Gamma", false, float, 1000.0f>
     audioFluxGamma;
 /* Default retuned 0.005 -> 0.08 (issue #264, post-Phase-3) — derivation in
  * DefaultAudioDspConfigProvider (audio_dsp.cpp). Provisioned boards keep their
  * persisted value; set it explicitly with "sound dsp set floor" when testing. */
-BtGattPersistentCharacteristic<"audio/beat_flux_floor", "Beat Flux Floor", true, float, 0.08f>
+BtGattPersistentCharacteristic<"audio/beat_flux_floor", "Beat Flux Floor", false, float, 0.08f>
     audioBeatFluxFloor;
 /* Default retuned 3.5 -> 0.3 in Phase 3 (issue #264) — derivation in
  * DefaultAudioDspConfigProvider (audio_dsp.cpp) and the PR body. NOTE this only
  * affects boards with no persisted value: an already-provisioned board keeps
  * whatever it stored (the shared dev board carries 1.5 from Phase 1), so
  * on-device verification must set it explicitly via "sound dsp set alpha". */
-BtGattPersistentCharacteristic<"audio/beat_alpha", "Beat Alpha", true, float, 0.3f> audioBeatAlpha;
-BtGattPersistentCharacteristic<"audio/beat_refractory_frames", "Beat Refractory Frames", true,
+BtGattPersistentCharacteristic<"audio/beat_alpha", "Beat Alpha", false, float, 0.3f>
+    audioBeatAlpha;
+BtGattPersistentCharacteristic<"audio/beat_refractory_frames", "Beat Refractory Frames", false,
                                uint32_t, 5>
     audioBeatRefractoryFrames;
 /* Target defaults retuned in Phase 2 (issue #264) from the ABGT 250 baseline
  * captures — derivation in DefaultAgcConfigProvider (sound.cpp) and the PR. */
-BtGattPersistentCharacteristic<"audio/agc_target_low", "AGC Target Low", true, float, 0.002f>
+BtGattPersistentCharacteristic<"audio/agc_target_low", "AGC Target Low", false, float, 0.002f>
     audioAgcTargetLow;
-BtGattPersistentCharacteristic<"audio/agc_target_high", "AGC Target High", true, float, 0.05f>
+BtGattPersistentCharacteristic<"audio/agc_target_high", "AGC Target High", false, float, 0.05f>
     audioAgcTargetHigh;
-BtGattPersistentCharacteristic<"audio/agc_rate_limit_frames", "AGC Rate Limit Frames", true,
+BtGattPersistentCharacteristic<"audio/agc_rate_limit_frames", "AGC Rate Limit Frames", false,
                                uint32_t, 10>
     audioAgcRateLimitFrames;
-BtGattPersistentCharacteristic<"audio/fft_smoothing_coeff", "FFT Smoothing Coeff", true, float,
+BtGattPersistentCharacteristic<"audio/fft_smoothing_coeff", "FFT Smoothing Coeff", false, float,
                                0.3f>
     audioFftSmoothingCoeff;
-BtGattPersistentCharacteristic<"audio/fft_energy_scale", "FFT Energy Scale", true, float, 20.0f>
+BtGattPersistentCharacteristic<"audio/fft_energy_scale", "FFT Energy Scale", false, float, 20.0f>
     audioFftEnergyScale;
 /* Phase 2 AGC tunables (issue #264) — appended AFTER the existing providers:
  * BtGattServer assigns UUIDs positionally, so appending preserves every
  * existing characteristic's UUID. */
-BtGattPersistentCharacteristic<"audio/agc_attack_frames", "AGC Attack Frames", true, uint32_t, 3>
+BtGattPersistentCharacteristic<"audio/agc_attack_frames", "AGC Attack Frames", false, uint32_t, 3>
     audioAgcAttackFrames;
-BtGattPersistentCharacteristic<"audio/agc_release_frames", "AGC Release Frames", true, uint32_t,
+BtGattPersistentCharacteristic<"audio/agc_release_frames", "AGC Release Frames", false, uint32_t,
                                15>
     audioAgcReleaseFrames;
 /* Default retuned 0.001 -> 0.0006 (issue #264, post-Phase-3) — derivation in
  * DefaultAgcConfigProvider (sound.cpp). Same persisted-value caveat as above. */
-BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", true, float, 0.0006f>
+BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", false, float, 0.0006f>
     audioNoiseGateRms;
 /* Phase 3 threshold-shape tunables (issue #264) — appended AFTER the existing
  * providers for the same positional-UUID reason as the Phase 2 block above.
  *
- * notify=true, matching every sibling in this service. It is load-bearing, not
- * cosmetic: both getters below clamp on read and assign the clamped value back,
- * and that write-back only reaches the app as a notification. The app's write
- * path optimistically shows what it wrote and never re-reads, so with
- * notify=false an out-of-range write (mode=2, sf_delta=5.0) would leave the UI
- * displaying that value indefinitely while the firmware ran the clamped one.
- * The write-back happens on the DSP thread's next getter call (~32 ms), not
- * inside the write handler, so it does not hit the "corrective notify races the
- * write response" hazard documented in fw/CLAUDE.md.
- *
- * CCC cost: two more entries per bonded peer. CONFIG_BT_SETTINGS_CCC_STORE_MAX
- * is 96 (see fw/prj.conf, which records why it was raised from the stock 48
- * during Phase 2) and the limit is PER BOND, not global — Zephyr's ccc_save
- * builds one struct ccc_store[CCC_STORE_MAX] per peer address
- * (zephyr/subsys/bluetooth/host/gatt.c). */
-BtGattPersistentCharacteristic<"audio/sf_delta", "Beat SF Delta", true, float, 0.10f> audioSfDelta;
-BtGattPersistentCharacteristic<"audio/threshold_mode", "Beat Threshold Mode", true, uint32_t, 0>
+ * notify=false, matching every sibling in this service (see the header comment
+ * at the top of the declarations). The clamp write-back these getters perform
+ * (assigning the clamped value back on read, on the DSP thread's next getter
+ * call ~32 ms after an out-of-range write like mode=2 or sf_delta=5.0) reaches
+ * the app through its read-back-after-write on non-notifiable characteristics
+ * instead of through a notification. */
+BtGattPersistentCharacteristic<"audio/sf_delta", "Beat SF Delta", false, float, 0.10f>
+    audioSfDelta;
+BtGattPersistentCharacteristic<"audio/threshold_mode", "Beat Threshold Mode", false, uint32_t, 0>
     audioThresholdMode;
 
 BtGattServer audioConfigServer(audioConfigPrimaryService, audioFluxGamma, audioBeatFluxFloor,

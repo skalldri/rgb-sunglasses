@@ -30,11 +30,14 @@
 template <StringLiteral Key>
 class ShuffleIncludeCharacteristic
     : public BtGattCharacteristicCommon<ShuffleIncludeCharacteristic<Key>, "Include in Shuffle",
-                                        true /* Notify */, false /* ReadOnly */, bool,
+                                        false /* Notify — app-written only; no device-side
+                                                 setter for built-ins, and every notify costs
+                                                 one of Android's ~15 registration slots */,
+                                        false /* ReadOnly */, bool,
                                         true /* Default: included */> {
    public:
     using Base = BtGattCharacteristicCommon<ShuffleIncludeCharacteristic<Key>, "Include in Shuffle",
-                                            true, false, bool, true>;
+                                            false, false, bool, true>;
     using Base::operator=;
 
     ShuffleIncludeCharacteristic() {

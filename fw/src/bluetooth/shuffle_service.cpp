@@ -21,11 +21,19 @@ BtGattPrimaryService<kShuffleServiceUuid> shufflePrimaryService;
 // abandoned; the orphaned NVS entries have no registry entry and are ignored).
 // min > max is a tolerated state (swapped at pick time by ShuffleController) — the two
 // durations are written one at a time over BLE, so no write is ever rejected here.
-BtGattPersistentCharacteristic<"shuffle/enabled", "Shuffle Enabled", true, bool, false>
+// None of the three notify: they only change because the app wrote them. The one
+// device-side writer of Enabled is shuffle_service_set_enabled(), reached solely
+// from the `anim shuffle` shell command — a developer tool, not a user-visible
+// scenario — so it does not justify holding one of Android's ~15
+// notification-registration slots (BTA_GATTC_NOTIF_REG_MAX, see
+// fw/src/core_config.cpp). The app reflects its own writes optimistically and
+// re-reads on the next connect; if a button binding ever flips shuffle
+// device-side, revisit this.
+BtGattPersistentCharacteristic<"shuffle/enabled", "Shuffle Enabled", false, bool, false>
     shuffleEnabled;
-BtGattPersistentCharacteristic<"shuffle/min_s", "Shuffle Min Duration (s)", true, uint32_t, 30>
+BtGattPersistentCharacteristic<"shuffle/min_s", "Shuffle Min Duration (s)", false, uint32_t, 30>
     shuffleMinS;
-BtGattPersistentCharacteristic<"shuffle/max_s", "Shuffle Max Duration (s)", true, uint32_t, 120>
+BtGattPersistentCharacteristic<"shuffle/max_s", "Shuffle Max Duration (s)", false, uint32_t, 120>
     shuffleMaxS;
 
 BtGattServer shuffleServer(shufflePrimaryService, shuffleEnabled, shuffleMinS, shuffleMaxS);
@@ -49,8 +57,10 @@ uint32_t shuffle_service_get_max_duration_s(void) {
 }
 
 void shuffle_service_set_enabled(bool enabled) {
-    // operator= notifies subscribers but bypasses onWrite (that hook is remote-write
-    // only), so persist explicitly — mark_dirty() exists for exactly this shell path.
+    // operator= bypasses onWrite (that hook is remote-write only), so persist
+    // explicitly — mark_dirty() exists for exactly this shell path. No BLE push:
+    // the characteristic is not notifiable (see its declaration above); a connected
+    // app picks the change up on its next read.
     shuffleEnabled = enabled;
     shuffleEnabled.mark_dirty();
     if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {

@@ -1,3 +1,4 @@
+#include <animations/active_animation_binding.h>
 #include <animations/animation_registry.h>
 #include <animations/animation_renderer.h>
 #include <animations/bt_animations.h>
@@ -413,6 +414,11 @@ int pattern_controller_change_to_animation(Animation animation, bool persist) {
     next->setActive(true);
 
     currentAnimation = animation;
+
+    // Push the new id to the BT-free Active Animation binding (Core Config's
+    // "Active Animation" characteristic registers the setter). Runs on the
+    // caller's thread — BT RX, shell, or this file's thread (see file header).
+    ActiveAnimationBinding::setLocalActiveAnimation(animation);
 
     if (persist && IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
         persistent_value_registry_mark_dirty(kLastActiveAnimationKey);

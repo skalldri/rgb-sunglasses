@@ -22,6 +22,26 @@ export const KnownServiceIds: { [key: string]: string } = {
 // Well-known non-animation service UUIDs that receive special treatment in device-state/index.tsx.
 export const UUID_MCUBOOT_INFO_SERVICE = "12345678-1234-5678-0003-56789abc0000";
 
+// Core Config service (service ID 1). "Active Animation" is position 4, appended for
+// the Android notification-budget fix: the single notifiable characteristic that
+// replaces the per-animation Is Active notifies. Read-only uint32 Animation id
+// (fw/src/animations/animation_types.h; extension slots are 0x40+slot; 0 = None) —
+// must match the declaration order in fw/src/core_config.cpp.
+export const UUID_CORE_CONFIG_SERVICE = "12345678-1234-5678-0001-56789abc0000";
+export const UUID_ACTIVE_ANIMATION    = "12345678-1234-5678-0001-56789abc0004";
+
+/**
+ * Builds the animation service UUID for a firmware animation id, mirroring the
+ * firmware's BT_ANIMATION_SERVICE_UUID macro: the id lands in the UUID's 4th group,
+ * shifted into the high byte (e.g. Rainbow = 5 -> "...-0500-56789abd0000"; extension
+ * slot 0 = 0x40 -> "...-4000-..."). Used to map an Active Animation notification back
+ * to the service whose Is Active toggle it represents.
+ */
+export function animationServiceUuidForId(animationId: number): string {
+    const group = (animationId << 8) & 0xffff;
+    return `12345678-1234-5678-${group.toString(16).padStart(4, "0")}-56789abd0000`;
+}
+
 // MCUboot BLE updater service (service ID 4). Proto0 only.
 // Must match kServiceUuid / kStatusUuid / kDataUuid / kControlUuid in
 // fw/src/bluetooth/mcuboot_updater_service.cpp.

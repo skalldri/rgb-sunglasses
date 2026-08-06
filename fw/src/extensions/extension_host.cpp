@@ -1377,9 +1377,9 @@ int cmd_ext_shuffle(const struct shell *sh, size_t argc, char **argv) {
     }
     if (argc == 3) {
         setShuffleInclude(slot, strtoul(argv[2], nullptr, 0) != 0);
-        /* Device-side change: push it to any subscribed BLE client (remote writes
-         * don't need this — the app already knows the value it wrote). */
-        extension_bt_notify_shuffle_include(slot);
+        /* No BLE push: the characteristic is no longer notifiable (Android
+         * registration-budget fix) — a connected app picks the change up on
+         * its next read of the characteristic. */
     }
     shell_print(sh, "%s.shuffle_include = %u", sSlots[slot].meta.displayName,
                 shuffleIncluded(slot) ? 1 : 0);

@@ -32,6 +32,17 @@ The GATT table of shipped firmware is a compatibility surface. Violations break 
 3. **Settings keys are explicit stable string literals** (e.g. `"battery/charge_enable"`), never
    derived from declaration position — UUIDs may be positional but persisted keys must survive
    any future (pre-ship) reorder.
+4. **Notify is a scarce, budgeted resource — default new characteristics to `Notify=false`.**
+   Android's Bluetooth stack caps GATT notification registrations at **15 per app**
+   (`BTA_GATTC_NOTIF_REG_MAX`) and silently drops the overflow: the CCC write still succeeds, so
+   the firmware notifies into a void. Exceeding it starved the SMP/DFU characteristic and broke
+   every companion-app firmware update (root-caused 2026-08-05; full diagnosis → /debug-ble §4a).
+   The whole firmware currently spends ~12 of those slots. A new characteristic earns `Notify=true`
+   only if its value changes **device-side** (shell, button, sensor, fault) AND drives
+   always-visible UI. Otherwise: app-written values rely on the app's read-back-after-write
+   (`scheduleClampReadBack` in `app/context/bluetooth-context.tsx`) and detail-screen telemetry
+   re-reads on focus. Animation activation already has a shared channel — Core Config's "Active
+   Animation" characteristic — so never add a per-animation notify for it.
 
 ## Which kind of characteristic?
 

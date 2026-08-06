@@ -41,10 +41,13 @@ static constexpr const char kChargeEnableKey[] = "battery/charge_enable";
  */
 class ChargeEnableCharacteristic
     : public BtGattAutoCharacteristicExt<ChargeEnableCharacteristic, "Charging Enabled",
-                                         true /* Notify */, false /* ReadOnly */, bool,
+                                         false /* Notify — app-written; bad writes are
+                                                  ATT-rejected and reverted, so there is
+                                                  no device-side change to push */,
+                                         false /* ReadOnly */, bool,
                                          true /* Default: charging ON */> {
    public:
-    using Base = BtGattAutoCharacteristicExt<ChargeEnableCharacteristic, "Charging Enabled", true,
+    using Base = BtGattAutoCharacteristicExt<ChargeEnableCharacteristic, "Charging Enabled", false,
                                              false, bool, true>;
     using Base::operator=;
 
@@ -115,11 +118,13 @@ static constexpr const char kChargeCurrentKey[] = "battery/charge_current_ma";
  */
 class ChargeCurrentCharacteristic
     : public BtGattAutoCharacteristicExt<ChargeCurrentCharacteristic, "Charge Current (mA)",
-                                         true /* Notify */, false /* ReadOnly */, uint32_t,
+                                         false /* Notify — app-written; same ATT-reject
+                                                  revert contract as Charging Enabled */,
+                                         false /* ReadOnly */, uint32_t,
                                          CONFIG_APP_CHARGE_CURRENT_MA> {
    public:
     using Base = BtGattAutoCharacteristicExt<ChargeCurrentCharacteristic, "Charge Current (mA)",
-                                             true, false, uint32_t, CONFIG_APP_CHARGE_CURRENT_MA>;
+                                             false, false, uint32_t, CONFIG_APP_CHARGE_CURRENT_MA>;
     using Base::operator=;
 
     ChargeCurrentCharacteristic() {
@@ -176,10 +181,16 @@ class ChargeCurrentCharacteristic
 };
 
 BtGattPrimaryService<kBatteryServiceUuid> batteryPrimaryService;
-BtGattAutoReadNotifyCharacteristic<"Battery Voltage (mV)", int32_t, 0> batteryVoltageMv;
-BtGattAutoReadNotifyCharacteristic<"Battery Current (mA)", int32_t, 0> batteryCurrentMa;
-BtGattAutoReadNotifyCharacteristic<"VBUS Voltage (mV)", int32_t, 0> vbusVoltageMv;
-BtGattAutoReadNotifyCharacteristic<"VBUS Current (mA)", int32_t, 0> vbusCurrentMa;
+/* Only Charge Status and Battery Percent stay notifiable — the two values the
+ * always-visible battery card renders live. The raw telemetry below is shown
+ * only on the battery detail page, which re-reads on focus (Android caps
+ * notification registrations at ~15 per app, BTA_GATTC_NOTIF_REG_MAX, and
+ * these four were costing a third of that budget). battery_service_update()
+ * still stores fresh values every sample, so reads always see current data. */
+BtGattAutoReadOnlyCharacteristic<"Battery Voltage (mV)", int32_t, 0> batteryVoltageMv;
+BtGattAutoReadOnlyCharacteristic<"Battery Current (mA)", int32_t, 0> batteryCurrentMa;
+BtGattAutoReadOnlyCharacteristic<"VBUS Voltage (mV)", int32_t, 0> vbusVoltageMv;
+BtGattAutoReadOnlyCharacteristic<"VBUS Current (mA)", int32_t, 0> vbusCurrentMa;
 BtGattAutoReadNotifyCharacteristic<"Charge Status", uint8_t, 0> chargeStatus;
 ChargeEnableCharacteristic chargingEnabled;
 /* Position 6 — APPEND-ONLY: UUIDs are positional (suffix ...0006); the app's
@@ -209,8 +220,11 @@ void battery_service_set_charger_comm_error(void) {
 void battery_service_update(int32_t vbat_mv, int32_t ibat_ma, int32_t vbus_mv, int32_t ibus_ma,
                             uint8_t chg_stat) {
     /* 10 mV / 10 mA steps — see battery_quantize() for why raw readings would
-     * spam notifications. Assignment only notifies when the quantized value
-     * actually changed. */
+     * spam notifications. Only chargeStatus and batteryPercent still notify (and
+     * only when the value actually changed); the four raw telemetry fields are
+     * plain stores now that they're read-only (their operator= compiles the
+     * notify out via `if constexpr (Notify)`), read on demand by the app's
+     * battery detail page. */
     batteryVoltageMv = battery_quantize(vbat_mv, 10);
     batteryCurrentMa = battery_quantize(ibat_ma, 10);
     vbusVoltageMv    = battery_quantize(vbus_mv, 10);

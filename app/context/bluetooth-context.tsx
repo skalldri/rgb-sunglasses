@@ -94,6 +94,13 @@ type BluetoothContextType = {
     // exist alongside (not instead of) the bare-UUID methods above.
     getServiceCharacteristicInfo: (serviceUuid: string, charUuid: string) => CharacteristicInfo | null;
     updateServiceCharacteristicValue: (serviceUuid: string, charUuid: string, newValue: string) => void;
+    // Function form patches conditionally: return null from the updater to leave the
+    // characteristic (and the surrounding state object's identity) untouched.
+    updateServiceCharacteristicFields: (
+        serviceUuid: string,
+        charUuid: string,
+        fields: Partial<CharacteristicInfo> | ((current: CharacteristicInfo) => Partial<CharacteristicInfo> | null)
+    ) => void;
     writeServiceCharacteristic: (
         serviceUuid: string,
         charUuid: string,
@@ -227,6 +234,59 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     // waiting a full write+notify round-trip for any UI feedback), pass the exact canonical value
     // you know the device will store (e.g. the dropdown list locally reordered selected-first). The
     // UI updates instantly and the eventual notify just re-affirms the identical value.
+    // Non-notifiable characteristics can't push the firmware's canonical value back to the
+    // app. Several config getters clamp on read and assign the clamped value back (~32 ms
+    // after an out-of-range write, on the DSP thread's next getter call — see
+    // fw/src/sound/audio_config.cpp), and before the Android notification-budget fix that
+    // write-back arrived as a notification. Now that app-written tunables don't notify,
+    // re-read shortly after a successful write so the UI settles on the value the firmware
+    // actually runs. The delay lets that device-side write-back land first; reading
+    // immediately would race it.
+    // Two passes, not one. The clamp write-back happens whenever the owning thread next
+    // runs its getter — normally ~32 ms, but a busy owner (e.g. the audio DSP thread
+    // during a PDM overrun self-heal) can push it well past 150 ms, and a single fixed
+    // read would then return the still-unclamped value, leaving the UI showing a number
+    // the firmware never runs with no correction channel until the next connect. The
+    // second pass costs one read only on writes to non-notifiable characteristics.
+    const CLAMP_READBACK_DELAYS_MS = [150, 1200];
+    // `baselineValue` is what the app believes the characteristic holds as this write
+    // settles; `apply` is expected to compare-and-swap against it (see the call sites).
+    const scheduleClampReadBack = useCallback((charInfo: CharacteristicInfo, baselineValue: string,
+                                               apply: (readValue: string, baseline: string) => void) => {
+        if (charInfo.characteristic.isNotifiable) {
+            return;  // notifying characteristics push their own canonical value
+        }
+        // Fire-and-forget, and deliberately defensive: these callbacks outlive the write,
+        // so by the time one runs the link may be gone, the client torn down, or the
+        // characteristic object no longer readable. read() can therefore throw
+        // SYNCHRONOUSLY (not just reject) — a plain .catch() misses that and the TypeError
+        // escapes as an unhandled error with no call stack pointing back here. Nothing in
+        // the UI depends on this read succeeding: the optimistic value is already applied,
+        // and the next connect re-reads everything.
+        const runPass = () => {
+            try {
+                const pending = charInfo.characteristic.read?.();
+                if (!pending) {
+                    return;  // no read() on this object (torn down, or a test double)
+                }
+                pending
+                    .then(read => {
+                        if (read.value) apply(read.value, baselineValue);
+                    })
+                    .catch(err => console.log(`Post-write read-back failed for ${charInfo.characteristic.uuid}:`, err));
+            } catch (err) {
+                console.log(`Post-write read-back could not start for ${charInfo.characteristic.uuid}:`, err);
+            }
+        };
+        // Both passes compare-and-swap against the SAME baseline, which is correct for
+        // every ordering: if pass 1 already applied a clamp, pass 2's CAS fails and skips
+        // (the value is already canonical); if pass 1 read back the unclamped value, that
+        // read equals the baseline so applying it was a no-op and the baseline still
+        // holds; and if a newer write landed meanwhile, both passes skip rather than
+        // snapping the control backwards to a pre-write read.
+        CLAMP_READBACK_DELAYS_MS.forEach(delay => setTimeout(runPass, delay));
+    }, []);
+
     const writeToCharacteristic = useCallback(async (
         charUuid: string,
         newEncodedValue: string,
@@ -259,6 +319,13 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
+            // Baseline for the read-back's compare-and-swap: what the UI shows now that this
+            // write has settled — the optimistic value, or the untouched previous value when
+            // the caller opted out of optimism.
+            scheduleClampReadBack(charInfo,
+                options?.skipOptimisticUpdate ? previousValue : optimisticValue,
+                (readValue, baseline) => updateCharFields(charUuid,
+                    current => current.value === baseline ? { value: readValue } : null));
             return true;
         } catch (error) {
             // Revert the optimistic value — but only if it's still what we wrote. A device
@@ -274,7 +341,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         } finally {
             setCharUpdateInProgress(charUuid, false);
         }
-    }, [getCharacteristicInfo, setCharUpdateInProgress, updateCharValue, updateCharFields]);
+    }, [getCharacteristicInfo, setCharUpdateInProgress, updateCharValue, updateCharFields, scheduleClampReadBack]);
 
     // Service-aware lookup for characteristics whose UUID is reused across services (e.g. "Is
     // Active"), where the flat characteristics map can only ever hold one (ambiguous) entry.
@@ -369,6 +436,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
         try {
             await charInfo.characteristic.writeWithResponse(newEncodedValue);
+            // Compare-and-swap against what this write left on screen — see writeToCharacteristic.
+            scheduleClampReadBack(charInfo,
+                options?.skipOptimisticUpdate ? previousValue : optimisticValue,
+                (readValue, baseline) => updateServiceCharacteristicFields(serviceUuid, charUuid,
+                    current => current.value === baseline ? { value: readValue } : null));
             return true;
         } catch (error) {
             // Compare-and-swap revert: only undo our optimistic value if nothing else (a device
@@ -383,7 +455,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         } finally {
             setServiceCharUpdateInProgress(serviceUuid, charUuid, false);
         }
-    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue, updateServiceCharacteristicFields]);
+    }, [getServiceCharacteristicInfo, setServiceCharUpdateInProgress, updateServiceCharacteristicValue, updateServiceCharacteristicFields, scheduleClampReadBack]);
 
     const contextValue = useMemo(() => ({
         selectedDevice,
@@ -404,13 +476,15 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         updateCharValue,
         getServiceCharacteristicInfo,
         updateServiceCharacteristicValue,
+        updateServiceCharacteristicFields,
         writeServiceCharacteristic,
         monitorSubscriptions,
         disconnectSubscription,
         selectedDeviceRef,
     }), [
         selectedDevice, isScanning, connectingDevice, reconnectingDevice, discoveryProgress, writeToCharacteristic, getCharacteristicInfo, updateCharValue,
-        getServiceCharacteristicInfo, updateServiceCharacteristicValue, writeServiceCharacteristic,
+        getServiceCharacteristicInfo, updateServiceCharacteristicValue, updateServiceCharacteristicFields,
+        writeServiceCharacteristic,
     ]);
 
     return (

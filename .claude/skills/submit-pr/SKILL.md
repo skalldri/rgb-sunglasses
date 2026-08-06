@@ -113,6 +113,27 @@ carries the full procedure (hold BOTH `board`+`app` hw-locks up front, exercise 
 changed read/write/notify path cross-checked against the firmware serial shell, verify
 notify reception, always release both locks) and *why* the gate exists (PR #89).
 
+### 5a. ALWAYS re-validate the firmware OTA update flow on any Bluetooth-affecting PR
+
+**Mandatory whenever step 5 applies at all — not just when the change looks
+MCUmgr-related.** Run a real firmware update from the companion app, end to end:
+open the Firmware Update modal (image state / slot info / board detect must populate
+with **no** `SMP request timeout after 5000ms`), select a `.zip`, and let the upload
+run to completion. Record the result in the PR body.
+
+The OTA path is uniquely fragile and uniquely invisible: SMP is the **last**
+notification the app registers, so it is the first casualty of anything that consumes
+Android's ~15-slot registration budget — and that failure is completely silent (the
+CCC write succeeds, the firmware notifies into a void). Every other app surface keeps
+working, so the normal step-5 sweep passes while firmware updates are 100% broken.
+That is exactly how it shipped undetected in `fw-v2.1.0` (root-caused 2026-08-05,
+diagnosis in /debug-ble §4a). A GATT change that merely *adds a notifiable
+characteristic* is enough to break it.
+
+Cheap pre-check that catches the whole failure class before you flash: after
+connecting, confirm the app's `Set up N characteristic monitors` log line plus SMP and
+MCUboot Status stays **≤ 15**.
+
 **Bugs found here get fixed in the SAME PR and documented in its body** — the house
 norm (PRs #43 and #55 each shipped extra fixes surfaced only by this step). After
 fixing, re-run the affected gates above (builds/tests always; coverage if C/C++ changed).

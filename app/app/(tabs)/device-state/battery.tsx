@@ -28,7 +28,7 @@ import {
     voltageToPercent, type ChargeDirection,
 } from "@/services/battery";
 import { decodeSint32FromBase64, decodeUint8FromBase64 } from "@/services/ble-value-codec";
-import { Link, useRouter } from "expo-router";
+import { Link, useFocusEffect, useRouter } from "expo-router";
 import React from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -70,7 +70,7 @@ const DIRECTION_BADGE: Record<ChargeDirection, { label: string; tone: 'success' 
  */
 export default function BatteryDetailScreen() {
     const router = useRouter();
-    const { selectedDevice, writeToCharacteristic } = useBluetooth();
+    const { selectedDevice, writeToCharacteristic, updateCharValue } = useBluetooth();
     const { renderCharacteristicInput, labelColorFor } = useCharacteristicEditor();
     const c = useThemeColors();
     // Issue #248: on disconnect, pop this screen (and the stack) back to the
@@ -78,6 +78,60 @@ export default function BatteryDetailScreen() {
     useDisconnectRedirect();
 
     const chars = selectedDevice?.characteristics;
+
+    // The raw telemetry rendered here (battery/VBUS volts+amps, the Power Debug
+    // section) stopped notifying with the Android notification-budget fix — only
+    // Battery Percent and Charge Status still push (they feed the always-visible
+    // card). Re-read the rest while this screen is focused, sequentially (Android
+    // allows one outstanding GATT op per connection) on a short interval, so the
+    // page keeps its live feel. Values land in context via updateCharValue, the
+    // same sink the old notifications used.
+    // Both the device and the update sink are read through refs, and refreshTelemetry has
+    // EMPTY deps, so its identity is stable. Depending on [selectedDevice, updateCharValue]
+    // instead is a feedback loop: each read calls updateCharValue, the context hands back a
+    // fresh device object, refreshTelemetry is recreated, and the focus effect re-runs —
+    // re-reading continuously instead of on the interval (hardware-observed 2026-08-05 in
+    // the sibling BatteryCard, ~11 reads/second; unit tests miss it because a mocked
+    // updateCharValue never produces a new context object).
+    const refreshInFlight = React.useRef(false);
+    const deviceRef = React.useRef(selectedDevice);
+    deviceRef.current = selectedDevice;
+    const updateCharValueRef = React.useRef(updateCharValue);
+    updateCharValueRef.current = updateCharValue;
+
+    const refreshTelemetry = React.useCallback(async () => {
+        if (refreshInFlight.current) return;
+        refreshInFlight.current = true;
+        const device = deviceRef.current;
+        const telemetryUuids = [
+            UUID_BATTERY_VOLTAGE, UUID_BATTERY_CURRENT,
+            UUID_BATTERY_VBUS_VOLTAGE, UUID_BATTERY_VBUS_CURRENT,
+            ...Object.keys(device?.characteristicsByService?.[UUID_POWER_DEBUG_SERVICE] ?? {}),
+        ];
+        try {
+            for (const uuid of telemetryUuids) {
+                const info = device?.characteristics?.[uuid];
+                if (!info || info.characteristic.isNotifiable) continue;
+                try {
+                    const read = await info.characteristic.read?.();
+                    if (read?.value) updateCharValueRef.current(uuid, read.value);
+                } catch (err) {
+                    // A single failed read (e.g. mid-disconnect) ends this pass; the
+                    // interval retries, and the disconnect redirect handles teardown.
+                    console.log(`Battery telemetry refresh stopped at ${uuid}:`, err);
+                    break;
+                }
+            }
+        } finally {
+            refreshInFlight.current = false;
+        }
+    }, []);
+
+    useFocusEffect(React.useCallback(() => {
+        refreshTelemetry();
+        const interval = setInterval(refreshTelemetry, 2000);
+        return () => clearInterval(interval);
+    }, [refreshTelemetry]));
     const vbatMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VOLTAGE]?.value);
     const ibatMa = decodeSint32OrNull(chars?.[UUID_BATTERY_CURRENT]?.value);
     const vbusMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VBUS_VOLTAGE]?.value);

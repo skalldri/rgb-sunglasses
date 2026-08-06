@@ -2,12 +2,15 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import {
+    animationServiceUuidForId,
     BLE_GATT_CPF_FORMAT_DROPDOWN_LIST,
     BLE_GATT_CPF_FORMAT_UTF8S,
+    UUID_ACTIVE_ANIMATION,
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
     UUID_IS_ACTIVE_CHARACTERISTIC,
+    UUID_MCUBOOT_UPDATER_STATUS,
     UUID_SHUFFLE_INCLUDE_CHARACTERISTIC,
 } from '@/constants/bluetooth';
 import * as BluetoothContext from '@/context/bluetooth-context';
@@ -59,6 +62,7 @@ function makeMockBluetooth() {
         setSelectedDevice: jest.fn(),
         updateCharValue: jest.fn(),
         updateServiceCharacteristicValue: jest.fn(),
+        updateServiceCharacteristicFields: jest.fn(),
         setDiscoveryProgress: jest.fn(),
         get connectingDevice() { return state.connectingDevice; },
         setConnectingDevice,
@@ -343,6 +347,73 @@ describe('useBleConnection', () => {
 
         expect(smpChar.monitor).not.toHaveBeenCalled();
         expect(ctx.monitorSubscriptions.current).toHaveLength(0);
+    });
+
+    it('connect() skips monitor setup for the MCUboot Updater Status characteristic (modal client owns it)', async () => {
+        const statusChar = makeCharacteristic(UUID_MCUBOOT_UPDATER_STATUS, { notifiable: true });
+        const service = makeService('svc-mcuboot', [statusChar]);
+        const deviceConn = makeDeviceConnection([service]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        expect(statusChar.monitor).not.toHaveBeenCalled();
+        expect(ctx.monitorSubscriptions.current).toHaveLength(0);
+    });
+
+    it('Active Animation notification fans out Is Active state across every animation service', async () => {
+        // Two animation services (Rainbow = id 5, ZigZag = id 1) each carrying the shared
+        // Is Active characteristic — no longer notifiable firmware-side; their state is
+        // pushed through Core Config's single Active Animation characteristic instead.
+        const rainbowSvcUuid = animationServiceUuidForId(5);
+        const zigzagSvcUuid = animationServiceUuidForId(1);
+        const activeAnimChar = makeCharacteristic(UUID_ACTIVE_ANIMATION, { notifiable: true, readValue: btoa('\x00\x00\x00\x00') });
+        const rainbowIsActive = makeCharacteristic(UUID_IS_ACTIVE_CHARACTERISTIC, { readValue: btoa('\x00') });
+        const zigzagIsActive = makeCharacteristic(UUID_IS_ACTIVE_CHARACTERISTIC, { readValue: btoa('\x01') });
+        const deviceConn = makeDeviceConnection([
+            makeService('svc-core-config', [activeAnimChar]),
+            makeService(rainbowSvcUuid, [rainbowIsActive]),
+            makeService(zigzagSvcUuid, [zigzagIsActive]),
+        ]);
+        (BleHook.bleManager.connectToDevice as jest.Mock).mockResolvedValue(deviceConn);
+
+        const { result } = renderHook(() => useBleConnection('AA:BB:CC', 'Test Device'));
+
+        await act(async () => { await result.current.connect(); });
+
+        // Firmware switches to Rainbow (uint32 LE 5): its service's toggle turns on,
+        // every other animation service's toggle turns off, and the raw value lands
+        // in the flat map for anything rendering the characteristic directly.
+        const monitorCallback = activeAnimChar.monitor.mock.calls[0][0];
+        act(() => { monitorCallback(null, { value: btoa('\x05\x00\x00\x00') }); });
+
+        expect(ctx.updateCharValue).toHaveBeenCalledWith(UUID_ACTIVE_ANIMATION, btoa('\x05\x00\x00\x00'));
+
+        // The fan-out patches through the FUNCTION form, so a service whose toggle is
+        // already correct keeps its state object identity (the updater returns null).
+        // Asserting on the updater's behaviour rather than on a flat value argument is
+        // what pins that down — a plain value write would look identical here.
+        const patchFor = (svcUuid: string) =>
+            (ctx.updateServiceCharacteristicFields as jest.Mock).mock.calls
+                .find(([svc, char]) => svc === svcUuid && char === UUID_IS_ACTIVE_CHARACTERISTIC)?.[2];
+
+        // lastWriteError clears only alongside a real value change (issue #92, care
+        // point 1) — a service the switch didn't touch keeps its write-error indicator.
+        const rainbowPatch = patchFor(rainbowSvcUuid);
+        expect(rainbowPatch).toBeDefined();
+        expect(rainbowPatch({ value: btoa('\x00') })).toEqual({ value: btoa('\x01'), lastWriteError: null });
+        expect(rainbowPatch({ value: btoa('\x01') })).toBeNull();
+
+        const zigzagPatch = patchFor(zigzagSvcUuid);
+        expect(zigzagPatch).toBeDefined();
+        expect(zigzagPatch({ value: btoa('\x01') })).toEqual({ value: btoa('\x00'), lastWriteError: null });
+        expect(zigzagPatch({ value: btoa('\x00') })).toBeNull();
+
+        // The non-animation Core Config service holds no Is Active characteristic and
+        // must not receive a fan-out write.
+        expect(patchFor('svc-core-config')).toBeUndefined();
     });
 
     it('monitor callback calls updateCharValue when a notification arrives', async () => {

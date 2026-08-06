@@ -6,8 +6,14 @@
 /**
  * @brief Reusable BLE `Is Active` characteristic for a specific animation.
  *
- * Provides the common read/write/notify characteristic shape and forwards
+ * Provides the common read/write characteristic shape and forwards
  * remote writes into @ref AnimationIsActiveBinding for the selected animation.
+ *
+ * Deliberately NOT notifiable: Android caps GATT notification registrations at
+ * ~15 per app (BTA_GATTC_NOTIF_REG_MAX), and one notify per animation service
+ * blew that budget and silently starved the SMP/DFU characteristic's
+ * registration. Device-side activation changes reach the app through Core
+ * Config's single "Active Animation" characteristic instead (core_config.cpp).
  *
  * Uses the fixed kIsActiveCharacteristicUuid (reused identically across every animation's
  * BtGattServer, like kAnimationNameCharacteristicUuid) rather than an auto-assigned UUID, so the
@@ -17,11 +23,11 @@
  */
 template <Animation tAnimationId>
 class IsActiveCharacteristic
-    : public BtGattCharacteristicCommon<IsActiveCharacteristic<tAnimationId>, "Is Active", true,
+    : public BtGattCharacteristicCommon<IsActiveCharacteristic<tAnimationId>, "Is Active", false,
                                         false, bool, false> {
    public:
     using Base = BtGattCharacteristicCommon<IsActiveCharacteristic<tAnimationId>, "Is Active",
-                                            true, false, bool, false>;
+                                            false, false, bool, false>;
     using Base::operator=;
 
     IsActiveCharacteristic() { this->characteristic_uuid_ = kIsActiveCharacteristicUuid; }

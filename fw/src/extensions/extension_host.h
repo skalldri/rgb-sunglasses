@@ -79,8 +79,8 @@ bool shuffleIncluded(size_t slot);
 
 /**
  * @brief Sets the slot's "include in shuffle" flag and persists it (debounced).
- * Device-side callers (the `ext shuffle` shell command) must also push the change to
- * subscribed BLE clients via extension_bt_notify_shuffle_include().
+ * No BLE push: the characteristic is not notifiable (Android notification-
+ * registration budget) — a connected app sees the change on its next read.
  */
 void setShuffleInclude(size_t slot, bool include);
 

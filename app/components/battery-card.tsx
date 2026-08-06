@@ -13,7 +13,7 @@ import {
 } from "@/services/battery";
 import { decodeSint32FromBase64, decodeUint8FromBase64 } from "@/services/ble-value-codec";
 import { useThemeColors } from "@/hooks/use-theme-color";
-import { Link } from "expo-router";
+import { Link, useFocusEffect } from "expo-router";
 import React from "react";
 import { Pressable, StyleSheet, View, ViewStyle } from "react-native";
 
@@ -53,11 +53,73 @@ function chargeStatusTone(chgStat: number): 'success' | 'info' | 'neutral' | 'wa
  * (position 7, PR E) and falls back to the app-side voltageToPercent() curve
  * for older firmware that only exposes raw voltage.
  */
+// Battery presence changes only when someone physically opens the enclosure, so a minute
+// is plenty; the badge is also re-seeded on every focus and reconnect.
+const POWER_FLAGS_POLL_MS = 60000;
+
 export function BatteryCard({ style }: { style?: ViewStyle }) {
-    const { selectedDevice } = useBluetooth();
+    const { selectedDevice, updateCharValue } = useBluetooth();
     const c = useThemeColors();
 
     const chars = selectedDevice?.characteristics;
+
+    // Power Flags (the "No Battery" badge input) stopped notifying with the Android
+    // notification-budget fix; it changes rarely (battery physically inserted or
+    // removed), so a one-shot read whenever this screen regains focus keeps the
+    // badge honest without holding a notification-registration slot.
+    // Read through refs, with EMPTY callback deps, so this fires once per focus.
+    // Depending on [powerFlagsInfo, updateCharValue] instead is a feedback loop: the read
+    // calls updateCharValue, the context hands back a fresh characteristics object, that
+    // changes powerFlagsInfo's identity, the useCallback is invalidated and the focus
+    // effect re-runs — measured at ~11 reads/second, forever, saturating the GATT queue
+    // (hardware-observed 2026-08-05; unit tests can't see it because a mocked
+    // updateCharValue never produces a new context object).
+    const powerFlagsRef = React.useRef(chars?.[UUID_POWER_FLAGS]);
+    powerFlagsRef.current = chars?.[UUID_POWER_FLAGS];
+    const updateCharValueRef = React.useRef(updateCharValue);
+    updateCharValueRef.current = updateCharValue;
+
+    // read() is optional-called and try/caught: on a link that dropped between render and
+    // focus the characteristic object may no longer be readable, and it can then throw
+    // SYNCHRONOUSLY rather than reject — which a bare .catch() would miss, turning a stale
+    // badge into a render-time crash. Nothing depends on this read succeeding; the badge
+    // just keeps its last value until the next focus or reconnect.
+    // `forMac` is re-checked when the read resolves: a read issued against one board can
+    // land after a reconnect swapped in another, and applying it would show the previous
+    // board's battery state under the new one's name.
+    const mac = selectedDevice?.mac;
+    const macRef = React.useRef(mac);
+    macRef.current = mac;
+    const readPowerFlags = React.useCallback((forMac: string | undefined) => {
+        const info = powerFlagsRef.current;
+        if (info && !info.characteristic.isNotifiable) {
+            try {
+                info.characteristic.read?.()
+                    ?.then(read => {
+                        if (read.value && macRef.current === forMac) {
+                            updateCharValueRef.current(UUID_POWER_FLAGS, read.value);
+                        }
+                    })
+                    .catch(err => console.log('Power Flags focus read failed:', err));
+            } catch (err) {
+                console.log('Power Flags focus read could not start:', err);
+            }
+        }
+    }, []);
+
+    // Focus alone is not enough here. This card lives on the Controls tab, which is the
+    // screen the app sits on for a whole session — so "read once per focus" can mean
+    // "read once, ever", and the No Battery badge then freezes across a battery being
+    // physically inserted or removed. A slow poll while focused keeps it honest at a cost
+    // of one read a minute, far below the traffic a notification-registration slot (or the
+    // detail page's 2 s telemetry tick) would spend. `mac` re-arms the effect on a
+    // reconnect; it is a plain string, so unlike a context object it cannot feed back into
+    // the effect's own identity the way the read loop documented above did.
+    useFocusEffect(React.useCallback(() => {
+        readPowerFlags(mac);
+        const timer = setInterval(() => readPowerFlags(mac), POWER_FLAGS_POLL_MS);
+        return () => clearInterval(timer);
+    }, [readPowerFlags, mac]));
     const fwPercent = decodeUint8OrNull(chars?.[UUID_BATTERY_PERCENT]?.value);
     const vbatMv = decodeSint32OrNull(chars?.[UUID_BATTERY_VOLTAGE]?.value);
     const chgStat = decodeUint8OrNull(chars?.[UUID_BATTERY_CHARGE_STATUS]?.value);
