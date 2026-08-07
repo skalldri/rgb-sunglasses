@@ -103,6 +103,26 @@ describe('FirmwareUpdateLanding', () => {
         );
     });
 
+    it('exposes stable testIDs for hardware validation runs', async () => {
+        // See the matching test on the flow screen: these are the handles /drive-app
+        // taps by, and fiber-based fallbacks press covered screens.
+        mockBluetooth(defaultSelectedDevice);
+        mockClientMethods({
+            getImageState: async () => ({
+                images: [{ image: 0, slot: 0, version: '1.0.0', active: true }],
+            }),
+        });
+        mockGitHub();
+
+        const { findByTestId, getByTestId } = renderWithMcuMgr(<FirmwareUpdateLanding />);
+
+        expect(await findByTestId('fw-update-install-release')).toBeTruthy();
+        expect(getByTestId('fw-update-pick-zip')).toBeTruthy();
+        expect(getByTestId('fw-update-landing-sync-extensions')).toBeTruthy();
+        expect(getByTestId('fw-update-landing-debug')).toBeTruthy();
+        expect(getByTestId('fw-update-landing-back')).toBeTruthy();
+    });
+
     it('shows a disconnected device as neutral status, never as a red error', async () => {
         // The whole point of the redesign: "No device connected" is a state, not a fault.
         mockBluetooth(null);

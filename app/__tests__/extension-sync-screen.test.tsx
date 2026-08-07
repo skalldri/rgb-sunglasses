@@ -382,7 +382,7 @@ describe('ExtensionSyncCard embedded in the flow', () => {
     });
 
     it('still offers its own Sync button on the standalone screen', () => {
-        const { getByText } = render(
+        const { getByText, getByTestId } = render(
             <ExtensionSyncCard
                 state="ready"
                 entries={entries}
@@ -396,5 +396,9 @@ describe('ExtensionSyncCard embedded in the flow', () => {
         );
         expect(getByText('plasma.llext')).toBeTruthy();
         expect(getByText('Sync Extensions')).toBeTruthy();
+        // /drive-app handles — see the flow-screen testID test.
+        expect(getByTestId('extension-sync-button')).toBeTruthy();
+        expect(getByTestId('extension-sync-ready')).toBeTruthy();
+        expect(getByTestId('extension-sync-entry-plasma.llext')).toBeTruthy();
     });
 });

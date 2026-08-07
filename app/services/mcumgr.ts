@@ -417,9 +417,10 @@ export class McuMgrClient {
         }
 
         // Set up notifications for responses
+        // Deliberately unlogged on the happy path: this fires once per BLE notification,
+        // so during an OTA upload it saturates the JS log buffer within milliseconds
+        // (2000/2000 entries observed, evicting everything else). Errors below still log.
         this.monitorSubscription = this.characteristic.monitor((error, char) => {
-            console.log('SMP monitor called!');
-
             // Ignore all callbacks if client is destroyed
             if (this.isDestroyed) {
                 return;

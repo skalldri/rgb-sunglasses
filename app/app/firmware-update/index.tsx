@@ -78,6 +78,7 @@ export default function FirmwareUpdateLanding() {
     const header = (
         <View style={styles.header}>
             <Pressable
+                testID="fw-update-landing-back"
                 onPress={() => router.back()}
                 accessibilityRole="button"
                 accessibilityLabel="Close firmware update"
@@ -190,6 +191,7 @@ export default function FirmwareUpdateLanding() {
                     </ThemedText>
                     <View style={styles.buttonRow}>
                         <AppButton
+                            testID="fw-update-install-release"
                             title="Install Update"
                             variant="primary"
                             style={styles.rowButton}
@@ -224,6 +226,7 @@ export default function FirmwareUpdateLanding() {
                     <ThemedText type="overline">Other options</ThemedText>
 
                     <AppButton
+                        testID="fw-update-pick-zip"
                         title="Install from a .zip file"
                         variant="secondary"
                         style={styles.stackedButton}
@@ -233,6 +236,7 @@ export default function FirmwareUpdateLanding() {
 
                     <Link href="/firmware-update/extensions" asChild>
                         <AppButton
+                            testID="fw-update-landing-sync-extensions"
                             title="Sync Extensions"
                             variant="secondary"
                             style={styles.stackedButton}
@@ -242,6 +246,7 @@ export default function FirmwareUpdateLanding() {
 
                     <Link href="/firmware-update/debug" asChild>
                         <AppButton
+                            testID="fw-update-landing-debug"
                             title="FW Update Debug"
                             variant="ghost"
                             style={styles.stackedButton}

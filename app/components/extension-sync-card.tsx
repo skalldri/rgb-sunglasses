@@ -85,6 +85,7 @@ export function ExtensionSyncCard({
     // apart between them.
     return (
         <Card
+            testID={`extension-sync-${state}`}
             style={[
                 styles.card,
                 state !== 'error' && pending.length > 0 ? { borderColor: c.success } : null,
@@ -113,7 +114,10 @@ export function ExtensionSyncCard({
 
             {hasPlan &&
                 entries.map(entry => (
-                    <View key={entry.name} style={styles.row}>
+                    <View
+                        key={entry.name}
+                        testID={`extension-sync-entry-${entry.name}`}
+                        style={styles.row}>
                         <ThemedText type="caption" style={styles.rowName} numberOfLines={1}>
                             {entry.name}
                         </ThemedText>
@@ -173,6 +177,7 @@ export function ExtensionSyncCard({
                     </ThemedText>
                     <View style={styles.buttonRow}>
                         <AppButton
+                            testID="extension-sync-button"
                             title={
                                 isSyncing
                                     ? 'Syncing...'

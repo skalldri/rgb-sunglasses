@@ -161,6 +161,35 @@ describe('FirmwareUpdateFlow screen', () => {
         expect(await findByText('Restart and Install')).toBeTruthy();
     });
 
+    it('exposes stable testIDs for hardware validation runs', async () => {
+        // /drive-app taps these by testID. Without them, execbro falls back to fiber
+        // matching, which searches *covered* screens (a pushed Expo Router screen does
+        // not unmount its parent) and silently presses a button the user cannot see.
+        // These IDs are an API for the validation runs - deleting one breaks a run in a
+        // way that looks like a hardware fault, so pin them here.
+        mockParams = { source: 'file', uri: 'file:///cache/fw.zip', name: 'fw.zip' };
+        jest.spyOn(FirmwareSource, 'loadPackage').mockResolvedValue({
+            manifest: { 'format-version': 1, time: 0, name: 'fw', files: [] },
+            images: [
+                {
+                    manifest: { file: 'fw.signed.bin', image_index: '0', size: 4 } as any,
+                    data: Uint8Array.from([1, 2, 3, 4]),
+                    parsedHeader: { magic: 0, version: '2.1.0+0', imageSize: 4 },
+                },
+            ],
+        } as any);
+
+        const { findByTestId, getByTestId } = render(<FirmwareUpdateFlow />);
+
+        expect(await findByTestId('fw-update-install')).toBeTruthy();
+        // The step container carries the current step, so a run can read state rather
+        // than infer it from the title text.
+        expect(getByTestId('fw-update-step-ready')).toBeTruthy();
+        expect(getByTestId('fw-update-image-0')).toBeTruthy();
+        expect(getByTestId('fw-update-image-0-status')).toBeTruthy();
+        expect(getByTestId('fw-update-flow-back')).toBeTruthy();
+    });
+
     it('does not re-resolve the source on re-render', async () => {
         // The effect downloads; re-running it would re-download an ~850 KB asset.
         mockParams = { source: 'release', url: 'https://example.com/fw.zip', version: '2.1.0' };

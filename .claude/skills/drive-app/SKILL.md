@@ -142,9 +142,22 @@ spreads onto the `Pressable`) — that forwarding is load-bearing for this skill
 destructure it away. Convention: lower kebab-case, template literals for per-item IDs,
 matching existing usage (`shuffle-toggle`, `slot-up-next-${i}`).
 
-When you add a screen that a validation run will click through, give it `testID`s at the
-same time. Put one on the **step container** too (`` {`fw-update-step-${step}`} ``) so
-state can be read rather than inferred. Caveat: `get_screen_state` prints `testID` only
-for pressables — a container `testID` is readable via `inspect_at_point` and in jest,
-but not from a `get_screen_state` poll, so the step *title* stays the practical polling
-signal.
+The firmware-update screens already have them, pinned by tests in
+`firmware-update-flow-screen.test.tsx`, `firmware-update-landing.test.tsx` and
+`extension-sync-screen.test.tsx` so a refactor can't silently drop one:
+
+| Screen | `testID`s |
+| --- | --- |
+| `firmware-update/index.tsx` | `fw-update-install-release`, `fw-update-pick-zip`, `fw-update-landing-sync-extensions`, `fw-update-landing-debug`, `fw-update-landing-back` |
+| `firmware-update/flow.tsx` | `fw-update-install`, `fw-update-restart`, `fw-update-retry`, `fw-update-open-debug`, `fw-update-success-sync-extensions`, `fw-update-done`, `fw-update-error-back`, `fw-update-flow-back` |
+| `firmware-update/flow.tsx` containers | `` fw-update-step-${step} ``, `` fw-update-image-${i} ``, `` fw-update-image-${i}-status `` |
+| `components/extension-sync-card.tsx` | `extension-sync-button`, `` extension-sync-${state} ``, `` extension-sync-entry-${name} `` |
+
+When you add a screen a validation run will click through, do the same — including a
+**step container** ID, so state can be read rather than inferred. `Card` and `AppButton`
+both forward `testID` to the underlying `View`/`Pressable`; keep it that way (a tap that
+resolves to a wrapper presses nothing and still reports success).
+
+Caveat: `get_screen_state` prints `testID` only for pressables. A container `testID` is
+readable via `inspect_at_point` and in jest, but not from a `get_screen_state` poll — so
+the step *title* stays the practical polling signal.

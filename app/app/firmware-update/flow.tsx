@@ -139,6 +139,7 @@ export default function FirmwareUpdateFlow() {
     const header = (
         <View style={styles.header}>
             <Pressable
+                testID="fw-update-flow-back"
                 onPress={() => router.back()}
                 accessibilityRole="button"
                 accessibilityLabel="Back to firmware update"
@@ -160,12 +161,17 @@ export default function FirmwareUpdateFlow() {
             const done = img.verified || img.staged;
             const tone = done ? c.success : c.warning;
             return (
-                <Card key={`${img.imageIndex}-${img.file}`} style={[styles.card, { borderColor: tone }]}>
+                <Card
+                    key={`${img.imageIndex}-${img.file}`}
+                    testID={`fw-update-image-${img.imageIndex}`}
+                    style={[styles.card, { borderColor: tone }]}>
                     <ThemedText style={{ color: tone }}>
                         Image {img.imageIndex}: {img.file}
                     </ThemedText>
                     <ThemedText type="caption">Version: {img.version}</ThemedText>
-                    <ThemedText type="caption">
+                    <ThemedText
+                        testID={`fw-update-image-${img.imageIndex}-status`}
+                        type="caption">
                         {img.verified
                             ? 'Verified — running on the device'
                             : img.staged
@@ -186,6 +192,7 @@ export default function FirmwareUpdateFlow() {
                     <ThemedText style={{ color: c.danger }}>{loadError}</ThemedText>
                     <View style={styles.buttonRow}>
                         <AppButton
+                            testID="fw-update-error-back"
                             title="Back"
                             variant="secondary"
                             style={styles.rowButton}
@@ -224,6 +231,7 @@ export default function FirmwareUpdateFlow() {
                         </ThemedText>
                         <View style={styles.buttonRow}>
                             <AppButton
+                                testID="fw-update-install"
                                 title="Install"
                                 variant="primary"
                                 style={styles.rowButton}
@@ -295,6 +303,7 @@ export default function FirmwareUpdateFlow() {
                             </ThemedText>
                             <View style={styles.buttonRow}>
                                 <AppButton
+                                    testID="fw-update-restart"
                                     title={
                                         syncingExtensions
                                             ? 'Updating extensions…'
@@ -366,12 +375,14 @@ export default function FirmwareUpdateFlow() {
                             </ThemedText>
                             <Link href="/firmware-update/extensions" asChild>
                                 <AppButton
+                                    testID="fw-update-success-sync-extensions"
                                     title="Sync Extensions"
                                     variant="primary"
                                     style={styles.stackedButton}
                                 />
                             </Link>
                             <AppButton
+                                testID="fw-update-done"
                                 title="Done"
                                 variant="secondary"
                                 style={styles.stackedButton}
@@ -390,6 +401,7 @@ export default function FirmwareUpdateFlow() {
                         {renderImageCards()}
                         <Card style={styles.card}>
                             <AppButton
+                                testID="fw-update-retry"
                                 title="Try Again"
                                 variant="primary"
                                 style={styles.stackedButton}
@@ -397,6 +409,7 @@ export default function FirmwareUpdateFlow() {
                             />
                             <Link href="/firmware-update/debug" asChild>
                                 <AppButton
+                                    testID="fw-update-open-debug"
                                     title="Open FW Update Debug"
                                     variant="ghost"
                                     style={styles.stackedButton}
@@ -411,7 +424,9 @@ export default function FirmwareUpdateFlow() {
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>
             {header}
-            <ScrollView contentContainerStyle={styles.content}>
+            <ScrollView
+                testID={`fw-update-step-${flow.step}`}
+                contentContainerStyle={styles.content}>
                 <ThemedText type="title" style={styles.title}>
                     {STEP_TITLE[flow.step]}
                 </ThemedText>
