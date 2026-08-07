@@ -1,10 +1,18 @@
-import { render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import FirmwareUpdateFlow from '@/app/firmware-update/flow';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import * as FirmwareSource from '@/services/firmware-source';
-import { mockClientMethods } from '@/test/firmware-mocks';
+import * as GitHubReleases from '@/services/github-releases';
+import * as McuMgrModule from '@/services/mcumgr';
+import { mockClientMethods, mockRelease, renderWithMcuMgr } from '@/test/firmware-mocks';
+import fixture from './fixtures/mcuboot-image-header.json';
+
+const APP_IMAGE = Uint8Array.from(fixture.bytes as number[]);
+const APP_TLV_BYTES = Uint8Array.from(
+    ((fixture.expectedSha256 as string).match(/../g) as string[]).map(h => parseInt(h, 16))
+);
 
 let mockParams: Record<string, string> = {};
 jest.mock('expo-router', () => {
@@ -98,6 +106,59 @@ describe('FirmwareUpdateFlow screen', () => {
         mockParams = { source: 'carrier-pigeon' };
         const { findByText } = render(<FirmwareUpdateFlow />);
         expect(await findByText(/Unknown update source: carrier-pigeon/)).toBeTruthy();
+    });
+
+    it('lists the extensions on the restart step instead of only counting them', async () => {
+        // The staged step embeds the real ExtensionSyncCard, so the user can see which
+        // files are involved and watch the upload progress - a bare "1 extension will be
+        // updated" line gave no way to tell what was about to change.
+        mockParams = { source: 'file', uri: 'file:///cache/fw.zip', name: 'fw.zip' };
+        jest.spyOn(FirmwareSource, 'loadPackage').mockResolvedValue({
+            manifest: { 'format-version': 1, time: 0, name: 'fw', files: [] },
+            images: [
+                {
+                    manifest: { file: 'fw.signed.bin', image_index: '0', size: 4 } as any,
+                    data: APP_IMAGE,
+                    parsedHeader: { magic: 0, version: '2.1.0+0', imageSize: 4 },
+                },
+            ],
+        } as any);
+        jest.spyOn(McuMgrModule.McuMgrClient.prototype, 'getImageState')
+            .mockResolvedValueOnce({
+                images: [{ image: 0, slot: 1, version: '2.1.0', hash: APP_TLV_BYTES }],
+            } as any)
+            .mockResolvedValue({
+                images: [
+                    { image: 0, slot: 1, version: '2.1.0', hash: APP_TLV_BYTES, pending: true },
+                ],
+            } as any);
+        // One extension out of date, one current.
+        jest.spyOn(GitHubReleases, 'fetchLatestFirmwareRelease').mockResolvedValue({
+            ...mockRelease,
+            assets: [
+                ...mockRelease.assets,
+                {
+                    id: 30,
+                    name: 'plasma.llext',
+                    browser_download_url: 'https://example.com/plasma.llext',
+                    size: 10,
+                    content_type: 'application/octet-stream',
+                    digest: `sha256:${'a'.repeat(64)}`,
+                },
+            ],
+        } as any);
+        jest.spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256').mockResolvedValue(
+            'b'.repeat(64)
+        );
+
+        const { findByText } = renderWithMcuMgr(<FirmwareUpdateFlow />);
+        fireEvent.press(await findByText('Install'));
+
+        // Named, with its status - not just a count.
+        expect(await findByText('plasma.llext')).toBeTruthy();
+        expect(await findByText('Update available')).toBeTruthy();
+        // The card must not offer a competing Sync button here; the restart drives it.
+        expect(await findByText('Restart and Install')).toBeTruthy();
     });
 
     it('does not re-resolve the source on re-render', async () => {

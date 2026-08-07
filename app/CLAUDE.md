@@ -562,27 +562,37 @@ If you see `Operation was cancelled` on `connectToDevice()` with no scan-related
 
 ### MCP Coordinate Systems
 
-Three coordinate spaces exist and are NOT interchangeable:
+**Driving the app on a phone at all — which tap strategy to use, and how to wait for a
+screen change — is `/drive-app`. Read it before a validation run; it is the difference
+between a five-minute click-through and a half-hour of taps that silently press buttons
+on the screen underneath.** This section is only the coordinate arithmetic.
 
-| Tool / context                         | Space                   | Dimensions                                  |
-| -------------------------------------- | ----------------------- | ------------------------------------------- |
-| `android_screenshot()` delivered image | **screenshot px**       | 896 × 2000                                  |
-| `tap(x, y)`                            | **screenshot px**       | same — pass coords directly from screenshot |
-| `inspect_at_point(x, y)`               | **dp** (logical pixels) | ~427 × 953                                  |
-| ADB `input tap` / `native=true`        | **raw device px**       | 960 × 2142                                  |
+Two coordinate spaces exist and are NOT interchangeable:
 
-**Converting screenshot px → dp** (needed for `inspect_at_point`):
+| Tool / context                         | Space             | Dimensions (Pixel 9 Pro)                    |
+| -------------------------------------- | ----------------- | ------------------------------------------- |
+| `android_screenshot()` delivered image | **execbro px**    | 896 × 2000                                  |
+| `tap(x, y)`                            | **execbro px**    | same                                        |
+| `get_screen_state` / `get_screen_layout` / `measure` | **execbro px** | same                     |
+| `inspect_at_point(x, y)`               | **execbro px**    | same                                        |
+| ADB `input tap` / `native=true` / `uiautomator dump` bounds | **raw device px** | 960 × 2142                |
 
 ```
-dp = (screenshot_px × 960/896) / 2.25
-   ≈ screenshot_px × 0.476
+device_px = execbro_px × 960/896   (exactly 15/14, ×1.0714)
 ```
 
-Device density is 360 dpi → pixel ratio = 360/160 = **2.25**.
+`inspect_at_point` takes **execbro px, not dp** — corrected 2026-08-07 against the live
+phone (`inspect_at_point(447, 1040)` returned the button under the finger; the
+dp-converted `(213, 495)` returned an unrelated `Card`). An earlier version of this table
+claimed dp and a `× 0.476` conversion; both were wrong. Verified three ways: `wm size`,
+a raw `screencap` PNG header, and execbro's own `convertedTo` echo.
 
-**Status bar**: 153 screenshot px (68 dp) at the top. App content starts below this. `measureInWindow` dp coordinates are relative to the content area (y=0 is below the status bar).
+**Status bar**: 153 execbro px at the top; app content starts below it. `measureInWindow`
+dp coordinates are relative to the content area (y=0 is below the status bar).
 
-**Practical rule**: get coordinates from the screenshot for `tap()`. Convert to dp for `inspect_at_point()`. Don't mix them up.
+**Practical rule**: take coordinates verbatim from `get_screen_state`, and never scale
+them. The third space — the image as rendered in your context, ~703 × 1568 — is never a
+valid tap input; estimating off it misses, and a miss can land on a covered screen.
 
 ### execbro tapping on the OnePlus 9 Pro (LE2125) — use `strategy="accessibility"` first
 

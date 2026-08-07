@@ -281,6 +281,7 @@ This is the project's **single** routing table — other docs link here, never c
 | Debug a firmware symptom | /debug-fw |
 | Debug a device↔app BLE symptom | /debug-ble |
 | Validate app changes without a phone | /validate-app |
+| Drive the app's UI on the physical phone (tap, wait for a screen change) | /drive-app |
 | Memory / FLASH / RAM work | /rom-ram-budget |
 | Flash + on-device verification | /flash-and-verify |
 | Flash / recover firmware without a J-Link (MCUmgr serial, MCUboot DFU) | `fw/scripts/mcumgr-flash.sh` + `fw/docs/flashing-without-jlink.md` |

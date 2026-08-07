@@ -1,4 +1,5 @@
 import { ThemedText } from '@/components/themed-text';
+import { ExtensionSyncCard } from '@/components/extension-sync-card';
 import { AppButton } from '@/components/ui/app-button';
 import { Card } from '@/components/ui/card';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -259,21 +260,39 @@ export default function FirmwareUpdateFlow() {
                 return (
                     <>
                         {renderImageCards()}
+
+                        {/* The real extension card, not a summary line: it already lists
+                            each file with its status and renders the upload progress
+                            bar, which is exactly what this step needs. Its own Sync
+                            button is hidden — "Restart and Install" below drives the
+                            sync, because extensions are written before the restart. */}
+                        {extensions.state !== 'idle' && (
+                            <ExtensionSyncCard
+                                state={extensions.state}
+                                entries={extensions.entries}
+                                unmanagedCount={extensions.unmanagedCount}
+                                error={extensions.error}
+                                isSyncing={syncingExtensions}
+                                progress={extensions.progress}
+                                onSync={extensions.sync}
+                                disabled
+                                showSyncButton={false}
+                            />
+                        )}
+
                         <Card style={[styles.card, { borderColor: c.success }]}>
                             <ThemedText style={{ color: c.success }}>
                                 Firmware uploaded and verified on the device.
                             </ThemedText>
                             <ThemedText type="caption">
-                                Restart now to install it. Your sunglasses will be unavailable for
-                                up to a minute, then reconnect on their own.
+                                {extensions.pendingCount > 0
+                                    ? `Restarting will update ${
+                                          extensions.pendingCount === 1
+                                              ? '1 animation extension'
+                                              : `${extensions.pendingCount} animation extensions`
+                                      } first, then install the firmware. Your sunglasses will be unavailable for up to a minute, then reconnect on their own.`
+                                    : 'Restart now to install it. Your sunglasses will be unavailable for up to a minute, then reconnect on their own.'}
                             </ThemedText>
-                            {extensions.pendingCount > 0 && (
-                                <ThemedText type="caption">
-                                    {extensions.pendingCount === 1
-                                        ? '1 animation extension will be updated first.'
-                                        : `${extensions.pendingCount} animation extensions will be updated first.`}
-                                </ThemedText>
-                            )}
                             <View style={styles.buttonRow}>
                                 <AppButton
                                     title={

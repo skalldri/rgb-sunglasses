@@ -1,4 +1,5 @@
-import { fireEvent, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { ExtensionSyncCard } from '@/components/extension-sync-card';
 import React from 'react';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import { sha256 } from 'js-sha256';
@@ -327,4 +328,73 @@ describe('ExtensionSyncScreen', () => {
     }
     await waitFor(() => expect(getFileSha256).toHaveBeenCalledTimes(callsAfterFirstCheck));
   });
+});
+
+/**
+ * The guided flow embeds this same card on its "Ready to restart" step, so it can name
+ * the extensions it is about to change and show the upload running. That reuse is the
+ * whole point of `showSyncButton` — the flow drives the sync from its own "Restart and
+ * Install" button, and a second Sync button on the card would be a competing control.
+ */
+describe('ExtensionSyncCard embedded in the flow', () => {
+    const entries = [
+        {
+            name: 'plasma.llext',
+            status: 'outdated' as const,
+            path: '/NAND:/ext/plasma.llext',
+            expectedSha256: 'a'.repeat(64),
+            deviceSha256: 'b'.repeat(64),
+            asset: {
+                id: 30,
+                name: 'plasma.llext',
+                browser_download_url: 'https://example.com/plasma.llext',
+                size: 5024,
+                content_type: 'application/octet-stream',
+            },
+        },
+    ];
+
+    it('shows per-file upload progress while the flow drives the sync', () => {
+        const { getByText, queryByText } = render(
+            <ExtensionSyncCard
+                state="ready"
+                entries={entries}
+                unmanagedCount={0}
+                error=""
+                isSyncing
+                progress={{
+                    entry: entries[0],
+                    index: 0,
+                    total: 1,
+                    bytesSent: 2512,
+                    bytesTotal: 5024,
+                }}
+                onSync={jest.fn()}
+                disabled
+                showSyncButton={false}
+            />
+        );
+
+        expect(getByText('Uploading plasma.llext (1/1)')).toBeTruthy();
+        expect(getByText('50%')).toBeTruthy();
+        // The flow owns the action; the card must not offer its own.
+        expect(queryByText('Sync Extensions')).toBeNull();
+    });
+
+    it('still offers its own Sync button on the standalone screen', () => {
+        const { getByText } = render(
+            <ExtensionSyncCard
+                state="ready"
+                entries={entries}
+                unmanagedCount={0}
+                error=""
+                isSyncing={false}
+                progress={null}
+                onSync={jest.fn()}
+                disabled={false}
+            />
+        );
+        expect(getByText('plasma.llext')).toBeTruthy();
+        expect(getByText('Sync Extensions')).toBeTruthy();
+    });
 });
