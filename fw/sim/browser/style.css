@@ -93,7 +93,9 @@ body {
   background: #05060a;
   border: 1px solid var(--line);
   border-radius: 12px;
-  aspect-ratio: 40 / 15;
+  /* PAIRED with PAD_X/PAD_Y in render/glasses.ts: (40+3.4)/(12+2.8), so
+   * the panel fills the box with no unintended extra bezel. */
+  aspect-ratio: 43.4 / 14.8;
   min-height: 180px;
 }
 

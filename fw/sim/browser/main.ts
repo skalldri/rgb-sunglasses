@@ -889,6 +889,9 @@ async function boot(): Promise<void> {
   });
   els.brightness.addEventListener("change", paint);
   els.decimate.addEventListener("change", paint);
+  // Sync at boot too: browsers restore checkbox state on reload/bfcache
+  // WITHOUT firing change, which would desync the renderer from the box.
+  renderer.whiteHot = els.whiteHot.checked;
   els.whiteHot.addEventListener("change", () => {
     renderer.whiteHot = els.whiteHot.checked;
     paint();

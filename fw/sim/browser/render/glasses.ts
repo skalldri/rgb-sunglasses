@@ -3,58 +3,92 @@
  *
  * Geometry: the real hardware is ONE continuous PCB — a rounded panel with
  * a nose arch cut out of the bottom-center (see the CAD in the hardware
- * guide), not two separate lenses. The arch flanks are smooth curves
- * anchored to the dead-cell geometry of LIVE_MASK at every width
- * transition (edges 15/25 at the bottom, 16/24 at rows 8-9, 17/23 at rows
- * 6-7). Between anchors the smooth flank averages the staircase — which
- * matches the physical truth: the PCB edge is a smooth curve, and the
- * dead-cell staircase is the LED grid's approximation of it.
+ * guide), not two separate lenses. The arch is DERIVED from the same
+ * LEDS_ON_ROW table that defines the dead-cell mask (no duplicated
+ * constants to drift): each contiguous band of equal dead-width
+ * contributes a staircase corner, and the flank between corners is a
+ * quadratic of the form x = E_k + (E_k+1 − E_k)·t², which stays within
+ * the corner pair's x-range — so the rendered cutout is always a strict
+ * SUPERSET of the dead-cell staircase. Board fill never covers a dead
+ * (see-through) cell; between corners the smooth edge may recess slightly
+ * behind LIVE rows, which only hides board face — sockets and LEDs draw
+ * on top and are never lost.
  *
  * Light: lit LEDs render in three additive layers —
- *   1. a WIDE soft glow: all lit LEDs drawn into a tiny offscreen buffer
- *      (3 px per cell) and upscaled with bilinear smoothing, which acts as
- *      a cheap, universally-supported gaussian-ish blur (no ctx.filter —
- *      Safari support is spotty);
- *   2. a TIGHT glow from a second buffer at 6 px per cell for the bright
- *      halo right around the die;
- *   3. crisp LED cores, with a white-hot center that grows with intensity
- *      (a saturated LED reads white at the die, colored in the halo — like
- *      the real thing).
- * Additive ('lighter') compositing makes overlapping glows SUM — adjacent
- * lit LEDs merge into a continuous light bar instead of stacking flat
- * alpha discs into moiré-like patterns.
+ *   1. a TIGHT glow buffer (6 px per cell, one cell of padding all round)
+ *      holding each lit LED as a disc whose alpha tracks its own peak
+ *      brightness — that keeps total glow energy ~quadratic in channel
+ *      value, so the device-brightness (×0.02) preview stays honestly
+ *      near-black like the real panel;
+ *   2. a WIDE buffer produced by DOWNSCALING the tight one (no second
+ *      per-disc rasterization), upscaled with bilinear smoothing for the
+ *      soft outer halo;
+ *   3. crisp LED cores, with an optional white-hot center (toggle):
+ *      hardware-confirmed realism vs exact-hue debugging.
+ * Both buffers upscale onto a destination rect padded by one cell, so
+ * perimeter-LED bloom spills naturally onto the bezel instead of clipping
+ * in a straight line at the grid edge. Additive ('lighter') compositing
+ * makes overlapping glows SUM like real light.
  *
- * Performance: the static layer (panel, slots, sockets) renders once per
- * resize; per frame it's two small-buffer disc passes, two drawImages, and
- * up to three arc fills per lit LED. Measured on the shared Pixel 9 Pro
- * (Chrome, dev server): full-field plasma (all 432 LEDs lit, white-hot on)
- * with display decimation OFF sustains 89 fps against the ~91 fps pacing
- * target — the worst case fits the per-tick budget without decimation.
+ * Performance: the static layer renders once per resize; per frame it's
+ * ONE disc pass into the tight buffer, one small downscale blit, two
+ * upscale drawImages, and 1-2 arc fills per lit LED. Measured on the
+ * shared Pixel 9 Pro (Chrome, dev server) BEFORE the single-pass
+ * optimization: full-field plasma (all 432 LEDs lit, white-hot on) with
+ * display decimation OFF sustained 89 fps against the ~91 fps pacing
+ * target; the current path does strictly less work per frame.
  */
 
-import { DISPLAY_HEIGHT, DISPLAY_WIDTH, LIVE_MASK } from "../../core/display";
+import { DISPLAY_HEIGHT, DISPLAY_WIDTH, LEDS_ON_ROW, LIVE_MASK } from "../../core/display";
 
-/** Horizontal / vertical padding around the LED grid, in grid pitches. */
-const PAD_X = 2.6;
-const PAD_Y = 2.6;
+/** Horizontal / vertical padding around the LED grid, in grid pitches.
+ * PAIRED with .canvas-wrap's aspect-ratio in style.css — keep
+ * (40+PAD_X)/(12+PAD_Y) equal to that ratio so the panel fills the box
+ * and nothing (temple arms included) draws outside the canvas. */
+const PAD_X = 3.4;
+const PAD_Y = 2.8;
 
-/** Nose arch, in grid-EDGE units (cell k spans edges k..k+1). Anchored to
- * the dead-cell rows in core/display.ts at every width transition: rows
- * 10-11 miss cells 15..24 (edges 15/25), rows 8-9 miss 16..23 (edges
- * 16/24), rows 6-7 miss 17..22 (edges 17/23). The flanks pass through all
- * three anchor pairs, so the board fill never covers a dead cell's edge. */
-const ARCH_BOTTOM_LEFT = 15;
-const ARCH_BOTTOM_RIGHT = 25;
-const ARCH_MID_LEFT = 16;
-const ARCH_MID_RIGHT = 24;
-const ARCH_MID_ROW = 9;
-const ARCH_TOP_LEFT = 17;
-const ARCH_TOP_RIGHT = 23;
-const ARCH_TOP_ROW = 6;
+/** How far the temple-arm stubs reach beyond the panel edge, in pitches.
+ * Must stay under PAD_X/2 (the canvas margin) plus the line cap. */
+const ARM_REACH = 1.4;
 
-/** Offscreen glow buffer resolutions, in pixels per LED cell. */
+/** Offscreen glow buffer resolutions, in pixels per LED cell, and the
+ * one-cell padding that lets edge bloom escape the grid rectangle. */
 const TIGHT_PX_PER_CELL = 6;
 const WIDE_PX_PER_CELL = 3;
+const GLOW_PAD_CELLS = 1;
+
+/** One staircase corner of the nose arch, in grid-EDGE units: the dead
+ * region spans [leftEdge, rightEdge] for rows topRow..(next band). */
+interface ArchBand {
+  leftEdge: number;
+  rightEdge: number;
+  topRow: number;
+}
+
+/** Derives the arch bands from LEDS_ON_ROW, bottom-up. For proto0 this
+ * yields [{15,25,10}, {16,24,8}, {17,23,6}]. A future panel revision that
+ * changes LEDS_ON_ROW reshapes the outline automatically. */
+function deriveArchBands(): ArchBand[] {
+  const bands: ArchBand[] = [];
+  for (let y = DISPLAY_HEIGHT - 1; y >= 0; y--) {
+    const missing = DISPLAY_WIDTH / 2 - LEDS_ON_ROW[y];
+    if (missing <= 0) {
+      break;
+    }
+    const leftEdge = LEDS_ON_ROW[y];
+    const rightEdge = DISPLAY_WIDTH - LEDS_ON_ROW[y];
+    const last = bands[bands.length - 1];
+    if (last !== undefined && last.leftEdge === leftEdge) {
+      last.topRow = y; // extend the band upward
+    } else {
+      bands.push({ leftEdge, rightEdge, topRow: y });
+    }
+  }
+  return bands;
+}
+
+const ARCH_BANDS = deriveArchBands();
 
 export class GlassesRenderer {
   private readonly ctx: CanvasRenderingContext2D;
@@ -80,21 +114,13 @@ export class GlassesRenderer {
     const ctx = canvas.getContext("2d");
     this.bg = document.createElement("canvas");
     const bgCtx = this.bg.getContext("2d");
-    this.glowTight = document.createElement("canvas");
-    this.glowTight.width = DISPLAY_WIDTH * TIGHT_PX_PER_CELL;
-    this.glowTight.height = DISPLAY_HEIGHT * TIGHT_PX_PER_CELL;
-    const tightCtx = this.glowTight.getContext("2d");
-    this.glowWide = document.createElement("canvas");
-    this.glowWide.width = DISPLAY_WIDTH * WIDE_PX_PER_CELL;
-    this.glowWide.height = DISPLAY_HEIGHT * WIDE_PX_PER_CELL;
-    const wideCtx = this.glowWide.getContext("2d");
-    if (ctx === null || bgCtx === null || tightCtx === null || wideCtx === null) {
+    if (ctx === null || bgCtx === null) {
       throw new Error("2D canvas context unavailable");
     }
     this.ctx = ctx;
     this.bgCtx = bgCtx;
-    this.glowTightCtx = tightCtx;
-    this.glowWideCtx = wideCtx;
+    ({ canvas: this.glowTight, ctx: this.glowTightCtx } = makeGlowBuffer(TIGHT_PX_PER_CELL));
+    ({ canvas: this.glowWide, ctx: this.glowWideCtx } = makeGlowBuffer(WIDE_PX_PER_CELL));
     this.resize();
   }
 
@@ -156,8 +182,8 @@ export class GlassesRenderer {
   }
 
   /** Traces the PCB outline: rounded panel with the bottom-center nose
-   * arch. One path — fill covers the board, so clipping to it also
-   * excludes the arch. */
+   * arch (see the header for the superset invariant). One path — fill
+   * covers the board, so clipping to it also excludes the arch. */
   private panelPath(c: CanvasRenderingContext2D): void {
     const p = this.pitch;
     const left = this.edgeX(0) - p * 0.9;
@@ -166,28 +192,48 @@ export class GlassesRenderer {
     const bottom = this.edgeY(DISPLAY_HEIGHT) + p * 0.85;
     const r = p * 1.15;
 
-    const aRB = this.edgeX(ARCH_BOTTOM_RIGHT);
-    const aRM = this.edgeX(ARCH_MID_RIGHT);
-    const aRT = this.edgeX(ARCH_TOP_RIGHT);
-    const aLT = this.edgeX(ARCH_TOP_LEFT);
-    const aLM = this.edgeX(ARCH_MID_LEFT);
-    const aLB = this.edgeX(ARCH_BOTTOM_LEFT);
-    const aMidY = this.edgeY(ARCH_MID_ROW);
-    const aTop = this.edgeY(ARCH_TOP_ROW) - p * 0.15;
+    const bands = ARCH_BANDS;
+    const innermost = bands[bands.length - 1];
+    const crownY = this.edgeY(innermost.topRow) - p * 0.15;
 
     c.beginPath();
     c.moveTo(left + r, top);
     c.arcTo(right, top, right, bottom, r);
     c.arcTo(right, bottom, left, bottom, r);
-    // Bottom edge, right to left, diverting up into the nose arch. Each
-    // flank runs through the mid-row anchor (edges 16/24 at rows 8-9) so
-    // the fill tracks the true dead-cell staircase; the crown is rounded —
-    // the CAD's silhouette.
-    c.lineTo(aRB + p * 0.45, bottom);
-    c.quadraticCurveTo(aRB, bottom, aRM, aMidY);
-    c.quadraticCurveTo(aRT, aTop, (aRT + aLT) / 2, aTop);
-    c.quadraticCurveTo(aLT, aTop, aLM, aMidY);
-    c.quadraticCurveTo(aLB, bottom, aLB - p * 0.45, bottom);
+
+    // Bottom edge, right to left, diverting up into the nose arch.
+    // Right flank, bottom-up: per staircase band, a quadratic whose
+    // control point pins x to the outer corner (x = E_k + ΔE·t²), so the
+    // flank never crosses inside a band's dead edge.
+    const first = bands[0];
+    c.lineTo(this.edgeX(first.rightEdge) + p * 0.45, bottom);
+    let prevX = this.edgeX(first.rightEdge);
+    let prevY = bottom;
+    c.quadraticCurveTo(prevX, bottom, prevX, this.edgeY(first.topRow));
+    prevY = this.edgeY(first.topRow);
+    for (let k = 1; k < bands.length; k++) {
+      const nx = this.edgeX(bands[k].rightEdge);
+      const ny = this.edgeY(bands[k].topRow);
+      c.quadraticCurveTo(prevX, (prevY + ny) / 2, nx, ny);
+      prevX = nx;
+      prevY = ny;
+    }
+    // Crown: gently rounded across the innermost band's top.
+    c.quadraticCurveTo(prevX, crownY, (prevX + this.edgeX(innermost.leftEdge)) / 2, crownY);
+    c.quadraticCurveTo(this.edgeX(innermost.leftEdge), crownY, this.edgeX(innermost.leftEdge), this.edgeY(innermost.topRow));
+    // Left flank, top-down (mirror of the right).
+    prevX = this.edgeX(innermost.leftEdge);
+    prevY = this.edgeY(innermost.topRow);
+    for (let k = bands.length - 2; k >= 0; k--) {
+      const nx = this.edgeX(bands[k].leftEdge);
+      const ny = this.edgeY(bands[k].topRow);
+      c.quadraticCurveTo(prevX, (prevY + ny) / 2, nx, ny);
+      prevX = nx;
+      prevY = ny;
+    }
+    c.quadraticCurveTo(prevX, bottom, prevX, bottom);
+    c.lineTo(this.edgeX(first.leftEdge) - p * 0.45, bottom);
+
     c.arcTo(left, bottom, left, top, r);
     c.arcTo(left, top, right, top, r);
     c.closePath();
@@ -201,16 +247,17 @@ export class GlassesRenderer {
     c.fillStyle = "#07080b";
     c.fillRect(0, 0, this.cssWidth, this.cssHeight);
 
-    // Temple arm stubs behind the panel's top outer corners.
+    // Temple arm stubs behind the panel's top outer corners (reach bounded
+    // by ARM_REACH so they stay inside the canvas margin — see PAD_X).
     c.strokeStyle = "#1b2029";
     c.lineWidth = p * 0.5;
     c.lineCap = "round";
     const armY = this.edgeY(0) - p * 0.2;
     c.beginPath();
     c.moveTo(this.edgeX(0) - p * 0.7, armY);
-    c.lineTo(this.edgeX(0) - p * 2.2, armY + p * 0.35);
+    c.lineTo(this.edgeX(0) - p * ARM_REACH, armY + p * 0.3);
     c.moveTo(this.edgeX(DISPLAY_WIDTH) + p * 0.7, armY);
-    c.lineTo(this.edgeX(DISPLAY_WIDTH) + p * 2.2, armY + p * 0.35);
+    c.lineTo(this.edgeX(DISPLAY_WIDTH) + p * ARM_REACH, armY + p * 0.3);
     c.stroke();
 
     // The board itself.
@@ -250,38 +297,6 @@ export class GlassesRenderer {
     }
   }
 
-  /** Renders lit LEDs as discs into one of the glow buffers. Color carries
-   * the brightness (the frame is already scaled), so the buffer holds the
-   * light energy the upscale then diffuses. */
-  private renderGlowBuffer(
-    c: CanvasRenderingContext2D,
-    frame: Uint8Array,
-    pxPerCell: number,
-    radius: number,
-  ): boolean {
-    c.clearRect(0, 0, DISPLAY_WIDTH * pxPerCell, DISPLAY_HEIGHT * pxPerCell);
-    let anyLit = false;
-    for (let i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++) {
-      if (LIVE_MASK[i] === 0) {
-        continue;
-      }
-      const r = frame[i * 3];
-      const g = frame[i * 3 + 1];
-      const b = frame[i * 3 + 2];
-      if ((r | g | b) === 0) {
-        continue;
-      }
-      anyLit = true;
-      const cx = ((i % DISPLAY_WIDTH) + 0.5) * pxPerCell;
-      const cy = (((i / DISPLAY_WIDTH) | 0) + 0.5) * pxPerCell;
-      c.fillStyle = `rgb(${r},${g},${b})`;
-      c.beginPath();
-      c.arc(cx, cy, radius, 0, Math.PI * 2);
-      c.fill();
-    }
-    return anyLit;
-  }
-
   /** Paints one displayed frame (already dead-masked and brightness-scaled
    * by toDisplayedFrame — this function does no colour math of its own). */
   draw(frame: Uint8Array): void {
@@ -289,50 +304,64 @@ export class GlassesRenderer {
     c.clearRect(0, 0, this.cssWidth, this.cssHeight);
     c.drawImage(this.bg, 0, 0, this.cssWidth, this.cssHeight);
 
-    const gridX = this.originX;
-    const gridY = this.originY;
-    const gridW = this.pitch * DISPLAY_WIDTH;
-    const gridH = this.pitch * DISPLAY_HEIGHT;
+    // Glow pass: rasterize lit discs ONCE into the tight buffer; the wide
+    // buffer is a downscale of it. Per-disc alpha tracks the LED's own
+    // peak, keeping total glow energy ~quadratic in channel value — the
+    // device-brightness preview stays honestly near-black.
+    const tctx = this.glowTightCtx;
+    tctx.clearRect(0, 0, this.glowTight.width, this.glowTight.height);
+    let anyLit = false;
+    forEachLit(frame, (i, gx, gy, r, g, b) => {
+      anyLit = true;
+      const peak = Math.max(r, g, b);
+      tctx.fillStyle = `rgba(${r},${g},${b},${peak / 255})`;
+      tctx.beginPath();
+      tctx.arc(
+        (gx + GLOW_PAD_CELLS + 0.5) * TIGHT_PX_PER_CELL,
+        (gy + GLOW_PAD_CELLS + 0.5) * TIGHT_PX_PER_CELL,
+        2.9,
+        0,
+        Math.PI * 2,
+      );
+      tctx.fill();
+    });
 
-    // Glow passes: tiny buffers upscaled with bilinear smoothing = cheap
-    // blur; 'lighter' makes overlapping halos ADD like real light.
-    const anyTight = this.renderGlowBuffer(this.glowTightCtx, frame, TIGHT_PX_PER_CELL, 2.9);
-    if (anyTight) {
-      this.renderGlowBuffer(this.glowWideCtx, frame, WIDE_PX_PER_CELL, 2.1);
+    if (anyLit) {
+      const wctx = this.glowWideCtx;
+      wctx.clearRect(0, 0, this.glowWide.width, this.glowWide.height);
+      wctx.imageSmoothingEnabled = true;
+      wctx.drawImage(this.glowTight, 0, 0, this.glowWide.width, this.glowWide.height);
+
+      // Destination rect includes the buffers' one-cell padding, so edge
+      // bloom spills onto the bezel instead of clipping at the grid.
+      const dx = this.originX - GLOW_PAD_CELLS * this.pitch;
+      const dy = this.originY - GLOW_PAD_CELLS * this.pitch;
+      const dw = (DISPLAY_WIDTH + 2 * GLOW_PAD_CELLS) * this.pitch;
+      const dh = (DISPLAY_HEIGHT + 2 * GLOW_PAD_CELLS) * this.pitch;
       c.save();
       c.globalCompositeOperation = "lighter";
       c.imageSmoothingEnabled = true;
       c.imageSmoothingQuality = "high";
       // Wide, faint outer glow first...
-      c.globalAlpha = 0.5;
-      c.drawImage(this.glowWide, gridX, gridY, gridW, gridH);
+      c.globalAlpha = 0.55;
+      c.drawImage(this.glowWide, dx, dy, dw, dh);
       // ...then the tighter, brighter halo.
       c.globalAlpha = 0.85;
-      c.drawImage(this.glowTight, gridX, gridY, gridW, gridH);
+      c.drawImage(this.glowTight, dx, dy, dw, dh);
       c.restore();
     }
 
     // Crisp LED dies on top. Two modes, user-toggleable:
     //  - whiteHot ON (default): a white-hot center grows with intensity —
-    //    matches what the eye/camera sees on the REAL panel, where a
-    //    saturated die washes out to white (hardware-confirmed);
+    //    matches what the eye sees on the REAL panel (hardware-confirmed);
     //  - whiteHot OFF: the core is the EXACT frame color, for debugging
     //    the hue an extension computed without the wash-out masking it
     //    (the same class of confusion as the issue #259 hue drift).
     const coreR = this.dotR * 0.8;
     const hotR = this.dotR * 0.42;
-    for (let i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++) {
-      if (LIVE_MASK[i] === 0) {
-        continue;
-      }
-      const r = frame[i * 3];
-      const g = frame[i * 3 + 1];
-      const b = frame[i * 3 + 2];
-      if ((r | g | b) === 0) {
-        continue;
-      }
-      const x = this.cellX(i % DISPLAY_WIDTH);
-      const y = this.cellY((i / DISPLAY_WIDTH) | 0);
+    forEachLit(frame, (i, gx, gy, r, g, b) => {
+      const x = this.cellX(gx);
+      const y = this.cellY(gy);
       c.fillStyle = `rgb(${r},${g},${b})`;
       c.beginPath();
       c.arc(x, y, coreR, 0, Math.PI * 2);
@@ -349,8 +378,44 @@ export class GlassesRenderer {
           c.fill();
         }
       }
-    }
+    });
   }
+}
+
+/** Iterates the lit, live LEDs of a frame — the single definition of
+ * "which pixels emit light", shared by the glow and core passes so they
+ * can never disagree. */
+function forEachLit(
+  frame: Uint8Array,
+  cb: (i: number, gx: number, gy: number, r: number, g: number, b: number) => void,
+): void {
+  for (let i = 0; i < DISPLAY_WIDTH * DISPLAY_HEIGHT; i++) {
+    if (LIVE_MASK[i] === 0) {
+      continue;
+    }
+    const r = frame[i * 3];
+    const g = frame[i * 3 + 1];
+    const b = frame[i * 3 + 2];
+    if ((r | g | b) === 0) {
+      continue;
+    }
+    cb(i, i % DISPLAY_WIDTH, (i / DISPLAY_WIDTH) | 0, r, g, b);
+  }
+}
+
+/** Creates one padded offscreen glow buffer at `pxPerCell` resolution. */
+function makeGlowBuffer(pxPerCell: number): {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+} {
+  const canvas = document.createElement("canvas");
+  canvas.width = (DISPLAY_WIDTH + 2 * GLOW_PAD_CELLS) * pxPerCell;
+  canvas.height = (DISPLAY_HEIGHT + 2 * GLOW_PAD_CELLS) * pxPerCell;
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) {
+    throw new Error("2D canvas context unavailable");
+  }
+  return { canvas, ctx };
 }
 
 /** Mixes a channel toward white by factor m in [0, 1]. */
