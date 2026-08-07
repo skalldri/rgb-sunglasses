@@ -113,9 +113,9 @@ fw/sim/rgbx-sim dsp-replay --wav clip.wav --out sim.txt
 python3 fw/tools/beat_lab/compare_sim.py host.txt sim.txt
 ```
 
-Gates: per element ULP ≤ 64 **or** scale-relative ≤ 2e-4; beat masks ≤ 1%
-frame mismatch. Measured on a click track: max 5.5e-5, 0 beat diffs.
-CI runs this in `build.yaml` (`dsp-parity` job).
+Gates: per element ULP ≤ 64 **or** scale-relative ≤ 2e-5; beat masks ≤ 1%
+frame mismatch. Measured on a click track (byte-identical PCM input): max
+3.7e-7, 0 beat diffs. CI runs this in `build.yaml` (`dsp-parity` job).
 
 ## Browser UI / phone
 

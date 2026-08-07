@@ -128,9 +128,11 @@ function buildImuProvider(imu: ScenarioImu | undefined, durationMs: number): Imu
   }
 }
 
-/** Parses a CLI/scenario param value: decimal, 0x hex, true/false, or a
- * plain string (only valid for STRING params). */
-export function parseParamValue(raw: number | string): number | string {
+/** Parses a scalar param value: decimal, 0x hex, or true/false. Returns
+ * null when the token is not scalar-shaped. NEVER applied to STRING params
+ * — their values pass through verbatim (a STRING param legitimately holds
+ * the literal text "true" or "0x10"). */
+export function parseScalarParamValue(raw: number | string): number | null {
   if (typeof raw === "number") {
     return raw;
   }
@@ -143,7 +145,7 @@ export function parseParamValue(raw: number | string): number | string {
   if (raw === "false") {
     return 0;
   }
-  return raw;
+  return null;
 }
 
 function applyParam(host: SimHost, name: string, rawValue: number | string): string | null {
@@ -151,15 +153,17 @@ function applyParam(host: SimHost, name: string, rawValue: number | string): str
   if (idx < 0) {
     return `no param named "${name}" (have: ${host.metadata?.params.map((p) => p.name).join(", ")})`;
   }
-  const value = parseParamValue(rawValue);
+  // Type first, coercion second: STRING params take the raw token verbatim.
   const type = host.metadata!.params[idx].type;
   if (type === RgbxParamType.String) {
-    host.setStringParam(idx, String(value));
-  } else if (typeof value === "string") {
-    return `param "${name}" is not a string param`;
-  } else {
-    host.setParam(idx, value);
+    host.setStringParam(idx, String(rawValue));
+    return null;
   }
+  const value = parseScalarParamValue(rawValue);
+  if (value === null) {
+    return `param "${name}" expects a number (decimal, 0x hex, or true/false), got "${rawValue}"`;
+  }
+  host.setParam(idx, value);
   return null;
 }
 
@@ -188,9 +192,16 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
   // early tick so "renders immediately" is visible).
   const sampleTicks = new Set<number>(opts.sampleTicksOverride ?? []);
   if (sampleTicks.size === 0) {
+    // First sample lands EARLY (~tick 10, ~110 ms) so a startup-only
+    // rendering bug is visible in the report; the rest spread to the end.
     const n = Math.max(1, opts.asciiSamples);
-    for (let i = 0; i < n; i++) {
-      sampleTicks.add(Math.max(1, Math.round(((i + 1) / n) * (opts.ticks - 1))));
+    const early = Math.min(10, opts.ticks - 1);
+    if (n === 1) {
+      sampleTicks.add(opts.ticks - 1);
+    } else {
+      for (let i = 0; i < n; i++) {
+        sampleTicks.add(Math.round(early + (i / (n - 1)) * (opts.ticks - 1 - early)));
+      }
     }
   }
   const stats = new RunStats(sampleTicks);
@@ -334,7 +345,7 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
   }
 
   const report = buildReport({
-    metadata: host.metadata!,
+    metadata: host.metadata,
     wasmPath: opts.wasmPath,
     scenario,
     seed: opts.seed,

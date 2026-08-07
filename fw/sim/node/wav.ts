@@ -38,7 +38,23 @@ export function decodeWavTo16kMono(bytes: Buffer): Int16Array {
   }
   const { format, channels, sampleRate, bitsPerSample } = fmt;
 
-  // Decode to mono float in [-1, 1).
+  // Fast path: an already-conformant WAV (16-bit PCM, mono, 16 kHz — e.g. a
+  // device `record_wav` capture) passes through BYTE-EXACT. This matters for
+  // the DSP parity gate: the native_sim replay harness reads the same file's
+  // raw int16 samples, and any float round-trip here (even a symmetric one)
+  // would make compare_sim.py measure input skew instead of build parity.
+  if (format === 1 && bitsPerSample === 16 && channels === 1 && sampleRate === AUDIO_SAMPLE_RATE) {
+    const frames16 = Math.floor(dataLength / 2);
+    const out = new Int16Array(frames16);
+    for (let i = 0; i < frames16; i++) {
+      out[i] = bytes.readInt16LE(dataOffset + i * 2);
+    }
+    return out;
+  }
+
+  // Decode to mono float in [-1, 1). The scale is 32768 on BOTH sides of
+  // the conversion (with a clamp on re-encode) so int16 values that survive
+  // mixing/resampling untouched round-trip exactly.
   let frames: number;
   let read: (frame: number, ch: number) => number;
   if (format === 1 && bitsPerSample === 16) {
@@ -82,7 +98,7 @@ export function decodeWavTo16kMono(bytes: Buffer): Int16Array {
 
   const out = new Int16Array(resampled.length);
   for (let i = 0; i < resampled.length; i++) {
-    out[i] = Math.max(-32768, Math.min(32767, Math.round(resampled[i] * 32767)));
+    out[i] = Math.max(-32768, Math.min(32767, Math.round(resampled[i] * 32768)));
   }
   return out;
 }

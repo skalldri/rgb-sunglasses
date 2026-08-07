@@ -279,7 +279,9 @@ export function frameToAnsi(frame: Uint8Array): string {
 }
 
 export interface ReportArgs {
-  metadata: ManifestMetadata;
+  /** Null when the load itself faulted (bad manifest, missing exports,
+   * spinning ctor) — the report still carries result.fault. */
+  metadata: ManifestMetadata | null;
   wasmPath: string;
   scenario: Scenario;
   seed: number;
@@ -298,16 +300,17 @@ export function buildReport(args: ReportArgs): Record<string, unknown> {
   return {
     schema: "rgbx-sim-report/1",
     extension: {
-      name: metadata.displayName,
+      name: metadata?.displayName ?? null,
       wasm: args.wasmPath,
-      width: metadata.width,
-      height: metadata.height,
-      params: metadata.params.map((p, i) => ({
-        index: i,
-        name: p.name,
-        type: ["uint32", "color", "bool", "string"][p.type],
-        default: p.type === 3 ? metadata.stringDefaults[p.stringSlot] : p.defaultValue,
-      })),
+      width: metadata?.width ?? null,
+      height: metadata?.height ?? null,
+      params:
+        metadata?.params.map((p, i) => ({
+          index: i,
+          name: p.name,
+          type: ["uint32", "color", "bool", "string"][p.type],
+          default: p.type === 3 ? metadata.stringDefaults[p.stringSlot] : p.defaultValue,
+        })) ?? [],
     },
     run: {
       scenario: args.scenario.name,

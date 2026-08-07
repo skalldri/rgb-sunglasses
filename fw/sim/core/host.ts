@@ -189,12 +189,18 @@ export class SimHost {
       this.backstopMs,
     );
     if (loadResp === "timeout" || !loadResp.ok) {
+      // Terminate on EVERY load-stage failure, not just clean rejections: a
+      // load timeout means _initialize (C++ static ctors) may be spinning,
+      // and an unterminated worker keeps burning a core behind the fault
+      // banner (see the adapter contract note above SandboxAdapter).
+      await this.terminate();
       const detail = loadResp === "timeout" ? "load timed out" : loadResp.message;
       const kind: FaultKind =
         loadResp !== "timeout" && loadResp.kind === "bad_manifest" ? "bad_manifest" : "load_failed";
       return this.fail(kind, detail, false, loadResp !== "timeout" && loadResp.ok === false ? loadResp.manifestResult : undefined);
     }
     if (loadResp.type !== "load") {
+      await this.terminate();
       return this.fail("load_failed", "protocol error", false);
     }
 

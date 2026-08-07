@@ -22,6 +22,18 @@ REPO_ROOT="$(cd "$SIM_DIR/../.." && pwd)"
 EXT_SRC_DIR="$REPO_ROOT/fw/extensions"
 OUT_DIR="$SIM_DIR/out/wasm"
 
+# The CMSIS-DSP revision golden digests and the DSP parity gate were
+# generated against — the NCS v3.1.1 module pin. Single source of truth:
+# sim-ci.yml greps this line for its pinned checkout, and the build below
+# warns when the local SDK tree has drifted from it (an NCS upgrade would
+# otherwise silently change DSP float output vs CI).
+CMSIS_DSP_PIN="d80a49b2bb186317dc1db4ac88da49c0ab77e6e7"
+
+# Portable file size (stat -c is GNU-only; the Mac Mini host has BSD stat).
+file_size() {
+    wc -c < "$1" | tr -d ' '
+}
+
 WASI_SDK="$("$SIM_DIR/scripts/install-toolchain.sh")"
 CC="$WASI_SDK/bin/clang"
 CXX="$WASI_SDK/bin/clang++"
@@ -29,6 +41,7 @@ CXX="$WASI_SDK/bin/clang++"
 # Shared flags. -isystem puts the Zephyr shim headers (EXPORT_SYMBOL no-op,
 # printk decl) ahead of nothing in particular — the wasi sysroot has no
 # zephyr/ headers — but keeps them out of warning scope.
+# shellcheck disable=SC2054  # the commas are -Wl,flag linker syntax, not separators
 COMMON_FLAGS=(
     -O2 -g
     -mexec-model=reactor
@@ -91,7 +104,7 @@ for dir in "${dirs[@]}"; do
         continue
     fi
     node "$SIM_DIR/scripts/check-wasm.mjs" "$out"
-    echo "built $out ($(stat -c%s "$out") bytes)"
+    echo "built $out ($(file_size "$out") bytes)"
     built=$((built + 1))
 done
 
@@ -114,6 +127,14 @@ if [ "$#" -eq 0 ]; then
     if [ ! -d "$CMSIS_DSP/Include" ]; then
         echo "warning: CMSIS-DSP not found (set CMSIS_DSP_PATH); skipping audio_dsp.wasm" >&2
     else
+        # Warn (don't fail) when the tree isn't at the pinned revision —
+        # golden digests and the CI parity gate were generated against it.
+        if command -v git >/dev/null 2>&1 && [ -e "$CMSIS_DSP/.git" ]; then
+            actual_rev="$(git -C "$CMSIS_DSP" rev-parse HEAD 2>/dev/null || echo unknown)"
+            if [ "$actual_rev" != "$CMSIS_DSP_PIN" ]; then
+                echo "warning: CMSIS-DSP at $CMSIS_DSP is $actual_rev, not the pinned $CMSIS_DSP_PIN — DSP output may differ from CI/goldens" >&2
+            fi
+        fi
         dsp_out="$OUT_DIR/audio_dsp.wasm"
         dsp_obj="$SIM_DIR/out/dsp-obj"
         mkdir -p "$dsp_obj"
@@ -141,6 +162,6 @@ if [ "$#" -eq 0 ]; then
             "$dsp_obj"/*.o \
             -o "$dsp_out"
         node "$SIM_DIR/scripts/check-wasm.mjs" "$dsp_out" --dsp
-        echo "built $dsp_out ($(stat -c%s "$dsp_out") bytes)"
+        echo "built $dsp_out ($(file_size "$dsp_out") bytes)"
     fi
 fi

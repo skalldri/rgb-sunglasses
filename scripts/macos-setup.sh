@@ -186,7 +186,15 @@ export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 EOF
 ln -sf "$(basename "${NCS_ENV_FILE}")" "${NCS_DIR}/env-current.sh"
 
-# --- 8. Summary ----------------------------------------------------------------
+# --- 8. Extension-simulator wasm toolchain -------------------------------------
+# The pinned wasi-sdk fw/sim/ compiles rgbx extensions with (the macOS
+# equivalent of the .devcontainer/Dockerfile layer). install-toolchain.sh is
+# idempotent: it resolves an existing install or downloads the macOS tarball
+# into ~/.cache/rgb-sunglasses once.
+info "Installing the extension-simulator wasm toolchain (wasi-sdk)..."
+"$(cd "$(dirname "$0")/.." && pwd)/fw/sim/scripts/install-toolchain.sh" >/dev/null
+
+# --- 9. Summary ----------------------------------------------------------------
 info "Done."
 echo
 echo "Firmware dev loop on this Mac:"

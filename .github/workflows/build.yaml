@@ -238,6 +238,7 @@ jobs:
           runCmd: >-
             bash -euo pipefail -c "
             cd /workspaces/rgb-sunglasses &&
+            fw/sim/build-extensions.sh &&
             python3 -c 'import sys; sys.path.insert(0, \"fw/tools/beat_lab\"); from frames import synth_click_track, write_wav; s, _ = synth_click_track(8.0, 120); write_wav(\"/tmp/click120.wav\", s)' &&
             python3 fw/tools/beat_lab/replay.py --wav /tmp/click120.wav --buckets --out /tmp/host.txt &&
             fw/sim/rgbx-sim dsp-replay --wav /tmp/click120.wav --out /tmp/sim.txt &&

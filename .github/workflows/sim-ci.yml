@@ -51,15 +51,18 @@ jobs:
         run: cd fw/sim && npm ci
 
       # CMSIS-DSP normally comes from the NCS SDK, absent on this runner; a
-      # checkout PINNED TO THE SAME REVISION the SDK ships (NCS v3.1.1's
-      # modules/lib/cmsis-dsp) keeps this job free of the 25 GB devcontainer
-      # while guaranteeing golden digests match local runs bit-for-bit.
+      # checkout pinned to the SAME revision keeps this job free of the
+      # 25 GB devcontainer while matching local builds bit-for-bit. The
+      # revision has ONE source of truth — CMSIS_DSP_PIN in
+      # build-extensions.sh (which also warns when a local SDK tree drifts
+      # from it) — greped here exactly like WASI_SDK_VERSION above.
       # audio_dsp.wasm is REQUIRED (DSP tests + metronome scenarios).
-      - name: Fetch CMSIS-DSP (NCS v3.1.1 revision)
+      - name: Fetch CMSIS-DSP (pinned revision from build-extensions.sh)
         run: |
+          rev="$(grep -oP 'CMSIS_DSP_PIN="\K[0-9a-f]+' fw/sim/build-extensions.sh)"
           git init /tmp/cmsis-dsp
           git -C /tmp/cmsis-dsp remote add origin https://github.com/zephyrproject-rtos/cmsis-dsp.git
-          git -C /tmp/cmsis-dsp fetch --depth 1 origin d80a49b2bb186317dc1db4ac88da49c0ab77e6e7
+          git -C /tmp/cmsis-dsp fetch --depth 1 origin "$rev"
           git -C /tmp/cmsis-dsp checkout FETCH_HEAD
           echo "CMSIS_DSP_PATH=/tmp/cmsis-dsp" >> "$GITHUB_ENV"
 

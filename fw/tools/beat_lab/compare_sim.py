@@ -11,14 +11,14 @@ the same thing for the same WAV, within float-platform tolerance:
 Gates (tuned for x86 vs wasm float differences — both are strict IEEE-754
 for +-*/ but libm differs (glibc vs wasi-libc: cosf in the Hann window,
 log1pf in the flux path) and those last-bit differences compound through
-the FFT and history statistics). Measured on an 8 s click track: max
-scale-relative error 5.5e-5, beats 0/250 mismatched. Per element a value
-passes if EITHER:
+the FFT and history statistics). Measured on an 8 s click track with
+byte-identical PCM input: max scale-relative error 3.7e-7, beats 0/250
+mismatched. Per element a value passes if EITHER:
   - ULP distance <= 64 (loud values agree tightly), OR
-  - |host - sim| <= 2e-4 * max|host array| (near-zero values suffer
+  - |host - sim| <= 2e-5 * max|host array| (near-zero values suffer
     catastrophic cancellation in the FFT, where a 1-ULP window difference
     becomes a large RELATIVE error on a physically-meaningless noise-floor
-    number; 2e-4 is ~4x margin over the measured worst case)
+    number; 2e-5 is ~50x margin over the measured worst case)
 Beat masks: <= 1% of frames may disagree (threshold-crossing flips on
 borderline frames are expected; systematic disagreement is not).
 
@@ -43,7 +43,7 @@ except ImportError:  # direct script invocation: python3 fw/tools/beat_lab/compa
 parse_dump = frames.parse_dump
 
 MAX_ULP = 64
-SCALE_RTOL = 2e-4
+SCALE_RTOL = 2e-5
 MAX_BEAT_MISMATCH_FRAC = 0.01
 
 
@@ -129,8 +129,10 @@ def main(argv=None) -> int:
     ap.add_argument("sim_dump", help="D-line dump from `rgbx-sim dsp-replay`")
     ap.add_argument("--max-ulp", type=int, default=MAX_ULP)
     ap.add_argument("--max-beat-mismatch", type=float, default=MAX_BEAT_MISMATCH_FRAC)
+    ap.add_argument("--scale-rtol", type=float, default=SCALE_RTOL)
     args = ap.parse_args(argv)
-    return compare(args.host_dump, args.sim_dump, args.max_ulp, args.max_beat_mismatch)
+    return compare(args.host_dump, args.sim_dump, args.max_ulp, args.max_beat_mismatch,
+                   args.scale_rtol)
 
 
 if __name__ == "__main__":
