@@ -30,14 +30,17 @@ if (imports.length > 0) {
 }
 
 const exportNames = new Set(WebAssembly.Module.exports(mod).map((e) => e.name));
-const required = [
-  "memory",
-  "rgbx_manifest",
-  "rgbx_inputs",
-  "rgbx_framebuffer",
-  "rgbx_init",
-  "rgbx_tick",
-];
+// --dsp: the audio_dsp.wasm module has its own export set.
+const required = process.argv.includes("--dsp")
+  ? ["memory", "sim_pcm", "sim_band_energy", "sim_beat", "sim_display_bucket", "sim_init", "sim_process"]
+  : [
+      "memory",
+      "rgbx_manifest",
+      "rgbx_inputs",
+      "rgbx_framebuffer",
+      "rgbx_init",
+      "rgbx_tick",
+    ];
 const missing = required.filter((name) => !exportNames.has(name));
 if (missing.length > 0) {
   console.error(`${path}: missing required export(s): ${missing.join(", ")}`);

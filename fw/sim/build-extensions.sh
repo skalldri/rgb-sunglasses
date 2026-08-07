@@ -99,3 +99,48 @@ if [ "$built" -eq 0 ]; then
     echo "no extensions found under $EXT_SRC_DIR" >&2
     exit 1
 fi
+
+# --- audio_dsp.wasm: the REAL firmware DSP for genuine audio features ------
+# Compiles fw/src/sound/audio_dsp.cpp + the needed SDK CMSIS-DSP groups
+# (generic C paths — the native_sim replay harness proves this TU runs
+# correctly off-target). Skipped when specific extension names were
+# requested, rebuilt on every full run (it's a few seconds).
+if [ "$#" -eq 0 ]; then
+    CMSIS_DSP="${CMSIS_DSP_PATH:-/root/ncs/v3.1.1/modules/lib/cmsis-dsp}"
+    if [ ! -d "$CMSIS_DSP/Include" ]; then
+        # macOS host keeps NCS in $HOME (see fw/CLAUDE.md).
+        CMSIS_DSP="$HOME/ncs/v3.1.1/modules/lib/cmsis-dsp"
+    fi
+    if [ ! -d "$CMSIS_DSP/Include" ]; then
+        echo "warning: CMSIS-DSP not found (set CMSIS_DSP_PATH); skipping audio_dsp.wasm" >&2
+    else
+        dsp_out="$OUT_DIR/audio_dsp.wasm"
+        dsp_obj="$SIM_DIR/out/dsp-obj"
+        mkdir -p "$dsp_obj"
+        # CMSIS-DSP group sources are C — q31 constant tables don't survive
+        # C++ narrowing rules, so they must go through clang, not clang++.
+        DSP_DEFS=(-DDISABLEFLOAT16 -D__GNUC_PYTHON__)
+        DSP_INC=(-isystem "$CMSIS_DSP/Include" -isystem "$CMSIS_DSP/PrivateInclude")
+        for group in TransformFunctions CommonTables ComplexMathFunctions \
+            StatisticsFunctions BasicMathFunctions FastMathFunctions WindowFunctions; do
+            "$CC" -O2 -g "${DSP_DEFS[@]}" "${DSP_INC[@]}" \
+                -c "$CMSIS_DSP/Source/$group/$group.c" -o "$dsp_obj/$group.o"
+        done
+        "$CXX" -O2 -g -mexec-model=reactor -std=c++23 -fno-exceptions -fno-rtti \
+            -I "$REPO_ROOT/fw/src" -I "$REPO_ROOT/fw/src/sound" \
+            -isystem "$SIM_DIR/shim/include" \
+            "${DSP_DEFS[@]}" "${DSP_INC[@]}" \
+            -Wl,--export=sim_pcm -Wl,--export=sim_band_energy \
+            -Wl,--export=sim_band_flux -Wl,--export=sim_band_mean \
+            -Wl,--export=sim_band_sigma -Wl,--export=sim_beat \
+            -Wl,--export=sim_display_bucket \
+            -Wl,--export=sim_init -Wl,--export=sim_process \
+            -Wl,--export=sim_reset_history \
+            "$SIM_DIR/shim/audio_dsp_wasm.cpp" \
+            "$REPO_ROOT/fw/src/sound/audio_dsp.cpp" \
+            "$dsp_obj"/*.o \
+            -o "$dsp_out"
+        node "$SIM_DIR/scripts/check-wasm.mjs" "$dsp_out" --dsp
+        echo "built $dsp_out ($(stat -c%s "$dsp_out") bytes)"
+    fi
+fi
