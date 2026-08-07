@@ -277,6 +277,69 @@ async function stepOnce(): Promise<void> {
 
 function paint(): void {
   renderer.draw(displayedFrame(lastRaw));
+  updateLiveAccent(lastRaw);
+}
+
+/* ------------------------------------------------------------------ */
+/* Live accent                                                          */
+/*                                                                      */
+/* The UI accent (tab underline, meter, focus rings, active borders) is */
+/* retinted from the dominant hue of the extension's framebuffer, so    */
+/* the chrome breathes with whatever is on the glasses. Uses the RAW    */
+/* (pre-brightness) frame — hue is what matters, not panel dimness.     */
+/* ------------------------------------------------------------------ */
+
+const DEFAULT_ACCENT: [number, number, number] = [0x59, 0xa5, 0xff];
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const accentState: [number, number, number] = [...DEFAULT_ACCENT];
+
+function updateLiveAccent(raw: Uint8Array): void {
+  if (reducedMotion.matches) {
+    return; // chrome stays put; the canvas is the only thing that moves
+  }
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let lit = 0;
+  for (let i = 0; i < raw.length; i += 3) {
+    const pr = raw[i];
+    const pg = raw[i + 1];
+    const pb = raw[i + 2];
+    if ((pr | pg | pb) !== 0) {
+      r += pr;
+      g += pg;
+      b += pb;
+      lit++;
+    }
+  }
+  let target = DEFAULT_ACCENT;
+  // Fewer than ~5% lit pixels means a near-black frame: averaging a handful
+  // of pixels makes the accent twitch, so hold the default instead.
+  if (lit >= 24) {
+    // Rescale so the max channel hits 255 — the same "always vivid" rule
+    // anim_color_from_hue enforces on the device — keeping hue, dropping
+    // dimness (an accent derived from a dim frame would be unreadable).
+    const max = Math.max(r, g, b) / lit;
+    if (max > 8) {
+      const scale = 255 / max;
+      target = [
+        Math.min(255, Math.round((r / lit) * scale)),
+        Math.min(255, Math.round((g / lit) * scale)),
+        Math.min(255, Math.round((b / lit) * scale)),
+      ];
+    }
+  }
+  // Exponential smoothing so beat flashes nudge the chrome rather than
+  // strobe it.
+  for (let c = 0; c < 3; c++) {
+    accentState[c] += (target[c] - accentState[c]) * 0.08;
+  }
+  const [ar, ag, ab] = accentState.map(Math.round);
+  const root = document.documentElement.style;
+  root.setProperty("--accent", `rgb(${ar} ${ag} ${ab})`);
+  // The dim companion (primary-button fill, pressed states): the same hue
+  // sunk toward the panel background.
+  root.setProperty("--accent-dim", `rgb(${Math.round(ar * 0.22 + 10)} ${Math.round(ag * 0.22 + 12)} ${Math.round(ab * 0.22 + 16)})`);
 }
 
 function displayedFrame(raw: Uint8Array): Uint8Array {
@@ -411,9 +474,12 @@ function syncDataFor(scope: HTMLElement, kind: string): void {
 
 function buildButtons(): void {
   const keys = ["↑", "←", "→", "↓", "space"];
+  // Grid areas mirror proto0's physical directional layout (fw/CLAUDE.md:
+  // 0=Up, 1=Left, 2=Right, 3=Down; Wake is a separate button).
+  const areas = ["pad-up", "pad-left", "pad-right", "pad-down", "pad-wake"];
   BUTTON_NAMES.forEach((name, i) => {
     const btn = document.createElement("button");
-    btn.className = "btn btn-pad";
+    btn.className = `btn btn-pad ${areas[i]}`;
     btn.innerHTML = `<span>${name}</span><small>${keys[i]}</small>`;
     btn.addEventListener("click", () => host?.pressButton(i));
     els.buttons.append(btn);

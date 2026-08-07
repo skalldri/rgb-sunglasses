@@ -8,6 +8,10 @@
   --line: #262c38;
   --fg: #dfe4ee;
   --fg-dim: #8f9aad;
+  /* --accent is LIVE: main.ts retints it every displayed frame from the
+   * dominant hue of the extension's framebuffer (the same full-scale hues
+   * anim_color_from_hue guarantees on the device), falling back to this
+   * value when the panel is dark or reduced motion is requested. */
   --accent: #59a5ff;
   --accent-dim: #1e3a5c;
   --ok: #56d364;
@@ -45,7 +49,11 @@ body {
   flex-wrap: wrap;
 }
 
+/* Structural text (brand, tabs, card headings, field labels, stat keys)
+ * speaks in the mono face — one instrument-panel voice; the sans stays for
+ * prose hints and button copy. */
 .brand {
+  font-family: var(--mono);
   font-weight: 700;
   letter-spacing: 0.04em;
 }
@@ -116,10 +124,23 @@ canvas {
   padding: 6px 12px;
   font: inherit;
   cursor: pointer;
+  /* The live accent drifts with the animation; let borders follow it
+   * smoothly instead of stepping. */
+  transition: border-color 250ms linear, background-color 250ms linear;
 }
 
 .btn:hover {
   border-color: #3b465c;
+}
+
+/* Keyboard focus is always visible; the ring rides the live accent. */
+.btn:focus-visible,
+.tab:focus-visible,
+select:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .btn:active,
@@ -161,6 +182,7 @@ canvas {
 
 .field > span {
   color: var(--fg-dim);
+  font-family: var(--mono);
   font-size: 12px;
 }
 
@@ -196,7 +218,7 @@ input[type="range"] {
 
 .hint {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -255,6 +277,7 @@ input[type="range"] {
 
 .card h3 {
   margin: 0 0 10px;
+  font-family: var(--mono);
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -265,23 +288,38 @@ input[type="range"] {
   gap: 10px;
 }
 
+/* The buttons are laid out as the physical d-pad they are on proto0
+ * (fw/CLAUDE.md: a directional grid — 0=Up, 1=Left, 2=Right, 3=Down),
+ * with the separate Wake button off to the side. */
 .buttons {
-  display: flex;
+  display: grid;
+  grid-template-areas:
+    ".    up   .     wake"
+    "left down right wake";
+  grid-template-columns: repeat(3, minmax(68px, max-content)) 1fr;
   gap: 8px;
-  flex-wrap: wrap;
+  justify-items: stretch;
+  align-items: stretch;
 }
 
 .btn-pad {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   min-width: 68px;
   gap: 2px;
 }
 
+.pad-up { grid-area: up; }
+.pad-left { grid-area: left; }
+.pad-right { grid-area: right; }
+.pad-down { grid-area: down; }
+.pad-wake { grid-area: wake; justify-self: end; align-self: center; }
+
 .btn-pad small {
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .meter {
@@ -297,7 +335,7 @@ input[type="range"] {
   height: 100%;
   width: 0;
   background: var(--accent);
-  transition: width 80ms linear;
+  transition: width 80ms linear, background-color 250ms linear;
 }
 
 .readout {
@@ -327,12 +365,14 @@ input[type="range"] {
   color: var(--fg-dim);
   padding: 10px;
   font: inherit;
+  font-family: var(--mono);
   cursor: pointer;
 }
 
 .tab.active {
   color: var(--fg);
   border-bottom-color: var(--accent);
+  transition: border-color 250ms linear;
 }
 
 .tab-panel {
@@ -508,5 +548,34 @@ input[type="range"] {
   .tab-panel {
     overflow-y: visible;
     flex: none;
+  }
+
+  /* Finger-sized targets: 44px minimum for every control on touch layouts
+   * (mis-taps on the shared phone were how the layout bug above was found). */
+  .btn,
+  select,
+  input[type="text"],
+  input[type="number"] {
+    min-height: 44px;
+  }
+
+  .tab {
+    padding: 14px 10px;
+  }
+
+  input[type="range"] {
+    height: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter > div {
+    transition: none;
+  }
+
+  /* main.ts also pins the live accent to its default under this query —
+   * the chrome stops re-tinting with the animation. */
+  * {
+    transition-duration: 0.01ms !important;
   }
 }

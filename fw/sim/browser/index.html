@@ -37,7 +37,7 @@
             <select id="brightness">
               <option value="full">Full (&times;1)</option>
               <option value="device">Device (&times;0.02)</option>
-              <option value="device-boost">Device (&times;0.02), boosted</option>
+              <option value="device-boost">Device (&times;0.02), amplified to visible</option>
             </select>
           </label>
           <label class="check"><input type="checkbox" id="decimate" checked /> 30 Hz display</label>
@@ -116,7 +116,7 @@
             <div id="imu-static" data-for="static"></div>
             <div class="field" data-for="orientation motion">
               <button id="imu-permission" class="btn">Grant motion access</button>
-              <div class="hint">Required on iOS; a no-op elsewhere.</div>
+              <div class="hint">Needed on iOS. Android grants this automatically.</div>
             </div>
             <div class="readout" id="imu-readout"></div>
           </div>
