@@ -6,7 +6,8 @@ name: Deploy Project Site (GitHub Pages)
 # site by scripts/build-site.py (single source of truth) — e.g. the firmware
 # recovery guide at /recovery, sourced from fw/docs/flashing-without-jlink.md.
 # Only the `site/` folder is uploaded, so internal design docs under `docs/plans/`
-# are never published.
+# are never published. The extension simulator (fw/sim) is built here as a Vite
+# bundle and composed into site/sim/ — served at /sim.
 
 on:
   push:
@@ -21,6 +22,12 @@ on:
       - 'fw/docs/proto0-hardware-guide.md'
       - 'fw/docs/developer-setup.md'
       - 'fw/docs/images/**'
+      # The extension simulator ships at /sim — redeploy when it (or the
+      # extensions/DSP its bundled .wasm modules are built from) changes.
+      - 'fw/sim/**'
+      - 'fw/extensions/**'
+      - 'fw/include/rgbx/**'
+      - 'fw/src/sound/audio_dsp*'
   workflow_dispatch:
 
 permissions:
@@ -62,6 +69,25 @@ jobs:
         run: |
           python -m pip install --upgrade markdown pymdown-extensions
           python scripts/build-site.py
+
+      # ---- Extension simulator (served at /sim) --------------------------
+      # Builds the in-repo extensions + the real audio DSP to wasm and
+      # bundles the simulator UI. Toolchain steps are the SAME composite
+      # action sim-ci.yml gates with, so a deploy can never use a different
+      # toolchain than the one CI validated.
+      - uses: ./.github/actions/sim-wasm-toolchain
+
+      - name: Build simulator bundle into site/sim
+        run: |
+          fw/sim/build-extensions.sh
+          cd fw/sim
+          npm ci
+          RGBX_SIM_BASE=/sim/ npx vite build
+          # rm first: cp -r nests into an EXISTING destination (dst/browser/),
+          # which would silently 404 the deployed page. Fresh runners never
+          # have site/sim, but keep the step idempotent regardless.
+          rm -rf ../../site/sim
+          cp -r dist/browser ../../site/sim
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3

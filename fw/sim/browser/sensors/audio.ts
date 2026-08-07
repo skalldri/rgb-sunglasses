@@ -13,6 +13,11 @@
  */
 
 import { DspAudioProvider } from "../../core/audio";
+// ?worker&url makes Vite BUILD the worklet as its own transpiled chunk and
+// hand back its URL — the only pattern that survives `vite build` (a plain
+// new URL(...) reference would emit the raw .ts as an asset, breaking the
+// mic on the deployed /sim/ page; found via browser/smoke.md's limitation).
+import micWorkletUrl from "./mic-worklet?worker&url";
 import {
   AUDIO_FRAME_MS,
   AUDIO_FRAME_SAMPLES,
@@ -93,7 +98,7 @@ export class AudioSources {
 
   /** Fetches and instantiates the firmware DSP. Returns false (and leaves
    * the manager on silence) if the artifact isn't built or fails to load. */
-  async loadDsp(url = "/wasm/audio_dsp.wasm"): Promise<boolean> {
+  async loadDsp(url = `${import.meta.env.BASE_URL}audio_dsp.wasm`): Promise<boolean> {
     try {
       const resp = await fetch(url);
       if (!resp.ok) {
@@ -173,7 +178,7 @@ export class AudioSources {
     } catch {
       ctx = new AudioContext();
     }
-    await ctx.audioWorklet.addModule(new URL("./mic-worklet.ts", import.meta.url).href);
+    await ctx.audioWorklet.addModule(micWorkletUrl);
     const node = new AudioWorkletNode(ctx, "rgbx-mic-capture", {
       numberOfInputs: 1,
       numberOfOutputs: 1,

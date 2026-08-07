@@ -28,43 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: fw/sim/package-lock.json
-
-      # wasi-sdk is ~120 MB unpacked; cache it keyed on the pinned version
-      # inside install-toolchain.sh.
-      - name: Compute toolchain cache key
-        id: toolchain-key
-        run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/rgb-sunglasses
-          key: wasi-sdk-${{ steps.toolchain-key.outputs.version }}
-
-      - name: Install wasm toolchain (cached)
-        run: fw/sim/scripts/install-toolchain.sh
+      # Node + pinned wasi-sdk (cached) + pinned CMSIS-DSP — shared with
+      # pages.yml via the composite action so the pre-merge gate always
+      # validates with the exact toolchain the deploy builds with.
+      - uses: ./.github/actions/sim-wasm-toolchain
 
       - name: npm ci
         run: cd fw/sim && npm ci
-
-      # CMSIS-DSP normally comes from the NCS SDK, absent on this runner; a
-      # checkout pinned to the SAME revision keeps this job free of the
-      # 25 GB devcontainer while matching local builds bit-for-bit. The
-      # revision has ONE source of truth — CMSIS_DSP_PIN in
-      # build-extensions.sh (which also warns when a local SDK tree drifts
-      # from it) — greped here exactly like WASI_SDK_VERSION above.
-      # audio_dsp.wasm is REQUIRED (DSP tests + metronome scenarios).
-      - name: Fetch CMSIS-DSP (pinned revision from build-extensions.sh)
-        run: |
-          rev="$(grep -oP 'CMSIS_DSP_PIN="\K[0-9a-f]+' fw/sim/build-extensions.sh)"
-          git init /tmp/cmsis-dsp
-          git -C /tmp/cmsis-dsp remote add origin https://github.com/zephyrproject-rtos/cmsis-dsp.git
-          git -C /tmp/cmsis-dsp fetch --depth 1 origin "$rev"
-          git -C /tmp/cmsis-dsp checkout FETCH_HEAD
-          echo "CMSIS_DSP_PATH=/tmp/cmsis-dsp" >> "$GITHUB_ENV"
 
       - name: Build extensions + audio_dsp to wasm
         run: fw/sim/build-extensions.sh
@@ -86,6 +56,20 @@ jobs:
 
       - name: Golden digest compare
         run: fw/sim/rgbx-sim compare
+
+      # Pages deploys only from main; this is the pre-merge guard that the
+      # /sim/-based production bundle still builds and ships EVERY built
+      # module (derived from out/wasm, not a hardcoded name list — retiring
+      # or adding an extension must not require editing this step).
+      - name: Production bundle builds under the /sim/ base
+        run: |
+          cd fw/sim
+          RGBX_SIM_BASE=/sim/ npx vite build
+          test -f dist/browser/wasm-index.json
+          for m in out/wasm/*.wasm; do
+            test -f "dist/browser/$(basename "$m")"
+          done
+          grep -q '/sim/assets/' dist/browser/index.html
 
       - name: Upload run reports
         if: always()

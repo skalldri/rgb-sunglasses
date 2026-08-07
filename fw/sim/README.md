@@ -18,6 +18,21 @@ Two frontends share one core:
 - **Browser UI** (`rgbx-sim serve`) — live glasses rendering, param
   editors, buttons, live microphone through the real DSP, phone IMU.
 
+## Hosted simulator
+
+The browser UI is deployed at **https://rgb-sunglasses.autom8ed.com/sim/**
+(built by `.github/workflows/pages.yml` on every relevant push to main).
+It bundles the in-repo extensions and the real DSP, and — because it's
+HTTPS — live microphone and phone motion work with zero setup.
+
+**Load your own extension**: drag a `.wasm` file onto the page (or use
+"Load .wasm…" in the top bar). Uploads are session-only by design — re-drop
+a rebuilt file to iterate; nothing persists across visits. The file must be
+a **wasm build** (`fw/sim/build-extensions.sh <name>`), not the ARM
+`.llext` the device runs — dropping an `.llext` gets a targeted
+explanation, since the simulator executes WebAssembly, never ARM code
+(`PARITY.md`).
+
 ## Quick start
 
 ```bash

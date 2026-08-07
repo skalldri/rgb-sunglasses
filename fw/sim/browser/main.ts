@@ -25,6 +25,7 @@ import {
   TappedAudioProvider,
   frameIndexForSimTime,
 } from "./sensors/audio";
+import { rejectionMessage, sniffModuleKind } from "../core/moduleSniff";
 import { G, ImuManager, ImuSourceKind, requestMotionPermission } from "./sensors/imu";
 import { ConsolePanel } from "./ui/console";
 import { ParamPanel } from "./ui/params";
@@ -55,6 +56,9 @@ function must<T extends HTMLElement>(id: string): T {
 const els = {
   extSelect: must<HTMLSelectElement>("ext-select"),
   extReload: must<HTMLButtonElement>("ext-reload"),
+  extUpload: must<HTMLButtonElement>("ext-upload"),
+  extFile: must<HTMLInputElement>("ext-file"),
+  dropOverlay: must<HTMLElement>("drop-overlay"),
   extMeta: must<HTMLElement>("ext-meta"),
   fault: must<HTMLElement>("fault"),
   faultKind: must<HTMLElement>("fault-kind"),
@@ -112,9 +116,25 @@ let fps = 0;
 /* Extension loading                                                    */
 /* ------------------------------------------------------------------ */
 
+/** Deploy base ("/" on the dev server, "/sim/" on the Pages deployment).
+ * Index urls are emitted RELATIVE by the vite plugin and resolved here. */
+const BASE = import.meta.env.BASE_URL;
+
+/** One entry the extension <select> can point at — bundled or uploaded.
+ * Keyed by the option's value (an opaque unique string, never parsed), so
+ * every module source flows through the same lookup/note/activate path.
+ * Upload bytes live in the getBytes closures: in-memory only, by design —
+ * re-dropping a rebuilt file IS the iteration loop; nothing persists. */
+interface ModuleSource {
+  label: string;
+  note: string;
+  getBytes(): Promise<ArrayBuffer>;
+}
+const moduleSources = new Map<string, ModuleSource>();
+
 async function loadExtensionList(): Promise<WasmEntry[]> {
   try {
-    const resp = await fetch("/wasm-index.json");
+    const resp = await fetch(`${BASE}wasm-index.json`);
     const all = (await resp.json()) as WasmEntry[];
     // audio_dsp.wasm is the DSP the audio sources run on, not an extension.
     return all.filter((e) => !e.name.startsWith("audio_dsp"));
@@ -123,57 +143,217 @@ async function loadExtensionList(): Promise<WasmEntry[]> {
   }
 }
 
-async function selectExtension(entry: WasmEntry): Promise<void> {
+async function teardownHost(): Promise<void> {
   stop();
   loopToken++;
   if (host !== null) {
     await host.terminate();
     host = null;
   }
-  consolePanel.note(`loading ${entry.name} (${entry.size} bytes)`);
+}
 
+/** Activations are strictly serialized: teardown of the previous host and
+ * bring-up of the next must never interleave. Without this, a drop during
+ * boot's initial activation raced — both SimHosts finished, last-resolved
+ * won the canvas while the picker showed the other, and the loser's
+ * sandbox worker leaked. */
+let activationChain: Promise<void> = Promise.resolve();
+
+function enqueueActivation(run: () => Promise<void>): Promise<void> {
+  const next = activationChain.then(run, run);
+  activationChain = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+/** Loads + activates a module from raw bytes — shared by the picker and
+ * session uploads. Serialized via the activation chain. */
+function activateBytes(label: string, bytes: ArrayBuffer): Promise<void> {
+  return enqueueActivation(async () => {
+    await teardownHost();
+
+    const h = new SimHost({
+      wasmBytes: bytes,
+      adapterFactory: () => new BrowserWorkerAdapter(),
+      dtMs: DT_MS,
+      audioProvider: audioTap,
+      imuProvider: imu,
+    });
+    // Publish BEFORE the await so a teardown can always reach the host
+    // that is mid-activation (belt and braces on top of serialization).
+    host = h;
+    const fault = await h.activate();
+    if (host !== h) {
+      // Torn down while activating; the worker is already terminated.
+      return;
+    }
+    resetStats();
+    lastRaw = new Uint8Array(FRAME_BYTES);
+    paramPanel.build(h);
+    updateMeta();
+
+    if (fault !== null) {
+      showFault(fault);
+      paint();
+      return;
+    }
+    hideFault();
+    consolePanel.note(
+      `activated "${h.metadata?.displayName ?? label}" — ${h.metadata?.width}x${h.metadata?.height}, ` +
+        `${h.metadata?.paramCount} params`,
+    );
+    start();
+  });
+}
+
+/** Activates whatever the extension <select> points at (any registered
+ * ModuleSource). Shared by the change handler, Reload, and uploads. On a
+ * getBytes failure the currently-running module keeps running under the
+ * fault banner. */
+async function activateSelection(): Promise<void> {
+  const source = moduleSources.get(els.extSelect.value);
+  if (source === undefined) {
+    return;
+  }
+  consolePanel.note(source.note);
   let bytes: ArrayBuffer;
   try {
-    const resp = await fetch(entry.url);
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`);
-    }
-    bytes = await resp.arrayBuffer();
+    bytes = await source.getBytes();
   } catch (err) {
     showFault({
       kind: "load_failed",
-      detail: `could not fetch ${entry.url}: ${String(err)}`,
+      detail: `could not load ${source.label}: ${String(err)}`,
       tick: -1,
       paramsResetToDefaults: false,
     });
     return;
   }
+  await activateBytes(source.label, bytes);
+}
 
-  const h = new SimHost({
-    wasmBytes: bytes,
-    adapterFactory: () => new BrowserWorkerAdapter(),
-    dtMs: DT_MS,
-    audioProvider: audioTap,
-    imuProvider: imu,
-  });
-  const fault = await h.activate();
-  host = h;
-  resetStats();
-  lastRaw = new Uint8Array(FRAME_BYTES);
-  paramPanel.build(h);
-  updateMeta();
+/* ------------------------------------------------------------------ */
+/* Session uploads (file picker + drag-and-drop)                        */
+/* ------------------------------------------------------------------ */
 
-  if (fault !== null) {
-    showFault(fault);
-    paint();
-    return;
+async function handleUploadFiles(fileList: Iterable<File>): Promise<void> {
+  // Snapshot first: the change handler clears the <input> while this loop
+  // is suspended on arrayBuffer(), and some engines empty the live
+  // FileList when the input's value resets.
+  const files = Array.from(fileList);
+  const rejections: string[] = [];
+  let lastValidKey: string | null = null;
+
+  for (const file of files) {
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await file.arrayBuffer();
+    } catch (err) {
+      // Most commonly a dropped DIRECTORY — one unreadable item must not
+      // sink the rest of the batch, and must not fail silently.
+      rejections.push(`"${file.name}" could not be read (a folder, or unreadable): ${String(err)}`);
+      continue;
+    }
+    const kind = sniffModuleKind(new Uint8Array(bytes));
+    if (kind !== "wasm") {
+      rejections.push(rejectionMessage(file.name, kind));
+      continue;
+    }
+    const name = file.name.replace(/\.wasm$/i, "");
+    const key = `upload:${name}`; // opaque Map key, never parsed
+    const isNew = !moduleSources.has(key);
+    moduleSources.set(key, {
+      label: name,
+      note: `loading ${name} (uploaded, ${bytes.byteLength} bytes)`,
+      getBytes: () => Promise.resolve(bytes),
+    });
+    if (isNew) {
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = `${name} (uploaded)`;
+      els.extSelect.append(opt);
+    }
+    consolePanel.note(
+      `${isNew ? "loaded" : "replaced"} upload "${name}" (${bytes.byteLength} bytes) — session only`,
+    );
+    lastValidKey = key;
   }
-  hideFault();
-  consolePanel.note(
-    `activated "${h.metadata?.displayName}" — ${h.metadata?.width}x${h.metadata?.height}, ` +
-      `${h.metadata?.paramCount} params`,
-  );
-  start();
+
+  // Every valid file is registered in the picker, but only the LAST one
+  // activates — N teardown/worker-spawn cycles for one surviving host was
+  // pure waste (and a visible stutter on slow modules).
+  if (lastValidKey !== null) {
+    els.extSelect.value = lastValidKey;
+    await activateSelection();
+  }
+
+  // Rejections surface AFTER the activation so a valid file later in the
+  // batch can't wipe the explanation off the screen (e.g. dropping
+  // plasma.llext + plasma.wasm together). Not a host fault, but the banner
+  // is the page's one visible error surface; "Clear fault & retry" simply
+  // re-activates the current module, a safe no-op recovery.
+  if (rejections.length > 0) {
+    showFault({
+      kind: "load_failed",
+      detail: rejections.join(" — "),
+      tick: -1,
+      paramsResetToDefaults: false,
+    });
+  }
+}
+
+/** True when a drop should be left to a native file input (the WAV chooser
+ * in the audio card) instead of the whole-page extension handler. */
+function isNativeFileDropTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest('input[type="file"]') !== null;
+}
+
+function wireUploads(): void {
+  els.extUpload.addEventListener("click", () => els.extFile.click());
+  els.extFile.addEventListener("change", () => {
+    const files = els.extFile.files === null ? [] : Array.from(els.extFile.files);
+    // Same file re-selected later must fire change again (rebuild loop);
+    // handleUploadFiles works from the snapshot above.
+    els.extFile.value = "";
+    if (files.length > 0) {
+      void handleUploadFiles(files);
+    }
+  });
+
+  // Whole-page drop target. A depth counter survives the enter/leave chatter
+  // from child elements; the overlay itself is pointer-events: none.
+  let dragDepth = 0;
+  window.addEventListener("dragenter", (ev) => {
+    if (ev.dataTransfer?.types.includes("Files")) {
+      dragDepth++;
+      els.dropOverlay.classList.remove("hidden");
+    }
+  });
+  window.addEventListener("dragleave", () => {
+    if (dragDepth > 0 && --dragDepth === 0) {
+      els.dropOverlay.classList.add("hidden");
+    }
+  });
+  window.addEventListener("dragover", (ev) => {
+    // Leave native file inputs alone — preventDefault here would cancel
+    // the browser's own drop-a-WAV-onto-the-chooser behavior.
+    if (!isNativeFileDropTarget(ev.target)) {
+      ev.preventDefault();
+    }
+  });
+  window.addEventListener("drop", (ev) => {
+    dragDepth = 0;
+    els.dropOverlay.classList.add("hidden");
+    if (isNativeFileDropTarget(ev.target)) {
+      return; // the input's own handler takes it from here
+    }
+    ev.preventDefault();
+    const files = ev.dataTransfer?.files;
+    if (files !== undefined && files.length > 0) {
+      void handleUploadFiles(files);
+    }
+  });
 }
 
 function updateMeta(): void {
@@ -393,6 +573,10 @@ function hideFault(): void {
 async function clearFaultAndRetry(): Promise<void> {
   const h = host;
   if (h === null) {
+    // No host to retry (e.g. the very first upload was rejected before any
+    // extension ever activated) — the button still has to dismiss the
+    // banner, or it becomes an undismissable dead end.
+    hideFault();
     return;
   }
   h.clearFault();
@@ -714,31 +898,35 @@ async function boot(): Promise<void> {
   }).observe(els.canvas);
 
   const entries = await loadExtensionList();
-  const selected = () => entries.find((e) => e.url === els.extSelect.value);
-  els.extReload.addEventListener("click", () => {
-    const entry = selected();
-    if (entry !== undefined) {
-      void selectExtension(entry);
-    }
-  });
+  els.extReload.addEventListener("click", () => void activateSelection());
+  els.extSelect.addEventListener("change", () => void activateSelection());
+  wireUploads();
 
   if (entries.length === 0) {
-    els.extMeta.textContent = "no .wasm modules in fw/sim/out/wasm — run fw/sim/build-extensions.sh";
-    consolePanel.note("extension index is empty; nothing to run");
+    els.extMeta.textContent =
+      "no bundled modules — drop a .wasm here or run fw/sim/build-extensions.sh";
+    consolePanel.note("extension index is empty; drop a .wasm to load one");
   } else {
     for (const entry of entries) {
+      const key = `bundled:${entry.url}`; // opaque Map key, never parsed
+      moduleSources.set(key, {
+        label: entry.name.replace(/\.wasm$/, ""),
+        note: `loading ${entry.name} (${entry.size} bytes)`,
+        getBytes: async () => {
+          const resp = await fetch(`${BASE}${entry.url}`);
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+          }
+          return resp.arrayBuffer();
+        },
+      });
       const opt = document.createElement("option");
-      opt.value = entry.url;
+      opt.value = key;
       opt.textContent = entry.name.replace(/\.wasm$/, "");
       els.extSelect.append(opt);
     }
-    els.extSelect.addEventListener("change", () => {
-      const entry = selected();
-      if (entry !== undefined) {
-        void selectExtension(entry);
-      }
-    });
-    await selectExtension(entries[0]);
+    els.extSelect.value = `bundled:${entries[0].url}`;
+    await activateSelection();
   }
 
   // One timer drives every non-frame-critical UI update, so a chatty

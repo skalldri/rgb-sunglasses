@@ -27,7 +27,7 @@ cd fw/sim && npm run serve          # -> http://localhost:5173
 `npm run serve` is `vite --host`. **Do not add a `browser` positional**
 (`vite browser`): Vite resolves its config file relative to the root given on
 the command line, so that makes it silently skip `fw/sim/vite.config.ts` —
-`/wasm-index.json` and `/wasm/*.wasm` then fall through to the SPA fallback
+`/wasm-index.json` and the flat `/<name>.wasm` module routes then fall through to the SPA fallback
 and return `index.html` with a 200. The config sets `root` itself.
 
 If the Node CLI's `fw/sim/rgbx-sim` grows a `serve` subcommand it delegates to
@@ -44,7 +44,7 @@ npx vite --port 5199 --strictPort &   # or: npm run serve -- --port 5199
 
 curl -s -o /dev/null -w '%{http_code}\n'            http://localhost:5199/            # 200, text/html
 curl -s                                            http://localhost:5199/wasm-index.json
-curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://localhost:5199/wasm/hello.wasm  # 200 application/wasm
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://localhost:5199/hello.wasm  # 200 application/wasm (modules serve FLAT — publicDir is out/wasm)
 curl -s -o /dev/null -w '%{http_code}\n'            http://localhost:5199/main.ts     # 200, transformed TS
 ```
 
@@ -107,15 +107,27 @@ plugin is not registered at all.
   beat flags straight out of the firmware DSP. Metronome at 120 BPM should
   light band-0 beats about twice a second.
 
+## Production build (the /sim/ Pages deployment)
+
+`RGBX_SIM_BASE=/sim/ npx vite build` produces a fully functional static
+bundle in `dist/browser/` — the mic worklet is imported with `?worker&url`
+so it ships as its own transpiled chunk, and `publicDir` is `out/wasm` so
+only the modules (flat, next to `index.html`) are copied in. To smoke it
+locally under the same subpath the site uses:
+
+```bash
+fw/sim/build-extensions.sh
+cd fw/sim && RGBX_SIM_BASE=/sim/ npx vite build
+mkdir -p /tmp/composed && cp -r dist/browser /tmp/composed/sim
+(cd /tmp/composed && python3 -m http.server 8000)   # -> http://localhost:8000/sim/
+```
+
+(Mic/DeviceMotion need a secure context; localhost qualifies.)
+
 ## Known limitations
 
-- **`vite build` output is not fully functional.** The static bundle works for
-  everything except the microphone: the AudioWorklet is referenced as
-  `new URL("./mic-worklet.ts", import.meta.url)`, which the dev server
-  transforms on demand but the production build does not emit as an asset.
-  The dev server is the supported way to run this.
-- The production build also copies all of `out/` (including the CMSIS-DSP
-  `.o` files) into `dist/browser`, because `out/` is mounted as `publicDir`.
 - Live microphone input is deliberately non-deterministic — a mic run is for
   feel, not for reproducing a scenario. Use the Node CLI's canned scenarios
   when a run has to be repeatable.
+- Uploaded `.wasm` extensions are session-only (by design): re-drop the file
+  after a rebuild; nothing persists across page reloads.
