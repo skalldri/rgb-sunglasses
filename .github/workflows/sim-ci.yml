@@ -1,0 +1,93 @@
+name: Extension Simulator CI
+
+# Fast Node-only job (no devcontainer, no ARM toolchain): builds the two
+# in-repo extensions to WASM, runs the harness unit/integration tests, the
+# scenario smoke runs, the fault-path assertions (hello's Crash/Hang), and
+# the golden digest compare. The audio-DSP parity check against the
+# native_sim replay harness lives in build.yaml (needs west).
+on:
+  pull_request:
+    paths:
+      - "fw/extensions/**"
+      - "fw/include/rgbx/**"
+      - "fw/sim/**"
+      - "fw/src/sound/audio_dsp*"
+      - ".github/workflows/sim-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "fw/extensions/**"
+      - "fw/include/rgbx/**"
+      - "fw/sim/**"
+      - "fw/src/sound/audio_dsp*"
+      - ".github/workflows/sim-ci.yml"
+
+jobs:
+  sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: fw/sim/package-lock.json
+
+      # wasi-sdk is ~120 MB unpacked; cache it keyed on the pinned version
+      # inside install-toolchain.sh.
+      - name: Compute toolchain cache key
+        id: toolchain-key
+        run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/rgb-sunglasses
+          key: wasi-sdk-${{ steps.toolchain-key.outputs.version }}
+
+      - name: Install wasm toolchain (cached)
+        run: fw/sim/scripts/install-toolchain.sh
+
+      - name: npm ci
+        run: cd fw/sim && npm ci
+
+      # CMSIS-DSP normally comes from the NCS SDK, absent on this runner; a
+      # checkout PINNED TO THE SAME REVISION the SDK ships (NCS v3.1.1's
+      # modules/lib/cmsis-dsp) keeps this job free of the 25 GB devcontainer
+      # while guaranteeing golden digests match local runs bit-for-bit.
+      # audio_dsp.wasm is REQUIRED (DSP tests + metronome scenarios).
+      - name: Fetch CMSIS-DSP (NCS v3.1.1 revision)
+        run: |
+          git init /tmp/cmsis-dsp
+          git -C /tmp/cmsis-dsp remote add origin https://github.com/zephyrproject-rtos/cmsis-dsp.git
+          git -C /tmp/cmsis-dsp fetch --depth 1 origin d80a49b2bb186317dc1db4ac88da49c0ab77e6e7
+          git -C /tmp/cmsis-dsp checkout FETCH_HEAD
+          echo "CMSIS_DSP_PATH=/tmp/cmsis-dsp" >> "$GITHUB_ENV"
+
+      - name: Build extensions + audio_dsp to wasm
+        run: fw/sim/build-extensions.sh
+
+      - name: Unit + integration tests
+        run: cd fw/sim && npm test
+
+      - name: Scenario smoke — visible rendering
+        run: |
+          fw/sim/rgbx-sim run hello  --scenario metronome-120 --no-build --json > /dev/null
+          fw/sim/rgbx-sim run hello  --scenario buttons-tour  --no-build --json > /dev/null
+          fw/sim/rgbx-sim run hello  --scenario head-tilt     --no-build --json > /dev/null
+          fw/sim/rgbx-sim run plasma --scenario silence       --no-build --json > /dev/null
+
+      - name: Fault paths — Crash traps, Hang hits the backstop
+        run: |
+          fw/sim/rgbx-sim run hello --scenario param-crash --no-build --json > /dev/null
+          fw/sim/rgbx-sim run hello --scenario param-hang  --no-build --json > /dev/null
+
+      - name: Golden digest compare
+        run: fw/sim/rgbx-sim compare
+
+      - name: Upload run reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-reports
+          path: fw/sim/out/runs/**/report.json
+          if-no-files-found: ignore

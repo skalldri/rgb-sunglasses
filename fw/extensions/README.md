@@ -121,6 +121,25 @@ Third-party developers get the same thing from the EDK archive
 extracted path), compile your single translation unit with `LLEXT_CFLAGS -c`,
 and `ld -r` the result. Both rgbx headers ship inside the archive.
 
+## Simulating without hardware
+
+The WASM simulator (`fw/sim/` — full docs in `fw/sim/README.md`) runs an
+extension's actual source with the firmware's tick semantics (nominal 11 ms
+ticks, 25 Hz IMU / 31.25 Hz audio cadence, color-mode resolution, brightness
+truncation, dead-pixel mask, fault handling) and the **real** audio DSP
+compiled to WebAssembly:
+
+```bash
+fw/sim/rgbx-sim run <name> --scenario metronome-120 --json   # headless, seconds
+fw/sim/rgbx-sim serve                                        # browser UI, live mic/IMU
+```
+
+It needs no proto0 build, no board, and no locks — use it as the iteration
+loop, then do the ARM build below before calling anything done (the sim links
+libc/libm statically, so code that fails llext symbol resolution on-device,
+like `sinf()`, still runs in the sim — `fw/sim/PARITY.md` has the full
+divergence list).
+
 ## Installing on the device
 
 You don't have to build the in-repo extensions yourself: prebuilt `.llext` files

@@ -55,7 +55,7 @@ class MicCaptureProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs: Float32Array[][]): boolean {
-    const channel = inputs[0]?.[0];
+    const channel: Float32Array | undefined = inputs[0]?.[0];
     if (channel === undefined || channel.length === 0) {
       // No input connected yet — stay alive, the graph may connect later.
       return true;

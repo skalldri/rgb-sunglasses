@@ -14,11 +14,16 @@
  *
  * This config targets the dev server (`npm run serve`). A production
  * `vite build` is wired up but is not part of any gate.
+ *
+ * Launch it as `vite` from fw/sim, NOT `vite browser` — Vite looks for its
+ * config inside the root given on the command line, so passing `browser` as
+ * a positional makes it silently ignore this file (and then the wasm index
+ * 404s into the SPA fallback). `root` below is what selects browser/.
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type Plugin } from "vite";
+import type { Plugin, UserConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 
 const simDir = __dirname;
@@ -53,7 +58,7 @@ function wasmIndexPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
+const config: UserConfig = {
   root: path.resolve(simDir, "browser"),
   publicDir: path.resolve(simDir, "out"),
   // basic-ssl is opt-in: the mic and DeviceMotion need a secure context, and
@@ -67,4 +72,6 @@ export default defineConfig({
     outDir: path.resolve(simDir, "dist/browser"),
     emptyOutDir: true,
   },
-});
+};
+
+export default config;

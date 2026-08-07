@@ -18,7 +18,9 @@ import {
   AUDIO_FRAME_SAMPLES,
   AUDIO_SAMPLE_RATE,
   AudioFeatureProvider,
+  AudioFeatures,
   SilenceAudioProvider,
+  zeroAudioFeatures,
 } from "../../core/providers";
 import {
   PcmGenerator,
@@ -239,6 +241,25 @@ export class AudioSources {
     }
     const origin = this.originFrame;
     return (frameIndex) => base(Math.max(0, frameIndex - origin));
+  }
+}
+
+/**
+ * Pass-through provider that remembers the last frame it handed to the host,
+ * so the UI can show live band energies and beat flags. It also indirects
+ * through a getter, which lets it be assigned to SimHost.audioProvider once
+ * at construction and still pick up the real DSP provider whenever
+ * audio_dsp.wasm finishes loading.
+ */
+export class TappedAudioProvider implements AudioFeatureProvider {
+  last: AudioFeatures = zeroAudioFeatures();
+
+  constructor(private readonly inner: () => AudioFeatureProvider) {}
+
+  async nextFrame(frameIndex: number): Promise<AudioFeatures> {
+    const frame = await this.inner().nextFrame(frameIndex);
+    this.last = frame;
+    return frame;
   }
 }
 
