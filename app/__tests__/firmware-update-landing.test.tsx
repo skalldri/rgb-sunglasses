@@ -128,6 +128,24 @@ describe('FirmwareUpdateLanding', () => {
         expect(await findByText('Reconnecting to RGB Sunglasses…')).toBeTruthy();
     });
 
+    it('explains a client-init failure instead of spinning on "Checking your device"', async () => {
+        // Connected device, but SMP init threw (e.g. firmware with no SMP
+        // characteristic). Board detection cannot run, so both of its outputs stay
+        // empty and the spinner branch was permanently true.
+        mockBluetooth(defaultSelectedDevice);
+        mockClientMethods({
+            initialize: async () => {
+                throw new Error('SMP characteristic not found');
+            },
+        });
+        mockGitHub();
+
+        const { findByText, queryByText } = renderWithMcuMgr(<FirmwareUpdateLanding />);
+
+        expect(await findByText(/Failed to initialize: SMP characteristic not found/)).toBeTruthy();
+        expect(queryByText('Checking your device…')).toBeNull();
+    });
+
     it('surfaces a GitHub failure without blocking the other options', async () => {
         mockBluetooth(defaultSelectedDevice);
         mockClientMethods();

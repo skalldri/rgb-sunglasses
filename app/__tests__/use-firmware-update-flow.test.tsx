@@ -3,7 +3,7 @@ import React from 'react';
 
 import * as BluetoothContext from '@/context/bluetooth-context';
 import * as McuMgrClientContext from '@/context/mcumgr-client-context';
-import { useFirmwareUpdateFlow } from '@/hooks/use-firmware-update-flow';
+import { REBOOT_TIMEOUT_MS, useFirmwareUpdateFlow } from '@/hooks/use-firmware-update-flow';
 import { FirmwarePackage } from '@/services/firmware-package';
 
 import fixture from './fixtures/mcuboot-image-header.json';
@@ -145,7 +145,7 @@ describe('useFirmwareUpdateFlow', () => {
         });
 
         expect(result.current.step).toBe('failed');
-        expect(result.current.error).toMatch(/did not mark the uploaded image for test/);
+        expect(result.current.error).toMatch(/did not stage the uploaded image/);
     });
 
     it('treats the device disappearing after a reboot as progress, not an error', async () => {
@@ -314,6 +314,124 @@ describe('useFirmwareUpdateFlow', () => {
 
         await waitFor(() => expect(result.current.step).toBe('success'));
         expect(result.current.images.map(i => i.verified)).toEqual([true, true]);
+    });
+
+    it('rejects a shorter running version that is only a prefix of the file version', async () => {
+        // '2.1.10+0'.startsWith('2.1.1') is true, so a bare prefix match verified a
+        // device stuck on 2.1.1 as an update to 2.1.10 - a false success in exactly the
+        // step that exists to catch a failed install. Uses image 1 (net core), which is
+        // exempt from the hash check, so the version comparison is the only signal.
+        const netPkg = {
+            manifest: { 'format-version': 0, time: 0, name: 'fw', files: [] as any },
+            images: [
+                {
+                    manifest: { file: 'ipc_radio.bin', image_index: '1', size: 2 } as any,
+                    data: Uint8Array.from([0, 0]),
+                    parsedHeader: { magic: 0, version: '2.1.10+0', imageSize: 2 },
+                },
+            ],
+        } as FirmwarePackage;
+
+        const client = makeClient(APP_HASH, APP_HASH);
+        client.getImageState = jest
+            .fn()
+            .mockResolvedValueOnce({
+                images: [{ image: 1, slot: 1, version: '2.1.10', hash: APP_HASH }],
+            })
+            .mockResolvedValueOnce({
+                images: [{ image: 1, slot: 1, version: '2.1.10', hash: APP_HASH, pending: true }],
+            })
+            // The net core failed to install and is still on the older 2.1.1.
+            .mockResolvedValue({
+                images: [{ image: 1, slot: 0, version: '2.1.1', hash: APP_HASH, active: true }],
+            });
+        mockEnv({ client, device: { mac: 'AA:BB:CC' } });
+
+        const { result, rerender } = renderHook(() => useFirmwareUpdateFlow(netPkg));
+        await act(async () => {
+            await result.current.startUpload();
+        });
+        await act(async () => {
+            await result.current.reboot();
+        });
+        mockEnv({ client, device: null });
+        rerender({});
+        await waitFor(() => expect(result.current.step).toBe('reconnecting'));
+        mockEnv({ client, device: { mac: 'AA:BB:CC' } });
+        rerender({});
+
+        await waitFor(() => expect(result.current.step).toBe('failed'));
+    });
+
+    it('accepts the file version with its +build suffix against the device version', async () => {
+        const client = makeClient(APP_HASH, APP_HASH);
+        client.getImageState = jest
+            .fn()
+            .mockResolvedValueOnce({
+                images: [{ image: 0, slot: 1, version: '2.1.0', hash: APP_HASH }],
+            })
+            .mockResolvedValueOnce({
+                images: [{ image: 0, slot: 1, version: '2.1.0', hash: APP_HASH, pending: true }],
+            })
+            .mockResolvedValue({
+                images: [{ image: 0, slot: 0, version: '2.1.0', hash: APP_HASH, active: true }],
+            });
+        mockEnv({ client, device: { mac: 'AA:BB:CC' } });
+
+        const pkg = makePackage(); // header version '2.1.0+0'
+        const { result, rerender } = renderHook(() => useFirmwareUpdateFlow(pkg));
+        await act(async () => {
+            await result.current.startUpload();
+        });
+        await act(async () => {
+            await result.current.reboot();
+        });
+        mockEnv({ client, device: null });
+        rerender({});
+        await waitFor(() => expect(result.current.step).toBe('reconnecting'));
+        mockEnv({ client, device: { mac: 'AA:BB:CC' } });
+        rerender({});
+
+        await waitFor(() => expect(result.current.step).toBe('success'));
+    });
+
+    it('fails instead of spinning forever when the restart never drops the link', async () => {
+        // reset() swallows its own rejection, so a reset that never reached the device
+        // is indistinguishable from one that did. Without a timeout the user sat on
+        // "Restarting…" forever with no counter and no way back.
+        jest.useFakeTimers();
+        try {
+            const client = makeClient(APP_HASH, APP_HASH);
+            client.getImageState = jest
+                .fn()
+                .mockResolvedValueOnce({
+                    images: [{ image: 0, slot: 1, version: '2.1.0', hash: APP_HASH }],
+                })
+                .mockResolvedValue({
+                    images: [{ image: 0, slot: 1, version: '2.1.0', hash: APP_HASH, pending: true }],
+                });
+            mockEnv({ client, device: { mac: 'AA:BB:CC' } });
+
+            const pkg = makePackage();
+            const { result } = renderHook(() => useFirmwareUpdateFlow(pkg));
+            await act(async () => {
+                await result.current.startUpload();
+            });
+            await act(async () => {
+                await result.current.reboot();
+            });
+            expect(result.current.step).toBe('rebooting');
+
+            // Device stays connected — the reset did not take.
+            await act(async () => {
+                jest.advanceTimersByTime(REBOOT_TIMEOUT_MS + 1000);
+            });
+
+            expect(result.current.step).toBe('failed');
+            expect(result.current.error).toMatch(/did not restart/);
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     it('ignores a different device reconnecting while it waits', async () => {

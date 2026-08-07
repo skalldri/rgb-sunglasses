@@ -6,7 +6,7 @@ import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
 import { useMcuMgrClientContext } from '@/context/mcumgr-client-context';
 import { useExtensionSync } from '@/hooks/use-extension-sync';
-import { useFirmwareRelease } from '@/hooks/use-firmware-release';
+import { useFirmwareRelease } from '@/context/firmware-update-context';
 import { useThemeColors } from '@/hooks/use-theme-color';
 import { useRouter } from 'expo-router';
 import React from 'react';
@@ -16,15 +16,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 /**
  * Animation-extension sync, on its own screen.
  *
- * Reached from the landing page and from the guided flow's success step, which is why
- * it owns its own release lookup rather than taking one as a prop.
+ * Reached from the landing page and from the guided flow's success step. The release
+ * lookup comes from the shared provider rather than a local hook — a per-screen lookup
+ * fired a fresh unauthenticated GitHub request on every navigation.
  */
 export default function ExtensionSyncScreen() {
     const c = useThemeColors();
     const router = useRouter();
     const { selectedDevice, reconnectingDevice } = useBluetooth();
     const { client } = useMcuMgrClientContext();
-    const { releaseAssets, latestVersion, updateCheckState } = useFirmwareRelease();
+    const { releaseAssets, latestVersion, updateCheckState, updateCheckError } =
+        useFirmwareRelease();
     const extensions = useExtensionSync(releaseAssets);
 
     const header = (
@@ -67,6 +69,17 @@ export default function ExtensionSyncScreen() {
                                 Comparing against release v{latestVersion}
                             </ThemedText>
                         ) : null}
+
+                        {/* Without this the card sits at 'idle' forever when the lookup
+                            fails: releaseAssets stays empty so the sync plan never runs,
+                            and the user gets an inert screen with no explanation. */}
+                        {updateCheckState === 'error' && (
+                            <ThemedText type="caption" style={{ color: c.danger }}>
+                                Could not look up the latest release: {updateCheckError}. Extensions
+                                are compared against a release, so syncing is unavailable until
+                                this succeeds.
+                            </ThemedText>
+                        )}
 
                         <ExtensionSyncCard
                             state={extensions.state}

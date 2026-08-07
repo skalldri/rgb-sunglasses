@@ -44,6 +44,26 @@ describe('FirmwareUpdateDebug', () => {
     expect(await findByText('Image 0 / Slot 1')).toBeTruthy();
   });
 
+  it('disables destructive actions while a transfer is in flight', async () => {
+    // The flow screen stays mounted underneath this page, so an upload can be running
+    // while it is open. A Reset Device landing between upload chunks reboots the device
+    // mid-transfer and leaves a partial image in slot 1 - the interlock the old
+    // single-screen modal got for free with disabled={isUploading}.
+    mockBluetooth(defaultSelectedDevice);
+    const spies = mockClientMethods();
+    jest
+      .spyOn(require('@/context/firmware-update-context'), 'useFirmwareBusy')
+      .mockReturnValue({ isBusy: true, setBusy: jest.fn() } as any);
+
+    const { findByText } = renderWithMcuMgr(<FirmwareUpdateDebug />);
+
+    expect(await findByText(/A firmware transfer is in progress/)).toBeTruthy();
+    fireEvent.press(await findByText('Reset Device'));
+    fireEvent.press(await findByText('Erase Slot 1'));
+    expect(spies.reset).not.toHaveBeenCalled();
+    expect(spies.eraseImage).not.toHaveBeenCalled();
+  });
+
   it('exposes the low-level device actions', async () => {
     mockBluetooth(defaultSelectedDevice);
     const spies = mockClientMethods();

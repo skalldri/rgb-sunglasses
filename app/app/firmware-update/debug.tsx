@@ -8,6 +8,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { UUID_MCUBOOT_INFO_SERVICE } from '@/constants/bluetooth';
 import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
+import { useFirmwareBusy } from '@/context/firmware-update-context';
 import { useMcuMgrClientContext } from '@/context/mcumgr-client-context';
 import { useThemeColors } from '@/hooks/use-theme-color';
 import { decodeUtf8FromBase64 } from '@/services/ble-value-codec';
@@ -68,6 +69,11 @@ export default function FirmwareUpdateDebug() {
     // The client is owned by the route-group provider, not by this screen — see
     // context/mcumgr-client-context.tsx for why there must only ever be one.
     const { client, isInitializing, error: initError } = useMcuMgrClientContext();
+    // The flow screen stays mounted underneath this one, so an upload can be in
+    // flight while this page is open. The old single-screen modal disabled these
+    // controls with `disabled={isUploading}`; splitting the screens took that away,
+    // and a Reset Device landing between upload chunks reboots the device mid-transfer.
+    const { isBusy } = useFirmwareBusy();
     const c = useThemeColors();
     const router = useRouter();
     const [imageState, setImageState] = useState<ImageSlot[]>([]);
@@ -761,6 +767,13 @@ export default function FirmwareUpdateDebug() {
                 <ThemedText style={[styles.error, { color: c.danger }]}>{error}</ThemedText>
             ) : null}
 
+            {isBusy ? (
+                <ThemedText type="caption" style={styles.status}>
+                    A firmware transfer is in progress — device actions are disabled until it
+                    finishes.
+                </ThemedText>
+            ) : null}
+
             {boardDetectionError ? (
                 <ThemedText type="caption" style={styles.status}>{boardDetectionError}</ThemedText>
             ) : null}
@@ -770,6 +783,12 @@ export default function FirmwareUpdateDebug() {
                     {reconnectingDevice
                         ? `Reconnecting to ${reconnectingDevice.name}…`
                         : initError || 'No device connected'}
+                </ThemedText>
+            ) : !client && !isInitializing ? (
+                // Connected but no client: SMP init failed. Without this every control
+                // is disabled with nothing saying why.
+                <ThemedText type="caption" style={[styles.status, { color: c.danger }]}>
+                    {initError || 'Firmware update is unavailable on this device.'}
                 </ThemedText>
             ) : null}
 
@@ -802,7 +821,7 @@ export default function FirmwareUpdateDebug() {
                                     refreshImageState();
                                     refreshSlotInfo();
                                 }}
-                                disabled={!client}
+                                disabled={!client || isBusy}
                             />
                         </View>
 
@@ -842,7 +861,7 @@ export default function FirmwareUpdateDebug() {
                                 variant="primary"
                                 style={styles.rowButton}
                                 onPress={handleSelectFirmwarePackage}
-                                disabled={!client}
+                                disabled={!client || isBusy}
                             />
                         </View>
 
@@ -856,14 +875,14 @@ export default function FirmwareUpdateDebug() {
                                 variant="secondary"
                                 style={styles.rowButton}
                                 onPress={handleReset}
-                                disabled={!client}
+                                disabled={!client || isBusy}
                             />
                             <AppButton
                                 title="Erase Slot 1"
                                 variant="danger"
                                 style={styles.rowButton}
                                 onPress={handleEraseSlot}
-                                disabled={!client}
+                                disabled={!client || isBusy}
                             />
                         </View>
 

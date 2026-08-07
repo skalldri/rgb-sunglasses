@@ -51,7 +51,18 @@ The value the device reports as a slot's `hash` in `getImageState()` **is** the 
 
 Two related facts worth keeping in mind:
 
-- **Images are staged with `confirm=false` (mark for test), and confirmed only after the post-reboot hash matches.** Until `confirmCurrentImage()` runs, MCUboot reverts to the previous image on the next reset. Never mark permanent at upload time — the pre-#288 screen did, which left no way back from a bad image.
+- **Images are staged as permanent (`setImageState(hash, true)`), and there is no rollback to be had.** The bootloader is built `CONFIG_BOOT_UPGRADE_ONLY=y` (overwrite-only), whose Kconfig help says it *"prevents the fallback recovery"*, and this SoC's architecture cannot support a swap mode. Hardware-confirmed: an image staged as `pending` came back `active confirmed` with nothing confirming it. **Do not "fix" this to `confirm=false` expecting MCUboot to revert a bad image — it cannot**, and a test-then-confirm sequence would be a permanently no-op extra step. A failed verification means the device is running the wrong firmware and needs re-flashing, not restarting.
+
+- **Verification cannot use the same signal for both cores.** Measured on hardware with fw-v2.1.0:
+
+  | image | file TLV | staged slot 1 | active slot 0 after install |
+  |---|---|---|---|
+  | 0 app core | `eeacf0fa…` | `eeacf0fa…` | `eeacf0fa…` — stable |
+  | 1 net core | `e43ebfa1…` | `e43ebfa1…` | `4d4b2c28…` — changes |
+
+  The app core's image is flashed into its own slot verbatim so its hash survives; the net-core image is a wrapper the app core unwraps over IPC, so its file TLV can never match post-install. Hashes are checked at staging for every image (proving the upload arrived intact) and after reboot for the app core only, plus a version check for both. Version comparison must stop at the `+build` boundary — a bare `startsWith` accepts a shorter running version (`'2.1.10+0'.startsWith('2.1.1')` is true), which would verify a failed update as success.
+
+- **Sync extensions BEFORE the activating restart.** They live on the FAT disk and are read at boot, so syncing after the reboot needs a second reboot — and a device that reboots into new firmware with old-ABI extensions has them rejected by `scan_slot()`, so the animations silently vanish. The guided flow does this in `handleRestart` (`app/firmware-update/flow.tsx`); a sync failure there does not block the restart, since the images are already staged and extensions can be retried afterwards.
 - **After an OTA stages an image, the first J-Link reflash boots the OTA'd image, not the one you just flashed** — MCUboot consumes the pending swap first. It takes a second flash to actually land your build. Check the boot banner's version before trusting any measurement taken after a reflash.
 
 ### GitHub-releases auto-update check (now `hooks/use-firmware-release.ts`)

@@ -4,7 +4,9 @@ import { Card } from '@/components/ui/card';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { Spacing } from '@/constants/theme';
-import { useFirmwareUpdateFlow, type FlowStep } from '@/hooks/use-firmware-update-flow';
+import { useFirmwareBusy, useFirmwareRelease } from '@/context/firmware-update-context';
+import { useExtensionSync } from '@/hooks/use-extension-sync';
+import { useFirmwareUpdateFlow, isTerminalStep, type FlowStep } from '@/hooks/use-firmware-update-flow';
 import { useThemeColors } from '@/hooks/use-theme-color';
 import { FirmwarePackage } from '@/services/firmware-package';
 import { loadPackage, type FirmwareSource } from '@/services/firmware-source';
@@ -49,12 +51,57 @@ export default function FirmwareUpdateFlow() {
     const [loadError, setLoadError] = useState('');
 
     const flow = useFirmwareUpdateFlow(pkg);
+    const { releaseAssets } = useFirmwareRelease();
+    const extensions = useExtensionSync(releaseAssets);
+    const { setBusy } = useFirmwareBusy();
+    const [syncingExtensions, setSyncingExtensions] = useState(false);
+
+    // Claim the shared busy flag for as long as a transfer or restart is in flight, so
+    // the debug page's destructive actions stay disabled underneath us.
+    const busy = !isTerminalStep(flow.step) && flow.step !== 'ready' && flow.step !== 'loadingSource';
+    useEffect(() => {
+        setBusy(busy);
+        return () => setBusy(false);
+    }, [busy, setBusy]);
+
+    /**
+     * Sync extensions, then restart.
+     *
+     * Order matters and is the behaviour the old single-screen modal had: extensions
+     * live on the FAT disk and are read at boot, so writing them BEFORE the activating
+     * restart means one reboot instead of two. Skipping it would leave a device that
+     * reboots into new firmware with old-ABI extensions the loader rejects — the
+     * animations simply vanish until the user notices and syncs manually.
+     *
+     * A sync failure does not block the restart: the firmware images are already
+     * staged, and extensions can be retried from the success screen afterwards.
+     */
+    async function handleRestart() {
+        if (extensions.pendingCount > 0) {
+            setSyncingExtensions(true);
+            try {
+                await extensions.sync();
+            } finally {
+                setSyncingExtensions(false);
+            }
+        }
+        await flow.reboot();
+    }
 
     // Resolve the source descriptor into a package. Params are strings only, so the
     // landing page hands over a URI/URL and the package is re-derived here.
     useEffect(() => {
         const kind = params.source as string | undefined;
-        if (!kind) return;
+        if (!kind) {
+            // Reachable when the screen is re-created without its pushed params -
+            // Android restoring the nested navigation state, a deep link, or dev
+            // navigation. Silently returning left a permanent "Preparing update"
+            // spinner indistinguishable from a slow download.
+            setLoadError(
+                'No update source was provided. Go back and choose an update to install.'
+            );
+            return;
+        }
 
         const source: FirmwareSource | null =
             kind === 'file'
@@ -220,12 +267,24 @@ export default function FirmwareUpdateFlow() {
                                 Restart now to install it. Your sunglasses will be unavailable for
                                 up to a minute, then reconnect on their own.
                             </ThemedText>
+                            {extensions.pendingCount > 0 && (
+                                <ThemedText type="caption">
+                                    {extensions.pendingCount === 1
+                                        ? '1 animation extension will be updated first.'
+                                        : `${extensions.pendingCount} animation extensions will be updated first.`}
+                                </ThemedText>
+                            )}
                             <View style={styles.buttonRow}>
                                 <AppButton
-                                    title="Restart and Install"
+                                    title={
+                                        syncingExtensions
+                                            ? 'Updating extensions…'
+                                            : 'Restart and Install'
+                                    }
                                     variant="primary"
                                     style={styles.rowButton}
-                                    onPress={flow.reboot}
+                                    onPress={handleRestart}
+                                    disabled={syncingExtensions}
                                 />
                             </View>
                         </Card>

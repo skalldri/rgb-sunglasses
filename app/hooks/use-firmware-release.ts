@@ -33,10 +33,12 @@ export interface FirmwareReleaseInfo {
 /**
  * Board detection plus the GitHub firmware-release check.
  *
- * Lifted verbatim in behaviour from the old single-screen modal so the landing page
- * and the extension screen can both use it without either owning the other's state.
+ * **Call this once per app, from `FirmwareUpdateProvider`** — screens should use
+ * `useFirmwareRelease()` from `context/firmware-update-context` instead. Each call
+ * fires its own unauthenticated GitHub fetch, and since pushed screens never unmount,
+ * a per-screen call multiplies requests against the 60 req/hr per-IP cap.
  */
-export function useFirmwareRelease(): FirmwareReleaseInfo {
+export function useFirmwareReleaseLookup(): FirmwareReleaseInfo {
     const { client } = useMcuMgrClientContext();
 
     const [imageState, setImageState] = useState<ImageSlot[]>([]);

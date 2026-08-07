@@ -55,6 +55,15 @@ export interface ImageProgress {
 export const RECONNECT_PATIENCE_MS = 180_000;
 
 /**
+ * How long to wait for the reset to actually drop the link before calling it a failure.
+ *
+ * The disconnect normally lands within a second or two of the SMP write. This is
+ * generous enough to absorb a slow ack, and short enough that a reset which never
+ * happened does not strand the user on a spinner.
+ */
+export const REBOOT_TIMEOUT_MS = 20_000;
+
+/**
  * The image index whose hash survives installation.
  *
  * On this SoC image 0 is the application core — the one the bootloader flashes into
@@ -200,9 +209,10 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
                 );
             }
 
-            // Stage every uploaded image for TEST (confirm=false). The device-reported
-            // hash is captured too, as a fallback reference for images whose TLV could
-            // not be parsed.
+            // Stage every uploaded image as PERMANENT (confirm=true) - see the note on
+            // this hook: the bootloader is overwrite-only, so there is no
+            // test-then-confirm to have. The device-reported hash is captured too, as a
+            // fallback reference for images whose TLV could not be parsed.
             setStep('staging');
             for (let i = 0; i < total; i++) {
                 const imageIndex = parseFirmwareImageIndex(pkg.images[i].manifest.image_index);
@@ -237,12 +247,13 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
                 );
             }
 
-            // Confirm the device really is holding them pending before telling the
-            // user it is safe to reboot.
+            // Check the device really is holding an image for the next boot before
+            // telling the user it is safe to restart. `pending` is set by both
+            // confirm=false and confirm=true; the latter also sets `permanent`.
             const after = await client.getImageState();
             const pending = after.images.filter((s: ImageSlot) => s.slot === 1 && s.pending);
             if (pending.length === 0) {
-                throw new Error('Device did not mark the uploaded image for test');
+                throw new Error('Device did not stage the uploaded image for the next boot');
             }
 
             setStep('staged');
@@ -266,10 +277,27 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
     // rebooting → reconnecting: the link dropping is the confirmation that the reset
     // landed. Deliberately NOT setting intentionalDisconnectRef: that would suppress
     // the auto-reconnect loop, and the loop is exactly what we want here.
+    //
+    // The timeout is load-bearing, not belt-and-braces: `reset()` swallows its own
+    // rejection, so a reset that never reached the device is indistinguishable from one
+    // that did. Without this, a link that stays up leaves the user on a "Restarting…"
+    // spinner forever, with no elapsed counter (that only runs while reconnecting) and
+    // no way back to the staged update.
     useEffect(() => {
         if (step !== 'rebooting') return;
-        if (selectedDevice) return;
-        setStep('reconnecting');
+        if (!selectedDevice) {
+            setStep('reconnecting');
+            return;
+        }
+        const id = setTimeout(() => {
+            setError(
+                'The device did not restart. It is still connected and still running the ' +
+                    'old firmware; the update is staged and will apply the next time it ' +
+                    'restarts.'
+            );
+            setStep('failed');
+        }, REBOOT_TIMEOUT_MS);
+        return () => clearTimeout(id);
     }, [step, selectedDevice]);
 
     // Elapsed-time ticker while waiting for the board to come back.
@@ -310,19 +338,28 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
                             (s.image === img.imageIndex ||
                                 (s.image === undefined && img.imageIndex === 0))
                     );
-                    // Version has to match for every image. The device reports a
-                    // 'major.minor.patch' string where the file carries
-                    // 'major.minor.patch+build', so compare on the former.
+                    // Version has to match for every image. The device reports
+                    // 'major.minor.patch' where the file carries 'major.minor.patch+build',
+                    // so the build suffix is optional - but the match must stop at that
+                    // boundary. A bare startsWith() accepts a *shorter* running version
+                    // that happens to be a prefix: '2.1.10+0'.startsWith('2.1.1') is true,
+                    // so a device stuck on 2.1.1 would verify as an update to 2.1.10.
                     const versionMatches =
                         active?.version != null &&
-                        img.version.startsWith(active.version);
+                        (img.version === active.version ||
+                            img.version.startsWith(`${active.version}+`));
 
                     // The hash only survives installation for the app core (see the
                     // table on this hook), so only demand it there. Requiring it for
                     // the net core reported a false failure on a good update.
+                    //
+                    // Prefer the digest from the zip; fall back to what the device
+                    // reported at staging for an image whose TLV would not parse, which
+                    // is still a stronger check than version alone.
+                    const reference = img.expectedHash ?? img.stagedHash;
                     const hashMatters =
-                        img.imageIndex === HASH_STABLE_IMAGE_INDEX && !!img.expectedHash;
-                    const hashMatches = hashHex(active?.hash) === img.expectedHash;
+                        img.imageIndex === HASH_STABLE_IMAGE_INDEX && !!reference;
+                    const hashMatches = hashHex(active?.hash) === reference;
 
                     const verified = versionMatches && (!hashMatters || hashMatches);
                     return { ...img, verified };

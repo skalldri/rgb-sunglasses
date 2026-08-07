@@ -5,7 +5,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
 import { useMcuMgrClientContext } from '@/context/mcumgr-client-context';
-import { useFirmwareRelease } from '@/hooks/use-firmware-release';
+import { useFirmwareRelease } from '@/context/firmware-update-context';
 import { useThemeColors } from '@/hooks/use-theme-color';
 import * as DocumentPicker from 'expo-document-picker';
 import { Link, useRouter } from 'expo-router';
@@ -29,7 +29,7 @@ export default function FirmwareUpdateLanding() {
     const c = useThemeColors();
     const router = useRouter();
     const { selectedDevice, reconnectingDevice } = useBluetooth();
-    const { isInitializing } = useMcuMgrClientContext();
+    const { client, isInitializing, error: clientError } = useMcuMgrClientContext();
     const {
         boardRevision,
         boardDetectionError,
@@ -109,6 +109,19 @@ export default function FirmwareUpdateLanding() {
 
     function renderReleaseCard() {
         if (!isConnected) return null;
+
+        // A connected device with no client means SMP init failed (e.g. firmware with
+        // no SMP characteristic). Without this the spinner below never resolves, since
+        // board detection cannot run and leaves both of its outputs empty.
+        if (!client && !isInitializing) {
+            return (
+                <Card style={styles.card}>
+                    <ThemedText type="caption" style={{ color: c.danger }}>
+                        {clientError || 'Firmware update is unavailable on this device.'}
+                    </ThemedText>
+                </Card>
+            );
+        }
 
         if (isInitializing || (!boardRevision && !boardDetectionError)) {
             return (

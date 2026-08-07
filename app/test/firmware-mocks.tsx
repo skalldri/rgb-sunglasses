@@ -10,6 +10,7 @@
  */
 import React from 'react';
 import { render } from '@testing-library/react-native';
+import { FirmwareUpdateProvider } from '@/context/firmware-update-context';
 import { McuMgrClientProvider } from '@/context/mcumgr-client-context';
 import { sha256 } from 'js-sha256';
 
@@ -166,7 +167,7 @@ export function deviceWithMcubootVersion(version: string) {
  * By default, initialize() simulates the real client's behaviour post-fix: it delivers an
  * initial status via whatever handler was registered through onStatusChanged *before*
  * initialize() was awaited — reproducing the real ordering dependency the issue #76 fix relies on
- * in firmware-update-modal.tsx (onStatusChanged is now called before initialize(), not after).
+ * in app/firmware-update/debug.tsx (onStatusChanged is called before initialize(), not after).
  */
 export function mockMcubootUpdater(overrides?: {
   initialStatus?: { state: McubootUpdaterState; progress: number; errorCode: number; flashUnlocked: boolean };
@@ -214,14 +215,25 @@ export function mockMcubootUpdater(overrides?: {
  * app uses - including the `setSelectedDevice({...,mcuMgrClient})` patch the provider
  * now owns - instead of a stub that could drift from it.
  */
+function wrap(ui: React.ReactElement) {
+    // Mirrors app/firmware-update/_layout.tsx. Both providers, in the same order, so a
+    // screen under test sees the shared client and the shared release lookup exactly as
+    // it would in the app - a screen rendered bare would silently get the inert
+    // fallbacks and quietly stop testing anything.
+    return (
+        <McuMgrClientProvider>
+            <FirmwareUpdateProvider>{ui}</FirmwareUpdateProvider>
+        </McuMgrClientProvider>
+    );
+}
+
 export function renderWithMcuMgr(ui: React.ReactElement) {
-    const result = render(<McuMgrClientProvider>{ui}</McuMgrClientProvider>);
+    const result = render(wrap(ui));
     return {
         ...result,
         // Re-wrap on rerender, so the "fresh context identities" regression tests
         // re-render the SAME tree rather than mounting a new one (a new tree would
         // re-run every effect and hide exactly the re-fire this guards against).
-        rerender: (next: React.ReactElement) =>
-            result.rerender(<McuMgrClientProvider>{next}</McuMgrClientProvider>),
+        rerender: (next: React.ReactElement) => result.rerender(wrap(next)),
     };
 }
