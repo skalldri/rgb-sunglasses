@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "pink-noise",
+  "description": "Seeded pink noise — steady broadband bucket excitation, no clean beats",
+  "durationMs": 5000,
+  "seed": 99,
+  "audio": { "type": "noise", "color": "pink", "gainDb": -18 },
+  "imu": { "type": "static" },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

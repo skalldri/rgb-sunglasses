@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "silence",
+  "description": "No audio, static IMU (gravity on Z), no buttons — the baseline render check",
+  "durationMs": 5000,
+  "seed": 0,
+  "audio": { "type": "silence" },
+  "imu": { "type": "static" },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "metronome-60",
+  "description": "60 BPM click train through the real DSP; expects beat-reactive output",
+  "durationMs": 8000,
+  "seed": 42,
+  "audio": { "type": "metronome", "bpm": 60 },
+  "imu": { "type": "static" },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true, "beatResponse": true }
+}

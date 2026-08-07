@@ -82,6 +82,9 @@ export interface TickOk {
   log: string;
   wallMs: number;
   manifestIntact: boolean;
+  /** Bitmask of audio bands whose beat flag was delivered this tick
+   * (sticky across the ~3 ticks an audio frame covers, like the device). */
+  beatMask: number;
 }
 
 export interface TickFault {
@@ -372,6 +375,13 @@ export class SimHost {
     this.tickIndex++;
     this.simTimeMs = this.tickIndex * this.dtMs;
 
+    let beatMask = 0;
+    for (let b = 0; b < inputs.audioBeat.length; b++) {
+      if (inputs.audioBeat[b] !== 0) {
+        beatMask |= 1 << b;
+      }
+    }
+
     return {
       status: "ok",
       framebuffer: new Uint8Array(resp.framebuffer),
@@ -380,6 +390,7 @@ export class SimHost {
       log: resp.log,
       wallMs: resp.wallMs,
       manifestIntact: resp.manifestIntact,
+      beatMask,
     };
   }
 

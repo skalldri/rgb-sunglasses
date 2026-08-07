@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "head-tilt",
+  "description": "Accel-X ramp -10 -> +10 m/s^2 over the run (a slow head tilt)",
+  "durationMs": 5000,
+  "seed": 0,
+  "audio": { "type": "silence" },
+  "imu": { "type": "ramp", "fromAccel": [-10, 0, 3], "toAccel": [10, 0, 3] },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

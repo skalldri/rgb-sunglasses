@@ -1,0 +1,17 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "color-modes",
+  "description": "Steps the first Color param through all 5 color modes over metronome audio",
+  "durationMs": 10000,
+  "seed": 42,
+  "audio": { "type": "metronome", "bpm": 120 },
+  "imu": { "type": "static" },
+  "timeline": [
+    { "atMs": 0, "set": { "Color": "0x0000FF80" } },
+    { "atMs": 2000, "set": { "Color": "0x01C00000" } },
+    { "atMs": 4000, "set": { "Color": "0x02000000" } },
+    { "atMs": 6000, "set": { "Color": "0x03000000" } },
+    { "atMs": 8000, "set": { "Color": "0x04C00000" } }
+  ],
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

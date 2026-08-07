@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "nod",
+  "description": "Gyro-X sine at 1.5 Hz, +/-3 rad/s (nodding), gravity held on Z",
+  "durationMs": 5000,
+  "seed": 0,
+  "audio": { "type": "silence" },
+  "imu": { "type": "sine", "channel": "gyro", "axis": 0, "amplitude": 3, "hz": 1.5 },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

@@ -1,0 +1,89 @@
+{
+  "schema": "rgbx-sim-golden/1",
+  "extension": "hello",
+  "scenario": "metronome-120",
+  "seed": 42,
+  "ticks": 727,
+  "samples": [
+    {
+      "tick": 10,
+      "digest": "sha256:8c420f1da32c385f78af284b46bda3f1",
+      "ascii": ""
+    },
+    {
+      "tick": 60,
+      "digest": "sha256:76f1bb16aeee4c0987a96007e98e12d6",
+      "ascii": ""
+    },
+    {
+      "tick": 110,
+      "digest": "sha256:07929d0eb120a43081f8bcafa6a37555",
+      "ascii": ""
+    },
+    {
+      "tick": 160,
+      "digest": "sha256:a70ffd93bd2d7e119aaf00b2b7447051",
+      "ascii": ""
+    },
+    {
+      "tick": 210,
+      "digest": "sha256:c0418dd6407ae5bb74c5e5ba875b6a2b",
+      "ascii": ""
+    },
+    {
+      "tick": 260,
+      "digest": "sha256:7e198c4d19a9fd094583b6b42b5db521",
+      "ascii": ""
+    },
+    {
+      "tick": 310,
+      "digest": "sha256:e19c3e3ca60176679280c3987a23fc9a",
+      "ascii": ""
+    },
+    {
+      "tick": 360,
+      "digest": "sha256:fb22ad087201217086df8dafa4809f94",
+      "ascii": ""
+    },
+    {
+      "tick": 410,
+      "digest": "sha256:e3e64de1934ba4614773d29742b09ad2",
+      "ascii": ""
+    },
+    {
+      "tick": 460,
+      "digest": "sha256:76f1bb16aeee4c0987a96007e98e12d6",
+      "ascii": ""
+    },
+    {
+      "tick": 510,
+      "digest": "sha256:07929d0eb120a43081f8bcafa6a37555",
+      "ascii": ""
+    },
+    {
+      "tick": 560,
+      "digest": "sha256:a70ffd93bd2d7e119aaf00b2b7447051",
+      "ascii": ""
+    },
+    {
+      "tick": 610,
+      "digest": "sha256:c0418dd6407ae5bb74c5e5ba875b6a2b",
+      "ascii": ""
+    },
+    {
+      "tick": 660,
+      "digest": "sha256:7e198c4d19a9fd094583b6b42b5db521",
+      "ascii": ""
+    },
+    {
+      "tick": 710,
+      "digest": "sha256:e19c3e3ca60176679280c3987a23fc9a",
+      "ascii": ""
+    },
+    {
+      "tick": 726,
+      "digest": "sha256:fb22ad087201217086df8dafa4809f94",
+      "ascii": "                                        \n       :       :       :       :       :\n       :       :       :       :       :\n       :       :       :       :       :\n       :       :       :       :       :\n       :       :       :       :       :\n       +       +       +       +       +\n       :       :       :       :       :\n       :       :               :       :\n       :       :               :       :\n       :                       :       :\n                                        "
+    }
+  ]
+}

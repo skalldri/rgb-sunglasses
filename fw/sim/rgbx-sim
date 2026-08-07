@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# rgbx-sim — hardware-free simulator CLI for rgbx animation extensions.
+# Thin shim so callers never touch npm: compiles the TypeScript on demand
+# (cheap no-op when dist/ is fresh) and forwards to the Node CLI.
+set -euo pipefail
+SIM_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ ! -d "$SIM_DIR/node_modules" ]; then
+    echo "rgbx-sim: first run — installing npm dependencies..." >&2
+    (cd "$SIM_DIR" && npm ci --silent)
+fi
+
+# Rebuild dist/ when any TS source is newer than the compiled CLI.
+CLI_JS="$SIM_DIR/dist/node/cli.js"
+if [ ! -f "$CLI_JS" ] ||
+    [ -n "$(find "$SIM_DIR/core" "$SIM_DIR/node" -name '*.ts' -newer "$CLI_JS" 2>/dev/null | head -1)" ]; then
+    (cd "$SIM_DIR" && npx tsc -p tsconfig.node.json)
+fi
+
+exec node "$CLI_JS" "$@"
