@@ -46,6 +46,19 @@ On mount (once an MCUmgr client connects), the modal sequentially: (1) calls `cl
 
 This was originally built and verified on the pre-monorepo standalone app repo (`skalldri/rgb-sunglasses-app`, `auto-update` branch) and silently never made it across during the monorepo migration — ported back into this repo by re-deriving the diff from that branch rather than re-implementing from scratch. The GitHub release lookup is unauthenticated and rate-limited per-IP by GitHub (60 req/hr) — fine for manual on-demand checks from a single device, but don't add polling/retry-on-mount behavior without adding a token.
 
+### Animation-extension sync during a firmware update ([services/extension-sync.ts](services/extension-sync.ts))
+
+Animation extensions are `.llext` files the firmware reads from `/NAND:/ext` at boot. They ship as bare assets on the same GitHub release as the firmware zip, and until this feature the only way onto a board was a manual USB mass-storage copy — so an OTA-updated device kept whatever extensions it already had, including ones built against an older RGBX ABI.
+
+The modal now hashes each one and re-uploads what differs, over MCUmgr's FS group (group 8). Points worth knowing before touching it:
+
+- **GitHub already publishes the hash.** `GET /releases` returns `digest: "sha256:<hex>"` per asset, so no sidecar manifest and no extra request. `digest` is **optional** on `GitHubAsset` — the field is a recent API addition and older releases lack it. `parseAssetSha256` returns null then, and `planExtensionSync` treats that as **up-to-date, not outdated**: guessing "differs" would re-upload every extension on every single update check.
+- **Asset name maps 1:1 to the device path** (`plasma.llext` → `/NAND:/ext/plasma.llext`), because `extension_registry::full_path()` is just `"<dir>/<name>"`. The firmware rejects anything outside that directory regardless (see `fw/CLAUDE.md`, "File management (group 8)"), so `isValidExtensionAssetName` is defence in depth, not the boundary.
+- **`uploadFile` repeats `name` in every packet** (unlike `uploadImage`, whose `image`/`sha` fields are first-packet only), so the chunk budget is `mtu - 64 - name.length`. Forgetting the name's length silently pushes packets past the MTU for long paths.
+- **"File not found" is a normal outcome, not an error** — it means "install this". `getFileSha256` returns null for it and rethrows everything else, keyed off the typed `SmpCommandError` (`group` + `rc`) rather than string-matching. Note `isSmpGroupError` deliberately does **not** match the legacy bare-`rc` shape: that carries no group, so FS "file not found" (3) would be indistinguishable from the generic mcumgr `EINVAL` (3).
+- **Unmanaged extensions are counted, never named.** MCUmgr's FS group has no directory listing and no delete, so the app can't enumerate the disk. It infers the count from the device's extension animation services (`countDeviceExtensions`, ids 0x40-0x4f) minus the released extensions it found. Naming them would mean matching the device's manifest *display* names ("Hello") against release *file* names ("hello.llext"), which nothing guarantees correspond — a confident-looking list that is sometimes just wrong.
+- **Sync runs before the reboot, while the old firmware is still running.** If the update is then abandoned, the old firmware finds newer-ABI extensions and rejects them at load (`scan_slot()` returns false, slot skipped) — degrades to "extension missing", never a boot failure.
+
 ### React Native BLE PLX
 
 Singleton `bleManager` in [hooks/ble-manager.ts](hooks/ble-manager.ts) with state restoration (connect/discovery logic lives in [hooks/use-ble-connection.ts](hooks/use-ble-connection.ts)). **Patch applied** via [patches/react-native-ble-plx+3.5.0.patch](patches/react-native-ble-plx+3.5.0.patch) - check patch file before upgrading library.

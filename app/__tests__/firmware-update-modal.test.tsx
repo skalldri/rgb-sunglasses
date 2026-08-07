@@ -665,4 +665,190 @@ describe('FirmwareUpdateModal', () => {
       });
     });
   });
+
+  describe('extension sync', () => {
+    const HASH_A = 'a'.repeat(64);
+    const HASH_B = 'b'.repeat(64);
+
+    /** mockRelease plus two bare .llext assets, as the real release workflow publishes. */
+    const releaseWithExtensions: GitHubReleases.GitHubRelease = {
+      ...mockRelease,
+      assets: [
+        ...mockRelease.assets,
+        {
+          id: 30,
+          name: 'hello.llext',
+          browser_download_url: 'https://example.com/hello.llext',
+          size: 3216,
+          content_type: 'application/octet-stream',
+          digest: `sha256:${HASH_A}`,
+        },
+        {
+          id: 31,
+          name: 'plasma.llext',
+          browser_download_url: 'https://example.com/plasma.llext',
+          size: 5024,
+          content_type: 'application/octet-stream',
+          digest: `sha256:${HASH_A}`,
+        },
+      ],
+    };
+
+    function mockExtensionClient(hashes: Record<string, string | null>) {
+      const getFileSha256 = jest
+        .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
+        .mockImplementation(async (path: string) => hashes[path] ?? null);
+      const uploadFile = jest
+        .spyOn(McuMgrModule.McuMgrClient.prototype, 'uploadFile')
+        .mockImplementation(async () => undefined);
+      return { getFileSha256, uploadFile };
+    }
+
+    it('reports each extension as up to date, outdated or not installed', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      mockExtensionClient({
+        '/NAND:/ext/hello.llext': HASH_A, // matches the release
+        '/NAND:/ext/plasma.llext': HASH_B, // differs
+      });
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+
+      expect(await findByText('Extensions')).toBeTruthy();
+      expect(await findByText('hello.llext')).toBeTruthy();
+      expect(await findByText('Up to date')).toBeTruthy();
+      expect(await findByText('plasma.llext')).toBeTruthy();
+      expect(await findByText('Update available')).toBeTruthy();
+    });
+
+    it('offers to install an extension the device does not have', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      mockExtensionClient({ '/NAND:/ext/hello.llext': HASH_A }); // plasma absent
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+
+      expect(await findByText('Not installed')).toBeTruthy();
+      expect(await findByText('Sync Extensions')).toBeTruthy();
+    });
+
+    it('uploads only the extensions that differ, to their device paths', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      const { uploadFile } = mockExtensionClient({
+        '/NAND:/ext/hello.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_B,
+      });
+      (global as any).fetch = jest.fn(async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      }));
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      fireEvent.press(await findByText('Sync Extensions'));
+
+      await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
+      expect(uploadFile.mock.calls[0][0]).toBe('/NAND:/ext/plasma.llext');
+    });
+
+    it('says nothing needs doing when every extension matches', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      mockExtensionClient({
+        '/NAND:/ext/hello.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      });
+
+      const { findByText, queryByText } = render(<FirmwareUpdateModal />);
+
+      expect(await findByText('All extensions match this release.')).toBeTruthy();
+      expect(queryByText('Sync Extensions')).toBeNull();
+    });
+
+    it('surfaces a firmware without file management instead of failing the modal', async () => {
+      // Firmware predating CONFIG_MCUMGR_GRP_FS answers every FS command with an
+      // error; that must not look like a broken update.
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      jest
+        .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
+        .mockImplementation(async () => {
+          throw new Error('File hash error: rc=8');
+        });
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+
+      expect(
+        await findByText('Extension check unavailable: File hash error: rc=8')
+      ).toBeTruthy();
+      // The rest of the modal still works.
+      expect(await findByText('Current Images')).toBeTruthy();
+    });
+
+    it('reports extensions on the device that the release does not ship', async () => {
+      // Device exposes three extension animation services but the release ships
+      // two, so one is unmanaged. Counted, not named: the device reports manifest
+      // display names while the release ships file names.
+      mockBluetooth({
+        ...defaultSelectedDevice,
+        characteristicsByService: {
+          '12345678-1234-5678-4000-56789abd0000': {},
+          '12345678-1234-5678-4100-56789abd0000': {},
+          '12345678-1234-5678-4200-56789abd0000': {},
+          '12345678-1234-5678-0500-56789abd0000': {}, // built-in, must not count
+        },
+      });
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      mockExtensionClient({
+        '/NAND:/ext/hello.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      });
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+
+      expect(
+        await findByText(/1 extension on this device is not part of this release\./)
+      ).toBeTruthy();
+    });
+
+    it('does not re-hash extensions when the context yields fresh identities', async () => {
+      // The regression app/CLAUDE.md mandates: an effect that issues BLE traffic and
+      // writes the result into state must not be re-armed by its own writes. Uses
+      // mockImplementation so every render returns a NEW selectedDevice object.
+      const setSelectedDevice = jest.fn();
+      jest.spyOn(BluetoothContext, 'useBluetooth').mockImplementation(
+        () =>
+          ({
+            selectedDevice: { ...defaultSelectedDevice, characteristicsByService: {} },
+            setSelectedDevice,
+          }) as any
+      );
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      const { getFileSha256 } = mockExtensionClient({
+        '/NAND:/ext/hello.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      });
+
+      const { findByText, rerender } = render(<FirmwareUpdateModal />);
+      await findByText('All extensions match this release.');
+
+      const callsAfterFirstCheck = getFileSha256.mock.calls.length;
+      expect(callsAfterFirstCheck).toBe(2); // one per released extension
+
+      // Re-render the SAME tree several times with fresh context identities.
+      for (let i = 0; i < 3; i++) {
+        rerender(<FirmwareUpdateModal />);
+      }
+      await waitFor(() => expect(getFileSha256).toHaveBeenCalledTimes(callsAfterFirstCheck));
+    });
+  });
 });

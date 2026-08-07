@@ -711,6 +711,18 @@ mcumgr $CONN stat read flash_sim_stats
 - `taskstat` requires `CONFIG_THREAD_MONITOR=y`, `CONFIG_MCUMGR_GRP_OS_TASKSTAT=y`, and a large-enough TX FIFO on the CDC-ACM mcumgr port (see DTS note below). All three are set on proto0.
 - `shell exec` — returns status=8 (ENOTSUP); the Zephyr shell is on ACM0, not the MCUmgr transport
 
+### File management (group 8), fenced to `/NAND:/ext`
+
+`CONFIG_MCUMGR_GRP_FS=y` on proto0, so the companion app can sync animation extensions during an OTA update: it asks for each `.llext` file's SHA256, compares it against the digest GitHub reports for that release asset, and re-uploads the ones that differ (`app/services/extension-sync.ts`). Adds ~4.9 KB FLASH / ~832 B RAM to the appcore.
+
+Three non-obvious things, all learned the hard way:
+
+- **Enabling the group alone hands a bonded peer read+write access to the entire FAT disk**, including `/NAND:/mcuboot.bin` (the bootloader updater's staging image). `CONFIG_APP_EXT_FILE_TRANSFER` (`src/extensions/extension_file_transfer.cpp`) registers an `MGMT_EVT_OP_FS_MGMT_FILE_ACCESS` callback that rejects every operation — read, write, status, hash — outside `extension_registry::kDirectory`. Zephyr itself prints a CMake WARNING when the group is on without an access hook; that warning is the intended alarm, don't silence it by other means. The decision is the pure predicate `extension_file_transfer::path_allowed()`, covered by the `extensions.file_transfer` native_sim suite. **A prefix check is not sufficient**: FATFS resolves `/NAND:/ext/../mcuboot.bin` straight out of the fenced directory, so `..` components are rejected over the whole path.
+- **`CONFIG_MCUMGR_GRP_FS_HASH_SHA256` cannot be set from a `.conf` on this build, and setting it there fails silently.** It is `depends on BUILD_WITH_TFM || MBEDTLS_SHA256`, and `MBEDTLS_SHA256` is declared inside `if !(NRF_SECURITY || NORDIC_SECURITY_BACKEND)` in `zephyr/modules/mbedtls/Kconfig.mbedtls` — unreachable, because this build uses nRF Security. Assigning either symbol in a `.conf` is ignored with no error; the only way to notice is that it never appears in `autoconf.h`. The dependency is stale rather than real: `fs_mgmt_hash_checksum_sha256.c` picks its backend off `CONFIG_MBEDTLS_PSA_CRYPTO_CLIENT`, which nRF Security does set. It is therefore force-enabled by an override in `fw/Kconfig` (a second, prompt-less definition with `default y if APP_EXT_FILE_TRANSFER`).
+- **Do NOT "work around" that by registering a SHA256 group at runtime** via the public `fs_mgmt_hash_checksum_register_group()`. It compiles, looks clean, and smashes the stack: `fs_mgmt.c` hashes into `char output[MCUMGR_GRP_FS_CHECKSUM_HASH_LARGEST_OUTPUT_SIZE]`, sized **from Kconfig alone** — 4 bytes when only CRC32 is enabled — while a registered SHA256 group writes 32. That macro is only 32 when `CONFIG_MCUMGR_GRP_FS_HASH_SHA256` is set, so the symbol is what makes SHA256 *safe*, not merely available.
+
+Extension files are read once at boot by `extension_registry::init()`, so a sync only takes effect after a reboot. There is no delete or directory-listing command in the FS group (IDs are only 0 `FILE`, 1 `STAT`, 2 `HASH_CHECKSUM`, 3 `SUPPORTED_HASH_CHECKSUM`, 4 `OPENED_FILE`), which is why the app can neither remove a retired extension nor name the ones it doesn't recognise — it reports a count and leaves removal to USB mass storage.
+
 ### CDC-ACM TX FIFO (why `hw-flow-control` matters)
 
 The `zephyr,cdc-acm-uart` driver's `poll_out` silently **drops bytes** when the TX ring buffer is full and `hw-flow-control` is NOT set. With the default 1024-byte FIFO a multi-frame `taskstat` response (~1850 wire bytes) overflows mid-stream and the client times out.

@@ -475,6 +475,52 @@ config APP_EXTENSION_HOST
 	  Selects THREAD_RUNTIME_STATS because the per-tick budget is charged
 	  against the sandbox thread's own execution_cycles (issue #276).
 
+config APP_EXT_FILE_TRANSFER
+	bool "Allow the companion app to sync extension files over MCUmgr"
+	depends on APP_EXTENSION_HOST && MCUMGR_GRP_FS
+	default y
+	help
+	  Fences MCUmgr's file-management group to the extension directory, so
+	  the companion app can hash and replace .llext files in /NAND:/ext
+	  during an OTA firmware update (it compares each file's SHA256 against
+	  the digest GitHub reports for the matching release asset) without
+	  exposing the rest of the FAT disk over BLE.
+
+	  Registers an MGMT_EVT_OP_FS_MGMT_FILE_ACCESS callback that rejects
+	  EVERY file operation — read, write, status and hash alike — whose path
+	  is not a direct child of extension_registry::kDirectory. Turning this
+	  off does NOT disable file management; it removes the fence and leaves
+	  CONFIG_MCUMGR_GRP_FS's default behaviour, where a bonded peer can read
+	  and overwrite any path on the disk (including the MCUboot staging
+	  image). Disable it only alongside CONFIG_MCUMGR_GRP_FS itself.
+
+# Forces on MCUmgr's SHA256 file-hash group, which the extension sync above
+# depends on. This is an override of an upstream Zephyr symbol, so it needs
+# justifying:
+#
+# MCUMGR_GRP_FS_HASH_SHA256 is declared `depends on BUILD_WITH_TFM ||
+# MBEDTLS_SHA256`, and NEITHER is reachable on this build. MBEDTLS_SHA256 lives
+# inside `if !(NRF_SECURITY || NORDIC_SECURITY_BACKEND)` in
+# zephyr/modules/mbedtls/Kconfig.mbedtls, and this build uses nRF Security as
+# its crypto backend; TF-M is not in use. Assigning either symbol in a .conf is
+# silently ignored (verified by their absence from the generated autoconf.h).
+#
+# The dependency is stale rather than real: fs_mgmt_hash_checksum_sha256.c picks
+# its backend off CONFIG_MBEDTLS_PSA_CRYPTO_CLIENT, which nRF Security DOES set
+# here, so the implementation compiles and runs against PSA regardless of the
+# two symbols it is gated behind.
+#
+# Registering our own group via the public
+# fs_mgmt_hash_checksum_register_group() API was tried first and is NOT safe:
+# fs_mgmt.c hashes into `char output[MCUMGR_GRP_FS_CHECKSUM_HASH_LARGEST_OUTPUT_SIZE]`,
+# a stack buffer sized from Kconfig alone — 4 bytes when only CRC32 is enabled.
+# A 32-byte SHA256 group registered at runtime overflows it by 28 bytes on the
+# MCUmgr thread. The buffer is only sized 32 when this symbol is set, so this
+# symbol is what makes SHA256 safe, not merely available.
+config MCUMGR_GRP_FS_HASH_SHA256
+	bool
+	default y if APP_EXT_FILE_TRANSFER
+
 config APP_EXT_HOST_THREAD_PRIORITY
 	int "Extension host thread priority"
 	default 9

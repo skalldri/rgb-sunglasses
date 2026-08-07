@@ -8,6 +8,11 @@
 # the board's /NAND:/ext/ over USB mass storage (mount, cp, sync, umount,
 # then reboot the board so the firmware re-mounts FAT and re-discovers).
 #
+# That USB copy is the loop for LOCAL builds. Extensions that ship on a GitHub
+# release reach end users a different way: the companion app's firmware-update
+# modal hashes each on-device .llext and re-uploads the ones that don't match
+# the release's asset digest (see fw/CLAUDE.md, "File management (group 8)").
+#
 # Third-party extension developers don't use this script — they get the
 # llext-edk.tar.xz archive and compile the same way against its cmake.cflags
 # or Makefile.cflags (see fw/extensions/README.md).

@@ -8,6 +8,16 @@ export interface GitHubAsset {
     browser_download_url: string;
     size: number;
     content_type: string;
+    /**
+     * Content digest GitHub reports for the uploaded asset, formatted
+     * "sha256:<hex>". Used to decide whether a device's copy of an animation
+     * extension is current (services/extension-sync.ts).
+     *
+     * Optional: it is a relatively recent addition to the releases API, so older
+     * releases legitimately lack it. Callers must treat a missing digest as
+     * "cannot compare", never as "differs".
+     */
+    digest?: string;
 }
 
 export interface GitHubRelease {
