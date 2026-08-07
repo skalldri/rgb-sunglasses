@@ -6,7 +6,17 @@ import * as McuMgrClientContext from '@/context/mcumgr-client-context';
 import { useFirmwareUpdateFlow } from '@/hooks/use-firmware-update-flow';
 import { FirmwarePackage } from '@/services/firmware-package';
 
-/** A two-image package, matching what the real dfu_application.zip carries. */
+import fixture from './fixtures/mcuboot-image-header.json';
+
+/** Real MCUboot image bytes, so parseImageSha256 finds a genuine TLV digest. */
+const APP_IMAGE = Uint8Array.from(fixture.bytes as number[]);
+/** The digest inside APP_IMAGE — what the device must report for the staged slot. */
+const APP_TLV_HASH = fixture.expectedSha256 as string;
+const APP_TLV_BYTES = Uint8Array.from(
+    (APP_TLV_HASH.match(/../g) as string[]).map(h => parseInt(h, 16))
+);
+
+/** A one-image package carrying a real signed image. */
 function makePackage(): FirmwarePackage {
     return {
         manifest: { 'format-version': 0, time: 0, name: 'fw', files: [] as any },
@@ -19,14 +29,14 @@ function makePackage(): FirmwarePackage {
                     type: 'application',
                     board: 'proto0',
                 } as any,
-                data: Uint8Array.from([1, 2, 3, 4]),
+                data: APP_IMAGE,
                 parsedHeader: { magic: 0, version: '2.1.0+0', imageSize: 4 },
             },
         ],
     } as FirmwarePackage;
 }
 
-const APP_HASH = Uint8Array.from([0xaa, 0xbb]);
+const APP_HASH = APP_TLV_BYTES;
 const OTHER_HASH = Uint8Array.from([0x99, 0x88]);
 
 interface Harness {
@@ -97,9 +107,7 @@ describe('useFirmwareUpdateFlow', () => {
     });
     afterEach(() => jest.restoreAllMocks());
 
-    it('stages images for TEST, never as permanent', async () => {
-        // The old screen called setImageState(hash, true) at upload time, leaving no way
-        // back from a bad image. confirm=false is what enables MCUboot's revert.
+    it('marks images permanent at staging (the bootloader is overwrite-only)', async () => {
         const client = makeClient(APP_HASH, APP_HASH);
         client.getImageState = jest
             .fn()
@@ -117,8 +125,9 @@ describe('useFirmwareUpdateFlow', () => {
             await result.current.startUpload();
         });
 
-        expect(client.setImageState).toHaveBeenCalledWith(APP_HASH, false);
-        expect(client.confirmCurrentImage).not.toHaveBeenCalled();
+        // confirm=true: this SoC's bootloader is overwrite-only, so there is no
+        // test-then-confirm to have and the extra step would be a permanent no-op.
+        expect(client.setImageState).toHaveBeenCalledWith(APP_HASH, true);
         await waitFor(() => expect(result.current.step).toBe('staged'));
     });
 
@@ -168,7 +177,7 @@ describe('useFirmwareUpdateFlow', () => {
         expect(result.current.error).toBe('');
     });
 
-    it('verifies against the hash captured at staging and then confirms', async () => {
+    it('verifies the app core against the digest inside the zip', async () => {
         const client = makeClient(APP_HASH, APP_HASH);
         client.getImageState = jest
             .fn()
@@ -200,13 +209,10 @@ describe('useFirmwareUpdateFlow', () => {
         rerender({});
 
         await waitFor(() => expect(result.current.step).toBe('success'));
-        expect(client.confirmCurrentImage).toHaveBeenCalledTimes(1);
         expect(result.current.images[0].verified).toBe(true);
     });
 
-    it('does NOT confirm when the running image is not the one that was staged', async () => {
-        // The safety property: an unconfirmed image is reverted by the bootloader, so
-        // confirming on a mismatch would strand the device on unverified firmware.
+    it('fails when the running image is not the one that was uploaded', async () => {
         const client = makeClient(APP_HASH, OTHER_HASH);
         client.getImageState = jest
             .fn()
@@ -236,8 +242,78 @@ describe('useFirmwareUpdateFlow', () => {
         rerender({});
 
         await waitFor(() => expect(result.current.step).toBe('failed'));
-        expect(client.confirmCurrentImage).not.toHaveBeenCalled();
-        expect(result.current.error).toMatch(/restore the previous firmware/);
+        expect(result.current.error).toMatch(/not running the firmware that was uploaded/);
+    });
+
+    it('does not demand a hash match for the net core, whose hash changes on install', async () => {
+        // Hardware-measured with fw-v2.1.0: the net-core image is a wrapper the app
+        // core unwraps over IPC, so the installed hash (4d4b2c28…) differs from the
+        // file's TLV (e43ebfa1…) even on a perfectly good update. Requiring a match
+        // reported "Update failed" for an install that had in fact worked.
+        const NET_FILE_HASH = Uint8Array.from([0xe4, 0x3e]);
+        const NET_INSTALLED_HASH = Uint8Array.from([0x4d, 0x4b]);
+
+        const twoImagePkg = {
+            manifest: { 'format-version': 0, time: 0, name: 'fw', files: [] as any },
+            images: [
+                {
+                    manifest: { file: 'fw.signed.bin', image_index: '0', size: 4 } as any,
+                    data: APP_IMAGE,
+                    parsedHeader: { magic: 0, version: '2.1.0+0', imageSize: 4 },
+                },
+                {
+                    // No parseable TLV, so expectedHash is undefined for this one and
+                    // verification must lean on the version alone.
+                    manifest: { file: 'ipc_radio.bin', image_index: '1', size: 2 } as any,
+                    data: Uint8Array.from([0, 0]),
+                    parsedHeader: { magic: 0, version: '2.1.0+0', imageSize: 2 },
+                },
+            ],
+        } as FirmwarePackage;
+
+        const client = makeClient(APP_HASH, APP_HASH);
+        client.getImageState = jest
+            .fn()
+            // staging reads, one per image
+            .mockResolvedValueOnce({
+                images: [{ image: 0, slot: 1, version: '2.1.0', hash: APP_HASH }],
+            })
+            .mockResolvedValueOnce({
+                images: [{ image: 1, slot: 1, version: '2.1.0', hash: NET_FILE_HASH }],
+            })
+            .mockResolvedValueOnce({
+                images: [{ image: 0, slot: 1, version: '2.1.0', hash: APP_HASH, pending: true }],
+            })
+            // post-reboot: net core reports a DIFFERENT hash, same version
+            .mockResolvedValue({
+                images: [
+                    { image: 0, slot: 0, version: '2.1.0', hash: APP_HASH, active: true },
+                    {
+                        image: 1,
+                        slot: 0,
+                        version: '2.1.0',
+                        hash: NET_INSTALLED_HASH,
+                        active: true,
+                    },
+                ],
+            });
+        mockEnv({ client, device: { mac: 'AA:BB:CC' } });
+
+        const { result, rerender } = renderHook(() => useFirmwareUpdateFlow(twoImagePkg));
+        await act(async () => {
+            await result.current.startUpload();
+        });
+        await act(async () => {
+            await result.current.reboot();
+        });
+        mockEnv({ client, device: null });
+        rerender({});
+        await waitFor(() => expect(result.current.step).toBe('reconnecting'));
+        mockEnv({ client, device: { mac: 'AA:BB:CC' } });
+        rerender({});
+
+        await waitFor(() => expect(result.current.step).toBe('success'));
+        expect(result.current.images.map(i => i.verified)).toEqual([true, true]);
     });
 
     it('ignores a different device reconnecting while it waits', async () => {
@@ -291,7 +367,7 @@ describe('useFirmwareUpdateFlow', () => {
         expect(result.current.uploadProgress).toBe(100);
         expect(result.current.images[0].uploaded).toBe(true);
         expect(result.current.images[0].staged).toBe(true);
-        expect(result.current.images[0].stagedHash).toBe('aabb');
+        expect(result.current.images[0].stagedHash).toBe(APP_TLV_HASH);
     });
 
     it('surfaces an upload failure without rebooting anything', async () => {

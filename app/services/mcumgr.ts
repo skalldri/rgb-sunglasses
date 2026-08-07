@@ -1244,6 +1244,71 @@ export function parseImageHeader(data: Uint8Array): {
     };
 }
 
+/** MCUboot TLV type for the image's own SHA256 digest (`IMAGE_TLV_SHA256`). */
+const IMAGE_TLV_SHA256 = 0x10;
+/** Magic of the unprotected TLV area (`IMAGE_TLV_INFO_MAGIC`). */
+const IMAGE_TLV_INFO_MAGIC = 0x6907;
+/** Magic of the protected TLV area, which precedes the unprotected one when present. */
+const IMAGE_TLV_PROT_INFO_MAGIC = 0x6908;
+
+/**
+ * Extract the image's own SHA256 digest from its MCUboot TLV trailer.
+ *
+ * This is the value the device reports as a slot's `hash` in `getImageState()`, so it
+ * is what a post-update verification must compare against. It is emphatically NOT
+ * `sha256(whole .bin)` — the file includes the TLV trailer, which the digest itself
+ * cannot cover. Verified against the real fw-v2.1.0 artifact: the TLV reads
+ * `eeacf0fa…`, matching what the device reported for the staged slot, while the
+ * whole-file digest is `9f5d7d3a…`.
+ *
+ * Layout (docs.mcuboot.com/design.html#image-format): header (`hdr_size`), payload
+ * (`img_size`), then optionally a protected TLV area, then the unprotected TLV area.
+ * Each area starts with `{magic:u16, total_len:u16}` and holds `{type:u16, len:u16,
+ * value}` records, all little-endian.
+ *
+ * @returns lowercase hex digest, or null if the image has no parseable SHA256 TLV.
+ */
+export function parseImageSha256(data: Uint8Array): string | null {
+    if (data.length < 32) return null;
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    if (view.getUint32(0, true) !== 0x96f3b83d) return null;
+
+    const headerSize = view.getUint16(8, true);
+    const imageSize = view.getUint32(12, true);
+
+    let offset = headerSize + imageSize;
+    // Walk at most two areas: protected (optional) then unprotected.
+    for (let area = 0; area < 2; area++) {
+        if (offset + 4 > data.length) return null;
+
+        const magic = view.getUint16(offset, true);
+        const totalLen = view.getUint16(offset + 2, true);
+        if (magic !== IMAGE_TLV_INFO_MAGIC && magic !== IMAGE_TLV_PROT_INFO_MAGIC) {
+            return null;
+        }
+
+        const areaEnd = Math.min(offset + totalLen, data.length);
+        let cursor = offset + 4;
+        while (cursor + 4 <= areaEnd) {
+            const type = view.getUint16(cursor, true);
+            const len = view.getUint16(cursor + 2, true);
+            const valueStart = cursor + 4;
+            if (valueStart + len > data.length) return null;
+            if (type === IMAGE_TLV_SHA256 && len === 32) {
+                return uint8ArrayToHex(data.subarray(valueStart, valueStart + len));
+            }
+            cursor = valueStart + len;
+        }
+
+        // Not in this area — the protected area is followed by the unprotected one.
+        if (magic !== IMAGE_TLV_PROT_INFO_MAGIC) return null;
+        offset = areaEnd;
+    }
+
+    return null;
+}
+
 /**
  * Format bytes as human-readable size
  */

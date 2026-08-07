@@ -40,7 +40,21 @@ The app mirrors BLE GATT characteristics as UI controls. Each characteristic on 
 - Multi-stage process: upload → test → confirm → reset
 - **Important**: Uses sequence numbers and fragmented responses across multiple BLE notifications
 
-### GitHub-releases auto-update check ([firmware-update-modal.tsx](app/firmware-update-modal.tsx))
+### Firmware update: what you can and cannot verify an installed image against
+
+The guided flow (`app/firmware-update/flow.tsx` + `hooks/use-firmware-update-flow.ts`) proves an update actually landed by comparing hashes. Getting the *right* hash is the whole trick, and there are two wrong answers that both look plausible:
+
+- **The zip manifest has no hash.** Verified against the published `fw-v2.1.0` `dfu_application_proto0.zip`: each `manifest.json` entry carries only `type`, `board`, `soc`, `load_address`, `image_index`, the two `slot_index` fields, `version`/`version_MCUBOOT`, `size`, `file`, `modtime`. Don't go looking for a digest there — and don't trust the `ManifestFile` interface as evidence either way; check a real artifact.
+- **`sha256(whole .bin)` is NOT the value the device reports.** The file ends with the MCUboot TLV trailer, which contains the digest, so the digest cannot cover it. For `fw-v2.1.0`'s `fw.signed.bin` the real values are `IMAGE_TLV_SHA256 = eeacf0fa…` versus `sha256(file) = 9f5d7d3a…`. Verification built on the whole-file digest would fail every single update.
+
+The value the device reports as a slot's `hash` in `getImageState()` **is** the image's own `IMAGE_TLV_SHA256` (type `0x10`) — hardware-confirmed: after uploading `fw-v2.1.0` the board reported `eeacf0fa…` for slot 1, matching the TLV extracted from the file. So `parseImageSha256()` (`services/mcumgr.ts`) reads that TLV out of the `.bin` and the flow verifies the post-reboot active slot against it, which is end-to-end: it never trusts the device's account of what it received. `fw/tools/dump_dfu_tlv.py` is the reference implementation and the cross-check.
+
+Two related facts worth keeping in mind:
+
+- **Images are staged with `confirm=false` (mark for test), and confirmed only after the post-reboot hash matches.** Until `confirmCurrentImage()` runs, MCUboot reverts to the previous image on the next reset. Never mark permanent at upload time — the pre-#288 screen did, which left no way back from a bad image.
+- **After an OTA stages an image, the first J-Link reflash boots the OTA'd image, not the one you just flashed** — MCUboot consumes the pending swap first. It takes a second flash to actually land your build. Check the boot banner's version before trusting any measurement taken after a reflash.
+
+### GitHub-releases auto-update check (now `hooks/use-firmware-release.ts`)
 
 On mount (once an MCUmgr client connects), the modal sequentially: (1) calls `client.getOsInfo('i')` (OS Management group, `OsCmd.INFO`, added to [services/mcumgr.ts](services/mcumgr.ts) for this feature) to read the device's board name string (e.g. `rgb_sunglasses_proto0_nrf5340_cpuapp`), (2) derives `'proto0' | 'dk' | null` from it via `extractBoardRevision()`, then (3) calls `fetchLatestRelease('skalldri', 'rgb-sunglasses')` (GitHub REST API, no auth — [services/github-releases.ts](services/github-releases.ts)) and picks the release asset whose filename contains the board revision (`findAssetForBoard()`). The found asset's tag (`vX.Y.Z` → stripped via `parseVersionFromTag()`) is compared against the currently-active image's `version` (from `getImageState()`, slot 0 + `active`) via `compareVersions()`; a strictly-older device version surfaces an "Update Available" card with a **Download Update** button. That button downloads the release zip via `expo-file-system/legacy`'s `createDownloadResumable` (not the newer `expo-file-system/next` `File` API used elsewhere in this file — `next` has no resumable-download primitive yet) straight into the same `parseFirmwarePackageFromBase64()` → `firmwarePackage` state the manual `.zip`-picker path already populates, so the existing upload/test/confirm flow (`handleStartUpdate`) is unmodified and shared by both paths.
 
@@ -68,7 +82,8 @@ The patch's core fix: the library's Android native module (`BlePlxModule.java`) 
 ### Expo Router (File-Based Routing)
 
 - Tabs: [app/(tabs)/](<app/(tabs)/>) directory (bluetooth, device-state/ — itself a directory with `index.tsx` + `[serviceUuid].tsx`, index)
-- Modals: [color-picker-modal.tsx](app/color-picker-modal.tsx), [firmware-update-modal.tsx](app/firmware-update-modal.tsx)
+- Modals: [color-picker-modal.tsx](app/color-picker-modal.tsx), and the firmware-update group below
+- **Firmware update is a nested stack**, not a single modal: `app/firmware-update/` holds `index` (landing), `flow` (the guided update), `debug` (the old high-detail page) and `extensions`, wrapped by a `_layout.tsx` that mounts `McuMgrClientProvider`. The provider is why it is a group at all — `McuMgrClient.initialize()` registers a `monitor()` on the SMP characteristic, and a pushed screen does **not** unmount the one below it, so a per-screen `useMcuMgrClient` would put two clients on one characteristic (two notification registrations against Android's 15-slot budget, two response handlers racing). Screens draw their own in-body headers so they stay renderable in unit tests without a navigator.
 - Query params for modal communication: `charUuid`, `r`, `g`, `b`, `mode`, `speed` (color picker; `mode`/`speed` added for the issue #259 color modes)
 
 ## Development Workflow

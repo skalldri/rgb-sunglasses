@@ -6,7 +6,7 @@ import {
     FirmwarePackage,
     parseFirmwareImageIndex,
 } from '@/services/firmware-package';
-import { ImageSlot, uint8ArrayToHex } from '@/services/mcumgr';
+import { ImageSlot, parseImageSha256, uint8ArrayToHex } from '@/services/mcumgr';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
@@ -24,7 +24,6 @@ export type FlowStep =
     | 'rebooting'
     | 'reconnecting'
     | 'verifying'
-    | 'confirming'
     | 'success'
     | 'failed';
 
@@ -35,7 +34,13 @@ export interface ImageProgress {
     /** Version from the image's own MCUboot header, or the manifest. */
     version: string;
     uploaded: boolean;
-    /** Hash the DEVICE reported for the staged slot-1 image (the verification reference). */
+    /**
+     * The image's own SHA256, read out of its MCUboot TLV trailer *in the zip*.
+     * This is the verification reference: it says what SHOULD be running, independent
+     * of anything the device reports. Null only if the TLV can't be parsed.
+     */
+    expectedHash?: string;
+    /** Hash the device reported for the staged slot-1 image (the fallback reference). */
     stagedHash?: string;
     staged: boolean;
     verified: boolean;
@@ -48,6 +53,16 @@ export interface ImageProgress {
  * message, it does NOT fail the update.
  */
 export const RECONNECT_PATIENCE_MS = 180_000;
+
+/**
+ * The image index whose hash survives installation.
+ *
+ * On this SoC image 0 is the application core — the one the bootloader flashes into
+ * its own slot verbatim. Image 1 is the network core, delivered as a wrapper the app
+ * core unwraps over IPC, so its installed hash differs from the file's. See the table
+ * on `useFirmwareUpdateFlow`.
+ */
+const HASH_STABLE_IMAGE_INDEX = 0;
 
 /** True once the flow has reached an end state and will not advance on its own. */
 export const isTerminalStep = (step: FlowStep) => step === 'success' || step === 'failed';
@@ -76,16 +91,41 @@ export interface FirmwareUpdateFlow {
 /**
  * The guided update: upload → stage for test → reboot → verify → confirm.
  *
- * The install model is MCUboot's test-then-confirm, not the old "mark permanent at
- * upload time". That ordering is what makes the post-reboot check meaningful: until
- * `confirmCurrentImage()` runs, an image that fails to boot (or fails verification
- * and is never confirmed) is reverted by the bootloader on the next reset. Marking
- * permanent up front, as the previous screen did, left no way back from a bad image.
+ * Images are marked permanent at staging time (`setImageState(hash, true)`), not
+ * test-then-confirm. That is deliberate and not a shortcut: this SoC's bootloader is
+ * built `CONFIG_BOOT_UPGRADE_ONLY=y` (overwrite-only), whose own Kconfig help says it
+ * "prevents the fallback recovery" — slot 1 is copied over slot 0 and marked confirmed
+ * by the bootloader itself. Hardware-confirmed: an image staged as `pending` came back
+ * `active confirmed` with nothing confirming it. The chip architecture cannot support a
+ * swap mode, so a test-then-confirm sequence would be a permanently no-op extra step.
+ * Don't reintroduce one expecting rollback — there is none to have.
  *
- * Verification compares the hash the device reported for the staged slot-1 image
- * against the hash it reports for the active slot-0 image after the swap. The
- * reference has to come from the device on both sides because the firmware zip's
- * manifest carries no hash at all (see `ManifestFile` in services/firmware-package.ts).
+ * ## What verification can actually check, per core
+ *
+ * The reference for an image is its own `IMAGE_TLV_SHA256`, read out of the `.bin`
+ * inside the zip (`parseImageSha256`). The zip's manifest.json carries no digest of any
+ * kind — verified against the real fw-v2.1.0 artifact — and `sha256(whole .bin)` is a
+ * different value again, because the file ends with the TLV trailer the digest cannot
+ * cover (`eeacf0fa…` vs `9f5d7d3a…`).
+ *
+ * The two cores then behave differently, measured on hardware with fw-v2.1.0:
+ *
+ * | image | file TLV    | staged slot 1 | active slot 0 after install |
+ * |-------|-------------|---------------|-----------------------------|
+ * | 0 app | `eeacf0fa…` | `eeacf0fa…`   | `eeacf0fa…`  (stable)       |
+ * | 1 net | `e43ebfa1…` | `e43ebfa1…`   | `4d4b2c28…`  (changes)      |
+ *
+ * The app core's image is flashed into its own slot byte-for-byte, so its hash survives
+ * the install. The net-core image is a wrapper that the app core's bootloader unwraps
+ * and pushes into the network core over IPC, so what ends up installed hashes
+ * differently — its file TLV can never match post-install, and expecting it to made the
+ * flow report a false failure on a perfectly good update.
+ *
+ * So hashes are checked where they mean something:
+ *  - **at staging, for every image** — device slot-1 hash vs file TLV, which proves the
+ *    uploaded bytes arrived intact;
+ *  - **after reboot, for the app core only** — plus a version check for every image,
+ *    which is the only signal that survives the net core's transform.
  */
 export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpdateFlow {
     const { client } = useMcuMgrClientContext();
@@ -126,6 +166,7 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
                     img.manifest.version_MCUBOOT ??
                     img.manifest.version ??
                     'unknown',
+                expectedHash: parseImageSha256(img.data) ?? undefined,
                 uploaded: false,
                 staged: false,
                 verified: false,
@@ -159,8 +200,9 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
                 );
             }
 
-            // Stage every uploaded image for TEST (confirm=false). Capturing the
-            // device-reported hash here is the whole basis of verification later.
+            // Stage every uploaded image for TEST (confirm=false). The device-reported
+            // hash is captured too, as a fallback reference for images whose TLV could
+            // not be parsed.
             setStep('staging');
             for (let i = 0; i < total; i++) {
                 const imageIndex = parseFirmwareImageIndex(pkg.images[i].manifest.image_index);
@@ -171,8 +213,23 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
                         `Uploaded image ${imageIndex} not found on the device after upload`
                     );
                 }
-                await client.setImageState(uploaded.hash, false); // false = mark for TEST
+                // Prove the bytes that landed are the bytes we sent, before committing
+                // to them. Valid for BOTH cores: the staged slot-1 hash matches the
+                // file's TLV for each (it is only the net core's *installed* hash that
+                // differs). A mismatch here means a corrupt upload, not a bad build.
                 const hex = hashHex(uploaded.hash);
+                const image = pkg.images[i];
+                const expected = parseImageSha256(image.data);
+                if (expected && hex !== expected) {
+                    throw new Error(
+                        `Image ${imageIndex} did not arrive intact: the device holds ` +
+                            `${hex?.slice(0, 16)}… but the file is ${expected.slice(0, 16)}…`
+                    );
+                }
+
+                // confirm=true: mark permanent. See the note on this hook - the
+                // bootloader is overwrite-only, so there is no test-then-confirm to have.
+                await client.setImageState(uploaded.hash, true);
                 setImages(prev =>
                     prev.map(p =>
                         p.imageIndex === imageIndex ? { ...p, staged: true, stagedHash: hex } : p
@@ -235,7 +292,7 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
         setStep('verifying');
     }, [step, selectedDevice, client]);
 
-    // verifying → confirming → success | failed.
+    // verifying → success | failed.
     useEffect(() => {
         if (step !== 'verifying' || !client) return;
         let cancelled = false;
@@ -253,12 +310,21 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
                             (s.image === img.imageIndex ||
                                 (s.image === undefined && img.imageIndex === 0))
                     );
-                    // Primary check: the running image is byte-identical to the one we
-                    // staged. Falls back to the version string when either side has no
-                    // hash, which is all an older firmware may report.
-                    const verified = img.stagedHash
-                        ? hashHex(active?.hash) === img.stagedHash
-                        : active?.version === img.version;
+                    // Version has to match for every image. The device reports a
+                    // 'major.minor.patch' string where the file carries
+                    // 'major.minor.patch+build', so compare on the former.
+                    const versionMatches =
+                        active?.version != null &&
+                        img.version.startsWith(active.version);
+
+                    // The hash only survives installation for the app core (see the
+                    // table on this hook), so only demand it there. Requiring it for
+                    // the net core reported a false failure on a good update.
+                    const hashMatters =
+                        img.imageIndex === HASH_STABLE_IMAGE_INDEX && !!img.expectedHash;
+                    const hashMatches = hashHex(active?.hash) === img.expectedHash;
+
+                    const verified = versionMatches && (!hashMatters || hashMatches);
                     return { ...img, verified };
                 });
 
@@ -266,19 +332,17 @@ export function useFirmwareUpdateFlow(pkg: FirmwarePackage | null): FirmwareUpda
                 setImages(results);
 
                 if (results.some(r => !r.verified)) {
+                    // Deliberately does not promise a rollback: this bootloader is
+                    // overwrite-only and cannot revert (see the note on this hook).
                     setError(
-                        'The device did not come back running the image that was uploaded. ' +
-                            'It has not been confirmed, so the bootloader will restore the ' +
-                            'previous firmware on the next restart.'
+                        'The device restarted, but it is not running the firmware that ' +
+                            'was uploaded. Check the FW Update Debug page for what is ' +
+                            'actually installed.'
                     );
                     setStep('failed');
                     return;
                 }
 
-                // Only now is it safe to make the new image permanent.
-                setStep('confirming');
-                await client!.confirmCurrentImage();
-                if (cancelled) return;
                 setStep('success');
             } catch (e: unknown) {
                 if (cancelled) return;

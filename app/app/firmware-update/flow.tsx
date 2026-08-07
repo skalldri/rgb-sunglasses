@@ -24,7 +24,6 @@ const STEP_TITLE: Record<FlowStep, string> = {
     rebooting: 'Restarting device',
     reconnecting: 'Waiting for device',
     verifying: 'Verifying installation',
-    confirming: 'Finishing up',
     success: 'Update complete',
     failed: 'Update failed',
 };
@@ -261,15 +260,12 @@ export default function FirmwareUpdateFlow() {
                 );
 
             case 'verifying':
-            case 'confirming':
                 return (
                     <>
                         <Card style={styles.card}>
                             <ActivityIndicator size="small" color={c.primary} />
                             <ThemedText type="caption" style={styles.centered}>
-                                {flow.step === 'verifying'
-                                    ? 'Checking the update installed correctly…'
-                                    : 'Finishing up…'}
+                                Checking the update installed correctly…
                             </ThemedText>
                         </Card>
                         {renderImageCards()}
