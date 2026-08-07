@@ -72,35 +72,10 @@ jobs:
 
       # ---- Extension simulator (served at /sim) --------------------------
       # Builds the in-repo extensions + the real audio DSP to wasm and
-      # bundles the simulator UI. Mirrors sim-ci.yml's toolchain steps
-      # (cached wasi-sdk, CMSIS-DSP pinned via CMSIS_DSP_PIN in
-      # build-extensions.sh — the single source of truth for that revision).
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: fw/sim/package-lock.json
-
-      - name: Compute wasm toolchain cache key
-        id: toolchain-key
-        run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/rgb-sunglasses
-          key: wasi-sdk-${{ steps.toolchain-key.outputs.version }}
-
-      - name: Install wasm toolchain (cached)
-        run: fw/sim/scripts/install-toolchain.sh
-
-      - name: Fetch CMSIS-DSP (pinned revision from build-extensions.sh)
-        run: |
-          rev="$(grep -oP 'CMSIS_DSP_PIN="\K[0-9a-f]+' fw/sim/build-extensions.sh)"
-          git init /tmp/cmsis-dsp
-          git -C /tmp/cmsis-dsp remote add origin https://github.com/zephyrproject-rtos/cmsis-dsp.git
-          git -C /tmp/cmsis-dsp fetch --depth 1 origin "$rev"
-          git -C /tmp/cmsis-dsp checkout FETCH_HEAD
-          echo "CMSIS_DSP_PATH=/tmp/cmsis-dsp" >> "$GITHUB_ENV"
+      # bundles the simulator UI. Toolchain steps are the SAME composite
+      # action sim-ci.yml gates with, so a deploy can never use a different
+      # toolchain than the one CI validated.
+      - uses: ./.github/actions/sim-wasm-toolchain
 
       - name: Build simulator bundle into site/sim
         run: |

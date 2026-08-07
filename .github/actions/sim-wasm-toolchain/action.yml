@@ -1,0 +1,42 @@
+name: sim wasm toolchain
+description: >-
+  Node 20 + the pinned wasi-sdk (cached) + the pinned CMSIS-DSP checkout for
+  building fw/sim wasm artifacts. Single source of truth for these steps —
+  used by both sim-ci.yml (the pre-merge gate) and pages.yml (the deploy), so
+  the gate can never validate with a different toolchain than the one that
+  ships /sim. Version pins live where the build scripts read them:
+  WASI_SDK_VERSION in fw/sim/scripts/install-toolchain.sh and CMSIS_DSP_PIN
+  in fw/sim/build-extensions.sh; this action only greps them.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: npm
+        cache-dependency-path: fw/sim/package-lock.json
+
+    - name: Compute wasm toolchain cache key
+      id: toolchain-key
+      shell: bash
+      run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/rgb-sunglasses
+        key: wasi-sdk-${{ steps.toolchain-key.outputs.version }}
+
+    - name: Install wasm toolchain (cached)
+      shell: bash
+      run: fw/sim/scripts/install-toolchain.sh
+
+    - name: Fetch CMSIS-DSP (pinned revision from build-extensions.sh)
+      shell: bash
+      run: |
+        rev="$(grep -oP 'CMSIS_DSP_PIN="\K[0-9a-f]+' fw/sim/build-extensions.sh)"
+        git init /tmp/cmsis-dsp
+        git -C /tmp/cmsis-dsp remote add origin https://github.com/zephyrproject-rtos/cmsis-dsp.git
+        git -C /tmp/cmsis-dsp fetch --depth 1 origin "$rev"
+        git -C /tmp/cmsis-dsp checkout FETCH_HEAD
+        echo "CMSIS_DSP_PATH=/tmp/cmsis-dsp" >> "$GITHUB_ENV"

@@ -27,7 +27,7 @@ cd fw/sim && npm run serve          # -> http://localhost:5173
 `npm run serve` is `vite --host`. **Do not add a `browser` positional**
 (`vite browser`): Vite resolves its config file relative to the root given on
 the command line, so that makes it silently skip `fw/sim/vite.config.ts` —
-`/wasm-index.json` and `/wasm/*.wasm` then fall through to the SPA fallback
+`/wasm-index.json` and the flat `/<name>.wasm` module routes then fall through to the SPA fallback
 and return `index.html` with a 200. The config sets `root` itself.
 
 If the Node CLI's `fw/sim/rgbx-sim` grows a `serve` subcommand it delegates to
@@ -44,7 +44,7 @@ npx vite --port 5199 --strictPort &   # or: npm run serve -- --port 5199
 
 curl -s -o /dev/null -w '%{http_code}\n'            http://localhost:5199/            # 200, text/html
 curl -s                                            http://localhost:5199/wasm-index.json
-curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://localhost:5199/wasm/hello.wasm  # 200 application/wasm
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://localhost:5199/hello.wasm  # 200 application/wasm (modules serve FLAT — publicDir is out/wasm)
 curl -s -o /dev/null -w '%{http_code}\n'            http://localhost:5199/main.ts     # 200, transformed TS
 ```
 
