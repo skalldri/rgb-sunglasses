@@ -93,7 +93,7 @@ body {
   background: #05060a;
   border: 1px solid var(--line);
   border-radius: 12px;
-  aspect-ratio: 40 / 17;
+  aspect-ratio: 40 / 15;
   min-height: 180px;
 }
 
