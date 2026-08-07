@@ -35,6 +35,17 @@ import {
     parseMcubootPackage,
 } from '@/services/mcuboot-updater-client';
 import { formatBytes, formatHash, ImageSlot, SlotInfoResponse } from '@/services/mcumgr';
+import { ExtensionCheckState, ExtensionSyncCard } from '@/components/extension-sync-card';
+import {
+    countDeviceExtensions,
+    countUnmanagedExtensions,
+    downloadExtensionAsset,
+    entriesNeedingUpload,
+    ExtensionSyncEntry,
+    ExtensionSyncProgress,
+    planExtensionSync,
+    syncExtensions,
+} from '@/services/extension-sync';
 import * as DocumentPicker from 'expo-document-picker';
 import * as LegacyFS from 'expo-file-system/legacy';
 import { File } from 'expo-file-system/next';
@@ -86,6 +97,21 @@ export default function FirmwareUpdateModal() {
     // Download
     const [isDownloading, setIsDownloading] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState<number>(0);
+
+    // Animation extensions. These are plain files on the board's FAT disk rather
+    // than MCUboot images, so they're synced separately from the firmware images
+    // and only take effect on the next boot.
+    const [releaseAssets, setReleaseAssets] = useState<GitHubAsset[]>([]);
+    const [extensionState, setExtensionState] = useState<ExtensionCheckState>('idle');
+    const [extensionEntries, setExtensionEntries] = useState<ExtensionSyncEntry[]>([]);
+    const [unmanagedExtensionCount, setUnmanagedExtensionCount] = useState(0);
+    const [extensionError, setExtensionError] = useState<string>('');
+    const [isSyncingExtensions, setIsSyncingExtensions] = useState(false);
+    const [extensionProgress, setExtensionProgress] = useState<ExtensionSyncProgress | null>(null);
+    // Latches once the unmanaged-extension count has been derived for this
+    // connection; see the comment at its use site for why it must not be redone
+    // after a sync. Reset alongside the rest of the extension state on disconnect.
+    const unmanagedComputedRef = useRef(false);
 
     // Bootloader update
     const blUpdaterRef = useRef<McubootUpdaterClient | null>(null);
@@ -220,6 +246,82 @@ export default function FirmwareUpdateModal() {
         }
     }, [client]);
 
+    /**
+     * Ask the device for the SHA256 of every extension this release ships and
+     * compare it against the digest GitHub reports for that asset.
+     *
+     * Runs against `releaseAssets` (all assets of the latest release), not
+     * `latestAsset` (just the board's firmware zip), because extensions are
+     * published as separate bare `.llext` assets.
+     */
+    const refreshExtensionPlan = useCallback(async () => {
+        if (!client || releaseAssets.length === 0) return;
+
+        setExtensionState('checking');
+        setExtensionError('');
+        try {
+            const entries = await planExtensionSync(client, releaseAssets);
+            setExtensionEntries(entries);
+
+            // Only ever computed from the FIRST plan of a connection. The device
+            // extension count comes from GATT services, which don't change until
+            // the firmware re-scans at boot - so comparing it against a post-sync
+            // plan would count just-uploaded files as loaded and silently drop the
+            // warning to zero while the stale extensions are still installed.
+            if (!unmanagedComputedRef.current) {
+                const deviceExtensions = countDeviceExtensions(
+                    Object.keys(selectedDevice?.characteristicsByService ?? {})
+                );
+                setUnmanagedExtensionCount(countUnmanagedExtensions(deviceExtensions, entries));
+                unmanagedComputedRef.current = true;
+            }
+            setExtensionState('ready');
+        } catch (e: unknown) {
+            // Firmware without MCUmgr file management answers every FS command with
+            // an error, so this is an expected outcome on an older build - surfaced
+            // in the card rather than raised as an update failure.
+            setExtensionError(e instanceof Error ? e.message : String(e));
+            setExtensionState('error');
+        }
+        // characteristicsByService is read for a one-off count at check time; it must
+        // not re-trigger the check, which issues SMP traffic.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [client, releaseAssets]);
+
+    /**
+     * Upload every extension that doesn't match the release. Shared by the
+     * Extensions card's own button and by the full update flow.
+     */
+    const runExtensionSync = useCallback(async (): Promise<boolean> => {
+        if (!client || entriesNeedingUpload(extensionEntries).length === 0) return true;
+
+        setIsSyncingExtensions(true);
+        setExtensionProgress(null);
+        try {
+            await syncExtensions(
+                client,
+                extensionEntries,
+                downloadExtensionAsset,
+                setExtensionProgress
+            );
+            await refreshExtensionPlan();
+            return true;
+        } catch (e: unknown) {
+            setExtensionError(e instanceof Error ? e.message : String(e));
+            // Re-plan before surfacing the error so the card lists what actually
+            // landed before the failure rather than the pre-sync picture, and so
+            // a retry only re-uploads what is still outstanding. Best-effort: if
+            // the link is gone this fails too, and the stale entries are still
+            // enough to render the retry button.
+            await refreshExtensionPlan().catch(() => undefined);
+            setExtensionState('error');
+            return false;
+        } finally {
+            setIsSyncingExtensions(false);
+            setExtensionProgress(null);
+        }
+    }, [client, extensionEntries, refreshExtensionPlan]);
+
     // Fetch initial state when client becomes available, then detect board revision.
     // All three SMP calls are sequenced to avoid concurrent requests (McuMgrClient
     // only supports one pending request at a time).
@@ -248,6 +350,13 @@ export default function FirmwareUpdateModal() {
         fetchInitialState();
     }, [client, refreshImageState, refreshSlotInfo]);
 
+    // Check extensions once the release's asset list is known. Kept out of
+    // fetchInitialState above because that runs before the GitHub lookup, and the
+    // release is what says which extensions should exist.
+    useEffect(() => {
+        refreshExtensionPlan();
+    }, [refreshExtensionPlan]);
+
     // Display initialization error if present
     useEffect(() => {
         if (initError) {
@@ -272,6 +381,12 @@ export default function FirmwareUpdateModal() {
         setLatestAsset(null);
         setLatestVersion('');
         setUpdateCheckError('');
+        setReleaseAssets([]);
+        setExtensionState('idle');
+        setExtensionEntries([]);
+        setUnmanagedExtensionCount(0);
+        unmanagedComputedRef.current = false;
+        setExtensionError('');
         setMcubootUpdateCheckState('idle');
         setMcubootLatestAsset(null);
         setMcubootLatestVersion('');
@@ -298,6 +413,9 @@ export default function FirmwareUpdateModal() {
 
                 setLatestAsset(asset);
                 setLatestVersion(githubVersion);
+                // Kept whole (not just the board's zip) so the extension check can
+                // find this release's bare .llext assets.
+                setReleaseAssets(release.assets);
                 setUpdateCheckState(cmp < 0 ? 'updateAvailable' : 'upToDate');
             } catch (e: unknown) {
                 setUpdateCheckError(e instanceof Error ? e.message : String(e));
@@ -420,6 +538,18 @@ export default function FirmwareUpdateModal() {
                 } else {
                     throw new Error(`Uploaded image not found in image state response`);
                 }
+            }
+
+            // Sync extensions before the user reboots: they're read from the FAT
+            // disk at boot, so writing them after the reboot that activates the new
+            // firmware would mean needing a second reboot. A failure here does not
+            // fail the firmware update - the images are already uploaded and
+            // confirmed - so it's reported through the Extensions card and the user
+            // can retry from there.
+            const pendingExtensions = entriesNeedingUpload(extensionEntries).length;
+            if (pendingExtensions > 0) {
+                setStatus(`Syncing ${pendingExtensions} extension(s)...`);
+                await runExtensionSync();
             }
 
             setStatus('All firmware images uploaded successfully!');
@@ -1082,6 +1212,17 @@ export default function FirmwareUpdateModal() {
                 {!firmwarePackage && (
                     <>
                         {renderAutoUpdateSection()}
+
+                        <ExtensionSyncCard
+                            state={extensionState}
+                            entries={extensionEntries}
+                            unmanagedCount={unmanagedExtensionCount}
+                            error={extensionError}
+                            isSyncing={isSyncingExtensions}
+                            progress={extensionProgress}
+                            onSync={runExtensionSync}
+                            disabled={!client || isUploading}
+                        />
 
                         <ThemedText type="overline" style={styles.sectionTitle}>
                             Current Images

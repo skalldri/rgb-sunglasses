@@ -5,8 +5,12 @@ import {
   encodeCbor,
   formatHash,
   formatBytes,
+  FsCmd,
+  FsMgmtError,
   ImageCmd,
+  isSmpGroupError,
   McuMgrClient,
+  SmpCommandError,
   parseImageHeader,
   parseSmpHeader,
   SmpGroup,
@@ -812,5 +816,272 @@ describe('wire format sanity', () => {
     const b64 = uint8ArrayToBase64(packet);
     expect(typeof b64).toBe('string');
     expect(b64.length).toBeGreaterThan(0);
+  });
+});
+
+describe('SMP error typing', () => {
+  it('carries group and rc for the version-1 {err} shape', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ err: { group: SmpGroup.FS, rc: FsMgmtError.FILE_NOT_FOUND } });
+
+    const error = await client.getFileHash('/NAND:/ext/x.llext').catch(e => e);
+
+    expect(error).toBeInstanceOf(SmpCommandError);
+    expect(error.group).toBe(SmpGroup.FS);
+    expect(error.rc).toBe(FsMgmtError.FILE_NOT_FOUND);
+    // Message format is unchanged, so the many `e.message` display sites still work.
+    expect(error.message).toBe('File hash error: group=8, rc=3');
+  });
+
+  it('carries rc with no group for the legacy bare-rc shape', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({ rc: 3 });
+
+    const error = await client.getSlotInfo().catch(e => e);
+
+    expect(error).toBeInstanceOf(SmpCommandError);
+    expect(error.rc).toBe(3);
+    expect(error.group).toBeUndefined();
+    expect(error.message).toBe('Slot info error: rc=3');
+  });
+
+  it('does not treat a bare rc as a group error', () => {
+    // A bare rc is an mcumgr_err_t with no group, so FS "file not found" (3) is
+    // indistinguishable from the generic EINVAL (3) — matching it would make
+    // getFileSha256 report a real error as "file absent" and re-upload blindly.
+    const bare = new SmpCommandError('x', FsMgmtError.FILE_NOT_FOUND, undefined);
+    expect(isSmpGroupError(bare, SmpGroup.FS, FsMgmtError.FILE_NOT_FOUND)).toBe(false);
+  });
+
+  it('does not match a different group with the same rc', () => {
+    const other = new SmpCommandError('x', FsMgmtError.FILE_NOT_FOUND, SmpGroup.IMAGE);
+    expect(isSmpGroupError(other, SmpGroup.FS, FsMgmtError.FILE_NOT_FOUND)).toBe(false);
+  });
+
+  it('ignores non-SMP errors', () => {
+    expect(isSmpGroupError(new Error('boom'), SmpGroup.FS, 3)).toBe(false);
+    expect(isSmpGroupError(undefined, SmpGroup.FS, 3)).toBe(false);
+  });
+});
+
+describe('McuMgrClient getFileSha256', () => {
+  it('returns the digest as lowercase hex', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({
+      type: 'sha256',
+      len: 3,
+      output: Uint8Array.from([0xde, 0xad, 0xbe, 0xef]),
+    });
+
+    await expect(client.getFileSha256('/NAND:/ext/x.llext')).resolves.toBe('deadbeef');
+  });
+
+  it('accepts an ArrayBuffer, which is how some CBOR decoders return byte strings', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({
+      type: 'sha256',
+      len: 3,
+      output: Uint8Array.from([0x01, 0xff]).buffer,
+    });
+
+    await expect(client.getFileSha256('/NAND:/ext/x.llext')).resolves.toBe('01ff');
+  });
+
+  it('returns null when the device says the file does not exist', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ err: { group: SmpGroup.FS, rc: FsMgmtError.FILE_NOT_FOUND } });
+
+    await expect(client.getFileSha256('/NAND:/ext/gone.llext')).resolves.toBeNull();
+  });
+
+  it('rethrows any other device error rather than reporting the file as absent', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ err: { group: SmpGroup.FS, rc: FsMgmtError.FILE_READ_FAILED } });
+
+    await expect(client.getFileSha256('/NAND:/ext/x.llext')).rejects.toThrow(
+      'File hash error: group=8, rc=7'
+    );
+  });
+
+  it('rejects a response that is not a sha256', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ type: 'crc32', len: 3, output: 12345 });
+
+    await expect(client.getFileSha256('/NAND:/ext/x.llext')).rejects.toThrow(
+      "Expected a sha256 hash, device returned 'crc32'"
+    );
+  });
+
+  it('requests the sha256 type from the FS group', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    const spy = jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ type: 'sha256', len: 1, output: new Uint8Array([0]) });
+
+    await client.getFileSha256('/NAND:/ext/x.llext');
+
+    expect(spy.mock.calls[0][1]).toBe(SmpGroup.FS);
+    expect(spy.mock.calls[0][2]).toBe(FsCmd.HASH);
+    expect(spy.mock.calls[0][3]).toEqual({ name: '/NAND:/ext/x.llext', type: 'sha256' });
+  });
+});
+
+describe('McuMgrClient uploadFile', () => {
+  it('sends len only in the first packet and repeats the name in every packet', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    const spy = jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ off: 6 })
+      .mockResolvedValueOnce({ off: 12 });
+
+    const onProgress = jest.fn();
+    await client.uploadFile('/NAND:/ext/x.llext', new Uint8Array(12), onProgress);
+
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    const first = spy.mock.calls[0][3] as any;
+    expect(first.off).toBe(0);
+    expect(first.len).toBe(12);
+    expect(first.name).toBe('/NAND:/ext/x.llext');
+
+    const second = spy.mock.calls[1][3] as any;
+    expect(second.off).toBe(6);
+    expect(second.len).toBeUndefined();
+    // The name is NOT optional on subsequent packets, unlike image upload's
+    // image/sha fields — the device needs it to reopen the file.
+    expect(second.name).toBe('/NAND:/ext/x.llext');
+
+    expect(onProgress).toHaveBeenNthCalledWith(1, 6, 12);
+    expect(onProgress).toHaveBeenNthCalledWith(2, 12, 12);
+  });
+
+  it('shrinks the chunk to make room for the repeated file name', async () => {
+    // The same mtu that gives image upload 16-byte chunks must yield
+    // 16 - name.length here, or a long path silently pushes packets past the MTU.
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    const shortName = '/a';
+    // Complete the transfer in one response so the loop ends after the first
+    // request; only that request's chunk size is under test here.
+    const spy = jest.spyOn(internal, 'sendRequest').mockResolvedValue({ off: 100 });
+
+    await client.uploadFile(shortName, new Uint8Array(100));
+    expect((spy.mock.calls[0][3] as any).data.length).toBe(80 - 64 - shortName.length);
+  });
+
+  it('never produces a non-positive chunk size for a very long path', async () => {
+    // Without the floor guard this loops forever sending nothing.
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    // Complete the transfer in one response so the loop ends after the first
+    // request; only that request's chunk size is under test here.
+    const spy = jest.spyOn(internal, 'sendRequest').mockResolvedValue({ off: 100 });
+    await client.uploadFile('/NAND:/ext/a-very-long-extension-name.llext', new Uint8Array(100));
+
+    expect((spy.mock.calls[0][3] as any).data.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('sends exactly one request for a zero-length file', async () => {
+    // Still needs a request to create/truncate the file on the device.
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    const spy = jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({ off: 0 });
+    await client.uploadFile('/NAND:/ext/x.llext', new Uint8Array(0));
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect((spy.mock.calls[0][3] as any).len).toBe(0);
+  });
+
+  it('honours a device-supplied rewind of the offset', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    const spy = jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ off: 8 })
+      .mockResolvedValueOnce({ off: 4 }) // device rewinds
+      .mockResolvedValueOnce({ off: 12 });
+
+    await client.uploadFile('/NAND:/ext/x.llext', new Uint8Array(12));
+
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect((spy.mock.calls[2][3] as any).off).toBe(4);
+  });
+
+  it('gives up when the device stops advancing the offset', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    jest.spyOn(internal, 'sendRequest').mockResolvedValue({ off: 0 });
+
+    await expect(client.uploadFile('/NAND:/ext/x.llext', new Uint8Array(12))).rejects.toThrow(
+      'File upload stalled at offset 0'
+    );
+  });
+
+  it('rejects an out-of-range offset from the device', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({ off: 99 });
+
+    await expect(client.uploadFile('/NAND:/ext/x.llext', new Uint8Array(12))).rejects.toThrow(
+      'File upload error: invalid offset 99 (total=12)'
+    );
+  });
+
+  it('surfaces a device-side write error', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ err: { group: SmpGroup.FS, rc: FsMgmtError.FILE_WRITE_FAILED } });
+
+    await expect(client.uploadFile('/NAND:/ext/x.llext', new Uint8Array(12))).rejects.toThrow(
+      'File upload error at offset 0: group=8, rc=10'
+    );
+  });
+
+  it('writes to the FS group upload command', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    internal.mtu = 80;
+
+    const spy = jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({ off: 4 });
+    await client.uploadFile('/NAND:/ext/x.llext', new Uint8Array(4));
+
+    expect(spy.mock.calls[0][0]).toBe(SmpOp.WRITE_REQUEST);
+    expect(spy.mock.calls[0][1]).toBe(SmpGroup.FS);
+    expect(spy.mock.calls[0][2]).toBe(FsCmd.DOWNLOAD_UPLOAD);
   });
 });

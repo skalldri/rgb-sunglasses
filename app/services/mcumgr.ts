@@ -67,6 +67,38 @@ export enum OsCmd {
     BOOTLOADER_INFO = 8, // Bootloader info
 }
 
+// FS management commands (Group 8)
+export enum FsCmd {
+    DOWNLOAD_UPLOAD = 0,
+    STATUS = 1,
+    HASH = 2,
+    LIST_SUPPORTED_HASHES = 3,
+    CLOSE = 4,
+}
+
+// FS Management Group Error Codes (Group 8), from Zephyr's fs_mgmt_err_code_t.
+// FILE_NOT_FOUND is the one the extension sync path branches on: it means
+// "device doesn't have this file", i.e. install it, not "something went wrong".
+export enum FsMgmtError {
+    OK = 0,
+    UNKNOWN = 1,
+    FILE_INVALID_NAME = 2,
+    FILE_NOT_FOUND = 3,
+    FILE_IS_DIRECTORY = 4,
+    FILE_OPEN_FAILED = 5,
+    FILE_SEEK_FAILED = 6,
+    FILE_READ_FAILED = 7,
+    FILE_TRUNCATE_FAILED = 8,
+    FILE_DELETE_FAILED = 9,
+    FILE_WRITE_FAILED = 10,
+    FILE_OFFSET_NOT_VALID = 11,
+    FILE_OFFSET_LARGER_THAN_FILE = 12,
+    CHECKSUM_HASH_NOT_FOUND = 13,
+    MOUNT_POINT_NOT_FOUND = 14,
+    READ_ONLY_FILESYSTEM = 15,
+    FILE_EMPTY = 16,
+}
+
 // SMP Error Codes
 export enum SmpError {
     OK = 0,
@@ -180,6 +212,43 @@ export interface SlotInfoResponse {
 }
 
 export type UploadProgressCallback = (bytesSent: number, totalBytes: number) => void;
+
+/**
+ * An SMP command that the device answered with an error.
+ *
+ * `rc` is the return code and `group` the management group it belongs to, or
+ * undefined for the legacy shape that reports a bare `rc` with no group. Both
+ * are carried so callers can branch on a specific device-side outcome without
+ * string-matching the message.
+ */
+export class SmpCommandError extends Error {
+    readonly rc: number;
+    readonly group?: number;
+
+    constructor(message: string, rc: number, group?: number) {
+        super(message);
+        this.name = 'SmpCommandError';
+        this.rc = rc;
+        this.group = group;
+        // Required for `instanceof` to work when targeting ES5, which the app's
+        // tsconfig does through React Native's preset.
+        Object.setPrototypeOf(this, SmpCommandError.prototype);
+    }
+}
+
+export interface FileHashResponse {
+    /** Algorithm the device used, e.g. "sha256". */
+    type: string;
+    off?: number;
+    /** Number of bytes of the file that were hashed. */
+    len: number;
+    /**
+     * A byte string for hashes and a number for checksums (CRC32). CBOR byte
+     * strings decode to an ArrayBuffer or a typed array depending on the decoder,
+     * so both are possible here.
+     */
+    output: number | Uint8Array | ArrayBuffer;
+}
 
 // ============================================================================
 // SMP Protocol Implementation
@@ -669,80 +738,128 @@ export class McuMgrClient {
         imageIndex: number = 0,
         onProgress?: UploadProgressCallback
     ): Promise<void> {
-        const totalLength = imageData.length;
-        let offset = 0;
-        let stalledOffsetCount = 0;
-
         // Calculate SHA256 hash of the image
         const sha256Hash = this.calculateSha256(imageData);
 
-        while (offset < totalLength) {
-            // Calculate chunk size (leave room for CBOR overhead)
-            const maxChunkSize = Math.max(1, this.mtu - 64); // Conservative chunk size with floor guard
+        await this.chunkedUpload({
+            data: imageData,
+            group: SmpGroup.IMAGE,
+            command: ImageCmd.UPLOAD,
+            reservedBytes: 64,
+            errorLabel: 'Image upload',
+            // A zero-length image is meaningless, and the old loop never sent a
+            // packet for one - keep that.
+            sendEmpty: false,
+            onProgress,
+            buildPayload: (offset, chunk, isFirst) => {
+                const payload: any = { off: offset, data: chunk };
+
+                // First packet includes additional fields
+                if (isFirst) {
+                    payload.len = imageData.length;
+                    payload.image = imageIndex;
+                    payload.sha = Uint8Array.from(sha256Hash);
+
+                    // console.log(`Sending first image chunk: ${JSON.stringify(payload.data)}`);
+                }
+
+                // Check if chunk contains the specific byte sequence
+                // const chunkHex = uint8ArrayToHex(chunk);
+                // console.log(`Chunk offset=${offset}, size=${chunk.length}, data=${chunkHex}`);
+                // if (chunkHex.includes('0d4606462ef0d0fc')) {
+                //     console.log(`Found target sequence! Full payload: ${JSON.stringify({
+                //         ...payload,
+                //         data: chunkHex,
+                //         sha: payload.sha ? uint8ArrayToHex(payload.sha) : undefined
+                //     })}`);
+                // }
+
+                return payload;
+            },
+        });
+
+        console.log('Image upload complete');
+    }
+
+    /**
+     * The SMP chunked-transfer loop, shared by image upload and file upload.
+     *
+     * Both commands speak the same protocol: send a slice at an offset, read the
+     * offset the device wants next (which it may rewind to recover a partial
+     * transfer), and stop when the whole payload is acknowledged. Only the
+     * payload fields and the per-packet overhead differ, so those are the
+     * parameters - keeping one copy of the offset-recovery, stall-detection and
+     * range-validation logic, which previously existed twice and had already
+     * started to drift.
+     */
+    private async chunkedUpload(options: {
+        data: Uint8Array;
+        group: SmpGroup;
+        command: number;
+        /**
+         * Per-packet overhead to hold back from the MTU: CBOR framing, plus
+         * anything repeated in every request (the FS group repeats the file
+         * name; the image group does not).
+         */
+        reservedBytes: number;
+        buildPayload: (offset: number, chunk: Uint8Array, isFirst: boolean) => any;
+        /** Prefix for thrown errors, e.g. "File upload". */
+        errorLabel: string;
+        /** Send one packet for a zero-length payload (creates/truncates a file). */
+        sendEmpty: boolean;
+        onProgress?: UploadProgressCallback;
+    }): Promise<void> {
+        const { data, group, command, reservedBytes, buildPayload, errorLabel, sendEmpty } =
+            options;
+        const totalLength = data.length;
+        let offset = 0;
+        let stalledOffsetCount = 0;
+
+        // Floor guard: a large reservation (a long file name) must never produce
+        // a zero or negative chunk, which would loop forever sending nothing.
+        const maxChunkSize = Math.max(1, this.mtu - reservedBytes);
+
+        if (totalLength === 0 && !sendEmpty) {
+            return;
+        }
+
+        do {
             const chunkSize = Math.min(maxChunkSize, totalLength - offset);
-            const chunk = imageData.slice(offset, offset + chunkSize);
+            // slice() already returns a fresh Uint8Array, so the payload builders
+            // must not copy it again.
+            const chunk = data.slice(offset, offset + chunkSize);
 
-            const payload: any = {
-                off: offset,
-                data: Uint8Array.from(chunk),
-            };
-
-            // First packet includes additional fields
-            if (offset === 0) {
-                payload.len = totalLength;
-                payload.image = imageIndex;
-                payload.sha = Uint8Array.from(sha256Hash);
-
-                // console.log(`Sending first image chunk: ${JSON.stringify(payload.data)}`);
-            }
-
-            // Check if chunk contains the specific byte sequence
-            // const chunkHex = uint8ArrayToHex(chunk);
-            // console.log(`Chunk offset=${offset}, size=${chunkSize}, data=${chunkHex}`);
-            // if (chunkHex.includes('0d4606462ef0d0fc')) {
-            //     console.log(`Found target sequence! Full payload: ${JSON.stringify({
-            //         ...payload,
-            //         data: chunkHex,
-            //         sha: payload.sha ? uint8ArrayToHex(payload.sha) : undefined
-            //     })}`);
-            // }
-
-            //console.log(`Sending image chunk: offset=${offset}, size=${chunkSize}`);
             const response = await this.sendRequest(
                 SmpOp.WRITE_REQUEST,
-                SmpGroup.IMAGE,
-                ImageCmd.UPLOAD,
-                payload,
+                group,
+                command,
+                buildPayload(offset, chunk, offset === 0),
                 10000 // Longer timeout for uploads
             );
-            //console.log(`Send complete`);
 
-            throwOnSmpError(response, `Image upload error at offset ${offset}`);
+            throwOnSmpError(response, `${errorLabel} error at offset ${offset}`);
 
             // Server may respond with a different offset (e.g., to continue broken upload)
             const nextOffset = response.off !== undefined ? response.off : offset + chunkSize;
             if (nextOffset < 0 || nextOffset > totalLength) {
-                throw new Error(`Image upload error: invalid offset ${nextOffset} (total=${totalLength})`);
+                throw new Error(
+                    `${errorLabel} error: invalid offset ${nextOffset} (total=${totalLength})`
+                );
             }
 
-            if (nextOffset <= offset) {
+            if (nextOffset <= offset && totalLength > 0) {
                 stalledOffsetCount += 1;
                 if (stalledOffsetCount >= 3) {
-                    throw new Error(`Image upload stalled at offset ${offset}`);
+                    throw new Error(`${errorLabel} stalled at offset ${offset}`);
                 }
             } else {
                 stalledOffsetCount = 0;
             }
 
-            // console.log(`Server asked for a new offset! ${nextOffset}`);
             offset = nextOffset;
 
-            if (onProgress) {
-                onProgress(offset, totalLength);
-            }
-        }
-
-        console.log('Image upload complete');
+            options.onProgress?.(offset, totalLength);
+        } while (offset < totalLength);
     }
 
     /**
@@ -857,6 +974,97 @@ export class McuMgrClient {
     }
 
     // ========================================================================
+    // FS Management Commands (Group 8)
+    // ========================================================================
+
+    async getFileHash(fileName: string): Promise<FileHashResponse> {
+        const response = await this.sendRequest(
+            SmpOp.READ_REQUEST,
+            SmpGroup.FS,
+            FsCmd.HASH,
+            { name: fileName, type: 'sha256' }
+        );
+        throwOnSmpError(response, 'File hash error');
+
+        return response;
+    }
+
+    /**
+     * SHA256 of a file on the device as a lowercase hex string, or null if the
+     * file does not exist.
+     *
+     * The null case is a normal outcome, not a failure: it's how extension sync
+     * distinguishes "install this" from "replace this". Every other error still
+     * throws.
+     */
+    async getFileSha256(fileName: string): Promise<string | null> {
+        let response: FileHashResponse;
+        try {
+            response = await this.getFileHash(fileName);
+        } catch (e: unknown) {
+            if (isSmpGroupError(e, SmpGroup.FS, FsMgmtError.FILE_NOT_FOUND)) {
+                return null;
+            }
+            throw e;
+        }
+
+        if (response.type !== 'sha256') {
+            throw new Error(`Expected a sha256 hash, device returned '${response.type}'`);
+        }
+
+        // CBOR byte strings decode to an ArrayBuffer or a typed array depending on
+        // the decoder; normalise both. A number here means the device answered
+        // with a checksum (CRC32) rather than a hash, which the type check above
+        // has already ruled out - but be explicit rather than producing garbage
+        // hex from a numeric value.
+        const output = response.output;
+        if (typeof output === 'number') {
+            throw new Error('Device returned a numeric checksum where a sha256 hash was expected');
+        }
+
+        const bytes = output instanceof Uint8Array ? output : new Uint8Array(output);
+        return uint8ArrayToHex(bytes);
+    }
+
+    /**
+     * Write a file to the device's filesystem, creating or truncating it.
+     *
+     * Chunking mirrors uploadImage(), with one difference that matters: the FS
+     * upload command repeats `name` in EVERY request (the image upload doesn't),
+     * so the file name's length has to come out of each chunk's byte budget or
+     * a long path silently pushes packets past the MTU.
+     */
+    async uploadFile(
+        fileName: string,
+        fileData: Uint8Array,
+        onProgress?: UploadProgressCallback
+    ): Promise<void> {
+        await this.chunkedUpload({
+            data: fileData,
+            group: SmpGroup.FS,
+            command: FsCmd.DOWNLOAD_UPLOAD,
+            // The file name is repeated in EVERY request (unlike image upload's
+            // first-packet-only fields), so its length comes out of each chunk's
+            // budget or a long path silently pushes packets past the MTU.
+            reservedBytes: 64 + fileName.length,
+            errorLabel: 'File upload',
+            // A zero-length file still needs one request, to create/truncate it.
+            sendEmpty: true,
+            onProgress,
+            buildPayload: (offset, chunk, isFirst) => {
+                const payload: any = { off: offset, name: fileName, data: chunk };
+
+                // The total length is only sent with the first packet; the device
+                // uses it to know when the transfer is complete.
+                if (isFirst) {
+                    payload.len = fileData.length;
+                }
+                return payload;
+            },
+        });
+    }
+
+    // ========================================================================
     // High-Level Firmware Update API
     // ========================================================================
 
@@ -944,15 +1152,45 @@ export class McuMgrClient {
 // ============================================================================
 
 /**
- * Check SMP response for errors and throw if present
+ * Check SMP response for errors and throw if present.
+ *
+ * Throws SmpCommandError (an Error subclass) so a caller that needs to branch on
+ * a specific failure - e.g. extension sync treating FS group "file not found" as
+ * "install it" rather than an error - can read `group`/`rc` instead of parsing
+ * the message. The message strings are unchanged, so the many call sites that
+ * just surface `e.message` behave exactly as before.
  */
 function throwOnSmpError(response: any, label: string): void {
     if (response.rc && response.rc !== 0) {
-        throw new Error(`${label}: rc=${response.rc}`);
+        // Legacy (SMP version 0) error shape: a bare `rc` with no group, which
+        // for a non-zero value is an mcumgr_err_t, not a group-specific code.
+        throw new SmpCommandError(`${label}: rc=${response.rc}`, response.rc, undefined);
     }
     if (response.err) {
-        throw new Error(`${label}: group=${response.err.group}, rc=${response.err.rc}`);
+        throw new SmpCommandError(
+            `${label}: group=${response.err.group}, rc=${response.err.rc}`,
+            response.err.rc,
+            response.err.group
+        );
     }
+}
+
+/**
+ * Returns true if `error` came from the given management group - the SMP
+ * version 1 `{err: {group, rc}}` shape - optionally also matching a specific
+ * return code. Omit `rc` to match any failure attributable to that group.
+ *
+ * A bare `rc` is deliberately NOT matched: it carries no group, so a
+ * group-specific code like FS "file not found" (3) would be indistinguishable
+ * from the generic mcumgr EINVAL (3). That also means a group-less failure
+ * (a transport error, or ENOTSUP from firmware that doesn't implement the
+ * group at all) never looks like a per-request problem.
+ */
+export function isSmpGroupError(error: unknown, group: SmpGroup, rc?: number): boolean {
+    if (!(error instanceof SmpCommandError) || error.group !== group) {
+        return false;
+    }
+    return rc === undefined || error.rc === rc;
 }
 
 /**
