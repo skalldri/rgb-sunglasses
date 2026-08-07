@@ -40,7 +40,32 @@ The app mirrors BLE GATT characteristics as UI controls. Each characteristic on 
 - Multi-stage process: upload → test → confirm → reset
 - **Important**: Uses sequence numbers and fragmented responses across multiple BLE notifications
 
-### GitHub-releases auto-update check ([firmware-update-modal.tsx](app/firmware-update-modal.tsx))
+### Firmware update: what you can and cannot verify an installed image against
+
+The guided flow (`app/firmware-update/flow.tsx` + `hooks/use-firmware-update-flow.ts`) proves an update actually landed by comparing hashes. Getting the *right* hash is the whole trick, and there are two wrong answers that both look plausible:
+
+- **The zip manifest has no hash.** Verified against the published `fw-v2.1.0` `dfu_application_proto0.zip`: each `manifest.json` entry carries only `type`, `board`, `soc`, `load_address`, `image_index`, the two `slot_index` fields, `version`/`version_MCUBOOT`, `size`, `file`, `modtime`. Don't go looking for a digest there — and don't trust the `ManifestFile` interface as evidence either way; check a real artifact.
+- **`sha256(whole .bin)` is NOT the value the device reports.** The file ends with the MCUboot TLV trailer, which contains the digest, so the digest cannot cover it. For `fw-v2.1.0`'s `fw.signed.bin` the real values are `IMAGE_TLV_SHA256 = eeacf0fa…` versus `sha256(file) = 9f5d7d3a…`. Verification built on the whole-file digest would fail every single update.
+
+The value the device reports as a slot's `hash` in `getImageState()` **is** the image's own `IMAGE_TLV_SHA256` (type `0x10`) — hardware-confirmed: after uploading `fw-v2.1.0` the board reported `eeacf0fa…` for slot 1, matching the TLV extracted from the file. So `parseImageSha256()` (`services/mcumgr.ts`) reads that TLV out of the `.bin` and the flow verifies the post-reboot active slot against it, which is end-to-end: it never trusts the device's account of what it received. `fw/tools/dump_dfu_tlv.py` is the reference implementation and the cross-check.
+
+Two related facts worth keeping in mind:
+
+- **Images are staged as permanent (`setImageState(hash, true)`), and there is no rollback to be had.** The bootloader is built `CONFIG_BOOT_UPGRADE_ONLY=y` (overwrite-only), whose Kconfig help says it *"prevents the fallback recovery"*, and this SoC's architecture cannot support a swap mode. Hardware-confirmed: an image staged as `pending` came back `active confirmed` with nothing confirming it. **Do not "fix" this to `confirm=false` expecting MCUboot to revert a bad image — it cannot**, and a test-then-confirm sequence would be a permanently no-op extra step. A failed verification means the device is running the wrong firmware and needs re-flashing, not restarting.
+
+- **Verification cannot use the same signal for both cores.** Measured on hardware with fw-v2.1.0:
+
+  | image | file TLV | staged slot 1 | active slot 0 after install |
+  |---|---|---|---|
+  | 0 app core | `eeacf0fa…` | `eeacf0fa…` | `eeacf0fa…` — stable |
+  | 1 net core | `e43ebfa1…` | `e43ebfa1…` | `4d4b2c28…` — changes |
+
+  The app core's image is flashed into its own slot verbatim so its hash survives; the net-core image is a wrapper the app core unwraps over IPC, so its file TLV can never match post-install. Hashes are checked at staging for every image (proving the upload arrived intact) and after reboot for the app core only, plus a version check for both. Version comparison must stop at the `+build` boundary — a bare `startsWith` accepts a shorter running version (`'2.1.10+0'.startsWith('2.1.1')` is true), which would verify a failed update as success.
+
+- **Sync extensions BEFORE the activating restart.** They live on the FAT disk and are read at boot, so syncing after the reboot needs a second reboot — and a device that reboots into new firmware with old-ABI extensions has them rejected by `scan_slot()`, so the animations silently vanish. The guided flow does this in `handleRestart` (`app/firmware-update/flow.tsx`); a sync failure there does not block the restart, since the images are already staged and extensions can be retried afterwards.
+- **After an OTA stages an image, the first J-Link reflash boots the OTA'd image, not the one you just flashed** — MCUboot consumes the pending swap first. It takes a second flash to actually land your build. Check the boot banner's version before trusting any measurement taken after a reflash.
+
+### GitHub-releases auto-update check (now `hooks/use-firmware-release.ts`)
 
 On mount (once an MCUmgr client connects), the modal sequentially: (1) calls `client.getOsInfo('i')` (OS Management group, `OsCmd.INFO`, added to [services/mcumgr.ts](services/mcumgr.ts) for this feature) to read the device's board name string (e.g. `rgb_sunglasses_proto0_nrf5340_cpuapp`), (2) derives `'proto0' | 'dk' | null` from it via `extractBoardRevision()`, then (3) calls `fetchLatestRelease('skalldri', 'rgb-sunglasses')` (GitHub REST API, no auth — [services/github-releases.ts](services/github-releases.ts)) and picks the release asset whose filename contains the board revision (`findAssetForBoard()`). The found asset's tag (`vX.Y.Z` → stripped via `parseVersionFromTag()`) is compared against the currently-active image's `version` (from `getImageState()`, slot 0 + `active`) via `compareVersions()`; a strictly-older device version surfaces an "Update Available" card with a **Download Update** button. That button downloads the release zip via `expo-file-system/legacy`'s `createDownloadResumable` (not the newer `expo-file-system/next` `File` API used elsewhere in this file — `next` has no resumable-download primitive yet) straight into the same `parseFirmwarePackageFromBase64()` → `firmwarePackage` state the manual `.zip`-picker path already populates, so the existing upload/test/confirm flow (`handleStartUpdate`) is unmodified and shared by both paths.
 
@@ -68,7 +93,8 @@ The patch's core fix: the library's Android native module (`BlePlxModule.java`) 
 ### Expo Router (File-Based Routing)
 
 - Tabs: [app/(tabs)/](<app/(tabs)/>) directory (bluetooth, device-state/ — itself a directory with `index.tsx` + `[serviceUuid].tsx`, index)
-- Modals: [color-picker-modal.tsx](app/color-picker-modal.tsx), [firmware-update-modal.tsx](app/firmware-update-modal.tsx)
+- Modals: [color-picker-modal.tsx](app/color-picker-modal.tsx), and the firmware-update group below
+- **Firmware update is a nested stack**, not a single modal: `app/firmware-update/` holds `index` (landing), `flow` (the guided update), `debug` (the old high-detail page) and `extensions`, wrapped by a `_layout.tsx` that mounts `McuMgrClientProvider`. The provider is why it is a group at all — `McuMgrClient.initialize()` registers a `monitor()` on the SMP characteristic, and a pushed screen does **not** unmount the one below it, so a per-screen `useMcuMgrClient` would put two clients on one characteristic (two notification registrations against Android's 15-slot budget, two response handlers racing). Screens draw their own in-body headers so they stay renderable in unit tests without a navigator.
 - Query params for modal communication: `charUuid`, `r`, `g`, `b`, `mode`, `speed` (color picker; `mode`/`speed` added for the issue #259 color modes)
 
 ## Development Workflow
@@ -536,27 +562,37 @@ If you see `Operation was cancelled` on `connectToDevice()` with no scan-related
 
 ### MCP Coordinate Systems
 
-Three coordinate spaces exist and are NOT interchangeable:
+**Driving the app on a phone at all — which tap strategy to use, and how to wait for a
+screen change — is `/drive-app`. Read it before a validation run; it is the difference
+between a five-minute click-through and a half-hour of taps that silently press buttons
+on the screen underneath.** This section is only the coordinate arithmetic.
 
-| Tool / context                         | Space                   | Dimensions                                  |
-| -------------------------------------- | ----------------------- | ------------------------------------------- |
-| `android_screenshot()` delivered image | **screenshot px**       | 896 × 2000                                  |
-| `tap(x, y)`                            | **screenshot px**       | same — pass coords directly from screenshot |
-| `inspect_at_point(x, y)`               | **dp** (logical pixels) | ~427 × 953                                  |
-| ADB `input tap` / `native=true`        | **raw device px**       | 960 × 2142                                  |
+Two coordinate spaces exist and are NOT interchangeable:
 
-**Converting screenshot px → dp** (needed for `inspect_at_point`):
+| Tool / context                         | Space             | Dimensions (Pixel 9 Pro)                    |
+| -------------------------------------- | ----------------- | ------------------------------------------- |
+| `android_screenshot()` delivered image | **execbro px**    | 896 × 2000                                  |
+| `tap(x, y)`                            | **execbro px**    | same                                        |
+| `get_screen_state` / `get_screen_layout` / `measure` | **execbro px** | same                     |
+| `inspect_at_point(x, y)`               | **execbro px**    | same                                        |
+| ADB `input tap` / `native=true` / `uiautomator dump` bounds | **raw device px** | 960 × 2142                |
 
 ```
-dp = (screenshot_px × 960/896) / 2.25
-   ≈ screenshot_px × 0.476
+device_px = execbro_px × 960/896   (exactly 15/14, ×1.0714)
 ```
 
-Device density is 360 dpi → pixel ratio = 360/160 = **2.25**.
+`inspect_at_point` takes **execbro px, not dp** — corrected 2026-08-07 against the live
+phone (`inspect_at_point(447, 1040)` returned the button under the finger; the
+dp-converted `(213, 495)` returned an unrelated `Card`). An earlier version of this table
+claimed dp and a `× 0.476` conversion; both were wrong. Verified three ways: `wm size`,
+a raw `screencap` PNG header, and execbro's own `convertedTo` echo.
 
-**Status bar**: 153 screenshot px (68 dp) at the top. App content starts below this. `measureInWindow` dp coordinates are relative to the content area (y=0 is below the status bar).
+**Status bar**: 153 execbro px at the top; app content starts below it. `measureInWindow`
+dp coordinates are relative to the content area (y=0 is below the status bar).
 
-**Practical rule**: get coordinates from the screenshot for `tap()`. Convert to dp for `inspect_at_point()`. Don't mix them up.
+**Practical rule**: take coordinates verbatim from `get_screen_state`, and never scale
+them. The third space — the image as rendered in your context, ~703 × 1568 — is never a
+valid tap input; estimating off it misses, and a miss can land on a covered screen.
 
 ### execbro tapping on the OnePlus 9 Pro (LE2125) — use `strategy="accessibility"` first
 

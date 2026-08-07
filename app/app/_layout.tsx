@@ -68,7 +68,9 @@ export default function RootLayout() {
           }}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="color-picker-modal" options={{ presentation: 'modal', title: 'Color Picker' }} />
-          <Stack.Screen name="firmware-update-modal" options={{ presentation: 'modal', title: 'Firmware Update' }} />
+          {/* A nested stack (see firmware-update/_layout.tsx), so its screens can share
+              one MCUmgr client and draw their own in-body headers. */}
+          <Stack.Screen name="firmware-update" options={{ presentation: 'modal', headerShown: false }} />
           <Stack.Screen name="app-update-modal" options={{ presentation: 'modal', title: 'App Update' }} />
         </Stack>
         <StatusBar style="auto" />

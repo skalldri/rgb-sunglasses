@@ -24,6 +24,15 @@ interface ExtensionSyncCardProps {
     progress: ExtensionSyncProgress | null;
     onSync: () => void;
     disabled: boolean;
+    /**
+     * Hide the card's own Sync button.
+     *
+     * Used by the guided flow, which embeds this card on its "Ready to restart" step
+     * and drives the sync from its own "Restart and Install" button — extensions are
+     * written before the activating restart, so the two actions are one decision and
+     * two buttons would invite the user to do half of it.
+     */
+    showSyncButton?: boolean;
 }
 
 function statusLabel(status: ExtensionSyncStatus): string {
@@ -56,6 +65,7 @@ export function ExtensionSyncCard({
     progress,
     onSync,
     disabled,
+    showSyncButton = true,
 }: ExtensionSyncCardProps) {
     const c = useThemeColors();
 
@@ -69,12 +79,13 @@ export function ExtensionSyncCard({
     // retry from this card, so the list and the retry button have to survive it -
     // otherwise they are left with a half-synced directory and no way back.
     const hasPlan = state === 'ready' || entries.length > 0;
-    const showSyncButton = hasPlan && pending.length > 0;
+    const showOwnSyncButton = showSyncButton && hasPlan && pending.length > 0;
 
     // One wrapper for every state, so the heading and card styling can't drift
     // apart between them.
     return (
         <Card
+            testID={`extension-sync-${state}`}
             style={[
                 styles.card,
                 state !== 'error' && pending.length > 0 ? { borderColor: c.success } : null,
@@ -103,7 +114,10 @@ export function ExtensionSyncCard({
 
             {hasPlan &&
                 entries.map(entry => (
-                    <View key={entry.name} style={styles.row}>
+                    <View
+                        key={entry.name}
+                        testID={`extension-sync-entry-${entry.name}`}
+                        style={styles.row}>
                         <ThemedText type="caption" style={styles.rowName} numberOfLines={1}>
                             {entry.name}
                         </ThemedText>
@@ -156,13 +170,14 @@ export function ExtensionSyncCard({
                 </View>
             )}
 
-            {showSyncButton && (
+            {showOwnSyncButton && (
                 <>
                     <ThemedText type="caption" style={styles.note}>
                         Extensions are read at boot, so a reboot is needed after syncing.
                     </ThemedText>
                     <View style={styles.buttonRow}>
                         <AppButton
+                            testID="extension-sync-button"
                             title={
                                 isSyncing
                                     ? 'Syncing...'
@@ -179,7 +194,7 @@ export function ExtensionSyncCard({
                 </>
             )}
 
-            {state === 'ready' && entries.length > 0 && pending.length === 0 && (
+            {showSyncButton && state === 'ready' && entries.length > 0 && pending.length === 0 && (
                 <ThemedText type="caption" style={{ color: c.success }}>
                     All extensions match this release.
                 </ThemedText>

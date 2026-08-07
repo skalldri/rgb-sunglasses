@@ -18,7 +18,10 @@ interface Props extends PressableProps {
 /**
  * Pressable button with gradient/solid/ghost variants.
  *
- * Spreads `...rest` onto the Pressable so `<Link asChild>` can inject its `onPress`.
+ * Spreads `...rest` onto the Pressable so `<Link asChild>` can inject its `onPress` — and
+ * so `testID` reaches the touchable itself rather than a wrapper. Don't destructure
+ * `testID` out: /drive-app depends on it landing on the Pressable, because a tap
+ * resolved to a wrapper View presses nothing and still reports success.
  * Intentionally has NO built-in spinner — callers that need a loading indicator render
  * their own (see bluetooth-device-list-item, where a separate ActivityIndicator is asserted).
  */

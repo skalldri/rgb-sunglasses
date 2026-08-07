@@ -8,13 +8,17 @@ interface Props {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   padded?: boolean;
+  /** Forwarded to the underlying View. Load-bearing for /drive-app — a card is how a
+   *  hardware validation run reads which step a screen is on. */
+  testID?: string;
 }
 
 /** Themed surface container with rounded corners, hairline border and a soft shadow. */
-export function Card({ children, style, padded = true }: Props) {
+export function Card({ children, style, padded = true, testID }: Props) {
   const c = useThemeColors();
   return (
     <View
+      testID={testID}
       style={[
         styles.card,
         { backgroundColor: c.surface, borderColor: c.border },

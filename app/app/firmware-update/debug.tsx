@@ -1,27 +1,20 @@
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
 import { AppButton } from '@/components/ui/app-button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Divider } from '@/components/ui/divider';
 import { ProgressBar } from '@/components/ui/progress-bar';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { UUID_MCUBOOT_INFO_SERVICE } from '@/constants/bluetooth';
 import { Spacing } from '@/constants/theme';
 import { useBluetooth } from '@/context/bluetooth-context';
+import { useFirmwareBusy } from '@/context/firmware-update-context';
+import { useMcuMgrClientContext } from '@/context/mcumgr-client-context';
 import { useThemeColors } from '@/hooks/use-theme-color';
-import { useMcuMgrClient } from '@/hooks/use-mcumgr-client';
 import { decodeUtf8FromBase64 } from '@/services/ble-value-codec';
-import {
-    calculateOverallUploadProgress,
-    findUploadedImageForIndex,
-    FirmwarePackage,
-    parseFirmwareImageIndex,
-    parseFirmwarePackageFromBase64
-} from '@/services/firmware-package';
 import {
     compareVersions,
     extractBoardRevision,
-    fetchLatestFirmwareRelease,
     fetchLatestMcubootRelease,
     findAssetForBoard,
     GitHubAsset,
@@ -35,26 +28,27 @@ import {
     parseMcubootPackage,
 } from '@/services/mcuboot-updater-client';
 import { formatBytes, formatHash, ImageSlot, SlotInfoResponse } from '@/services/mcumgr';
-import { ExtensionCheckState, ExtensionSyncCard } from '@/components/extension-sync-card';
-import {
-    countDeviceExtensions,
-    countUnmanagedExtensions,
-    downloadExtensionAsset,
-    entriesNeedingUpload,
-    ExtensionSyncEntry,
-    ExtensionSyncProgress,
-    planExtensionSync,
-    syncExtensions,
-} from '@/services/extension-sync';
 import * as DocumentPicker from 'expo-document-picker';
 import * as LegacyFS from 'expo-file-system/legacy';
 import { File } from 'expo-file-system/next';
-import { Link } from 'expo-router';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 // ============================================================================
-// Component
+// FW Update Debug — the low-level page
+//
+// This is the original all-in-one firmware screen, kept for development and
+// recovery work. The everyday path now lives in `index.tsx` (landing) and
+// `flow.tsx` (guided update); what stayed here is everything diagnostic:
+// the raw slot table, mark-for-test, manual reset/erase, slot info, and the
+// MCUboot bootloader updater.
+//
+// It deliberately does NOT upload firmware itself any more. The one upload
+// implementation lives in `hooks/use-firmware-update-flow.ts`, which stages for
+// test and confirms only after verifying the reboot; a second copy here would
+// have kept the old mark-permanent-immediately behaviour alive.
 // ============================================================================
 
 function flagTone(flag: string): 'success' | 'info' | 'neutral' {
@@ -70,48 +64,26 @@ function base64ToBytes(base64Data: string): Uint8Array {
     return bytes;
 }
 
-export default function FirmwareUpdateModal() {
-    const { selectedDevice, setSelectedDevice } = useBluetooth();
-    const { client, isInitializing, error: initError } = useMcuMgrClient(selectedDevice?.device ?? null);
+export default function FirmwareUpdateDebug() {
+    const { selectedDevice, reconnectingDevice } = useBluetooth();
+    // The client is owned by the route-group provider, not by this screen — see
+    // context/mcumgr-client-context.tsx for why there must only ever be one.
+    const { client, isInitializing, error: initError } = useMcuMgrClientContext();
+    // The flow screen stays mounted underneath this one, so an upload can be in
+    // flight while this page is open. The old single-screen modal disabled these
+    // controls with `disabled={isUploading}`; splitting the screens took that away,
+    // and a Reset Device landing between upload chunks reboots the device mid-transfer.
+    const { isBusy } = useFirmwareBusy();
     const c = useThemeColors();
+    const router = useRouter();
     const [imageState, setImageState] = useState<ImageSlot[]>([]);
     const [status, setStatus] = useState<string>('');
     const [error, setError] = useState<string>('');
-    const [uploadProgress, setUploadProgress] = useState<number>(0);
-    const [isUploading, setIsUploading] = useState(false);
     const [slotInfo, setSlotInfo] = useState<SlotInfoResponse | null>(null);
-    const [firmwarePackage, setFirmwarePackage] = useState<FirmwarePackage | null>(null);
-    const [currentUploadIndex, setCurrentUploadIndex] = useState<number>(0);
 
-    // Board detection
+    // Board detection (still needed here for the MCUboot release lookup below)
     const [boardRevision, setBoardRevision] = useState<string | null>(null);
     const [boardDetectionError, setBoardDetectionError] = useState<string>('');
-
-    // GitHub update check
-    type UpdateCheckState = 'idle' | 'checking' | 'upToDate' | 'updateAvailable' | 'error';
-    const [updateCheckState, setUpdateCheckState] = useState<UpdateCheckState>('idle');
-    const [latestAsset, setLatestAsset] = useState<GitHubAsset | null>(null);
-    const [latestVersion, setLatestVersion] = useState<string>('');
-    const [updateCheckError, setUpdateCheckError] = useState<string>('');
-
-    // Download
-    const [isDownloading, setIsDownloading] = useState(false);
-    const [downloadProgress, setDownloadProgress] = useState<number>(0);
-
-    // Animation extensions. These are plain files on the board's FAT disk rather
-    // than MCUboot images, so they're synced separately from the firmware images
-    // and only take effect on the next boot.
-    const [releaseAssets, setReleaseAssets] = useState<GitHubAsset[]>([]);
-    const [extensionState, setExtensionState] = useState<ExtensionCheckState>('idle');
-    const [extensionEntries, setExtensionEntries] = useState<ExtensionSyncEntry[]>([]);
-    const [unmanagedExtensionCount, setUnmanagedExtensionCount] = useState(0);
-    const [extensionError, setExtensionError] = useState<string>('');
-    const [isSyncingExtensions, setIsSyncingExtensions] = useState(false);
-    const [extensionProgress, setExtensionProgress] = useState<ExtensionSyncProgress | null>(null);
-    // Latches once the unmanaged-extension count has been derived for this
-    // connection; see the comment at its use site for why it must not be redone
-    // after a sync. Reset alongside the rest of the extension state on disconnect.
-    const unmanagedComputedRef = useRef(false);
 
     // Bootloader update
     const blUpdaterRef = useRef<McubootUpdaterClient | null>(null);
@@ -149,20 +121,6 @@ export default function FirmwareUpdateModal() {
             return { charUuid, name: charInfo.name as string, value: displayValue };
         });
     const currentMcubootVersion = mcubootDeviceInfo.find(info => info.name === 'MCUboot Version')?.value ?? null;
-
-    // Update context with client for cleanup on disconnect
-    useEffect(() => {
-        if (client && selectedDevice) {
-            setSelectedDevice({
-                ...selectedDevice,
-                mcuMgrClient: client
-            });
-        }
-        // Only re-run when the client or device MAC changes: depending on the full
-        // `selectedDevice` object would loop forever, since this effect itself calls
-        // setSelectedDevice with a new object. (setSelectedDevice is a stable context setter.)
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [client, selectedDevice?.mac]);
 
     // Initialize (and tear down) the MCUboot updater BLE client alongside the MCUmgr client.
     useEffect(() => {
@@ -246,82 +204,6 @@ export default function FirmwareUpdateModal() {
         }
     }, [client]);
 
-    /**
-     * Ask the device for the SHA256 of every extension this release ships and
-     * compare it against the digest GitHub reports for that asset.
-     *
-     * Runs against `releaseAssets` (all assets of the latest release), not
-     * `latestAsset` (just the board's firmware zip), because extensions are
-     * published as separate bare `.llext` assets.
-     */
-    const refreshExtensionPlan = useCallback(async () => {
-        if (!client || releaseAssets.length === 0) return;
-
-        setExtensionState('checking');
-        setExtensionError('');
-        try {
-            const entries = await planExtensionSync(client, releaseAssets);
-            setExtensionEntries(entries);
-
-            // Only ever computed from the FIRST plan of a connection. The device
-            // extension count comes from GATT services, which don't change until
-            // the firmware re-scans at boot - so comparing it against a post-sync
-            // plan would count just-uploaded files as loaded and silently drop the
-            // warning to zero while the stale extensions are still installed.
-            if (!unmanagedComputedRef.current) {
-                const deviceExtensions = countDeviceExtensions(
-                    Object.keys(selectedDevice?.characteristicsByService ?? {})
-                );
-                setUnmanagedExtensionCount(countUnmanagedExtensions(deviceExtensions, entries));
-                unmanagedComputedRef.current = true;
-            }
-            setExtensionState('ready');
-        } catch (e: unknown) {
-            // Firmware without MCUmgr file management answers every FS command with
-            // an error, so this is an expected outcome on an older build - surfaced
-            // in the card rather than raised as an update failure.
-            setExtensionError(e instanceof Error ? e.message : String(e));
-            setExtensionState('error');
-        }
-        // characteristicsByService is read for a one-off count at check time; it must
-        // not re-trigger the check, which issues SMP traffic.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [client, releaseAssets]);
-
-    /**
-     * Upload every extension that doesn't match the release. Shared by the
-     * Extensions card's own button and by the full update flow.
-     */
-    const runExtensionSync = useCallback(async (): Promise<boolean> => {
-        if (!client || entriesNeedingUpload(extensionEntries).length === 0) return true;
-
-        setIsSyncingExtensions(true);
-        setExtensionProgress(null);
-        try {
-            await syncExtensions(
-                client,
-                extensionEntries,
-                downloadExtensionAsset,
-                setExtensionProgress
-            );
-            await refreshExtensionPlan();
-            return true;
-        } catch (e: unknown) {
-            setExtensionError(e instanceof Error ? e.message : String(e));
-            // Re-plan before surfacing the error so the card lists what actually
-            // landed before the failure rather than the pre-sync picture, and so
-            // a retry only re-uploads what is still outstanding. Best-effort: if
-            // the link is gone this fails too, and the stale entries are still
-            // enough to render the retry button.
-            await refreshExtensionPlan().catch(() => undefined);
-            setExtensionState('error');
-            return false;
-        } finally {
-            setIsSyncingExtensions(false);
-            setExtensionProgress(null);
-        }
-    }, [client, extensionEntries, refreshExtensionPlan]);
-
     // Fetch initial state when client becomes available, then detect board revision.
     // All three SMP calls are sequenced to avoid concurrent requests (McuMgrClient
     // only supports one pending request at a time).
@@ -350,19 +232,10 @@ export default function FirmwareUpdateModal() {
         fetchInitialState();
     }, [client, refreshImageState, refreshSlotInfo]);
 
-    // Check extensions once the release's asset list is known. Kept out of
-    // fetchInitialState above because that runs before the GitHub lookup, and the
-    // release is what says which extensions should exist.
-    useEffect(() => {
-        refreshExtensionPlan();
-    }, [refreshExtensionPlan]);
-
-    // Display initialization error if present
-    useEffect(() => {
-        if (initError) {
-            setError(initError);
-        }
-    }, [initError]);
+    // NOTE: initError is deliberately NOT copied into `error` here. It is
+    // 'No device connected' whenever the link is down - including during a perfectly
+    // normal reboot - and the old code assigned it without ever clearing it, so a
+    // stale red banner outlived the reconnect. It is rendered as neutral status below.
 
     // Reset board-detection/update-check state when the client disconnects (e.g. the device
     // reboots to apply an update via "Reset Device"). Without this, a stale "Update Available"
@@ -377,58 +250,11 @@ export default function FirmwareUpdateModal() {
 
         setBoardRevision(null);
         setBoardDetectionError('');
-        setUpdateCheckState('idle');
-        setLatestAsset(null);
-        setLatestVersion('');
-        setUpdateCheckError('');
-        setReleaseAssets([]);
-        setExtensionState('idle');
-        setExtensionEntries([]);
-        setUnmanagedExtensionCount(0);
-        unmanagedComputedRef.current = false;
-        setExtensionError('');
         setMcubootUpdateCheckState('idle');
         setMcubootLatestAsset(null);
         setMcubootLatestVersion('');
         setMcubootUpdateCheckError('');
     }, [client]);
-
-    // Check GitHub for the latest release once board revision is known
-    useEffect(() => {
-        if (!boardRevision || updateCheckState !== 'idle') return;
-
-        async function checkForUpdates() {
-            setUpdateCheckState('checking');
-            try {
-                const release = await fetchLatestFirmwareRelease('skalldri', 'rgb-sunglasses');
-                const asset = findAssetForBoard(release.assets, boardRevision!);
-                if (!asset) {
-                    throw new Error(`No firmware asset found for board: ${boardRevision}`);
-                }
-
-                const githubVersion = parseVersionFromTag(release.tag_name);
-                const activeSlot = imageState.find(s => s.active && s.slot === 0);
-                const deviceVersion = activeSlot?.version ?? '';
-                const cmp = deviceVersion ? compareVersions(deviceVersion, githubVersion) : -1;
-
-                setLatestAsset(asset);
-                setLatestVersion(githubVersion);
-                // Kept whole (not just the board's zip) so the extension check can
-                // find this release's bare .llext assets.
-                setReleaseAssets(release.assets);
-                setUpdateCheckState(cmp < 0 ? 'updateAvailable' : 'upToDate');
-            } catch (e: unknown) {
-                setUpdateCheckError(e instanceof Error ? e.message : String(e));
-                setUpdateCheckState('error');
-            }
-        }
-
-        checkForUpdates();
-        // updateCheckState is read only as a run-once idle guard, not to compute the
-        // result; it's deliberately not a dependency so the check fires once per
-        // board/image change rather than re-firing on its own state transitions.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [boardRevision, imageState]);
 
     // Check GitHub for the latest standalone MCUboot release. Proto0-only, like the bootloader
     // updater service itself (fw/Kconfig's APP_MCUBOOT_UPDATER), and only once the device's own
@@ -469,6 +295,12 @@ export default function FirmwareUpdateModal() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [boardRevision, currentMcubootVersion]);
 
+    /**
+     * Sideload a .zip. Hands off to the guided flow rather than uploading here: the
+     * flow is the single implementation of upload -> stage-for-test -> reboot ->
+     * verify -> confirm, and a second copy on this page would have kept the old
+     * mark-permanent-immediately behaviour alive alongside it.
+     */
     async function handleSelectFirmwarePackage() {
         try {
             setError('');
@@ -476,131 +308,15 @@ export default function FirmwareUpdateModal() {
                 type: 'application/zip',
                 copyToCacheDirectory: true,
             });
-
-            if (result.canceled || !result.assets?.[0]) {
-                return;
-            }
+            if (result.canceled || !result.assets?.[0]) return;
 
             const file = result.assets[0];
-            setStatus(`Loading: ${file.name}`);
-
-            // Read file contents as base64 using new File API
-            const fileRef = new File(file.uri);
-            const base64Data = await fileRef.base64();
-
-            // Parse zip file
-            setStatus('Parsing firmware package...');
-            const parsedPackage = await parseFirmwarePackageFromBase64(base64Data);
-            setFirmwarePackage(parsedPackage);
-            setStatus('');
+            router.push({
+                pathname: '/firmware-update/flow',
+                params: { source: 'file', uri: file.uri, name: file.name },
+            });
         } catch (e: any) {
             setError(`Failed to load firmware package: ${e.message}`);
-            setStatus('');
-        }
-    }
-
-    async function handleStartUpdate() {
-        if (!client || !firmwarePackage) return;
-
-        setIsUploading(true);
-        setUploadProgress(0);
-        setError('');
-        setCurrentUploadIndex(0);
-
-        try {
-            const totalImages = firmwarePackage.images.length;
-
-            for (let i = 0; i < totalImages; i++) {
-                const image = firmwarePackage.images[i];
-                const imageIndex = parseFirmwareImageIndex(image.manifest.image_index);
-                setCurrentUploadIndex(i);
-
-                setStatus(`Uploading ${image.manifest.file} (${i + 1}/${totalImages})...`);
-
-                await client.uploadImage(
-                    image.data,
-                    imageIndex,
-                    (sent, total) => {
-                        setUploadProgress(calculateOverallUploadProgress(i, totalImages, sent, total));
-                    }
-                );
-
-                setStatus(`Marking image ${imageIndex} for test...`);
-
-                // Get updated image state and mark for test
-                const state = await client.getImageState();
-                console.log(`Got image state after upload: ${JSON.stringify(state)}`)
-                const uploadedImage = findUploadedImageForIndex(state.images, imageIndex);
-
-                if (uploadedImage?.hash) {
-                    console.log(`Setting image state!`);
-                    await client.setImageState(uploadedImage.hash, true); // Confirm image, permanent install
-                } else {
-                    throw new Error(`Uploaded image not found in image state response`);
-                }
-            }
-
-            // Sync extensions before the user reboots: they're read from the FAT
-            // disk at boot, so writing them after the reboot that activates the new
-            // firmware would mean needing a second reboot. A failure here does not
-            // fail the firmware update - the images are already uploaded and
-            // confirmed - so it's reported through the Extensions card and the user
-            // can retry from there.
-            const pendingExtensions = entriesNeedingUpload(extensionEntries).length;
-            if (pendingExtensions > 0) {
-                setStatus(`Syncing ${pendingExtensions} extension(s)...`);
-                await runExtensionSync();
-            }
-
-            setStatus('All firmware images uploaded successfully!');
-            setFirmwarePackage(null); // Clear the package
-            await refreshImageState();
-        } catch (e: any) {
-            setError(`Upload failed: ${e.message}`);
-        } finally {
-            setIsUploading(false);
-        }
-    }
-
-    async function handleDownloadUpdate() {
-        if (!latestAsset) return;
-
-        setIsDownloading(true);
-        setDownloadProgress(0);
-        setError('');
-
-        const destUri = (LegacyFS.cacheDirectory ?? '') + 'firmware-update.zip';
-
-        try {
-            const task = LegacyFS.createDownloadResumable(
-                latestAsset.browser_download_url,
-                destUri,
-                {},
-                ({ totalBytesWritten, totalBytesExpectedToWrite }: { totalBytesWritten: number; totalBytesExpectedToWrite: number }) => {
-                    if (totalBytesExpectedToWrite > 0) {
-                        setDownloadProgress(
-                            Math.round((totalBytesWritten / totalBytesExpectedToWrite) * 100)
-                        );
-                    }
-                }
-            );
-
-            const result = await task.downloadAsync();
-            if (!result) {
-                throw new Error('Download was cancelled');
-            }
-
-            setStatus('Parsing firmware package...');
-            const fileRef = new File(result.uri);
-            const base64Data = await fileRef.base64();
-            const parsedPackage = await parseFirmwarePackageFromBase64(base64Data);
-            setFirmwarePackage(parsedPackage);
-            setStatus('');
-        } catch (e: any) {
-            setError(`Download failed: ${e.message}`);
-        } finally {
-            setIsDownloading(false);
-            setDownloadProgress(0);
         }
     }
 
@@ -759,11 +475,6 @@ export default function FirmwareUpdateModal() {
         }
     }
 
-    function handleCancelPackage() {
-        setFirmwarePackage(null);
-        setStatus('');
-    }
-
     async function handleConfirmImage(hash: Uint8Array) {
         if (!client) return;
 
@@ -802,106 +513,6 @@ export default function FirmwareUpdateModal() {
         }
     }
 
-    function formatBoardRevision(revision: string): string {
-        if (revision === 'proto0') return 'Proto0';
-        if (revision === 'dk') return 'DK';
-        return revision;
-    }
-
-    function renderAutoUpdateSection() {
-        if (isDownloading) {
-            return (
-                <Card style={styles.updateCard}>
-                    <ThemedText type="overline">Downloading Update...</ThemedText>
-                    <ProgressBar progress={downloadProgress / 100} label={`${downloadProgress}%`} height={12} />
-                </Card>
-            );
-        }
-
-        if (!boardRevision && !boardDetectionError) {
-            return (
-                <Card style={styles.updateCard}>
-                    <ActivityIndicator size="small" color={c.primary} />
-                    <ThemedText type="caption" style={styles.status}>Detecting board...</ThemedText>
-                </Card>
-            );
-        }
-
-        if (boardDetectionError && !boardRevision) {
-            return (
-                <Card style={styles.updateCard}>
-                    <ThemedText style={[styles.updateCardError, { color: c.danger }]}>{boardDetectionError}</ThemedText>
-                </Card>
-            );
-        }
-
-        if (updateCheckState === 'checking') {
-            return (
-                <Card style={styles.updateCard}>
-                    <ThemedText type="caption" style={styles.boardLabel}>
-                        Board: {formatBoardRevision(boardRevision!)}
-                    </ThemedText>
-                    <ActivityIndicator size="small" color={c.primary} />
-                    <ThemedText type="caption" style={styles.status}>Checking for updates...</ThemedText>
-                </Card>
-            );
-        }
-
-        if (updateCheckState === 'error') {
-            return (
-                <Card style={styles.updateCard}>
-                    <ThemedText type="caption" style={styles.boardLabel}>
-                        Board: {formatBoardRevision(boardRevision!)}
-                    </ThemedText>
-                    <ThemedText style={[styles.updateCardError, { color: c.danger }]}>
-                        Update check failed: {updateCheckError}
-                    </ThemedText>
-                </Card>
-            );
-        }
-
-        if (updateCheckState === 'upToDate') {
-            return (
-                <Card style={styles.updateCard}>
-                    <ThemedText type="caption" style={styles.boardLabel}>
-                        Board: {formatBoardRevision(boardRevision!)}
-                    </ThemedText>
-                    <ThemedText style={[styles.updateCardSuccess, { color: c.success }]}>
-                        Up to date (v{latestVersion})
-                    </ThemedText>
-                </Card>
-            );
-        }
-
-        if (updateCheckState === 'updateAvailable' && latestAsset) {
-            const activeSlot = imageState.find(s => s.active && s.slot === 0);
-            const deviceVersion = activeSlot?.version ?? 'Unknown';
-
-            return (
-                <Card style={[styles.updateCard, { borderColor: c.success }]}>
-                    <ThemedText type="overline" style={styles.sectionTitle}>
-                        Update Available
-                    </ThemedText>
-                    <ThemedText type="caption" style={styles.boardLabel}>
-                        Board: {formatBoardRevision(boardRevision!)}
-                    </ThemedText>
-                    <ThemedText type="caption">Current: v{deviceVersion}</ThemedText>
-                    <ThemedText type="caption">Latest: v{latestVersion}</ThemedText>
-                    <View style={styles.buttonRow}>
-                        <AppButton
-                            title="Download Update"
-                            variant="primary"
-                            style={styles.rowButton}
-                            onPress={handleDownloadUpdate}
-                            disabled={!client || isUploading}
-                        />
-                    </View>
-                </Card>
-            );
-        }
-
-        return null;
-    }
 
     function renderImageSlot(slot: ImageSlot, index: number) {
         const flags = [];
@@ -938,58 +549,6 @@ export default function FirmwareUpdateModal() {
                     />
                 )}
             </Card>
-        );
-    }
-
-    function renderFirmwarePackagePreview() {
-        if (!firmwarePackage) return null;
-
-        return (
-            <View style={styles.packagePreview}>
-                <ThemedText type="overline" style={styles.sectionTitle}>
-                    Firmware Package: {firmwarePackage.manifest.name}
-                </ThemedText>
-
-                {firmwarePackage.images.map((image, idx) => (
-                    <Card key={idx} style={styles.cardSpacing}>
-                        <ThemedText style={[styles.firmwareTitle, { color: c.warning }]}>
-                            Image {image.manifest.image_index}: {image.manifest.file}
-                        </ThemedText>
-                        <ThemedText type="caption">
-                            Type: {image.manifest.type}
-                        </ThemedText>
-                        <ThemedText type="caption">
-                            Board: {image.manifest.board}
-                        </ThemedText>
-                        <ThemedText type="caption">
-                            Size: {formatBytes(image.manifest.size)}
-                        </ThemedText>
-                        <ThemedText type="caption">
-                            Version: {image.parsedHeader?.version || image.manifest.version_MCUBOOT || image.manifest.version || 'Unknown'}
-                        </ThemedText>
-                        <ThemedText type="caption">
-                            Target Slots: {image.manifest.slot_index_primary} → {image.manifest.slot_index_secondary}
-                        </ThemedText>
-                    </Card>
-                ))}
-
-                <View style={styles.buttonRow}>
-                    <AppButton
-                        title="Cancel"
-                        variant="secondary"
-                        style={styles.rowButton}
-                        onPress={handleCancelPackage}
-                        disabled={isUploading}
-                    />
-                    <AppButton
-                        title={isUploading ? `Uploading (${currentUploadIndex + 1}/${firmwarePackage.images.length})...` : 'Start Update'}
-                        variant="primary"
-                        style={styles.rowButton}
-                        onPress={handleStartUpdate}
-                        disabled={isUploading || !client}
-                    />
-                </View>
-            </View>
         );
     }
 
@@ -1181,48 +740,67 @@ export default function FirmwareUpdateModal() {
 
     if (isInitializing) {
         return (
-            <ThemedView style={styles.container}>
+            <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>
                 <ActivityIndicator size="large" color={c.primary} />
                 <ThemedText type="caption" style={styles.status}>{status || 'Initializing...'}</ThemedText>
-            </ThemedView>
+            </SafeAreaView>
         );
     }
 
     return (
-        <ThemedView style={styles.container}>
+        <SafeAreaView style={[styles.container, { backgroundColor: c.background }]} edges={['top']}>
+            <View style={styles.header}>
+                <Pressable
+                    onPress={() => router.back()}
+                    accessibilityRole="button"
+                    accessibilityLabel="Back to firmware update"
+                    hitSlop={8}
+                    style={styles.backButton}>
+                    <IconSymbol name="chevron.left" size={22} color={c.primary} />
+                    <ThemedText style={{ color: c.primary }}>Firmware</ThemedText>
+                </Pressable>
+            </View>
+
+            {/* A real failure. Note this is NOT where "no device" goes - that is
+                connection status, rendered neutrally just below. */}
             {error ? (
                 <ThemedText style={[styles.error, { color: c.danger }]}>{error}</ThemedText>
+            ) : null}
+
+            {isBusy ? (
+                <ThemedText type="caption" style={styles.status}>
+                    A firmware transfer is in progress — device actions are disabled until it
+                    finishes.
+                </ThemedText>
+            ) : null}
+
+            {boardDetectionError ? (
+                <ThemedText type="caption" style={styles.status}>{boardDetectionError}</ThemedText>
+            ) : null}
+
+            {!selectedDevice ? (
+                <ThemedText type="caption" style={styles.status}>
+                    {reconnectingDevice
+                        ? `Reconnecting to ${reconnectingDevice.name}…`
+                        : initError || 'No device connected'}
+                </ThemedText>
+            ) : !client && !isInitializing ? (
+                // Connected but no client: SMP init failed. Without this every control
+                // is disabled with nothing saying why.
+                <ThemedText type="caption" style={[styles.status, { color: c.danger }]}>
+                    {initError || 'Firmware update is unavailable on this device.'}
+                </ThemedText>
             ) : null}
 
             {status ? (
                 <ThemedText type="caption" style={styles.status}>{status}</ThemedText>
             ) : null}
 
-            {isUploading && (
-                <View style={styles.progressWrap}>
-                    <ProgressBar progress={uploadProgress / 100} label={`${uploadProgress}%`} height={12} />
-                </View>
-            )}
-
             <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-                {/* Firmware Package Preview */}
-                {renderFirmwarePackagePreview()}
-
-                {/* Only show other sections if no package is loaded */}
-                {!firmwarePackage && (
                     <>
-                        {renderAutoUpdateSection()}
-
-                        <ExtensionSyncCard
-                            state={extensionState}
-                            entries={extensionEntries}
-                            unmanagedCount={unmanagedExtensionCount}
-                            error={extensionError}
-                            isSyncing={isSyncingExtensions}
-                            progress={extensionProgress}
-                            onSync={runExtensionSync}
-                            disabled={!client || isUploading}
-                        />
+                        <ThemedText type="title" style={styles.sectionTitle}>
+                            FW Update Debug
+                        </ThemedText>
 
                         <ThemedText type="overline" style={styles.sectionTitle}>
                             Current Images
@@ -1243,7 +821,7 @@ export default function FirmwareUpdateModal() {
                                     refreshImageState();
                                     refreshSlotInfo();
                                 }}
-                                disabled={isUploading}
+                                disabled={!client || isBusy}
                             />
                         </View>
 
@@ -1283,7 +861,7 @@ export default function FirmwareUpdateModal() {
                                 variant="primary"
                                 style={styles.rowButton}
                                 onPress={handleSelectFirmwarePackage}
-                                disabled={isUploading || !client}
+                                disabled={!client || isBusy}
                             />
                         </View>
 
@@ -1297,26 +875,21 @@ export default function FirmwareUpdateModal() {
                                 variant="secondary"
                                 style={styles.rowButton}
                                 onPress={handleReset}
-                                disabled={isUploading || !client}
+                                disabled={!client || isBusy}
                             />
                             <AppButton
                                 title="Erase Slot 1"
                                 variant="danger"
                                 style={styles.rowButton}
                                 onPress={handleEraseSlot}
-                                disabled={isUploading || !client}
+                                disabled={!client || isBusy}
                             />
                         </View>
 
                         {(blUpdaterRef.current || blRebooting) && renderBootloaderSection()}
                     </>
-                )}
             </ScrollView>
-
-            <Link href="../" style={styles.link}>
-                <ThemedText type="link">Done</ThemedText>
-            </Link>
-        </ThemedView>
+        </SafeAreaView>
     );
 }
 
@@ -1325,6 +898,12 @@ const styles = StyleSheet.create({
         flex: 1,
         padding: Spacing.lg,
     },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: Spacing.sm,
+    },
+    backButton: { flexDirection: 'row', alignItems: 'center' },
     scrollView: {
         flex: 1,
     },
