@@ -151,7 +151,7 @@ export default function DeviceStateMenuScreen() {
                     {firmwareService && (
                         <Card style={styles.card}>
                             <Section title="Firmware">
-                                <MenuRow label="Firmware Update" href="/firmware-update-modal" />
+                                <MenuRow label="Firmware Update" href="/firmware-update" />
                             </Section>
                         </Card>
                     )}

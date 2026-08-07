@@ -154,7 +154,7 @@ export default function DeviceStateDetailScreen() {
                                     >
                                         <WriteErrorIndicator charInfo={charInfo} />
                                         {isMcuMgrCharacteristic && (
-                                            <Link href="/firmware-update-modal" asChild>
+                                            <Link href="/firmware-update" asChild>
                                                 <AppButton title="Update" variant="secondary" />
                                             </Link>
                                         )}
