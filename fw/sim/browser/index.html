@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>rgbx extension simulator</title>
-    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <header class="topbar">
@@ -14,8 +14,14 @@
         <select id="ext-select"></select>
       </label>
       <button id="ext-reload" class="btn" title="Re-fetch the module and re-activate">Reload</button>
+      <button id="ext-upload" class="btn" title="Load a locally built .wasm extension for this session (or drop the file anywhere on the page)">Load .wasm&hellip;</button>
+      <input type="file" id="ext-file" accept=".wasm,application/wasm" multiple hidden />
       <div id="ext-meta" class="meta"></div>
     </header>
+
+    <div id="drop-overlay" class="drop-overlay hidden" aria-hidden="true">
+      Drop a .wasm extension to load it
+    </div>
 
     <div id="fault" class="fault hidden">
       <div class="fault-body">

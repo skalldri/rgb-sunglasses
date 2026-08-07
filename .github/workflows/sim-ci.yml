@@ -87,6 +87,17 @@ jobs:
       - name: Golden digest compare
         run: fw/sim/rgbx-sim compare
 
+      # Pages deploys only from main; this is the pre-merge guard that the
+      # /sim/-based production bundle still builds and ships its modules.
+      - name: Production bundle builds under the /sim/ base
+        run: |
+          cd fw/sim
+          RGBX_SIM_BASE=/sim/ npx vite build
+          test -f dist/browser/wasm-index.json
+          test -f dist/browser/hello.wasm
+          test -f dist/browser/audio_dsp.wasm
+          grep -q '/sim/assets/' dist/browser/index.html
+
       - name: Upload run reports
         if: always()
         uses: actions/upload-artifact@v4

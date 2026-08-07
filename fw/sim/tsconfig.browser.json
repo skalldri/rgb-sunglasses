@@ -8,7 +8,8 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "types": ["vite/client"]
   },
   "include": ["core/**/*.ts", "browser/**/*.ts"],
   "exclude": ["core/webassembly.d.ts"]

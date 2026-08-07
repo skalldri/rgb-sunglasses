@@ -3,8 +3,9 @@
  *
  * Two things this has to arrange that a stock Vite setup does not:
  *  - the built wasm artifacts live OUTSIDE the Vite root (fw/sim/out/wasm,
- *    produced by build-extensions.sh), so `out/` is mounted as publicDir —
- *    out/wasm/hello.wasm is served as GET /wasm/hello.wasm;
+ *    produced by build-extensions.sh), so out/wasm is mounted as publicDir —
+ *    modules serve FLAT at <base><name>.wasm (e.g. GET /hello.wasm in dev,
+ *    /sim/hello.wasm on Pages);
  *  - the UI imports the platform-agnostic core from ../core, which is also
  *    outside the root, so server.fs.allow has to reach fw/sim.
  *
@@ -12,8 +13,9 @@
  * static publicDir has no directory listing — hence the tiny middleware
  * below serving /wasm-index.json.
  *
- * This config targets the dev server (`npm run serve`). A production
- * `vite build` is wired up but is not part of any gate.
+ * Serves the dev loop (`npm run serve`) AND the Pages deployment: the
+ * production `vite build` (base=/sim/) is composed into site/sim/ by
+ * pages.yml and gated pre-merge by sim-ci.yml's production-bundle step.
  *
  * Launch it as `vite` from fw/sim, NOT `vite browser` — Vite looks for its
  * config inside the root given on the command line, so passing `browser` as
@@ -45,7 +47,10 @@ function readWasmIndex(): WasmEntry[] {
       .sort()
       .map((name) => ({
         name,
-        url: `/wasm/${name}`,
+        // RELATIVE to the deploy base — the client resolves it against
+        // import.meta.env.BASE_URL, so the same index works at "/" (dev)
+        // and "/sim/" (Pages).
+        url: name,
         size: fs.statSync(path.join(wasmDir, name)).size,
       }));
   } catch {
@@ -77,7 +82,15 @@ function wasmIndexPlugin(): Plugin {
 
 const config: UserConfig = {
   root: path.resolve(simDir, "browser"),
-  publicDir: path.resolve(simDir, "out"),
+  // Deploy base: "/" for the dev server, "/sim/" when the Pages workflow
+  // builds the copy hosted at rgb-sunglasses.autom8ed.com/sim/. Everything
+  // that references bundled assets goes through import.meta.env.BASE_URL
+  // (or Vite's own rewriting), so no code changes per deployment target.
+  base: process.env.RGBX_SIM_BASE ?? "/",
+  // ONLY the wasm modules — out/ itself also holds CLI artifacts (runs/,
+  // *-obj/) that must never ship in a deployed bundle. Modules therefore
+  // serve at <base><name>.wasm (flat), matching the index urls below.
+  publicDir: wasmDir,
   // basic-ssl is opt-in: the mic and DeviceMotion need a secure context, and
   // http://localhost only counts as one for the machine running the browser.
   // Set RGBX_SIM_SSL=1 to reach the sim from a phone over the LAN by IP.

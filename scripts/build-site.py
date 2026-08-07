@@ -40,6 +40,9 @@ NAV_LINKS = [
     ("https://github.com/skalldri/rgb-sunglasses", "GitHub", True),
     ("https://github.com/skalldri/rgb-sunglasses/releases", "Releases", True),
     ("/docs", "Docs", False),
+    # The extension simulator is a Vite bundle built by pages.yml into
+    # site/sim/ (not rendered by this script) — see fw/sim/README.md.
+    ("/sim", "Simulator", False),
     ("/privacy", "Privacy", False),
 ]
 
