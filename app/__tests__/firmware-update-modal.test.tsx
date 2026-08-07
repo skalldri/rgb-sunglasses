@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { sha256 } from 'js-sha256';
 
 import FirmwareUpdateModal from '@/app/firmware-update-modal';
 import { UUID_MCUBOOT_INFO_SERVICE } from '@/constants/bluetooth';
@@ -694,6 +695,28 @@ describe('FirmwareUpdateModal', () => {
       ],
     };
 
+    /** Bytes the mocked download serves for plasma.llext. */
+    const PLASMA_BYTES = Uint8Array.from([1, 2, 3]);
+
+    /** releaseWithExtensions, but plasma's digest matches `bytes`. */
+    function releaseServing(bytes: Uint8Array): GitHubReleases.GitHubRelease {
+      return {
+        ...releaseWithExtensions,
+        assets: releaseWithExtensions.assets.map(a =>
+          a.name === 'plasma.llext' ? { ...a, digest: `sha256:${sha256.hex(bytes)}` } : a
+        ),
+      };
+    }
+
+    function mockDownload(bytes: Uint8Array) {
+      (global as any).fetch = jest.fn(async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      }));
+    }
+
     function mockExtensionClient(hashes: Record<string, string | null>) {
       const getFileSha256 = jest
         .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
@@ -737,23 +760,116 @@ describe('FirmwareUpdateModal', () => {
     it('uploads only the extensions that differ, to their device paths', async () => {
       mockBluetooth(defaultSelectedDevice);
       mockClientMethods();
-      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      // The release must advertise the digest of the bytes the download actually
+      // returns, or the integrity check below refuses to upload them.
+      mockGitHub({
+        fetchLatestFirmwareRelease: async () => releaseServing(PLASMA_BYTES),
+      });
       const { uploadFile } = mockExtensionClient({
         '/NAND:/ext/hello.llext': HASH_A,
         '/NAND:/ext/plasma.llext': HASH_B,
       });
-      (global as any).fetch = jest.fn(async () => ({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
-      }));
+      mockDownload(PLASMA_BYTES);
 
       const { findByText } = render(<FirmwareUpdateModal />);
       fireEvent.press(await findByText('Sync Extensions'));
 
       await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
       expect(uploadFile.mock.calls[0][0]).toBe('/NAND:/ext/plasma.llext');
+    });
+
+    it('refuses to upload a download that does not match the release digest', async () => {
+      // A truncated CDN response would otherwise overwrite a working extension
+      // with corrupt bytes that only fail at the next boot.
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({
+        fetchLatestFirmwareRelease: async () => releaseServing(PLASMA_BYTES),
+      });
+      const { uploadFile } = mockExtensionClient({
+        '/NAND:/ext/hello.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_B,
+      });
+      mockDownload(Uint8Array.from([9, 9, 9])); // not what the digest promises
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      fireEvent.press(await findByText('Sync Extensions'));
+
+      // Nothing is written to the device, and the failure is surfaced with a
+      // retry. (The exact message is asserted in the extension-sync unit tests.)
+      expect(await findByText(/Extension sync failed/)).toBeTruthy();
+      expect(await findByText('Retry Sync')).toBeTruthy();
+      expect(uploadFile).not.toHaveBeenCalled();
+    });
+
+    it('keeps the entry list and a retry button when a sync fails part-way', async () => {
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({
+        fetchLatestFirmwareRelease: async () => releaseServing(PLASMA_BYTES),
+      });
+      mockExtensionClient({
+        '/NAND:/ext/hello.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_B,
+      });
+      jest
+        .spyOn(McuMgrModule.McuMgrClient.prototype, 'uploadFile')
+        .mockImplementation(async () => {
+          throw new Error('SMP request timeout after 5000ms');
+        });
+      mockDownload(PLASMA_BYTES);
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+      fireEvent.press(await findByText('Sync Extensions'));
+
+      expect(await findByText(/Extension sync failed/)).toBeTruthy();
+      expect(await findByText('plasma.llext')).toBeTruthy();
+      expect(await findByText('Retry Sync')).toBeTruthy();
+    });
+
+    it('treats an unhashable file as needing repair instead of failing the whole check', async () => {
+      // A sync interrupted by a BLE drop leaves a zero-length file, which
+      // fs_mgmt answers with FILE_EMPTY (16) - not FILE_NOT_FOUND. Without
+      // per-entry handling, that one file made every extension unsyncable.
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      jest
+        .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
+        .mockImplementation(async (path: string) => {
+          if (path.includes('plasma')) {
+            throw new McuMgrModule.SmpCommandError(
+              'File hash error: group=8, rc=16',
+              McuMgrModule.FsMgmtError.FILE_EMPTY,
+              McuMgrModule.SmpGroup.FS
+            );
+          }
+          return HASH_A;
+        });
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+
+      expect(await findByText('Needs repair')).toBeTruthy();
+      // The healthy one is still listed and the card still offers a sync.
+      expect(await findByText('Up to date')).toBeTruthy();
+      expect(await findByText('Sync Extensions')).toBeTruthy();
+    });
+
+    it('still fails the whole check for an error that is not file-specific', async () => {
+      // Firmware with no file-management group answers with a group-less rc;
+      // reporting "needs upload" there would start an upload that cannot work.
+      mockBluetooth(defaultSelectedDevice);
+      mockClientMethods();
+      mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+      jest
+        .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
+        .mockImplementation(async () => {
+          throw new McuMgrModule.SmpCommandError('File hash error: rc=8', 8, undefined);
+        });
+
+      const { findByText } = render(<FirmwareUpdateModal />);
+
+      expect(await findByText(/Extension check unavailable/)).toBeTruthy();
     });
 
     it('says nothing needs doing when every extension matches', async () => {

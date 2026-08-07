@@ -73,6 +73,25 @@ ZTEST(extension_file_transfer, test_rejects_subdirectories) {
     zassert_false(path_allowed("/NAND:/ext/sub/"));
 }
 
+ZTEST(extension_file_transfer, test_rejects_backslash_separated_subdirectories) {
+    /* FatFs splits on '\' as well as '/' (ff.c IsSeparator), so a fence that
+     * only knew about '/' would accept these and then have FatFs resolve them
+     * into a subdirectory. */
+    zassert_false(path_allowed("/NAND:/ext/sub\\secret.bin"));
+    zassert_false(path_allowed("/NAND:/ext/sub\\"));
+    zassert_false(path_allowed("/NAND:\\ext\\sub\\secret.bin"));
+}
+
+ZTEST(extension_file_transfer, test_rejects_backslash_parent_traversal) {
+    zassert_false(path_allowed("/NAND:/ext/..\\mcuboot.bin"));
+    zassert_false(path_allowed("/NAND:/ext\\..\\mcuboot.bin"));
+}
+
+ZTEST(extension_file_transfer, test_rejects_backslash_trailing_separator) {
+    /* The directory itself, spelled with the other separator. */
+    zassert_false(path_allowed("/NAND:/ext\\"));
+}
+
 ZTEST(extension_file_transfer, test_rejects_prefix_lookalikes) {
     /* "/NAND:/extra/..." shares the directory's characters but is a different
      * directory — a bare strncmp without the separator check would accept it. */

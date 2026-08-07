@@ -6,11 +6,14 @@ import {
     extensionPathFor,
     findExtensionAssets,
     isValidExtensionAssetName,
+    MAX_EXTENSION_NAME_LENGTH,
     parseAssetSha256,
     planExtensionSync,
     syncExtensions,
 } from '@/services/extension-sync';
 import type { GitHubAsset } from '@/services/github-releases';
+import { FsMgmtError, SmpCommandError, SmpGroup } from '@/services/mcumgr';
+import { sha256 } from 'js-sha256';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -67,6 +70,21 @@ describe('isValidExtensionAssetName', () => {
         expect(isValidExtensionAssetName('sub/plasma.llext')).toBe(false);
         expect(isValidExtensionAssetName('sub\\plasma.llext')).toBe(false);
         expect(isValidExtensionAssetName('.llext')).toBe(false);
+    });
+
+    it('rejects names longer than the firmware can store', () => {
+        // extension_registry copies discovered names into a 32-byte buffer, so a
+        // longer name would upload, re-hash and report "Up to date" while the
+        // firmware silently failed to load a truncated path at next boot.
+        const at = 'a'.repeat(MAX_EXTENSION_NAME_LENGTH - '.llext'.length) + '.llext';
+        expect(at.length).toBe(MAX_EXTENSION_NAME_LENGTH);
+        expect(isValidExtensionAssetName(at)).toBe(true);
+
+        const over = 'a'.repeat(MAX_EXTENSION_NAME_LENGTH - '.llext'.length + 1) + '.llext';
+        expect(over.length).toBe(MAX_EXTENSION_NAME_LENGTH + 1);
+        expect(isValidExtensionAssetName(over)).toBe(false);
+
+        expect(isValidExtensionAssetName('spectrum_analyzer_bars_hires.llext')).toBe(false);
     });
 });
 
@@ -153,16 +171,61 @@ describe('planExtensionSync', () => {
         expect(client.getFileSha256).not.toHaveBeenCalled();
     });
 
-    it('propagates a device error that is not "file not found"', async () => {
+    it('marks a file the device cannot hash as needing repair, without failing the plan', async () => {
+        // fs_mgmt answers a hash request for a zero-length file with FILE_EMPTY
+        // (16), not FILE_NOT_FOUND - the state an interrupted upload leaves
+        // behind. One bad file must not make every extension unsyncable.
+        const client = {
+            getFileSha256: jest.fn(async (path: string) => {
+                if (path.includes('plasma')) {
+                    throw new SmpCommandError(
+                        'File hash error: group=8, rc=16',
+                        FsMgmtError.FILE_EMPTY,
+                        SmpGroup.FS
+                    );
+                }
+                return HASH_A;
+            }),
+        } as any;
+
+        const plan = await planExtensionSync(client, [
+            asset('hello.llext', `sha256:${HASH_A}`),
+            asset('plasma.llext', `sha256:${HASH_A}`),
+        ]);
+
+        expect(plan.map(e => [e.name, e.status])).toEqual([
+            ['hello.llext', 'up-to-date'],
+            ['plasma.llext', 'unreadable'],
+        ]);
+        expect(plan[1].deviceError).toContain('rc=16');
+        expect(entriesNeedingUpload(plan).map(e => e.name)).toEqual(['plasma.llext']);
+    });
+
+    it('propagates an error that is not attributable to the FS group', async () => {
+        // A transport timeout, or ENOTSUP from firmware with no file management,
+        // is a whole-feature failure - reporting "needs upload" would start an
+        // upload that cannot succeed.
         const client = {
             getFileSha256: jest.fn(async () => {
-                throw new Error('File hash error: group=8, rc=5');
+                throw new SmpCommandError('File hash error: rc=8', 8, undefined);
             }),
         } as any;
 
         await expect(
             planExtensionSync(client, [asset('hello.llext', `sha256:${HASH_A}`)])
         ).rejects.toThrow('File hash error');
+    });
+
+    it('propagates a plain transport error', async () => {
+        const client = {
+            getFileSha256: jest.fn(async () => {
+                throw new Error('SMP request timeout after 5000ms');
+            }),
+        } as any;
+
+        await expect(
+            planExtensionSync(client, [asset('hello.llext', `sha256:${HASH_A}`)])
+        ).rejects.toThrow('SMP request timeout');
     });
 });
 
@@ -327,6 +390,60 @@ describe('syncExtensions', () => {
             'newfx.llext 2/2 50/100',
             'newfx.llext 2/2 100/100',
         ]);
+    });
+
+    it('refuses to upload bytes that do not match the release digest', async () => {
+        // A truncated CDN response would otherwise overwrite a working extension
+        // and only fail at the next boot.
+        const client = makeClient();
+        const withDigest = [
+            {
+                name: 'plasma.llext',
+                path: '/NAND:/ext/plasma.llext',
+                status: 'outdated',
+                asset: asset('plasma.llext'),
+                expectedSha256: HASH_A,
+            },
+        ] as any;
+
+        await expect(
+            syncExtensions(client, withDigest, async () => Uint8Array.from([1, 2, 3]))
+        ).rejects.toThrow(/does not match the release digest/);
+        expect(client.uploadFile).not.toHaveBeenCalled();
+    });
+
+    it('uploads when the downloaded bytes match the release digest', async () => {
+        const client = makeClient();
+        const bytes = Uint8Array.from([1, 2, 3]);
+        const entry = [
+            {
+                name: 'plasma.llext',
+                path: '/NAND:/ext/plasma.llext',
+                status: 'outdated',
+                asset: asset('plasma.llext'),
+                expectedSha256: sha256.hex(bytes),
+            },
+        ] as any;
+
+        await syncExtensions(client, entry, async () => bytes);
+        expect(client.uploadFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('uploads without verification when the release published no digest', async () => {
+        // Older releases legitimately lack a digest; that must not block a sync.
+        const client = makeClient();
+        const entry = [
+            {
+                name: 'plasma.llext',
+                path: '/NAND:/ext/plasma.llext',
+                status: 'missing',
+                asset: asset('plasma.llext'),
+                expectedSha256: null,
+            },
+        ] as any;
+
+        await syncExtensions(client, entry, async () => Uint8Array.from([7]));
+        expect(client.uploadFile).toHaveBeenCalledTimes(1);
     });
 
     it('stops at the first failure, leaving later entries untouched', async () => {

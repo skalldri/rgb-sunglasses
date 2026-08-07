@@ -23,6 +23,25 @@ namespace extension_file_transfer {
 
 namespace {
 
+/* Path separators, matching FatFs rather than intuition: ff.c defines
+ *     #define IsSeparator(c) ((c) == '/' || (c) == '\\')
+ * so a backslash splits a path just like a slash does. Splitting on '/' alone
+ * would let "/NAND:/ext/sub\secret.bin" through this fence and then have FatFs
+ * resolve it as "/NAND:/ext/sub/secret.bin" — inside a subdirectory the header
+ * documents as denied. */
+bool is_separator(char c) { return c == '/' || c == '\\'; }
+
+/* First separator at or after `s`, or nullptr. strchr's counterpart for the
+ * two-character separator set above. */
+const char *find_separator(const char *s) {
+    for (; *s != '\0'; ++s) {
+        if (is_separator(*s)) {
+            return s;
+        }
+    }
+    return nullptr;
+}
+
 /* True if `path` contains a ".." path component. Deliberately checks components
  * rather than a substring, so a legitimate name like "my..ext.llext" is not
  * rejected while "/NAND:/ext/../mcuboot.bin" is. */
@@ -30,18 +49,18 @@ bool has_parent_component(const char *path) {
     const char *component = path;
 
     while (true) {
-        const char *slash = strchr(component, '/');
-        const size_t len  = (slash != nullptr) ? static_cast<size_t>(slash - component)
-                                               : strlen(component);
+        const char *sep   = find_separator(component);
+        const size_t len  = (sep != nullptr) ? static_cast<size_t>(sep - component)
+                                             : strlen(component);
 
         if (len == 2 && component[0] == '.' && component[1] == '.') {
             return true;
         }
 
-        if (slash == nullptr) {
+        if (sep == nullptr) {
             return false;
         }
-        component = slash + 1;
+        component = sep + 1;
     }
 }
 
@@ -70,8 +89,8 @@ bool path_allowed(const char *path) {
 
     /* A direct child, and only a direct child: exactly one separator, then a
      * non-empty name with no separator of its own. This also rejects the
-     * directory itself ("" remainder) and a trailing-slash form. */
-    if (path[kDirLen] != '/') {
+     * directory itself ("" remainder) and a trailing-separator form. */
+    if (!is_separator(path[kDirLen])) {
         return false;
     }
 
@@ -80,7 +99,7 @@ bool path_allowed(const char *path) {
         return false;
     }
 
-    return strchr(name, '/') == nullptr;
+    return find_separator(name) == nullptr;
 }
 
 }  // namespace extension_file_transfer

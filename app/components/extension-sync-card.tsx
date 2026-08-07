@@ -9,6 +9,7 @@ import {
     ExtensionSyncStatus,
     entriesNeedingUpload,
 } from '@/services/extension-sync';
+import React from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 export type ExtensionCheckState = 'idle' | 'checking' | 'ready' | 'error';
@@ -33,6 +34,8 @@ function statusLabel(status: ExtensionSyncStatus): string {
             return 'Update available';
         case 'missing':
             return 'Not installed';
+        case 'unreadable':
+            return 'Needs repair';
     }
 }
 
@@ -60,71 +63,68 @@ export function ExtensionSyncCard({
         return null;
     }
 
-    if (state === 'checking') {
-        return (
-            <Card style={styles.card}>
-                <ThemedText type="overline" style={styles.title}>
-                    Extensions
-                </ThemedText>
-                <ActivityIndicator size="small" color={c.primary} />
-                <ThemedText type="caption" style={styles.status}>
-                    Checking extensions...
-                </ThemedText>
-            </Card>
-        );
-    }
-
-    if (state === 'error') {
-        return (
-            <Card style={styles.card}>
-                <ThemedText type="overline" style={styles.title}>
-                    Extensions
-                </ThemedText>
-                <ThemedText type="caption" style={{ color: c.danger }}>
-                    {/* Older firmware has no MCUmgr file management at all, so this
-                        is an expected outcome, not necessarily a fault. */}
-                    Extension check unavailable: {error}
-                </ThemedText>
-            </Card>
-        );
-    }
-
-    if (entries.length === 0) {
-        return (
-            <Card style={styles.card}>
-                <ThemedText type="overline" style={styles.title}>
-                    Extensions
-                </ThemedText>
-                <ThemedText type="caption">This release ships no animation extensions.</ThemedText>
-            </Card>
-        );
-    }
-
     const pending = entriesNeedingUpload(entries);
+    // An error does not discard a plan we already have. A sync that fails
+    // part-way through is exactly the case handleStartUpdate tells the user to
+    // retry from this card, so the list and the retry button have to survive it -
+    // otherwise they are left with a half-synced directory and no way back.
+    const hasPlan = state === 'ready' || entries.length > 0;
+    const showSyncButton = hasPlan && pending.length > 0;
 
+    // One wrapper for every state, so the heading and card styling can't drift
+    // apart between them.
     return (
-        <Card style={[styles.card, pending.length > 0 ? { borderColor: c.success } : null]}>
+        <Card
+            style={[
+                styles.card,
+                state !== 'error' && pending.length > 0 ? { borderColor: c.success } : null,
+            ]}
+        >
             <ThemedText type="overline" style={styles.title}>
                 Extensions
             </ThemedText>
 
-            {entries.map(entry => (
-                <View key={entry.name} style={styles.row}>
-                    <ThemedText type="caption" style={styles.rowName} numberOfLines={1}>
-                        {entry.name}
+            {state === 'checking' && (
+                <>
+                    <ActivityIndicator size="small" color={c.primary} />
+                    <ThemedText type="caption" style={styles.status}>
+                        Checking extensions...
                     </ThemedText>
-                    <ThemedText
-                        type="caption"
-                        style={{
-                            color: entry.status === 'up-to-date' ? c.success : c.primary,
-                        }}
-                    >
-                        {statusLabel(entry.status)}
-                    </ThemedText>
-                </View>
-            ))}
+                </>
+            )}
 
-            {unmanagedCount > 0 && (
+            {state === 'error' && (
+                <ThemedText type="caption" style={{ color: c.danger }}>
+                    {/* Older firmware has no MCUmgr file management at all, so this
+                        is an expected outcome, not necessarily a fault. */}
+                    {hasPlan ? 'Extension sync failed' : 'Extension check unavailable'}: {error}
+                </ThemedText>
+            )}
+
+            {hasPlan &&
+                entries.map(entry => (
+                    <View key={entry.name} style={styles.row}>
+                        <ThemedText type="caption" style={styles.rowName} numberOfLines={1}>
+                            {entry.name}
+                        </ThemedText>
+                        <ThemedText
+                            type="caption"
+                            style={{
+                                color: entry.status === 'up-to-date' ? c.success : c.primary,
+                            }}
+                        >
+                            {statusLabel(entry.status)}
+                        </ThemedText>
+                    </View>
+                ))}
+
+            {state === 'ready' && entries.length === 0 && (
+                <ThemedText type="caption">
+                    This release ships no animation extensions.
+                </ThemedText>
+            )}
+
+            {hasPlan && unmanagedCount > 0 && (
                 <ThemedText type="caption" style={styles.note}>
                     {/* Deliberately a count, not a list: MCUmgr can neither list a
                         directory nor delete, and the device reports extension
@@ -143,7 +143,9 @@ export function ExtensionSyncCard({
                         Uploading {progress.entry.name} ({progress.index + 1}/{progress.total})
                     </ThemedText>
                     <ProgressBar
-                        progress={progress.bytesTotal > 0 ? progress.bytesSent / progress.bytesTotal : 0}
+                        progress={
+                            progress.bytesTotal > 0 ? progress.bytesSent / progress.bytesTotal : 0
+                        }
                         label={`${Math.round(
                             progress.bytesTotal > 0
                                 ? (progress.bytesSent / progress.bytesTotal) * 100
@@ -154,14 +156,20 @@ export function ExtensionSyncCard({
                 </View>
             )}
 
-            {pending.length > 0 ? (
+            {showSyncButton && (
                 <>
                     <ThemedText type="caption" style={styles.note}>
                         Extensions are read at boot, so a reboot is needed after syncing.
                     </ThemedText>
                     <View style={styles.buttonRow}>
                         <AppButton
-                            title={isSyncing ? 'Syncing...' : 'Sync Extensions'}
+                            title={
+                                isSyncing
+                                    ? 'Syncing...'
+                                    : state === 'error'
+                                      ? 'Retry Sync'
+                                      : 'Sync Extensions'
+                            }
                             variant="primary"
                             style={styles.rowButton}
                             onPress={onSync}
@@ -169,7 +177,9 @@ export function ExtensionSyncCard({
                         />
                     </View>
                 </>
-            ) : (
+            )}
+
+            {state === 'ready' && entries.length > 0 && pending.length === 0 && (
                 <ThemedText type="caption" style={{ color: c.success }}>
                     All extensions match this release.
                 </ThemedText>

@@ -108,6 +108,10 @@ export default function FirmwareUpdateModal() {
     const [extensionError, setExtensionError] = useState<string>('');
     const [isSyncingExtensions, setIsSyncingExtensions] = useState(false);
     const [extensionProgress, setExtensionProgress] = useState<ExtensionSyncProgress | null>(null);
+    // Latches once the unmanaged-extension count has been derived for this
+    // connection; see the comment at its use site for why it must not be redone
+    // after a sync. Reset alongside the rest of the extension state on disconnect.
+    const unmanagedComputedRef = useRef(false);
 
     // Bootloader update
     const blUpdaterRef = useRef<McubootUpdaterClient | null>(null);
@@ -259,10 +263,18 @@ export default function FirmwareUpdateModal() {
             const entries = await planExtensionSync(client, releaseAssets);
             setExtensionEntries(entries);
 
-            const deviceExtensions = countDeviceExtensions(
-                Object.keys(selectedDevice?.characteristicsByService ?? {})
-            );
-            setUnmanagedExtensionCount(countUnmanagedExtensions(deviceExtensions, entries));
+            // Only ever computed from the FIRST plan of a connection. The device
+            // extension count comes from GATT services, which don't change until
+            // the firmware re-scans at boot - so comparing it against a post-sync
+            // plan would count just-uploaded files as loaded and silently drop the
+            // warning to zero while the stale extensions are still installed.
+            if (!unmanagedComputedRef.current) {
+                const deviceExtensions = countDeviceExtensions(
+                    Object.keys(selectedDevice?.characteristicsByService ?? {})
+                );
+                setUnmanagedExtensionCount(countUnmanagedExtensions(deviceExtensions, entries));
+                unmanagedComputedRef.current = true;
+            }
             setExtensionState('ready');
         } catch (e: unknown) {
             // Firmware without MCUmgr file management answers every FS command with
@@ -296,6 +308,12 @@ export default function FirmwareUpdateModal() {
             return true;
         } catch (e: unknown) {
             setExtensionError(e instanceof Error ? e.message : String(e));
+            // Re-plan before surfacing the error so the card lists what actually
+            // landed before the failure rather than the pre-sync picture, and so
+            // a retry only re-uploads what is still outstanding. Best-effort: if
+            // the link is gone this fails too, and the stale entries are still
+            // enough to render the retry button.
+            await refreshExtensionPlan().catch(() => undefined);
             setExtensionState('error');
             return false;
         } finally {
@@ -367,6 +385,7 @@ export default function FirmwareUpdateModal() {
         setExtensionState('idle');
         setExtensionEntries([]);
         setUnmanagedExtensionCount(0);
+        unmanagedComputedRef.current = false;
         setExtensionError('');
         setMcubootUpdateCheckState('idle');
         setMcubootLatestAsset(null);

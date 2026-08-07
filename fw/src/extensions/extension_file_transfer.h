@@ -28,12 +28,17 @@ namespace extension_file_transfer {
  *
  * Rejects, specifically:
  *  - anything outside the directory, including a bare relative file name;
- *  - the directory itself, with or without a trailing slash;
+ *  - the directory itself, with or without a trailing separator;
  *  - subdirectories, so the fence can't be widened by creating one;
  *  - any path containing a ".." component. A prefix test alone is not enough
  *    here — FATFS resolves "/NAND:/ext/../mcuboot.bin" perfectly happily, so
  *    a prefix-only check would hand out exactly the access this exists to
  *    deny. Checked over the whole path, not just the tail.
+ *
+ * Both '/' AND '\' count as separators, because that is what FatFs itself
+ * does (ff.c: `IsSeparator(c) ((c) == '/' || (c) == '\\')`). Splitting on '/'
+ * alone would accept "/NAND:/ext/sub\secret.bin" as a direct child while
+ * FatFs resolved it into a subdirectory.
  *
  * @param path NUL-terminated path from the MCUmgr request; nullptr is denied.
  * @return true to allow the operation, false to reject it.
