@@ -54,6 +54,31 @@ largest *single* extension since only the active one is llext-resident. Sanity-c
 build.sh's reported `.llext` byte size against it (a rough proxy: the loader copies
 sections into the heap, so on-heap size ≈ file size, not exactly equal).
 
+## 2b. Simulate (no hardware, no lock — the iteration loop)
+
+The WASM simulator (`fw/sim/`, full docs `fw/sim/README.md`) runs your extension's
+actual code against the firmware's tick semantics and the REAL audio DSP:
+
+```bash
+fw/sim/rgbx-sim run <name> --scenario silence --json        # baseline render
+fw/sim/rgbx-sim run <name> --scenario metronome-120 --json  # audio-reactive?
+fw/sim/rgbx-sim run <name> --scenario head-tilt --json      # IMU-reactive?
+```
+
+(First run auto-installs npm deps + the wasi-sdk toolchain; `fw/sim/setup.sh` does it
+eagerly. Needs no proto0 build, no board, no locks.)
+
+Read the JSON report, not the pixels: `frames.samples[].ascii` (40×12 luma render),
+`frames.visibleAfterBrightness` (**false = invisible on the real panel** — the 0.02
+brightness trap from §3), `frames.regions` + `motionScore` (is it animating where you
+think), `audio.beatResponse.detected`, `result.fault` (kind + `paramsResetToDefaults`),
+`printk`. Exit codes: 0 pass, 1 build error, 2 unexpected fault, 3 expectation failed.
+`rgbx-sim scenarios` lists all stimuli; `--param Name=value` overrides params;
+`--png-every 30` writes viewable PNG frames; custom scenario JSON = timelines of param
+writes + button presses + audio/IMU generators (schema in `fw/sim/README.md`).
+
+Iterate here until the sim is clean, THEN do the ARM build (§2) — both must pass.
+
 ## 3. Guardrails (each one is a real, observed failure)
 
 - **Never bypass build.sh for C++.** Its `ld -r` partial link is mandatory: C++
@@ -80,12 +105,21 @@ sections into the heap, so on-heap size ≈ file size, not exactly equal).
 
 ## 4. What you can honestly validate without hardware
 
-- Compile success from step 2 — this is the whole off-device validation surface for
-  your extension's code.
+- **Simulator runs (§2b)**: your `rgbx_tick` logic, rendering, param/string/input
+  handling, brightness visibility, beat/IMU reactivity, and fault behavior — the sim
+  executes your real code with the firmware's real tick semantics and real audio DSP.
+- **ARM compile (§2)**: linker pressure the sim can't reproduce — the sim links
+  libc/libm statically, so **`sinf()` works in the sim and still fails llext load on
+  the device** (nothing exports a math library on-target). Also the `ld -r` section
+  layout and the 24 KB heap fit. Both §2 and §2b must pass; neither substitutes for
+  the other. Full divergence list: `fw/sim/PARITY.md` (notably: CPU budget is only
+  wall-clock-approximated — device timing still needs the board).
 - Optionally `twister -T fw/tests/extensions/manifest -p native_sim` (suite
   `extensions.manifest`) — but this validates the **host's manifest validator**, not
-  your extension. Nothing executes `rgbx_tick` off-device. **Never claim an extension
-  was "tested in the simulator"** — report "compiles; on-device verification pending".
+  your extension.
+- **Honest claim wording**: "compiles for ARM; passes sim scenarios X/Y/Z; on-device
+  load/render verification pending". The sim does NOT prove llext loading, MPU
+  behavior, or timing budgets.
 
 ## 5. Install & run (board lock required)
 

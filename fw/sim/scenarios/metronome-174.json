@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "metronome-174",
+  "description": "174 BPM (drum & bass tempo) click train through the real DSP",
+  "durationMs": 8000,
+  "seed": 42,
+  "audio": { "type": "metronome", "bpm": 174 },
+  "imu": { "type": "static" },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

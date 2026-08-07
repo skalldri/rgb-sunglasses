@@ -1,0 +1,11 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "param-crash",
+  "description": "hello-specific: sets Crash=1 at 1 s — the run MUST fault with a trap (wild write; the sim analog of the device's MPU fault)",
+  "durationMs": 3000,
+  "seed": 0,
+  "audio": { "type": "silence" },
+  "imu": { "type": "static" },
+  "timeline": [{ "atMs": 1000, "set": { "Crash": 1 } }],
+  "expect": { "fault": { "kind": "trap" } }
+}

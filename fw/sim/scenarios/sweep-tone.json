@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "sweep-tone",
+  "description": "100 Hz -> 6 kHz tone sweep — walks energy across all 4 bands / 20 buckets",
+  "durationMs": 6000,
+  "seed": 0,
+  "audio": { "type": "sweep", "fromHz": 100, "toHz": 6000, "gainDb": -12 },
+  "imu": { "type": "static" },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

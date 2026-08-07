@@ -1,0 +1,11 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "param-hang",
+  "description": "hello-specific: sets Hang=1 at 1 s — the run MUST hit the wall backstop (device verdict: CPU budget; the sim cannot interrupt a spinning wasm call, see PARITY.md)",
+  "durationMs": 3000,
+  "seed": 0,
+  "audio": { "type": "silence" },
+  "imu": { "type": "static" },
+  "timeline": [{ "atMs": 1000, "set": { "Hang": 1 } }],
+  "expect": { "fault": { "kind": "wall_backstop" } }
+}

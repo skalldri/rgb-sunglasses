@@ -1,0 +1,17 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "buttons-tour",
+  "description": "Presses all 5 buttons 600 ms apart (proto0 order: Up, Left, Right, Down, Wake)",
+  "durationMs": 5000,
+  "seed": 0,
+  "audio": { "type": "silence" },
+  "imu": { "type": "static" },
+  "timeline": [
+    { "atMs": 800, "press": "Up" },
+    { "atMs": 1400, "press": "Left" },
+    { "atMs": 2000, "press": "Right" },
+    { "atMs": 2600, "press": "Down" },
+    { "atMs": 3200, "press": "Wake" }
+  ],
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

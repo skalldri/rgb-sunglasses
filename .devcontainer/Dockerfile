@@ -37,6 +37,15 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# wasi-sdk — pinned clang/wasm32 toolchain used by the extension simulator
+# (fw/sim/) to compile rgbx animation extensions to WebAssembly. The version
+# must stay in sync with fw/sim/scripts/install-toolchain.sh, which is the
+# fallback path (cached download) for containers built before this layer and
+# for CI.
+RUN curl -fsSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-linux.tar.gz \
+        | tar -xz -C /opt \
+    && mv /opt/wasi-sdk-33.0-x86_64-linux /opt/wasi-sdk-33.0
+
 # Android command-line tools + core SDK packages.
 # NDK and cmake are intentionally excluded — they are too large to put in the
 # image layer; install them via postCreateCommand on first container open.
