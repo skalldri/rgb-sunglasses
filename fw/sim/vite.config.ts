@@ -29,30 +29,47 @@ import basicSsl from "@vitejs/plugin-basic-ssl";
 const simDir = __dirname;
 const wasmDir = path.resolve(simDir, "out/wasm");
 
-/** Serves a JSON array of the built .wasm modules: [{name, url, size}]. */
+interface WasmEntry {
+  name: string;
+  url: string;
+  size: number;
+}
+
+/** Enumerates out/wasm. An unreadable directory (extensions not built yet)
+ * is an empty index, not an error — the UI says so and stays usable. */
+function readWasmIndex(): WasmEntry[] {
+  try {
+    return fs
+      .readdirSync(wasmDir)
+      .filter((f) => f.endsWith(".wasm"))
+      .sort()
+      .map((name) => ({
+        name,
+        url: `/wasm/${name}`,
+        size: fs.statSync(path.join(wasmDir, name)).size,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** Serves /wasm-index.json — read fresh per request in dev so rebuilding
+ * extensions needs no server restart, and frozen into the bundle on build. */
 function wasmIndexPlugin(): Plugin {
   return {
     name: "rgbx-wasm-index",
     configureServer(server) {
       server.middlewares.use("/wasm-index.json", (_req, res) => {
-        let entries: { name: string; url: string; size: number }[] = [];
-        try {
-          entries = fs
-            .readdirSync(wasmDir)
-            .filter((f) => f.endsWith(".wasm"))
-            .sort()
-            .map((name) => ({
-              name,
-              url: `/wasm/${name}`,
-              size: fs.statSync(path.join(wasmDir, name)).size,
-            }));
-        } catch {
-          // out/wasm missing = extensions not built yet; an empty index is a
-          // valid answer, and the UI says so rather than failing to load.
-        }
         res.setHeader("Content-Type", "application/json");
         res.setHeader("Cache-Control", "no-store");
-        res.end(JSON.stringify(entries));
+        res.end(JSON.stringify(readWasmIndex()));
+      });
+    },
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "wasm-index.json",
+        source: JSON.stringify(readWasmIndex()),
       });
     },
   };

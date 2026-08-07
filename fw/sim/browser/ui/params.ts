@@ -17,9 +17,8 @@
  * mode and back doesn't destroy the colour you picked.
  */
 
-import { RgbxParamType } from "../../core/abi";
+import { RgbxParamType, getStringSlot } from "../../core/abi";
 import { ColorMode } from "../../core/colorMode";
-import { getStringSlot } from "../../core/abi";
 import type { SimHost } from "../../core/host";
 import type { ParamInfo } from "../../core/manifest";
 

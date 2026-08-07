@@ -17,7 +17,7 @@ import {
   toDisplayedFrame,
 } from "../core/display";
 import { SimHost } from "../core/host";
-import type { FaultInfo } from "../core/host";
+import type { FaultInfo, TickOutcome } from "../core/host";
 import { GlassesRenderer } from "./render/glasses";
 import {
   AudioSourceKind,
@@ -96,6 +96,7 @@ const imu = new ImuManager();
 
 let host: SimHost | null = null;
 let running = false;
+let ticking = false;
 let loopToken = 0;
 let nextDueMs = 0;
 let lastRaw: Uint8Array = new Uint8Array(FRAME_BYTES);
@@ -225,10 +226,30 @@ async function pump(token: number): Promise<void> {
 
 async function stepOnce(): Promise<void> {
   const h = host;
-  if (h === null) {
+  // SimHost is not reentrant — the Step button must not start a second tick
+  // while the pump loop is still awaiting one.
+  if (h === null || ticking) {
     return;
   }
-  const outcome = await h.tick();
+  ticking = true;
+  let outcome: TickOutcome;
+  try {
+    outcome = await h.tick();
+  } catch (err) {
+    // Switching extensions terminates the adapter out from under an
+    // in-flight request; that rejection is expected and not a fault.
+    if (h === host) {
+      consolePanel.note(`tick failed: ${String(err)}`);
+      stop();
+    }
+    return;
+  } finally {
+    ticking = false;
+  }
+  // The extension may have been swapped while this tick was in flight.
+  if (h !== host) {
+    return;
+  }
   consolePanel.append(outcome.log);
 
   if (outcome.status === "fault") {

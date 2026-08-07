@@ -289,7 +289,10 @@ async function main(): Promise<void> {
       break;
     }
     case "serve": {
-      const res = spawnSync("npx", ["vite", "browser", "--host"], {
+      // No `browser` positional: Vite resolves its config file relative to a
+      // positional root and would silently skip fw/sim/vite.config.ts (which
+      // is what sets root/publicDir/the wasm index). See browser/smoke.md.
+      const res = spawnSync("npx", ["vite", "--host"], {
         stdio: "inherit",
         cwd: SIM_DIR,
       });
