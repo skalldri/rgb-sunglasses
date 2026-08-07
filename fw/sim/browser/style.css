@@ -486,11 +486,27 @@ input[type="range"] {
 }
 
 @media (max-width: 900px) {
+  /* Phone layout: give up the viewport-locked app shell and let the whole
+   * page scroll as one document. Keeping the tab panel internally
+   * scrollable on a phone leaves it a ~100px window whose bottom edge sits
+   * in Android's gesture-navigation zone — swiping it triggers the tab
+   * switcher instead of scrolling (found live on the shared phone). */
+  html,
+  body {
+    height: auto;
+  }
+
   .layout {
     grid-template-columns: 1fr;
   }
 
   .side {
     min-height: 420px;
+    overflow: visible;
+  }
+
+  .tab-panel {
+    overflow-y: visible;
+    flex: none;
   }
 }
