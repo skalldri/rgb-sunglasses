@@ -105,7 +105,10 @@ codegen decision that varies by compiler version and flags. Two consequences:
 ### 4.1 Phase 0 verification experiment (run 2026-08-08, devcontainer)
 
 Compiled `fw/extensions/hello/hello.c` (C path) and
-`fw/extensions/plasma/plasma.cpp` (C++ wrapper path) with **only** the flag set
+`fw/extensions/plasma/plasma.cpp` (C++ wrapper path — that file has since
+been renamed to `fw/extensions/cpptest/cpptest.cpp`, and the production
+Plasma moved to the registry-shipped rgbx-plasma repo; the `plasma.llext`
+names below are the historical record of this run) with **only** the flag set
 above plus two shim headers (`zephyr/llext/symbol.h`, `zephyr/kernel.h` —
 prototypes of the SDK's `arm/shim/`), no EDK, no Zephyr include tree, using
 Zephyr SDK 0.17.0's GCC 12.2.0 / GNU ld 2.38, then `ld -r`:

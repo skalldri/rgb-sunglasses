@@ -61,7 +61,11 @@ jobs:
           cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           configFile: .devcontainer/ci/devcontainer.json
           push: never
-          runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw" -DVERSION_TWEAK_MODE=release && /workspaces/rgb-sunglasses/fw/extensions/build.sh /workspaces/rgb-sunglasses/fw/build
+          # No fw/extensions/build.sh here: in-repo extensions (hello, cpptest)
+          # are dev tools that never attach to releases — their compile check
+          # lives in build.yaml's PR/merge gate, and a fixture failure must not
+          # block a firmware release.
+          runCmd: west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="/workspaces/rgb-sunglasses/fw" -DVERSION_TWEAK_MODE=release
 
       - name: Copy Proto0 DFU artifact
         run: cp ${{ github.workspace }}/fw/build/dfu_application.zip ${{ github.workspace }}/dfu_application_proto0.zip
@@ -106,7 +110,8 @@ jobs:
   # pinned commits against this checkout's SDK, in the sandboxed reusable
   # workflow (untrusted code runs there with read-only permissions and no
   # secrets). Never blocks the firmware release — a failing extension just
-  # misses this release.
+  # misses this release (attach-community below still turns RED for it, so
+  # the miss is a visible signal on the run, not a silent asset gap).
   community:
     needs: release
     uses: ./.github/workflows/community-extensions.yml
@@ -115,7 +120,9 @@ jobs:
   # succeeded, attach them, and publish the draft. if: always() so a broken
   # community extension (or an empty registry, where the community build job
   # is skipped) never leaves the firmware release unpublished; gated on the
-  # release job itself having succeeded.
+  # release job itself having succeeded. Publish happens BEFORE the
+  # completeness check: a missing registry extension must fail this job
+  # loudly, but never hold the firmware release hostage.
   attach-community:
     needs: [release, community]
     if: ${{ always() && needs.release.result == 'success' }}
@@ -127,6 +134,9 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ github.ref_name }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           pattern: community-ext-*
@@ -143,3 +153,16 @@ jobs:
           gh release upload "$TAG" "${files[@]}" --clobber
       - name: Publish the release
         run: gh release edit "$TAG" --draft=false
+      # After publishing: every registry entry must have made it onto the
+      # release. A miss means devices syncing from this release silently lose
+      # that extension — make it a red job (with the release already live).
+      - name: Fail if any registry extension missed the release
+        run: |
+          missing=0
+          for name in $(jq -r '.extensions[].name' extensions/registry.json); do
+            if [ ! -f "community/$name.llext" ]; then
+              echo "::error::registry extension '$name' failed to build and is ABSENT from $TAG — devices will not receive it"
+              missing=1
+            fi
+          done
+          exit $missing
