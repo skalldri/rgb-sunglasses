@@ -35,3 +35,6 @@ include("${RGBX_SDK_SOURCE_DIR}/cmake/rgbx-sdk-config.cmake")
 get_filename_component(_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
 rgbx_add_extension(hello SOURCES "${_repo_root}/fw/extensions/hello/hello.c")
 rgbx_add_extension(plasma SOURCES "${_repo_root}/fw/extensions/plasma/plasma.cpp")
+# Exercises the issue #295 export surface (libm, __aeabi_uldivmod, memmove)
+# so the gate's ACCEPT side is proven, not just its reject side.
+rgbx_add_extension(mathtest SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mathtest.c")

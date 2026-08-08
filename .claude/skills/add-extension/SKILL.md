@@ -34,9 +34,14 @@ the first `.cpp`, falling back to the first `.c` only if no `.cpp` exists). Copy
 - **`fw/extensions/plasma/plasma.cpp`** — C++ via `rgbx_animation.h`: subclass
   `rgbx::Animation`, instantiate with the `RGBX_ANIMATION(Class, "Name", W, H, ...)`
   macro (which emits + exports the same 5 C symbols). The class must be **trivially
-  destructible** (static_assert in the macro); no heap, no exceptions, no RTTI, no
-  libm — nothing links a math library, so `sinf()` etc. fail symbol resolution at
-  load time on the device. See plasma's integer-math `wave8()` for the workaround.
+  destructible** (static_assert in the macro); no heap, no exceptions, no RTTI.
+  Callable firmware symbols are exactly `fw/sdk/arm/allowed-symbols.txt`: string/mem
+  + printk/vprintk + the curated single-precision libm set (`sinf`, `cosf`, `atan2f`,
+  `sqrtf`, …), 64-bit division helpers, and `memmove` (issue #295,
+  `fw/src/extensions/extension_exports.c`). Anything else — notably ALL
+  double-precision math (`sin`, `pow`; fpv5-sp soft-floats doubles) — fails symbol
+  resolution at load on the device. Plasma's integer `wave8()` predates the libm
+  exports and remains a fine low-cost pattern.
 
 Framebuffer dims: 40×12 on proto0 (the host rejects a manifest whose dims don't match
 the display).
@@ -121,11 +126,12 @@ Iterate here until the sim is clean, THEN do the ARM build (§2) — both must p
   handling, brightness visibility, beat/IMU reactivity, and fault behavior — the sim
   executes your real code with the firmware's real tick semantics and real audio DSP.
 - **ARM compile (§2)**: linker pressure the sim can't reproduce — the sim links
-  libc/libm statically, so **`sinf()` works in the sim and still fails llext load on
-  the device** (nothing exports a math library on-target). Also the `ld -r` section
-  layout and the 24 KB heap fit. Both §2 and §2b must pass; neither substitutes for
-  the other. Full divergence list: `fw/sim/PARITY.md` (notably: CPU budget is only
-  wall-clock-approximated — device timing still needs the board).
+  libc/libm statically, so **any call outside the device's exported surface (e.g.
+  double-precision `sin()`, `sinhf()`) works in the sim and still fails llext load
+  on the device**. Also the `ld -r` section layout and the 24 KB heap fit. Both §2
+  and §2b must pass; neither substitutes for the other. Full divergence list:
+  `fw/sim/PARITY.md` (notably: CPU budget is only wall-clock-approximated — device
+  timing still needs the board).
 - Optionally `twister -T fw/tests/extensions/manifest -p native_sim` (suite
   `extensions.manifest`) — but this validates the **host's manifest validator**, not
   your extension.

@@ -73,6 +73,15 @@ jobs:
             "$NM" -u "$RUNNER_TEMP/b-arm/plasma.llext"
             exit 1
           fi
+          # mathtest must actually exercise the issue #295 surface: the gate
+          # passing proves ACCEPT; these prove the calls weren't inlined away.
+          for want in sinf atan2f __aeabi_uldivmod memmove; do
+            if ! "$NM" -u "$RUNNER_TEMP/b-arm/mathtest.llext" | grep -q "\b$want\$"; then
+              echo "mathtest.llext should reference $want (did codegen inline it away?)"
+              "$NM" -u "$RUNNER_TEMP/b-arm/mathtest.llext"
+              exit 1
+            fi
+          done
 
       - name: Build hello + plasma via the SDK (wasm, strict)
         run: |

@@ -49,5 +49,29 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 
+# Reverse direction for the one file whose exports exist FOR extensions:
+# every EXPORT_SYMBOL in extension_exports.c must be mirrored in the allowed
+# list, or the new export is silently unusable (the SDK gate keeps rejecting
+# it even though the device would resolve it). The firmware's OTHER exports
+# (z_impl_* syscall internals etc.) are deliberately not mirrored — this
+# check is scoped to the extension-facing file only.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+EXPORTS_SRC="$SCRIPT_DIR/../../src/extensions/extension_exports.c"
+if [ -f "$EXPORTS_SRC" ]; then
+    unmirrored=""
+    while read -r sym; do
+        [ -n "$sym" ] || continue
+        if ! grep -qx "$sym" <(grep -v '^#' "$ALLOWED"); then
+            unmirrored="$unmirrored $sym"
+        fi
+    done < <(grep -o '^EXPORT_SYMBOL([A-Za-z0-9_]*)' "$EXPORTS_SRC" | sed 's/EXPORT_SYMBOL(\(.*\))/\1/')
+    if [ -n "$unmirrored" ]; then
+        echo "extension_exports.c exports symbol(s) missing from $(basename "$ALLOWED"):$unmirrored" >&2
+        echo "  The two files must move in lockstep (see the invariant note in each) —" >&2
+        echo "  without the mirror line the SDK gate rejects extensions calling the new export." >&2
+        exit 1
+    fi
+fi
+
 count="$(grep -cv -e '^#' -e '^$' "$ALLOWED" || true)"
 echo "OK: all $count allowed symbols are present in the firmware export table"
