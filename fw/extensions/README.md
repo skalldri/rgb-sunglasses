@@ -56,7 +56,7 @@ extension, same as the required ones.
 Raw-C extensions define + `EXPORT_SYMBOL` it themselves (see `hello/hello.c`,
 which signals on its scan-head wrap). C++ wrapper extensions get it for free:
 `RGBX_ANIMATION()` always emits the symbol, driven by the `rgbx::Animation::goodMoment()`
-virtual (default `true` — override it to signal real boundaries; `plasma.cpp`
+virtual (default `true` — override it to signal real boundaries; `cpptest.cpp`
 doesn't and needs no changes).
 
 ### Parameters
@@ -96,7 +96,7 @@ C++ authors can use `include/rgbx/rgbx_animation.h` instead: subclass
 RGBX_PARAM(...))`. It adds typed accessors (`paramU32/paramColor/paramBool/
 paramString`, `bandEnergy/isBeat/displayBucket`, `buttonWasPressed`, accel/
 gyro getters). Nothing C++ crosses the host boundary — the macro emits the
-same five C symbols. See `plasma/plasma.cpp`.
+same five C symbols. See `cpptest/cpptest.cpp` (the in-repo integration-test fixture; the production Plasma lives in the registry-shipped https://github.com/skalldri/rgbx-plasma).
 
 ### API docs
 
@@ -172,7 +172,7 @@ artifact on every firmware build.
 ```bash
 # Mount the board's USB mass-storage disk (see fw/CLAUDE.md "USB Flash Disk"),
 # then:
-cp fw/build/extensions/plasma.llext /mnt/sunglasses-fs/ext/
+cp fw/build/extensions/cpptest.llext /mnt/sunglasses-fs/ext/
 sync && umount /mnt/sunglasses-fs
 # Reboot the board (kernel reboot warm) so the firmware re-mounts FAT and
 # re-discovers extensions.

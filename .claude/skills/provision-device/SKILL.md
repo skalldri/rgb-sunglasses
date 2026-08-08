@@ -76,7 +76,9 @@ Wait ~15s for the board to re-enumerate, then re-run `/check-hardware` to get th
 Over `mcp__serial__*`:
 
 - `glim list` (or the `rgb_sunglasses.glim_list` plugin tool) — expect both `nyan_cat.glim` and `bad_apple.glim`.
-- `ext list` — expect `hello` and `plasma`, neither marked `[FAULTED]`.
+- `ext list` — expect `hello` and `cpptest` (the in-repo dev extensions; a
+  device that has also synced from a release will additionally show the
+  registry extensions, e.g. `demo_wave` and `plasma`), none marked `[FAULTED]`.
 
 Report a short summary table to the user: filesystem health, GLIM files present, extensions present.
 

@@ -1,5 +1,5 @@
 # Pre-merge gate for the standalone rgbx-sdk (fw/sdk/): packages the SDK,
-# then builds the in-repo hello + plasma extensions through it for BOTH
+# then builds the in-repo hello + cpptest extensions through it for BOTH
 # targets with the pinned toolchains in strict mode, and checks parity
 # against the established fw/sim/build-extensions.sh output.
 #
@@ -54,7 +54,7 @@ jobs:
         with:
           version: 0.0.0-ci
 
-      - name: Build hello + plasma via the SDK (arm, strict)
+      - name: Build hello + cpptest via the SDK (arm, strict)
         run: |
           cmake -S fw/sdk/tests/consumer -B "$RUNNER_TEMP/b-arm" \
             -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_TARGET=arm -DRGBX_STRICT_TOOLCHAIN=ON
@@ -64,13 +64,13 @@ jobs:
         run: |
           TC="$(fw/sdk/scripts/install-arm-toolchain.sh)"
           NM="$TC/bin/arm-none-eabi-nm"
-          # hello may need only memset + printk; plasma must need nothing.
+          # hello may need only memset + printk; cpptest must need nothing.
           for sym in $("$NM" -u "$RUNNER_TEMP/b-arm/hello.llext" | awk '{print $NF}'); do
             case "$sym" in memset|printk) ;; *) echo "unexpected undefined symbol in hello.llext: $sym"; exit 1 ;; esac
           done
-          if [ -n "$("$NM" -u "$RUNNER_TEMP/b-arm/plasma.llext")" ]; then
-            echo "plasma.llext should have no undefined symbols:"
-            "$NM" -u "$RUNNER_TEMP/b-arm/plasma.llext"
+          if [ -n "$("$NM" -u "$RUNNER_TEMP/b-arm/cpptest.llext")" ]; then
+            echo "cpptest.llext should have no undefined symbols:"
+            "$NM" -u "$RUNNER_TEMP/b-arm/cpptest.llext"
             exit 1
           fi
           # mathtest must actually exercise the issue #295 surface: the gate
@@ -83,7 +83,7 @@ jobs:
             fi
           done
 
-      - name: Build hello + plasma via the SDK (wasm, strict)
+      - name: Build hello + cpptest via the SDK (wasm, strict)
         run: |
           cmake -S fw/sdk/tests/consumer -B "$RUNNER_TEMP/b-wasm" \
             -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_TARGET=wasm -DRGBX_STRICT_TOOLCHAIN=ON
@@ -91,6 +91,6 @@ jobs:
 
       - name: Compare wasm export/import sets against build-extensions.sh
         run: |
-          fw/sim/build-extensions.sh hello plasma
+          fw/sim/build-extensions.sh hello cpptest
           node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/hello.wasm" fw/sim/out/wasm/hello.wasm
-          node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/plasma.wasm" fw/sim/out/wasm/plasma.wasm
+          node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/cpptest.wasm" fw/sim/out/wasm/cpptest.wasm

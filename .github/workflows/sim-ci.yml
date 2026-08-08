@@ -47,7 +47,7 @@ jobs:
           fw/sim/rgbx-sim run hello  --scenario metronome-120 --no-build --json > /dev/null
           fw/sim/rgbx-sim run hello  --scenario buttons-tour  --no-build --json > /dev/null
           fw/sim/rgbx-sim run hello  --scenario head-tilt     --no-build --json > /dev/null
-          fw/sim/rgbx-sim run plasma --scenario silence       --no-build --json > /dev/null
+          fw/sim/rgbx-sim run cpptest --scenario silence      --no-build --json > /dev/null
 
       - name: Fault paths — Crash traps, Hang hits the backstop
         run: |

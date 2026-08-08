@@ -31,7 +31,7 @@ the first `.cpp`, falling back to the first `.c` only if no `.cpp` exists). Copy
   param type (UINT32/COLOR/BOOL/STRING), every input source (IMU/audio/buttons), and
   each of the 5 symbols (`rgbx_manifest`, `rgbx_inputs`, `rgbx_framebuffer`,
   `rgbx_init`, `rgbx_tick`) individually `EXPORT_SYMBOL`'d at the bottom of the file.
-- **`fw/extensions/plasma/plasma.cpp`** — C++ via `rgbx_animation.h`: subclass
+- **`fw/extensions/cpptest/cpptest.cpp`** — C++ via `rgbx_animation.h`: subclass
   `rgbx::Animation`, instantiate with the `RGBX_ANIMATION(Class, "Name", W, H, ...)`
   macro (which emits + exports the same 5 C symbols). The class must be **trivially
   destructible** (static_assert in the macro); no heap, no exceptions, no RTTI.
@@ -40,7 +40,7 @@ the first `.cpp`, falling back to the first `.c` only if no `.cpp` exists). Copy
   `sqrtf`, …), 64-bit division helpers, and `memmove` (issue #295,
   `fw/src/extensions/extension_exports.c`). Anything else — notably ALL
   double-precision math (`sin`, `pow`; fpv5-sp soft-floats doubles) — fails symbol
-  resolution at load on the device. Plasma's integer `wave8()` predates the libm
+  resolution at load on the device. cpptest's integer `wave8()` predates the libm
   exports and remains a fine low-cost pattern.
 
 Framebuffer dims: 40×12 on proto0 (the host rejects a manifest whose dims don't match

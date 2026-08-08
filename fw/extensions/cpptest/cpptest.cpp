@@ -1,20 +1,24 @@
 /*
- * plasma — a full animation extension written in C++ against the rgbx
- * wrapper (rgbx_animation.h). Classic three-wave plasma, tinted by a
- * BLE-tunable color, speed-scaled by a BLE-tunable parameter. Doubles as
- * the integration test for the C++ wrapper path: the static Plasma instance
- * below is constructed by the extension's init arrays, which the host runs
- * inside the sandbox via llext_bringup().
+ * cpptest — the in-repo integration-test fixture for the C++ wrapper path
+ * (rgbx_animation.h): the static instance below is constructed by the
+ * extension's init arrays, which the host runs inside the sandbox via
+ * llext_bringup(), and the `ld -r` COMDAT handling is exercised end to end.
+ * A dev/debug tool like `hello` — built and provisioned on dev boards,
+ * never shipped on releases.
  *
- * (The deliberate crash/hang sandbox-recovery hooks that used to live here
- * moved to the `hello` kitchen-sink extension — plasma ships clean.)
+ * Visually it is the classic three-wave plasma. The production Plasma
+ * extension now lives in its own registry-shipped repo
+ * (https://github.com/skalldri/rgbx-plasma), modernized to real sinf();
+ * this fixture keeps the integer wave8() form deliberately — it documents
+ * the cheap-integer-math pattern AND keeps the fixture's ARM import
+ * surface empty, which sdk-ci asserts.
  */
 
 #include <rgbx/rgbx_animation.h>
 
 namespace {
 
-class Plasma : public rgbx::Animation {
+class CppTest : public rgbx::Animation {
    public:
     void tick(uint32_t dt_ms) override {
         /* speed is a percentage of nominal (50 == 1x). */
@@ -60,6 +64,6 @@ class Plasma : public rgbx::Animation {
 
 }  // namespace
 
-RGBX_ANIMATION(Plasma, "Plasma", 40, 12, RGBX_PARAM("Speed", RGBX_PARAM_UINT32, 50),
+RGBX_ANIMATION(CppTest, "C++ Test", 40, 12, RGBX_PARAM("Speed", RGBX_PARAM_UINT32, 50),
                RGBX_PARAM("Color", RGBX_PARAM_COLOR, 0x00FF40FF),
                RGBX_PARAM("Invert", RGBX_PARAM_BOOL, 0));

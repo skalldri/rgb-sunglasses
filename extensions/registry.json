@@ -2,6 +2,14 @@
   "version": 1,
   "extensions": [
     {
+      "name": "plasma",
+      "repo": "https://github.com/skalldri/rgbx-plasma",
+      "rev": "308eef7dc29057324badda9dbd28e339876d2d82",
+      "description": "Classic three-wave interference plasma with tunable color, speed, and an invert toggle - formerly the in-repo C++ extension, now sinf-based",
+      "author": "skalldri",
+      "license": "MIT"
+    },
+    {
       "name": "demo_wave",
       "repo": "https://github.com/skalldri/rgbx-demo-wave",
       "rev": "4fdc53fc282e8bdb9c221a4302a6b77b24cb5489",

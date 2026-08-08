@@ -291,7 +291,7 @@ async function handleUploadFiles(fileList: Iterable<File>): Promise<void> {
 
   // Rejections surface AFTER the activation so a valid file later in the
   // batch can't wipe the explanation off the screen (e.g. dropping
-  // plasma.llext + plasma.wasm together). Not a host fault, but the banner
+  // cpptest.llext + cpptest.wasm together). Not a host fault, but the banner
   // is the page's one visible error surface; "Clear fault & retry" simply
   // re-activates the current module, a safe no-op recovery.
   if (rejections.length > 0) {
