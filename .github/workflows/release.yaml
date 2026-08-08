@@ -93,3 +93,41 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Community extensions (extensions/registry.json): rebuilt from their
+  # pinned commits against this checkout's SDK, in the sandboxed reusable
+  # workflow (untrusted code runs there with read-only permissions and no
+  # secrets). Never blocks the firmware release — a failing extension just
+  # misses this release.
+  community:
+    needs: release
+    uses: ./.github/workflows/community-extensions.yml
+
+  # Trusted side of the handoff: collect whichever per-extension artifacts
+  # succeeded and attach them to the release. if: always() so one broken
+  # community extension doesn't strand the others; gated on the release job
+  # itself having succeeded.
+  attach-community:
+    needs: [release, community]
+    if: ${{ always() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: community-ext-*
+          merge-multiple: true
+          path: community
+      - name: Attach community .llext files to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          shopt -s nullglob
+          files=(community/*.llext)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no community extension artifacts to attach"
+            exit 0
+          fi
+          gh release upload "${{ github.ref_name }}" "${files[@]}" --clobber

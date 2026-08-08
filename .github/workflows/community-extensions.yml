@@ -1,0 +1,115 @@
+# Build every community extension in extensions/registry.json from its
+# pinned commit, against THIS checkout's SDK (so release assets always match
+# the release's ABI — the extension's own SDK pin governs only its local dev
+# and its fork CI). Two entry points:
+#   - pull_request on the registry: the gate for registry-addition/bump PRs
+#   - workflow_call from release.yaml: the same build at release time; an
+#     attach job there uploads the .llext artifacts to the release
+#
+# Deliberately outside build.yaml (whose paths exclude extensions/**): a
+# registry-only PR must never trigger the heavy firmware build, and a broken
+# community extension must never block a firmware release.
+#
+# SECURITY: the build matrix runs UNTRUSTED code (cmake configure of a
+# third-party repo is arbitrary code execution). Containment: the build job
+# has read-only permissions, checkout does not persist credentials (nothing
+# for exfiltrated code to steal beyond public-repo read), no secrets are in
+# env, and artifact upload happens from this job while the release-asset
+# attach runs in a separate trusted job in release.yaml.
+name: community-extensions
+
+on:
+  pull_request:
+    paths:
+      - 'extensions/**'
+      - '.github/workflows/community-extensions.yml'
+  workflow_call:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate registry
+        run: node extensions/validate-registry.mjs
+      - name: Emit build matrix
+        id: matrix
+        run: echo "matrix=$(node -e 'console.log(JSON.stringify(JSON.parse(require("fs").readFileSync("extensions/registry.json","utf8")).extensions))')" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        ext: ${{ fromJSON(needs.validate.outputs.matrix) }}
+    name: build (${{ matrix.ext.name }})
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: ./.github/actions/arm-gnu-toolchain
+
+      - name: Compute wasi-sdk cache key
+        id: wasi-key
+        run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/rgb-sunglasses/wasi-sdk-${{ steps.wasi-key.outputs.version }}
+          key: wasi-sdk-scoped-${{ steps.wasi-key.outputs.version }}
+
+      - name: Package this checkout's SDK
+        run: |
+          fw/sdk/package-sdk.sh --version 0.0.0-registry --output "$RUNNER_TEMP/sdk"
+          tar -xzf "$RUNNER_TEMP/sdk/rgbx-sdk-0.0.0-registry.tar.gz" -C "$RUNNER_TEMP/sdk"
+          echo "SDK_DIR=$RUNNER_TEMP/sdk/rgbx-sdk-0.0.0-registry" >> "$GITHUB_ENV"
+
+      - name: Fetch ${{ matrix.ext.name }} at its pinned commit
+        run: |
+          git init "$RUNNER_TEMP/ext"
+          git -C "$RUNNER_TEMP/ext" remote add origin "${{ matrix.ext.repo }}"
+          git -C "$RUNNER_TEMP/ext" fetch --depth 1 origin "${{ matrix.ext.rev }}"
+          git -C "$RUNNER_TEMP/ext" checkout FETCH_HEAD
+
+      # Bypass the extension's own presets/pin entirely: configure directly
+      # with this checkout's SDK, strict toolchains. Robust against a fork
+      # that mangled its CMakePresets.json, and guarantees ABI match.
+      - name: Build ${{ matrix.ext.name }} (arm + wasm, strict)
+        run: |
+          cmake -S "$RUNNER_TEMP/ext" -B "$RUNNER_TEMP/b-arm" \
+            -DRGBX_TARGET=arm -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_STRICT_TOOLCHAIN=ON
+          cmake --build "$RUNNER_TEMP/b-arm"
+          cmake -S "$RUNNER_TEMP/ext" -B "$RUNNER_TEMP/b-wasm" \
+            -DRGBX_TARGET=wasm -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_STRICT_TOOLCHAIN=ON
+          cmake --build "$RUNNER_TEMP/b-wasm"
+
+      # The registry name IS the device filename (slot discovery is
+      # filename-based) — the extension's project() must produce exactly it.
+      - name: Enforce artifact name
+        run: |
+          test -f "$RUNNER_TEMP/b-arm/${{ matrix.ext.name }}.llext" || {
+            echo "expected ${{ matrix.ext.name }}.llext — the repo's CMake project() name must equal its registry name"; ls "$RUNNER_TEMP/b-arm"; exit 1; }
+          test -f "$RUNNER_TEMP/b-wasm/${{ matrix.ext.name }}.wasm"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$RUNNER_TEMP/b-arm/${{ matrix.ext.name }}.llext" "$RUNNER_TEMP/out/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: community-ext-${{ matrix.ext.name }}
+          path: ${{ runner.temp }}/out/*.llext
