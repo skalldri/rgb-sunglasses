@@ -69,6 +69,7 @@ const els = {
   step: must<HTMLButtonElement>("step"),
   brightness: must<HTMLSelectElement>("brightness"),
   decimate: must<HTMLInputElement>("decimate"),
+  whiteHot: must<HTMLInputElement>("white-hot"),
   stats: must<HTMLElement>("stats"),
   buttons: must<HTMLElement>("buttons"),
   params: must<HTMLElement>("params"),
@@ -888,6 +889,13 @@ async function boot(): Promise<void> {
   });
   els.brightness.addEventListener("change", paint);
   els.decimate.addEventListener("change", paint);
+  // Sync at boot too: browsers restore checkbox state on reload/bfcache
+  // WITHOUT firing change, which would desync the renderer from the box.
+  renderer.whiteHot = els.whiteHot.checked;
+  els.whiteHot.addEventListener("change", () => {
+    renderer.whiteHot = els.whiteHot.checked;
+    paint();
+  });
   els.paramReset.addEventListener("click", () => paramPanel.resetToDefaults());
   els.consoleClear.addEventListener("click", () => consolePanel.clear());
   els.faultClear.addEventListener("click", () => void clearFaultAndRetry());
