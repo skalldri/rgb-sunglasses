@@ -41,22 +41,19 @@ CXX="$WASI_SDK/bin/clang++"
 # Shared flags. -isystem puts the Zephyr shim headers (EXPORT_SYMBOL no-op,
 # printk decl) ahead of nothing in particular — the wasi sysroot has no
 # zephyr/ headers — but keeps them out of warning scope.
-# shellcheck disable=SC2054  # the commas are -Wl,flag linker syntax, not separators
 COMMON_FLAGS=(
     -O2 -g
     -mexec-model=reactor
     -I "$REPO_ROOT/fw/include"
     -isystem "$SIM_DIR/shim/include"
     -Wall -Wextra
-    -Wl,--export-if-defined=rgbx_manifest
-    -Wl,--export-if-defined=rgbx_inputs
-    -Wl,--export-if-defined=rgbx_framebuffer
-    -Wl,--export-if-defined=rgbx_init
-    -Wl,--export-if-defined=rgbx_tick
-    -Wl,--export-if-defined=rgbx_good_moment
-    -Wl,--export-if-defined=rgbx_sim_log_buf
-    -Wl,--export-if-defined=rgbx_sim_log_len
 )
+# The export surface is single-sourced in shim/rgbx-exports.txt (also read
+# by the rgbx-sdk's cmake/rgbx-sdk-config.cmake — keep them from drifting).
+while read -r export_sym; do
+    case "$export_sym" in ''|'#'*) continue ;; esac
+    COMMON_FLAGS+=("-Wl,--export-if-defined=$export_sym")
+done < "$SIM_DIR/shim/rgbx-exports.txt"
 # Match the device C++ dialect (fw/extensions/build.sh): C++23, no
 # exceptions, no RTTI. -Wno-null-conversion: clang (unlike the device's GCC)
 # warns on rgbx_animation.h's `NULL ? NULL : params` macro expansion; the

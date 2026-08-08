@@ -58,6 +58,13 @@ function(rgbx_add_extension name)
     list(GET ARG_SOURCES 0 _src)
     get_filename_component(_src "${_src}" ABSOLUTE)
 
+    # A C++ TU in a C-only project() yields an EMPTY object library and a
+    # baffling "ld: no input files" — fail at configure time instead.
+    get_property(_langs GLOBAL PROPERTY ENABLED_LANGUAGES)
+    if(_src MATCHES "\\.(cpp|cc|cxx)$" AND NOT "CXX" IN_LIST _langs)
+        message(FATAL_ERROR "rgbx_add_extension(${name}): ${_src} is C++ but the project() does not enable CXX — use project(<name> C CXX)")
+    endif()
+
     if(RGBX_TARGET STREQUAL "arm")
         add_library(${name}_obj OBJECT "${_src}")
         target_include_directories(${name}_obj PRIVATE "${_RGBX_SDK_ROOT}/include")
@@ -83,6 +90,12 @@ function(rgbx_add_extension name)
             COMMAND_EXPAND_LISTS)
         add_custom_target(${name}_llext ALL DEPENDS "${_llext}")
     elseif(RGBX_TARGET STREQUAL "wasm")
+        # The wasm side only exists in a packaged SDK tree (package-sdk.sh
+        # copies the sim shims in); fail with the actual cause rather than a
+        # missing-source error from the generator.
+        if(NOT EXISTS "${_RGBX_SDK_ROOT}/wasm/shim/sim_shim.c")
+            message(FATAL_ERROR "rgbx-sdk: '${_RGBX_SDK_ROOT}' has no wasm/shim/ — the wasm target needs a packaged SDK tree (a package-sdk.sh output), not fw/sdk/ from the source tree")
+        endif()
         # The sim shims compile as C alongside the extension TU:
         # sim_shim.c (self-contained printk -> exported log buffer, keeps the
         # module import-free) and abi_offsets.c (static_asserts the struct
@@ -95,17 +108,19 @@ function(rgbx_add_extension name)
         target_include_directories(${name} SYSTEM PRIVATE "${_RGBX_SDK_ROOT}/wasm/shim/include")
         target_compile_options(${name} PRIVATE -Wall -Wextra)
         # -mexec-model=reactor is link-only; export visibility comes from the
-        # linker (—export-if-defined tolerates absent optional exports).
-        target_link_options(${name} PRIVATE
-            -mexec-model=reactor
-            -Wl,--export-if-defined=rgbx_manifest
-            -Wl,--export-if-defined=rgbx_inputs
-            -Wl,--export-if-defined=rgbx_framebuffer
-            -Wl,--export-if-defined=rgbx_init
-            -Wl,--export-if-defined=rgbx_tick
-            -Wl,--export-if-defined=rgbx_good_moment
-            -Wl,--export-if-defined=rgbx_sim_log_buf
-            -Wl,--export-if-defined=rgbx_sim_log_len)
+        # linker (--export-if-defined tolerates absent optional exports).
+        # The export surface is single-sourced in wasm/shim/rgbx-exports.txt
+        # (shared with fw/sim/build-extensions.sh).
+        file(STRINGS "${_RGBX_SDK_ROOT}/wasm/shim/rgbx-exports.txt" _rgbx_export_lines)
+        set(_rgbx_export_flags "")
+        foreach(_line IN LISTS _rgbx_export_lines)
+            string(STRIP "${_line}" _line)
+            if(_line STREQUAL "" OR _line MATCHES "^#")
+                continue()
+            endif()
+            list(APPEND _rgbx_export_flags "-Wl,--export-if-defined=${_line}")
+        endforeach()
+        target_link_options(${name} PRIVATE -mexec-model=reactor ${_rgbx_export_flags})
         add_custom_command(TARGET ${name} POST_BUILD
             COMMAND "${RGBX_NODE}" "${_RGBX_SDK_ROOT}/wasm/check-wasm.mjs" "$<TARGET_FILE:${name}>"
             COMMENT "Gating ${name}.wasm (zero imports + required exports)"

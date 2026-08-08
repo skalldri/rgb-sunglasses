@@ -1,7 +1,13 @@
-# Symbols the firmware exports to .llext extensions at load time — the
-# complete list an extension's undefined symbols must resolve against.
-# Sources: Zephyr's subsys/llext/llext_export.c (string/memory functions)
-# and lib/os/printk.c (printk). No libm, no libgcc __aeabi_* helpers.
+# The SUPPORTED symbol surface for .llext extensions — the subset of the
+# firmware's export table that extensions may rely on. Sources: Zephyr's
+# subsys/llext/llext_export.c (string/memory functions) and lib/os/printk.c
+# (printk/vprintk). No libm, no libgcc __aeabi_* helpers.
+#
+# The built firmware's full export table (zephyr.map .exported_sym) also
+# contains internal symbols (z_impl_* syscall implementations, arch helpers)
+# that are NOT part of the extension ABI: they exist for the llext machinery
+# itself, are not stable across firmware versions, and extensions must not
+# call them — which is why this gate rejects them.
 strcpy
 strncpy
 strlen
@@ -11,3 +17,4 @@ memcmp
 memcpy
 memset
 printk
+vprintk

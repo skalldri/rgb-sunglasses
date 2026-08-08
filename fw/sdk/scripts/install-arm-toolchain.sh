@@ -99,6 +99,10 @@ if [ -z "$extracted" ]; then
     echo "error: unexpected archive layout in $asset" >&2
     exit 1
 fi
+# $dest may exist as a broken/partial tree (interrupted mv, corrupted CI
+# cache restore) — resolve() already failed on it, and a bare mv would nest
+# the toolchain INSIDE it and report success. Replace it.
+rm -rf "$dest"
 mv "$extracted" "$dest"
 
 echo "$dest"

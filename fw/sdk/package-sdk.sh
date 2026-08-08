@@ -54,10 +54,15 @@ fi
 abi_version="$(grep -o '#define RGBX_ABI_VERSION [0-9]*' "$REPO_ROOT/fw/include/rgbx/rgbx_api.h" | grep -o '[0-9]*$')"
 arm_toolchain="$(grep -o 'ARM_TOOLCHAIN_VERSION="[^"]*"' "$SDK_DIR/scripts/install-arm-toolchain.sh" | cut -d'"' -f2)"
 wasi_sdk="$(grep -o 'WASI_SDK_VERSION="[^"]*"' "$REPO_ROOT/fw/sim/scripts/install-toolchain.sh" | cut -d'"' -f2)"
-if [ -z "$abi_version" ] || [ -z "$arm_toolchain" ] || [ -z "$wasi_sdk" ]; then
-    echo "error: failed to extract abi/toolchain pins from source files" >&2
+# The llext heap limit comes from the board .conf (CONFIG_LLEXT_HEAP_SIZE,
+# in KB) — stamped into the SDK so check-llext.sh always gates against the
+# firmware release the SDK ships with, never a hand-copied constant.
+heap_kb="$(grep -o '^CONFIG_LLEXT_HEAP_SIZE=[0-9]*' "$REPO_ROOT/fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf" | grep -o '[0-9]*$')"
+if [ -z "$abi_version" ] || [ -z "$arm_toolchain" ] || [ -z "$wasi_sdk" ] || [ -z "$heap_kb" ]; then
+    echo "error: failed to extract abi/toolchain/heap pins from source files" >&2
     exit 1
 fi
+heap_limit=$((heap_kb * 1024))
 
 mkdir -p "$OUTPUT"
 OUTPUT="$(cd "$OUTPUT" && pwd)"
@@ -71,14 +76,18 @@ mkdir -p "$root/include/rgbx" "$root/arm" "$root/wasm/shim" "$root/cmake" "$root
 # ABI headers — the contract, verbatim.
 cp "$REPO_ROOT/fw/include/rgbx/"*.h "$root/include/rgbx/"
 
-# ARM side: the .exported_sym-emitting shims + gates.
+# ARM side: the .exported_sym-emitting shims + gates. heap-limit.txt is the
+# stamped CONFIG_LLEXT_HEAP_SIZE in bytes (see above).
 cp -r "$SDK_DIR/arm/shim" "$root/arm/shim"
 cp "$SDK_DIR/arm/allowed-symbols.txt" "$SDK_DIR/arm/check-llext.sh" "$root/arm/"
+echo "$heap_limit" > "$root/arm/heap-limit.txt"
 
 # WASM side: the simulator shims (NOT audio_dsp_wasm.cpp — the audio DSP
-# module is simulator infrastructure, not part of an extension build).
+# module is simulator infrastructure, not part of an extension build) plus
+# the single-sourced export-surface list.
 cp -r "$REPO_ROOT/fw/sim/shim/include" "$root/wasm/shim/include"
-cp "$REPO_ROOT/fw/sim/shim/sim_shim.c" "$REPO_ROOT/fw/sim/shim/abi_offsets.c" "$root/wasm/shim/"
+cp "$REPO_ROOT/fw/sim/shim/sim_shim.c" "$REPO_ROOT/fw/sim/shim/abi_offsets.c" \
+   "$REPO_ROOT/fw/sim/shim/rgbx-exports.txt" "$root/wasm/shim/"
 cp "$REPO_ROOT/fw/sim/scripts/check-wasm.mjs" "$root/wasm/"
 
 # CMake package + toolchain installers.
@@ -95,7 +104,8 @@ cat > "$root/sdk-manifest.json" <<EOF
   "fwRelease": "fw-v$VERSION",
   "abiVersion": $abi_version,
   "armToolchain": "arm-gnu-$arm_toolchain",
-  "wasiSdk": "$wasi_sdk"
+  "wasiSdk": "$wasi_sdk",
+  "llextHeapBytes": $heap_limit
 }
 EOF
 

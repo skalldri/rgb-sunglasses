@@ -1,0 +1,15 @@
+# The wasm export surface of an rgbx extension module — every symbol the
+# simulator host may look up, exported via -Wl,--export-if-defined so absent
+# optional exports don't fail the link. Single source of truth: both
+# fw/sim/build-extensions.sh and the rgbx-sdk's cmake/rgbx-sdk-config.cmake
+# read this file (it ships in the SDK tarball under wasm/shim/). Append-only:
+# new optional exports are negotiated by symbol presence, like
+# rgbx_good_moment.
+rgbx_manifest
+rgbx_inputs
+rgbx_framebuffer
+rgbx_init
+rgbx_tick
+rgbx_good_moment
+rgbx_sim_log_buf
+rgbx_sim_log_len

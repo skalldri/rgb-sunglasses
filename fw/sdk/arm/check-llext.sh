@@ -6,25 +6,37 @@
 #
 #   check-llext.sh --nm <nm> --readelf <readelf> --allowed <file> <name.llext>
 #
-# Three checks:
-#  1. Undefined symbols: every one must be in the allowed list (the complete
-#     set the firmware exports to extensions). Anything else — sinf (no libm
+# Checks (mirroring zephyr/subsys/llext/llext_load.c llext_map_sections):
+#  1. Undefined symbols: every one must be in the allowed list (the supported
+#     subset of what the firmware exports). Anything else — sinf (no libm
 #     on-target), __aeabi_* (no libgcc helpers exported: 64-bit division,
 #     soft-float) — would fail llext symbol resolution at load time.
-#  2. Section layout: .exported_sym present and well-formed, and allocatable
-#     PROGBITS file offsets strictly non-overlapping — the precondition for
-#     the on-device loader's region-overlap check ("Region 0 ELF file range
-#     ... overlaps with 1"). ld -r ordering is an implementation behavior,
-#     so this stays a permanent guard rather than a one-time verification.
+#  2. Region layout, the loader's model: sections are classified into regions
+#     (text = executable, data = writable PROGBITS, rodata = other alloc
+#     PROGBITS, export = .exported_sym, init/fini/preinit arrays), each
+#     region's file span is the min..max over its sections, and region spans
+#     must not overlap ("Region 0 ELF file range ... overlaps with 1" is the
+#     on-device rejection this predicts, e.g. from COMDAT text interleaving
+#     with data in a C++ object that skipped `ld -r`). Additionally at most
+#     ONE allocatable NOBITS section is allowed — the loader hard-rejects
+#     multiple ("Multiple SHT_NOBITS sections are not supported", -ENOTSUP),
+#     which a C++ function-local static in an inline function can trigger
+#     via a COMDAT .bss._Z* section.
+#     Plus: .exported_sym present, nonzero, a multiple of 8.
 #  3. Size: total SHF_ALLOC bytes (the loader copies/allocates all alloc
 #     sections, including .bss, into the llext heap) against
-#     CONFIG_LLEXT_HEAP_SIZE = 24 KB.
+#     CONFIG_LLEXT_HEAP_SIZE. The limit is read from heap-limit.txt next to
+#     this script (stamped by package-sdk.sh from the board .conf), falling
+#     back to grepping the board .conf directly when running from the
+#     monorepo source tree — never a hardcoded copy.
 #
 # Parsing note: readelf -S -W output is processed in plain bash ($((16#...)))
 # rather than awk — the "[ Nr]" column splits inconsistently for awk, and
 # strtonum() is gawk-only (ubuntu runners default to mawk).
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 NM=""
 READELF=""
@@ -45,7 +57,24 @@ if [ -z "$NM" ] || [ -z "$READELF" ] || [ -z "$ALLOWED" ] || [ -z "$LLEXT" ]; th
     exit 2
 fi
 
-HEAP_LIMIT=24576  # CONFIG_LLEXT_HEAP_SIZE (KB -> bytes) on proto0
+# --- resolve the llext heap limit (single source: the board .conf) ----------
+if [ -f "$SCRIPT_DIR/heap-limit.txt" ]; then
+    HEAP_LIMIT="$(grep -o '^[0-9]*' "$SCRIPT_DIR/heap-limit.txt" | head -1)"
+else
+    board_conf="$SCRIPT_DIR/../../boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf"
+    if [ -f "$board_conf" ]; then
+        kb="$(grep -o '^CONFIG_LLEXT_HEAP_SIZE=[0-9]*' "$board_conf" | grep -o '[0-9]*$')"
+        HEAP_LIMIT=$((kb * 1024))
+    else
+        echo "error: no heap-limit.txt beside check-llext.sh and no board .conf to derive it from" >&2
+        exit 2
+    fi
+fi
+if [ -z "$HEAP_LIMIT" ] || [ "$HEAP_LIMIT" -le 0 ]; then
+    echo "error: could not determine the llext heap limit" >&2
+    exit 2
+fi
+
 fail=0
 
 # --- 1. undefined-symbol gate ------------------------------------------------
@@ -58,29 +87,63 @@ while read -r sym; do
 done < <("$NM" -u "$LLEXT" | awk '{print $NF}')
 if [ -n "$bad" ]; then
     echo "$LLEXT: undefined symbol(s) the device does not export:$bad" >&2
-    echo "  The firmware only exports the symbols in $(basename "$ALLOWED") to extensions." >&2
+    echo "  Extensions may only call the symbols in $(basename "$ALLOWED")." >&2
     echo "  Common causes: libm calls (sinf/cosf - no math library on-target)," >&2
     echo "  64-bit division or soft-float arithmetic (__aeabi_* libgcc helpers)." >&2
     echo "  Use integer math or single-precision float expressions the FPU handles inline." >&2
     fail=1
 fi
 
-# --- 2 + 3. section layout and heap fit --------------------------------------
+# --- 2. region layout (the loader's model) -----------------------------------
 # Each relevant readelf -S -W line, after stripping the "[ Nr]" prefix, is:
 #   Name Type Addr Off Size ES Flg Lk Inf Al
 exported_size=0
 alloc_total=0
-ranges=""  # "off size name" per alloc PROGBITS section, newline-separated
+nobits_count=0
+nobits_names=""
+# Per-region merged file spans: "<min_off> <max_end>" (empty = no sections).
+declare -A region_min region_max
+
 while read -r name type _addr off size _es flg _rest; do
-    case "$type" in PROGBITS|NOBITS|INIT_ARRAY|FINI_ARRAY|PREINIT_ARRAY) ;; *) continue ;; esac
-    size_dec=$((16#$size))
-    if [ "$name" = ".exported_sym" ]; then
-        exported_size=$size_dec
-    fi
     case "$flg" in *A*) ;; *) continue ;; esac
+    size_dec=$((16#$size))
+    [ "$size_dec" -gt 0 ] || continue
+
+    # Classify into the loader's llext_mem region (llext_map_sections).
+    region=""
+    if [ "$name" = ".exported_sym" ]; then
+        region="export"
+        exported_size=$size_dec
+    else
+        case "$type" in
+            NOBITS)
+                nobits_count=$((nobits_count + 1))
+                nobits_names="$nobits_names $name"
+                ;;
+            PROGBITS)
+                case "$flg" in
+                    *X*) region="text" ;;
+                    *W*) region="data" ;;
+                    *) region="rodata" ;;
+                esac
+                ;;
+            INIT_ARRAY) region="init" ;;
+            FINI_ARRAY) region="fini" ;;
+            PREINIT_ARRAY) region="preinit" ;;
+            *) ;;  # unknown types are skipped by the loader too
+        esac
+    fi
     alloc_total=$((alloc_total + size_dec))
-    if [ "$type" != "NOBITS" ]; then
-        ranges+="$((16#$off)) $size_dec $name"$'\n'
+
+    if [ -n "$region" ]; then
+        off_dec=$((16#$off))
+        end=$((off_dec + size_dec))
+        if [ -z "${region_min[$region]:-}" ] || [ "$off_dec" -lt "${region_min[$region]}" ]; then
+            region_min[$region]=$off_dec
+        fi
+        if [ -z "${region_max[$region]:-}" ] || [ "$end" -gt "${region_max[$region]}" ]; then
+            region_max[$region]=$end
+        fi
     fi
 done < <("$READELF" -S -W "$LLEXT" | sed -n 's/^ *\[ *[0-9]*\] *//p')
 
@@ -92,20 +155,28 @@ elif [ $((exported_size % 8)) -ne 0 ]; then
     fail=1
 fi
 
-prev_end=0
-prev_name=""
-while read -r off size name; do
-    [ -n "$off" ] || continue
-    if [ "$off" -lt "$prev_end" ]; then
-        echo "$LLEXT: section $name (file offset $off) overlaps $prev_name (ends at $prev_end) - the on-device loader will reject this file" >&2
-        fail=1
-    fi
-    if [ $((off + size)) -gt "$prev_end" ]; then
-        prev_end=$((off + size))
-        prev_name=$name
-    fi
-done < <(printf '%s' "$ranges" | sort -n)
+if [ "$nobits_count" -gt 1 ]; then
+    echo "$LLEXT: $nobits_count allocatable NOBITS sections ($nobits_names ) - the on-device loader rejects multiple bss sections (-ENOTSUP)" >&2
+    echo "  Common cause in C++: a function-local static in an inline or template function emits a COMDAT .bss._Z* section." >&2
+    fail=1
+fi
 
+# Pairwise overlap between merged region file spans (any shared byte counts,
+# matching the loader's REGIONS_OVERLAP_ON).
+regions=("${!region_min[@]}")
+n=${#regions[@]}
+for ((i = 0; i < n; i++)); do
+    for ((j = i + 1; j < n; j++)); do
+        a=${regions[$i]} b=${regions[$j]}
+        if [ "${region_min[$a]}" -lt "${region_max[$b]}" ] && [ "${region_min[$b]}" -lt "${region_max[$a]}" ]; then
+            echo "$LLEXT: region '$a' file span [${region_min[$a]},${region_max[$a]}) overlaps region '$b' [${region_min[$b]},${region_max[$b]}) - the on-device loader will reject this file" >&2
+            echo "  (This is the merged-region overlap the mandatory 'ld -r' partial link exists to prevent.)" >&2
+            fail=1
+        fi
+    done
+done
+
+# --- 3. llext heap fit -------------------------------------------------------
 if [ "$alloc_total" -gt "$HEAP_LIMIT" ]; then
     echo "$LLEXT: allocatable sections total $alloc_total bytes > llext heap ($HEAP_LIMIT bytes, CONFIG_LLEXT_HEAP_SIZE)" >&2
     fail=1
@@ -116,4 +187,4 @@ fi
 if [ "$fail" -ne 0 ]; then
     exit 1
 fi
-echo "$LLEXT: OK (alloc $alloc_total bytes, $((exported_size / 8)) exported symbols)"
+echo "$LLEXT: OK (alloc $alloc_total bytes, $((exported_size / 8)) exported symbols, heap limit $HEAP_LIMIT)"

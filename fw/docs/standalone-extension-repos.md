@@ -16,8 +16,8 @@ eventual "extension store":
 
 1. Fork the `rgbx-extension-template` repo (its example source is the Hello
    kitchen-sink extension).
-2. Implement the animation; `cmake --workflow --preset all` produces both a
-   simulator `.wasm` and a device `.llext`.
+2. Implement the animation; `./build.sh` produces both a simulator `.wasm`
+   and a device `.llext`.
 3. Test by dragging the `.wasm` onto the hosted simulator. Optionally USB-copy
    the `.llext` to a device's `/NAND:/ext/` for on-hardware testing.
 4. Submit a PR to this repo adding one entry to `extensions/registry.json`.
@@ -47,12 +47,12 @@ on-device load fault caught at build time instead.
  rgbx-extension-template (fork)          rgb-sunglasses (this repo)
  ┌────────────────────────────┐          ┌─────────────────────────────────┐
  │ src/main.c                 │          │ fw/include/rgbx/*.h  (ABI)      │
- │ CMakeLists.txt ──FetchContent──────►  │ fw/sim/shim/*        (wasm shim)│
+ │ CMakeLists.txt ──sdk download──────►  │ fw/sim/shim/*        (wasm shim)│
  │ cmake/fw-release.cmake     │  pinned  │ fw/sdk/**            (arm shim, │
  │   (fw release + sha256 pin)│  rgbx-sdk│   cmake pkg, gates, packaging)  │
  │ CMakePresets.json          │  tarball │        │ package-sdk.sh         │
  └──────────┬─────────────────┘          │        ▼                        │
-            │ cmake --workflow           │ rgbx-sdk-<ver>.tar.gz ──────────┼──► fw-v* release asset
+            │ ./build.sh                 │ rgbx-sdk-<ver>.tar.gz ──────────┼──► fw-v* release asset
             ▼                            │                                 │
    build/wasm/<name>.wasm ──drag──►  hosted sim (/sim)                     │
    build/arm/<name>.llext            (zero-import sandbox)                 │
