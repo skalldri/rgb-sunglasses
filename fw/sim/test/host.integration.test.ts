@@ -1,5 +1,5 @@
 /**
- * End-to-end SimHost tests against the REAL hello.wasm / plasma.wasm built
+ * End-to-end SimHost tests against the REAL hello.wasm / cpptest.wasm built
  * by fw/sim/build-extensions.sh. Skipped (with a loud message) if the
  * modules haven't been built — run `fw/sim/build-extensions.sh` first;
  * `npm test` in CI always builds before testing.
@@ -34,8 +34,8 @@ function makeHost(wasmBytes: ArrayBuffer, opts: Partial<ConstructorParameters<ty
 }
 
 const helloBytes = loadWasm("hello");
-const plasmaBytes = loadWasm("plasma");
-const skip = helloBytes === null || plasmaBytes === null
+const cpptestBytes = loadWasm("cpptest");
+const skip = helloBytes === null || cpptestBytes === null
   ? "extension .wasm modules not built — run fw/sim/build-extensions.sh"
   : false;
 
@@ -161,15 +161,15 @@ test("hello: audio beat flags stay sticky across ~3 ticks (32ms vs 11ms)", { ski
   }
 });
 
-test("plasma (C++ wrapper): renders, good_moment export honored", { skip }, async () => {
-  const host = makeHost(plasmaBytes!);
+test("cpptest (C++ wrapper): renders, good_moment export honored", { skip }, async () => {
+  const host = makeHost(cpptestBytes!);
   try {
     assert.equal(await host.activate(), null);
-    assert.equal(host.metadata!.displayName, "Plasma");
+    assert.equal(host.metadata!.displayName, "C++ Test");
     const out = await host.tick();
     assert.equal(out.status, "ok");
     if (out.status === "ok") {
-      assert.ok(out.framebuffer.some((b) => b !== 0), "plasma rendered black");
+      assert.ok(out.framebuffer.some((b) => b !== 0), "cpptest rendered black");
       assert.equal(typeof out.goodMoment, "boolean");
     }
   } finally {
@@ -179,7 +179,7 @@ test("plasma (C++ wrapper): renders, good_moment export honored", { skip }, asyn
 
 test("determinism: same seed + inputs => identical frames", { skip }, async () => {
   async function run(): Promise<Uint8Array> {
-    const host = makeHost(plasmaBytes!, { seed: 7 });
+    const host = makeHost(cpptestBytes!, { seed: 7 });
     try {
       assert.equal(await host.activate(), null);
       // Exercise the seeded color-mode path too: RandomTimerFade, speed 200.

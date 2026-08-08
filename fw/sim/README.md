@@ -37,7 +37,7 @@ explanation, since the simulator executes WebAssembly, never ARM code
 
 ```bash
 fw/sim/setup.sh                                   # once per checkout
-fw/sim/rgbx-sim run plasma --scenario silence     # build + simulate + report
+fw/sim/rgbx-sim run cpptest --scenario silence     # build + simulate + report
 fw/sim/rgbx-sim run hello --scenario metronome-120 --json   # full JSON report
 fw/sim/rgbx-sim scenarios                         # list canned stimuli
 fw/sim/rgbx-sim serve                             # browser UI

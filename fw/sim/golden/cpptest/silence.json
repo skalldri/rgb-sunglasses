@@ -1,6 +1,6 @@
 {
   "schema": "rgbx-sim-golden/1",
-  "extension": "plasma",
+  "extension": "cpptest",
   "scenario": "silence",
   "seed": 0,
   "ticks": 455,

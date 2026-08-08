@@ -10,7 +10,7 @@ test("recognizes the wasm magic", () => {
 
 test("recognizes an ELF (.llext) and names the device/sim split", () => {
   assert.equal(sniffModuleKind(new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 1, 1, 1, 0])), "elf");
-  const msg = rejectionMessage("plasma.llext", "elf");
+  const msg = rejectionMessage("cpptest.llext", "elf");
   assert.match(msg, /\.llext/);
   assert.match(msg, /build-extensions\.sh/);
 });

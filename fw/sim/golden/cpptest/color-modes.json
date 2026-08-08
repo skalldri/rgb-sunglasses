@@ -1,6 +1,6 @@
 {
   "schema": "rgbx-sim-golden/1",
-  "extension": "plasma",
+  "extension": "cpptest",
   "scenario": "color-modes",
   "seed": 42,
   "ticks": 909,

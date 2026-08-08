@@ -12,7 +12,7 @@ sources need `audio_dsp.wasm` from the same directory:
 
 ```bash
 fw/sim/build-extensions.sh          # no hardware required
-ls fw/sim/out/wasm                  # hello.wasm  plasma.wasm  audio_dsp.wasm
+ls fw/sim/out/wasm                  # hello.wasm  cpptest.wasm  audio_dsp.wasm
 ```
 
 If `out/wasm` is missing the page still loads, the picker is empty, and the

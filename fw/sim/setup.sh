@@ -16,4 +16,4 @@ echo "== tsc =="
 echo "== build extensions + audio_dsp =="
 "$SIM_DIR/build-extensions.sh"
 
-echo "setup complete — try: fw/sim/rgbx-sim run plasma --scenario silence --seconds 3"
+echo "setup complete — try: fw/sim/rgbx-sim run cpptest --scenario silence --seconds 3"

@@ -84,9 +84,13 @@ jobs:
           # matches "dk" against older releases; DK builds now live only on the
           # dk-support branch, and DK releases must never reuse the fw-v* tag
           # prefix — the app serves the latest fw-v* release to proto0 users).
+          #
+          # NO in-repo-built .llext files attach here: every shipped extension
+          # comes from the community registry (extensions/registry.json) via
+          # the attach-community job below. In-repo extensions (hello, cpptest)
+          # are dev/debug tools — built by CI as a check, never released.
           files: |
             ${{ github.workspace }}/dfu_application_proto0.zip
-            ${{ github.workspace }}/fw/build/extensions/*.llext
             ${{ github.workspace }}/rgbx-sdk-*.tar.gz
           body: "Release ${{ steps.version.outputs.version }}"
           # Draft until attach-community flips it live: the app treats the

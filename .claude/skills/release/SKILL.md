@@ -10,7 +10,7 @@ files need editing** for any release track.
 
 | Track | Tag convention | CI workflow | Artifact |
 |---|---|---|---|
-| Firmware | `fw-vX.Y.Z` | `release.yaml` | `dfu_application_proto0.zip`, `dfu_application_dk.zip`, plus one bare `<name>.llext` per in-repo extension (proto0-only; issue #163) |
+| Firmware | `fw-vX.Y.Z` | `release.yaml` | `dfu_application_proto0.zip`, `dfu_application_dk.zip`, plus one bare `<name>.llext` per community-registry extension (built by attach-community from `extensions/registry.json`; in-repo extensions are dev tools and never attach) |
 | App | `app-vX.Y.Z` | `app-release.yml` | `rgb-sunglasses-<version>.apk` + iOS build on TestFlight + Google Play AAB (track from the `PLAY_TRACK` repo variable, default `internal`) |
 | MCUboot bootloader | `mcuboot-vX.Y.Z` | `mcuboot-release.yaml` | `mcuboot-<version>-proto0.bin` |
 

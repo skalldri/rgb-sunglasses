@@ -283,7 +283,7 @@ firmware's 31-char `kMaxNameLen`-derived limit, because the app-side
 `MAX_EXTENSION_NAME_LENGTH = 31` in `app/services/extension-sync.ts` applies
 to the whole asset filename *including* the 6-char `.llext` suffix — a longer
 name would be silently skipped by extension sync); no collision with
-in-repo extensions (`hello`, `plasma`); `https://github.com/` repo URLs; full
+in-repo extensions (currently `hello`, `cpptest` — read dynamically from `fw/extensions/`); `https://github.com/` repo URLs; full
 40-hex `rev` (a pinned SHA, never a branch or tag — post-review tampering with
 the source repo is inert; changing `rev` requires a new reviewed PR); `license`
 required.
@@ -391,8 +391,12 @@ including the degraded case of a missing community asset) must be actively
 verified on the first post-merge `fw-v*` release, tracked as **issue #298**.
 
 **Phase 4 — docs rerouted: done** (this change). Remaining optional
-dogfooding — migrating in-repo hello/plasma onto the SDK build path — is
-still open and low priority.
+dogfooding happened by another route: plasma moved OUT to its own
+registry-shipped repo (rgbx-plasma, sinf-modernized), releases stopped
+attaching in-repo-built `.llext` entirely (every shipped extension now comes
+through the registry), and the in-repo extensions that remain — `hello` and
+the `cpptest` C++ fixture that replaced plasma — are dev/debug tools built by
+CI but never released.
 
 Existing files modified along the way: `.github/workflows/release.yaml`,
 `.github/workflows/build.yaml`, `fw/extensions/README.md` (its "third parties
