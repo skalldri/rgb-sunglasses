@@ -4,7 +4,7 @@
     {
       "name": "demo_wave",
       "repo": "https://github.com/skalldri/rgbx-demo-wave",
-      "rev": "20ad6d575ab5a2c0c185d87e7e3b47ec20d6724e",
+      "rev": "4fdc53fc282e8bdb9c221a4302a6b77b24cb5489",
       "description": "Audio-reactive wave: parameterized crest color and speed, amplitude swells with audio energy, beats flash the crest column",
       "author": "skalldri",
       "license": "MIT"
