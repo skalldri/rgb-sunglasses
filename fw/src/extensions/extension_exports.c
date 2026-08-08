@@ -15,8 +15,9 @@
  *
  * Curation rules:
  *  - Single-precision only. The FPU (fpv5-sp-d16) inlines float
- *    add/sub/mul/div/abs and UDIV/SDIV; what extensions actually lack are
- *    the libm transcendentals below. Double-precision math soft-floats
+ *    add/sub/mul/div/abs, and the M33 integer core provides UDIV/SDIV
+ *    (so 32-bit integer division needs no helper either); what extensions
+ *    actually lack are the libm transcendentals below. Double-precision math soft-floats
  *    through the large __aeabi_d* family and stays deliberately
  *    unexported — the SDK gate's rejection message steers authors to
  *    float expressions.
@@ -52,6 +53,9 @@ extern void __aeabi_ul2f(void);
 extern void __aeabi_l2f(void);
 extern void __aeabi_f2ulz(void);
 extern void __aeabi_f2lz(void);
+extern void __aeabi_llsl(void);
+extern void __aeabi_llsr(void);
+extern void __aeabi_lasr(void);
 
 /* Single-precision libm (picolibc) */
 EXPORT_SYMBOL(sinf);
@@ -67,11 +71,13 @@ EXPORT_SYMBOL(floorf);
 EXPORT_SYMBOL(ceilf);
 EXPORT_SYMBOL(roundf);
 
-/* libgcc 64-bit integer helpers (ARM RTABI): division, and the
- * 64-bit-int <-> float conversions the FPU has no instructions for.
- * The conversions matter in practice: `(float)elapsed_ms` on a uint64_t
- * tick counter — the most natural animation phase math there is — emits
- * __aeabi_ul2f (found by this change's own gate test, not hypothetical).
+/* libgcc 64-bit integer helpers (ARM RTABI): division, the 64-bit-int <->
+ * float conversions the FPU has no instructions for, and variable-count
+ * 64-bit shifts (constant-count shifts inline; runtime shift amounts call
+ * a helper). The conversions matter in practice: `(float)elapsed_ms` on a
+ * uint64_t tick counter — the most natural animation phase math there is —
+ * emits __aeabi_ul2f (found by this change's own gate test, not
+ * hypothetical).
  */
 EXPORT_SYMBOL(__aeabi_uldivmod);
 EXPORT_SYMBOL(__aeabi_ldivmod);
@@ -79,6 +85,9 @@ EXPORT_SYMBOL(__aeabi_ul2f);
 EXPORT_SYMBOL(__aeabi_l2f);
 EXPORT_SYMBOL(__aeabi_f2ulz);
 EXPORT_SYMBOL(__aeabi_f2lz);
+EXPORT_SYMBOL(__aeabi_llsl);
+EXPORT_SYMBOL(__aeabi_llsr);
+EXPORT_SYMBOL(__aeabi_lasr);
 
 /* Overlap-safe memcpy companion */
 EXPORT_SYMBOL(memmove);

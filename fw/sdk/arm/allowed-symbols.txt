@@ -43,3 +43,6 @@ __aeabi_ul2f
 __aeabi_l2f
 __aeabi_f2ulz
 __aeabi_f2lz
+__aeabi_llsl
+__aeabi_llsr
+__aeabi_lasr

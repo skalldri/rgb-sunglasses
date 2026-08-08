@@ -8,9 +8,11 @@
 #
 # Checks (mirroring zephyr/subsys/llext/llext_load.c llext_map_sections):
 #  1. Undefined symbols: every one must be in the allowed list (the supported
-#     subset of what the firmware exports). Anything else — sinf (no libm
-#     on-target), __aeabi_* (no libgcc helpers exported: 64-bit division,
-#     soft-float) — would fail llext symbol resolution at load time.
+#     subset of what the firmware exports: string/mem + printk/vprintk +
+#     curated single-precision libm + 64-bit integer helpers + memmove).
+#     Anything else — double-precision math (sin/pow -> __aeabi_d*),
+#     unexported libc (strtol, snprintf), uncommon libm (sinhf) — would
+#     fail llext symbol resolution at load time.
 #  2. Region layout, the loader's model: sections are classified into regions
 #     (text = executable, data = writable PROGBITS, rodata = other alloc
 #     PROGBITS, export = .exported_sym, init/fini/preinit arrays), each
@@ -87,10 +89,11 @@ while read -r sym; do
 done < <("$NM" -u "$LLEXT" | awk '{print $NF}')
 if [ -n "$bad" ]; then
     echo "$LLEXT: undefined symbol(s) the device does not export:$bad" >&2
-    echo "  Extensions may only call the symbols in $(basename "$ALLOWED")." >&2
-    echo "  Common causes: libm calls (sinf/cosf - no math library on-target)," >&2
-    echo "  64-bit division or soft-float arithmetic (__aeabi_* libgcc helpers)." >&2
-    echo "  Use integer math or single-precision float expressions the FPU handles inline." >&2
+    echo "  Extensions may only call the symbols in $(basename "$ALLOWED") - single-precision" >&2
+    echo "  libm (sinf/cosf/atan2f/...), 64-bit integer helpers, string/mem, printk ARE allowed." >&2
+    echo "  Common causes of the rejected symbol: double-precision math (sin, pow, any" >&2
+    echo "  double expression -> __aeabi_d* helpers; use float and the f-suffixed functions)," >&2
+    echo "  or libc/libm calls outside the exported set (strtol, snprintf, sinhf, ...)." >&2
     fail=1
 fi
 

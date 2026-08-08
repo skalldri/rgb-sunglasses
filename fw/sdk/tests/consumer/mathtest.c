@@ -45,10 +45,17 @@ void rgbx_tick(void)
 {
 	ticks += rgbx_inputs.dt_ms;
 	/* Volatile divisor defeats strength reduction so the compiler must
-	 * emit the __aeabi_uldivmod call this test exists to exercise.
+	 * emit the __aeabi_uldivmod call this test exists to exercise. The
+	 * variable-count 64-bit shift is exercised too, but NOT nm-asserted:
+	 * GCC at the SDK's pinned -O2 inlines it (lsl/orr sequence) instead
+	 * of calling __aeabi_llsl — the shift helpers are exported
+	 * defensively for codegen that does emit them (-Os, other
+	 * compilers), which is exactly why they can't be a reliable
+	 * assertion target here.
 	 */
 	volatile uint64_t div = 7u + (rgbx_inputs.buttons_pressed & 1u);
-	const uint64_t phase = ticks / div;
+	volatile unsigned shift = 3u + (rgbx_inputs.buttons_pressed & 1u);
+	const uint64_t phase = (ticks << shift) / div;
 
 	const float t = (float)phase * 0.02f;
 	for (uint32_t x = 0; x < WIDTH; x++) {
