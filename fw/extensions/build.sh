@@ -13,9 +13,8 @@
 # modal hashes each on-device .llext and re-uploads the ones that don't match
 # the release's asset digest (see fw/CLAUDE.md, "File management (group 8)").
 #
-# Third-party extension developers don't use this script — they get the
-# llext-edk.tar.xz archive and compile the same way against its cmake.cflags
-# or Makefile.cflags (see fw/extensions/README.md).
+# Third-party extension developers don't use this script — see "Building" in
+# fw/extensions/README.md for the supported standalone flow.
 
 set -euo pipefail
 

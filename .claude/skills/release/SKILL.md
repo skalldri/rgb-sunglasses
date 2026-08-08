@@ -193,6 +193,23 @@ The app tag is **annotated** (`-a -m`): its message becomes the Google Play
 - Find the triggered runs: `gh run list --limit 5`. `gh run list` has no duration
   field — compute elapsed time from `startedAt`/`updatedAt`
   (`gh run list --json workflowName,status,startedAt,updatedAt`).
+- **Firmware releases are born as DRAFTS**: `release.yaml`'s release job creates
+  the release with `draft: true`, and its `attach-community` job publishes it
+  (`--draft=false`) only after attaching whatever community-extension `.llext`
+  assets built successfully (see `extensions/README.md`). So a firmware release
+  visible as draft mid-run is normal — wait for `attach-community`. If THAT job
+  itself failed, the release stays draft (deliberately — an incomplete asset
+  list must not go live), and recovery is NOT just undrafting: first attach the
+  community assets the run already built, THEN publish —
+  ```bash
+  gh run download <release-run-id> --pattern 'community-ext-*' --dir /tmp/community
+  gh release upload fw-v<version> /tmp/community/*/*.llext --clobber
+  gh release edit fw-v<version> --draft=false
+  ```
+  Undrafting without the upload publishes exactly the incomplete asset list the
+  draft gate exists to prevent (the app syncs every `.llext` on the latest
+  release and would miss the community extensions). `gh release edit
+  --notes-file` in step 7 works on drafts and published releases alike.
 - Watch each to completion: `gh run watch <id> --exit-status`. Observed durations,
   as of 2026-07 — re-verify: firmware `release.yaml` ~9–13 min (one pristine
   proto0 NCS build since issue #203), MCUboot `mcuboot-release.yaml` ~9 min, app
