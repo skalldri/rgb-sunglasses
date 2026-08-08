@@ -60,6 +60,14 @@ jobs:
           runCmd: >-
             bash -euo pipefail -c "west build --build-dir /workspaces/rgb-sunglasses/fw/build /workspaces/rgb-sunglasses/fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT=/workspaces/rgb-sunglasses/fw 2>&1 | tee /workspaces/rgb-sunglasses/fw/build.log && west build --build-dir /workspaces/rgb-sunglasses/fw/build --domain fw -t llext-edk && /workspaces/rgb-sunglasses/fw/extensions/build.sh /workspaces/rgb-sunglasses/fw/build"
 
+      # The SDK's allowed-symbols.txt must be a subset of what this build
+      # actually exports to extensions (__llext_sym_* in the appcore ELF) —
+      # otherwise the standalone SDK gate would pass an extension that then
+      # fails llext symbol resolution on-device. Host-side read of the
+      # root-owned build tree, like the size report below.
+      - name: Check SDK allowed symbols against firmware exports
+        run: fw/sdk/scripts/check-allowed-symbols.sh fw/build/fw/zephyr/zephyr.elf fw/sdk/arm/allowed-symbols.txt
+
       # --- Firmware ROM/RAM impact report (proto0 appcore) ---
       # Parse runs on every trigger; the build log is root-owned (created inside
       # the devcontainer), so we only READ it and write the JSON to fw/ (which
