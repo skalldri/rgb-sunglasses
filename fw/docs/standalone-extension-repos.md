@@ -16,8 +16,8 @@ eventual "extension store":
 
 1. Fork the `rgbx-extension-template` repo (its example source is the Hello
    kitchen-sink extension).
-2. Implement the animation; `cmake --workflow --preset all` produces both a
-   simulator `.wasm` and a device `.llext`.
+2. Implement the animation; `./build.sh` produces both a simulator `.wasm`
+   and a device `.llext`.
 3. Test by dragging the `.wasm` onto the hosted simulator. Optionally USB-copy
    the `.llext` to a device's `/NAND:/ext/` for on-hardware testing.
 4. Submit a PR to this repo adding one entry to `extensions/registry.json`.
@@ -47,12 +47,12 @@ on-device load fault caught at build time instead.
  rgbx-extension-template (fork)          rgb-sunglasses (this repo)
  ┌────────────────────────────┐          ┌─────────────────────────────────┐
  │ src/main.c                 │          │ fw/include/rgbx/*.h  (ABI)      │
- │ CMakeLists.txt ──FetchContent──────►  │ fw/sim/shim/*        (wasm shim)│
+ │ CMakeLists.txt ──sdk download──────►  │ fw/sim/shim/*        (wasm shim)│
  │ cmake/fw-release.cmake     │  pinned  │ fw/sdk/**            (arm shim, │
  │   (fw release + sha256 pin)│  rgbx-sdk│   cmake pkg, gates, packaging)  │
  │ CMakePresets.json          │  tarball │        │ package-sdk.sh         │
  └──────────┬─────────────────┘          │        ▼                        │
-            │ cmake --workflow           │ rgbx-sdk-<ver>.tar.gz ──────────┼──► fw-v* release asset
+            │ ./build.sh                 │ rgbx-sdk-<ver>.tar.gz ──────────┼──► fw-v* release asset
             ▼                            │                                 │
    build/wasm/<name>.wasm ──drag──►  hosted sim (/sim)                     │
    build/arm/<name>.llext            (zero-import sandbox)                 │
@@ -187,10 +187,24 @@ rgbx-sdk-<fw-version>/
   `check-wasm.mjs`.
 
 The SDK ships **no build step of its own** — shim sources compile inside the
-consuming project under that project's toolchain. That is why the template
-consumes it with `FetchContent` (a download + `find_package`, essentially)
-rather than `ExternalProject`; the two-toolchain problem is solved by presets
-in the template (§6), not by a superbuild.
+consuming project under that project's toolchain. The two-toolchain problem is
+solved by presets in the template (§6), not by a superbuild.
+
+**Consumption mechanism (implementation amendment):** the template downloads
+and extracts the SDK **before `project()`** via `file(DOWNLOAD ...
+EXPECTED_HASH SHA256=...)` + `file(ARCHIVE_EXTRACT)`, then sets
+`CMAKE_TOOLCHAIN_FILE` from the extracted tree and `include()`s
+`cmake/rgbx-sdk-config.cmake` after `project()`. Literal `FetchContent` cannot
+work here: the SDK's toolchain files must exist before `project()` runs, but
+`FetchContent` executes after it. Same spirit (CMake-native download pinned by
+URL + sha256), single configure pass. CI and local overrides supply a
+pre-extracted tree via `-DRGBX_SDK_SOURCE_DIR=<path>` (pointing at a
+`package-sdk.sh` output — not at `fw/sdk/`, which is only a source fragment
+of the assembled SDK). The ARM toolchain file pins **`-O2`** explicitly: the
+undefined-symbol surface is codegen-dependent, and notably the in-repo EDK
+path compiles extensions with no `-O` flag at all (`-Os` is stripped by
+Zephyr's `LLEXT_REMOVE_FLAGS` with nothing re-added), so inheriting a build
+type would silently vary the gate result.
 
 Monorepo side: new `fw/sdk/` directory holds the files that don't already
 exist elsewhere (arm shims, `check-llext.sh`, `allowed-symbols.txt`, the cmake
@@ -207,13 +221,16 @@ A new GitHub repo under the same owner, marked as a GitHub *template
 repository* (fork or "Use this template" both work).
 
 ```
-CMakeLists.txt            project() + FetchContent of the SDK tarball (URL/hash
-                          from cmake/fw-release.cmake) + rgbx_add_extension()
-CMakePresets.json         configure/build presets "arm" and "wasm" (separate
-                          binary dirs, each setting the SDK toolchain file) +
-                          a CMake >= 3.25 workflow preset "all", so
-                          `cmake --workflow --preset all` yields
+CMakeLists.txt            pre-project() download+extract of the SDK tarball
+                          (URL/hash from cmake/fw-release.cmake, see §5's
+                          consumption amendment) + rgbx_add_extension()
+CMakePresets.json         version-3 presets (works on CMake 3.21, which is
+                          what the devcontainer has): configure/build presets
+                          "arm" and "wasm" (separate binary dirs, each
+                          selecting the SDK toolchain file via RGBX_TARGET)
+build.sh                  wrapper running both presets in sequence, yielding
                           build/arm/<name>.llext AND build/wasm/<name>.wasm
+                          (no `cmake --workflow` — that needs CMake >= 3.25)
 cmake/fw-release.cmake    set(RGBX_FW_RELEASE "fw-v1.4.0")
                           set(RGBX_SDK_SHA256 "<sha256 of the release asset>")
                           — the single pin; bumping = editing these two lines
@@ -225,7 +242,7 @@ README.md                 the full flow: fork -> rename -> build -> drag the
                           -> PR a registry.json entry to rgb-sunglasses
 .github/workflows/ci.yml  ubuntu runner: node 20, cached pinned toolchains via
                           the SDK's install scripts, then
-                          cmake --workflow --preset all -DRGBX_STRICT_TOOLCHAIN=ON;
+                          ./build.sh -DRGBX_STRICT_TOOLCHAIN=ON;
                           uploads both artifacts
 .gitignore                build/
 LICENSE                   MIT (registry entries must carry an OSI license)
@@ -260,8 +277,12 @@ failure-isolation seam between community code and firmware CI.
 ```
 
 Validation (`extensions/validate-registry.mjs`, run in CI and locally): unique
-names matching `[a-z0-9_]{1,32}` (the name becomes the `.llext` filename on
-`/NAND:/ext/`, and slot discovery is filename-sorted); no collision with
+names matching `[a-z0-9_]{1,25}` (the name becomes the `.llext` filename on
+`/NAND:/ext/`, and slot discovery is filename-sorted; the cap is 25, not the
+firmware's 31-char `kMaxNameLen`-derived limit, because the app-side
+`MAX_EXTENSION_NAME_LENGTH = 31` in `app/services/extension-sync.ts` applies
+to the whole asset filename *including* the 6-char `.llext` suffix — a longer
+name would be silently skipped by extension sync); no collision with
 in-repo extensions (`hello`, `plasma`); `https://github.com/` repo URLs; full
 40-hex `rev` (a pinned SHA, never a branch or tag — post-review tampering with
 the source repo is inert; changing `rev` requires a new reviewed PR); `license`

@@ -1,0 +1,96 @@
+# Pre-merge gate for the standalone rgbx-sdk (fw/sdk/): packages the SDK,
+# then builds the in-repo hello + plasma extensions through it for BOTH
+# targets with the pinned toolchains in strict mode, and checks parity
+# against the established fw/sim/build-extensions.sh output.
+#
+# Deliberately devcontainer-free (precedent: scripts-ci.yml) — the whole
+# point of the SDK is that extension builds need no Zephyr/west, so this
+# gate proves it on a bare runner. See fw/docs/standalone-extension-repos.md.
+name: sdk-ci
+
+on:
+  pull_request:
+    paths:
+      - 'fw/sdk/**'
+      - 'fw/include/rgbx/**'
+      - 'fw/sim/shim/**'
+      - 'fw/sim/scripts/**'
+      - 'fw/sim/build-extensions.sh'
+      - 'fw/extensions/**'
+      - '.github/actions/arm-gnu-toolchain/**'
+      - '.github/workflows/sdk-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'fw/sdk/**'
+      - 'fw/include/rgbx/**'
+      - 'fw/sim/shim/**'
+      - 'fw/sim/scripts/**'
+      - 'fw/sim/build-extensions.sh'
+      - 'fw/extensions/**'
+      - '.github/actions/arm-gnu-toolchain/**'
+      - '.github/workflows/sdk-ci.yml'
+
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: ./.github/actions/arm-gnu-toolchain
+
+      # wasi-sdk, scoped to its own subdir/key (see the note in the
+      # arm-gnu-toolchain action about not caching the whole dir).
+      - name: Compute wasi-sdk cache key
+        id: wasi-key
+        run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/rgb-sunglasses/wasi-sdk-${{ steps.wasi-key.outputs.version }}
+          key: wasi-sdk-scoped-${{ steps.wasi-key.outputs.version }}
+      - name: Install wasi-sdk (cached)
+        run: fw/sim/scripts/install-toolchain.sh
+
+      - name: Package the SDK
+        run: |
+          fw/sdk/package-sdk.sh --version 0.0.0-ci --output "$RUNNER_TEMP/sdk"
+          tar -xzf "$RUNNER_TEMP/sdk/rgbx-sdk-0.0.0-ci.tar.gz" -C "$RUNNER_TEMP/sdk"
+          echo "SDK_DIR=$RUNNER_TEMP/sdk/rgbx-sdk-0.0.0-ci" >> "$GITHUB_ENV"
+
+      - name: Build hello + plasma via the SDK (arm, strict)
+        run: |
+          cmake -S fw/sdk/tests/consumer -B "$RUNNER_TEMP/b-arm" \
+            -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_TARGET=arm -DRGBX_STRICT_TOOLCHAIN=ON
+          cmake --build "$RUNNER_TEMP/b-arm"
+
+      - name: Assert expected undefined-symbol sets
+        run: |
+          TC="$(fw/sdk/scripts/install-arm-toolchain.sh)"
+          NM="$TC/bin/arm-none-eabi-nm"
+          # hello may need only memset + printk; plasma must need nothing.
+          for sym in $("$NM" -u "$RUNNER_TEMP/b-arm/hello.llext" | awk '{print $NF}'); do
+            case "$sym" in memset|printk) ;; *) echo "unexpected undefined symbol in hello.llext: $sym"; exit 1 ;; esac
+          done
+          if [ -n "$("$NM" -u "$RUNNER_TEMP/b-arm/plasma.llext")" ]; then
+            echo "plasma.llext should have no undefined symbols:"
+            "$NM" -u "$RUNNER_TEMP/b-arm/plasma.llext"
+            exit 1
+          fi
+
+      - name: Build hello + plasma via the SDK (wasm, strict)
+        run: |
+          cmake -S fw/sdk/tests/consumer -B "$RUNNER_TEMP/b-wasm" \
+            -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_TARGET=wasm -DRGBX_STRICT_TOOLCHAIN=ON
+          cmake --build "$RUNNER_TEMP/b-wasm"
+
+      - name: Compare wasm export/import sets against build-extensions.sh
+        run: |
+          fw/sim/build-extensions.sh hello plasma
+          node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/hello.wasm" fw/sim/out/wasm/hello.wasm
+          node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/plasma.wasm" fw/sim/out/wasm/plasma.wasm

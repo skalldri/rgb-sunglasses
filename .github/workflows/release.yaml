@@ -66,6 +66,12 @@ jobs:
       - name: Copy Proto0 DFU artifact
         run: cp ${{ github.workspace }}/fw/build/dfu_application.zip ${{ github.workspace }}/dfu_application_proto0.zip
 
+      # Host-side on purpose: package-sdk.sh only copies from source-tree
+      # locations (never fw/build, which is root-owned after the
+      # devcontainer build step) and writes to the workspace root.
+      - name: Package rgbx-sdk
+        run: fw/sdk/package-sdk.sh --version ${{ steps.version.outputs.version }} --output ${{ github.workspace }}
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -81,6 +87,7 @@ jobs:
           files: |
             ${{ github.workspace }}/dfu_application_proto0.zip
             ${{ github.workspace }}/fw/build/extensions/*.llext
+            ${{ github.workspace }}/rgbx-sdk-*.tar.gz
           body: "Release ${{ steps.version.outputs.version }}"
           draft: false
           prerelease: false
