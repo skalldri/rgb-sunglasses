@@ -7,12 +7,14 @@
  * LEDS_ON_ROW table that defines the dead-cell mask (no duplicated
  * constants to drift): each contiguous band of equal dead-width
  * contributes a staircase corner, and the flank between corners is a
- * quadratic of the form x = E_k + (E_k+1 − E_k)·t², which stays within
- * the corner pair's x-range — so the rendered cutout is always a strict
- * SUPERSET of the dead-cell staircase. Board fill never covers a dead
- * (see-through) cell; between corners the smooth edge may recess slightly
- * behind LIVE rows, which only hides board face — sockets and LEDs draw
- * on top and are never lost.
+ * quadratic of the form x = E_k + (E_k+1 − E_k)·t² anchored on the
+ * staircase's INNER corners — so the rendered cutout is always a strict
+ * SUBSET of the dead-cell staircase. That direction matters: the physical
+ * PCB edge has to carry every live LED, so it runs through the dead zone,
+ * covering slivers of see-through cells with board face — it never recedes
+ * behind a live cell. (The first cut of this outline used the outer
+ * corners instead, which left the transition-row LEDs floating detached
+ * in the black cutout.)
  *
  * Light: lit LEDs render in three additive layers —
  *   1. a TIGHT glow buffer (6 px per cell, one cell of padding all round)
@@ -182,7 +184,7 @@ export class GlassesRenderer {
   }
 
   /** Traces the PCB outline: rounded panel with the bottom-center nose
-   * arch (see the header for the superset invariant). One path — fill
+   * arch (see the header for the subset invariant). One path — fill
    * covers the board, so clipping to it also excludes the arch. */
   private panelPath(c: CanvasRenderingContext2D): void {
     const p = this.pitch;
@@ -191,10 +193,14 @@ export class GlassesRenderer {
     const top = this.edgeY(0) - p * 0.85;
     const bottom = this.edgeY(DISPLAY_HEIGHT) + p * 0.85;
     const r = p * 1.15;
+    /** Rounding of the two corners where the flanks meet the bottom edge. */
+    const cr = p * 0.45;
 
     const bands = ARCH_BANDS;
     const innermost = bands[bands.length - 1];
-    const crownY = this.edgeY(innermost.topRow) - p * 0.15;
+    // Crown apex sits INSIDE the innermost dead band (below its top edge)
+    // so the arch never bites into the fully-live row above it.
+    const crownY = this.edgeY(innermost.topRow) + p * 0.15;
 
     c.beginPath();
     c.moveTo(left + r, top);
@@ -202,37 +208,39 @@ export class GlassesRenderer {
     c.arcTo(right, bottom, left, bottom, r);
 
     // Bottom edge, right to left, diverting up into the nose arch.
-    // Right flank, bottom-up: per staircase band, a quadratic whose
-    // control point pins x to the outer corner (x = E_k + ΔE·t²), so the
-    // flank never crosses inside a band's dead edge.
+    // Right flank, bottom-up: each quadratic rises through band k−1 with
+    // its control point pinned to that band's dead edge (x = E_k − ΔE·t²)
+    // and lands on band k's edge exactly at the band boundary — i.e. on
+    // the staircase's INNER corner. The flank therefore never leaves the
+    // dead region, so every live LED keeps board face under it.
     const first = bands[0];
-    c.lineTo(this.edgeX(first.rightEdge) + p * 0.45, bottom);
+    c.lineTo(this.edgeX(first.rightEdge) + cr, bottom);
     let prevX = this.edgeX(first.rightEdge);
-    let prevY = bottom;
-    c.quadraticCurveTo(prevX, bottom, prevX, this.edgeY(first.topRow));
-    prevY = this.edgeY(first.topRow);
+    let prevY = bottom - cr;
+    c.quadraticCurveTo(prevX, bottom, prevX, prevY);
     for (let k = 1; k < bands.length; k++) {
       const nx = this.edgeX(bands[k].rightEdge);
-      const ny = this.edgeY(bands[k].topRow);
+      const ny = this.edgeY(bands[k - 1].topRow);
       c.quadraticCurveTo(prevX, (prevY + ny) / 2, nx, ny);
       prevX = nx;
       prevY = ny;
     }
-    // Crown: gently rounded across the innermost band's top.
+    // Crown: gently rounded across the innermost band, from shoulder to
+    // shoulder (prevY is the top of the second-innermost band).
+    const shoulderY = prevY;
     c.quadraticCurveTo(prevX, crownY, (prevX + this.edgeX(innermost.leftEdge)) / 2, crownY);
-    c.quadraticCurveTo(this.edgeX(innermost.leftEdge), crownY, this.edgeX(innermost.leftEdge), this.edgeY(innermost.topRow));
+    c.quadraticCurveTo(this.edgeX(innermost.leftEdge), crownY, this.edgeX(innermost.leftEdge), shoulderY);
     // Left flank, top-down (mirror of the right).
     prevX = this.edgeX(innermost.leftEdge);
-    prevY = this.edgeY(innermost.topRow);
+    prevY = shoulderY;
     for (let k = bands.length - 2; k >= 0; k--) {
       const nx = this.edgeX(bands[k].leftEdge);
-      const ny = this.edgeY(bands[k].topRow);
+      const ny = k > 0 ? this.edgeY(bands[k - 1].topRow) : bottom - cr;
       c.quadraticCurveTo(prevX, (prevY + ny) / 2, nx, ny);
       prevX = nx;
       prevY = ny;
     }
-    c.quadraticCurveTo(prevX, bottom, prevX, bottom);
-    c.lineTo(this.edgeX(first.leftEdge) - p * 0.45, bottom);
+    c.quadraticCurveTo(prevX, bottom, prevX - cr, bottom);
 
     c.arcTo(left, bottom, left, top, r);
     c.arcTo(left, top, right, top, r);
