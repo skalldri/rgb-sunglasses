@@ -276,7 +276,8 @@ This is the project's **single** routing table — other docs link here, never c
 | ---- | ----- |
 | Add or modify a built-in animation | /add-animation |
 | Add or change a GATT service/characteristic (+ app UI) | /add-gatt-characteristic |
-| Write or modify a loadable `.llext` extension | /add-extension |
+| Write or modify a loadable `.llext` extension (in-repo) | /add-extension |
+| Standalone extension repo / rgbx-sdk / community registry | `fw/docs/standalone-extension-repos.md` + `extensions/README.md` (SDK code: `fw/sdk/`) |
 | Add or fix a firmware test | /add-fw-test |
 | Debug a firmware symptom | /debug-fw |
 | Debug a device↔app BLE symptom | /debug-ble |
@@ -290,4 +291,4 @@ This is the project's **single** routing table — other docs link here, never c
 | Pre-PR gate | /submit-pr |
 | Cut a release | /release |
 
-Three things sound alike — don't mix them up: a **built-in C++ animation** compiled into firmware = /add-animation; a **loadable `.llext` extension** = /add-extension; a **`.glim` asset file** (stored animation data) = `fw/src/storage/GLIM_FORMAT.md` + the `fw/tools/` converters (see `fw/CLAUDE.md`).
+Three things sound alike — don't mix them up: a **built-in C++ animation** compiled into firmware = /add-animation; a **loadable `.llext` extension** = /add-extension; a **`.glim` asset file** (stored animation data) = `fw/src/storage/GLIM_FORMAT.md` + the `fw/tools/` converters (see `fw/CLAUDE.md`). A fourth: a **community extension** developed in a standalone repo (from the `rgbx-extension-template` GitHub repo) and registered in `extensions/registry.json` — same `.llext` on the device, but built against the released `rgbx-sdk`, never the in-repo EDK path.

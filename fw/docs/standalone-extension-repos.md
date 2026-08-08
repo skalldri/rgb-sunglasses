@@ -363,27 +363,33 @@ policy beyond maintainer review.
 
 Phase 0 — verification experiment: **done** (§4.1).
 
-**Phase 1 — SDK artifact.** New `fw/sdk/` (arm shims, `allowed-symbols.txt`,
-`check-llext.sh`, cmake package + toolchain files, `install-arm-toolchain.sh`,
-`package-sdk.sh`); wire into `release.yaml` (attach) and `build.yaml` (CI
-artifact); CI parity job proving SDK-built hello/plasma pass both gates; close
-§4.1's residual risks (on-device load of a shim-built `.llext` via
-`/flash-and-verify` + `/provision-device`; repeat §4.1 under the pinned Arm GNU
-Toolchain).
+**Phase 1 — SDK artifact: done** (PR #294). `fw/sdk/` + `sdk-ci.yml` + the
+`release.yaml`/`build.yaml` wiring, plus two hardening items beyond the
+original scope: `check-llext.sh` mirrors the loader's merged-region overlap
+model and its multiple-NOBITS reject, and `build.yaml` CI-asserts
+`allowed-symbols.txt` ⊆ the built firmware's export table
+(`check-allowed-symbols.sh`). §4.1 residual risk (b)/(c) closed (hello/plasma
+rebuilt clean under the pinned Arm GNU 13.2.Rel1, identical `nm -u` sets);
+risk (a) — on-device load of a shim-built `.llext` — still **deferred to a
+hardware session**, bundled with issue #295 (curated libm exports).
 
-**Phase 2 — template repo.** Create `rgbx-extension-template` per §6; validate
-the full fork → build → drag-drop loop against a real `fw-v*` release carrying
-the SDK asset (requires cutting a release after Phase 1).
+**Phase 2 — template repo: done.** `rgbx-extension-template` is live (GitHub
+template repo, CI green); the SDK tarball was backfilled onto the `fw-v3.0.0`
+release, and the full fork → download-pinned-SDK → build → drag-drop loop is
+validated against it.
 
-**Phase 3 — registry + CI.** `extensions/registry.json` + `extensions/README.md`
-+ `validate-registry.mjs` + `community-extensions.yml` + the `release.yaml`
-attach job; seed with one real out-of-repo extension (e.g. a plasma fork) and
-prove the end-to-end path: registry PR → release asset → app extension-sync →
-running on a device.
+**Phase 3 — registry + CI: done** (PR #296). `extensions/` + 
+`community-extensions.yml` + the draft-release/attach flow in `release.yaml`,
+seeded with the `rgbx-demo-wave` repo (created from the template). Hardened
+per review: env-indirected registry values + charset-tight repo URLs (script
+injection), full-clone reachability check on pinned revs (fork-network SHA
+attack), draft-until-attached releases (no incomplete-asset window). The
+end-to-end proof through app extension-sync onto a device lands with the
+first post-merge `fw-v*` release.
 
-**Phase 4 (optional dogfooding).** Migrate in-repo hello/plasma onto the SDK
-build path; retire the EDK-based third-party guidance in
-`fw/extensions/README.md`.
+**Phase 4 — docs rerouted: done** (this change). Remaining optional
+dogfooding — migrating in-repo hello/plasma onto the SDK build path — is
+still open and low priority.
 
 Existing files modified along the way: `.github/workflows/release.yaml`,
 `.github/workflows/build.yaml`, `fw/extensions/README.md` (its "third parties

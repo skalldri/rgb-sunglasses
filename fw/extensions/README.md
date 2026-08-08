@@ -115,11 +115,15 @@ partial-links (`ld -r`) the object. The `ld -r` step matters for C++: COMDAT
 group sections otherwise interleave with `.data`/`.bss` in file offsets and
 trip the llext loader's region-overlap check.
 
-Third-party developers get the same thing from the EDK archive
-(`fw/build/fw/zephyr/llext-edk.tar.xz`): extract it, include its
-`cmake.cflags` or `Makefile.cflags` (set `LLEXT_EDK_INSTALL_DIR` to the
-extracted path), compile your single translation unit with `LLEXT_CFLAGS -c`,
-and `ld -r` the result. Both rgbx headers ship inside the archive.
+**Third-party / standalone development does not use this script or the EDK.**
+Fork the [rgbx-extension-template](https://github.com/skalldri/rgbx-extension-template)
+repo instead: it builds the same single translation unit to both a device
+`.llext` and a simulator `.wasm` using the `rgbx-sdk` tarball attached to
+every `fw-v*` release (pinned toolchains, no Zephyr checkout), and publishes
+through the community registry (`extensions/registry.json` at the repo root —
+see `extensions/README.md` for the flow, and
+`fw/docs/standalone-extension-repos.md` for the design). The worked example
+is [rgbx-demo-wave](https://github.com/skalldri/rgbx-demo-wave).
 
 ## Simulating without hardware
 
