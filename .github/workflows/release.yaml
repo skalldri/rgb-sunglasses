@@ -89,7 +89,11 @@ jobs:
             ${{ github.workspace }}/fw/build/extensions/*.llext
             ${{ github.workspace }}/rgbx-sdk-*.tar.gz
           body: "Release ${{ steps.version.outputs.version }}"
-          draft: false
+          # Draft until attach-community flips it live: the app treats the
+          # latest release's asset list as complete, so publishing before
+          # the community .llext assets attach would give devices updating
+          # in that window a release with the community extensions missing.
+          draft: true
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -104,25 +108,27 @@ jobs:
     uses: ./.github/workflows/community-extensions.yml
 
   # Trusted side of the handoff: collect whichever per-extension artifacts
-  # succeeded and attach them to the release. if: always() so one broken
-  # community extension doesn't strand the others; gated on the release job
-  # itself having succeeded.
+  # succeeded, attach them, and publish the draft. if: always() so a broken
+  # community extension (or an empty registry, where the community build job
+  # is skipped) never leaves the firmware release unpublished; gated on the
+  # release job itself having succeeded.
   attach-community:
     needs: [release, community]
     if: ${{ always() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: community-ext-*
           merge-multiple: true
           path: community
-      - name: Attach community .llext files to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
+      - name: Attach community .llext files
         run: |
           shopt -s nullglob
           files=(community/*.llext)
@@ -130,4 +136,6 @@ jobs:
             echo "no community extension artifacts to attach"
             exit 0
           fi
-          gh release upload "${{ github.ref_name }}" "${files[@]}" --clobber
+          gh release upload "$TAG" "${files[@]}" --clobber
+      - name: Publish the release
+        run: gh release edit "$TAG" --draft=false

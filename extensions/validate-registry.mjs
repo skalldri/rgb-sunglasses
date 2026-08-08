@@ -65,8 +65,11 @@ for (const [i, ext] of registry.extensions.entries()) {
       errors.push(`${where}: name collides with in-repo extension fw/extensions/${ext.name}/`);
     }
   }
-  if (typeof ext?.repo === "string" && !/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(ext.repo)) {
-    errors.push(`${where}: repo must be a https://github.com/<owner>/<name> URL`);
+  // Charset-tight on purpose: registry values are interpolated into CI
+  // context, so this is an injection surface, not just a format check.
+  // GitHub owner names are alphanumeric+hyphen; repo names add . and _.
+  if (typeof ext?.repo === "string" && !/^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(ext.repo)) {
+    errors.push(`${where}: repo must be https://github.com/<owner>/<name> with only [A-Za-z0-9._-] segments`);
   }
   if (typeof ext?.rev === "string" && !/^[0-9a-f]{40}$/.test(ext.rev)) {
     errors.push(`${where}: rev must be a full 40-hex commit SHA (never a branch or tag)`);

@@ -1,0 +1,24 @@
+name: package rgbx-sdk
+description: >-
+  Package this checkout's rgbx-sdk (fw/sdk/package-sdk.sh) with the given
+  version, extract it, and export SDK_DIR (extracted tree) and SDK_TARBALL
+  into the job env. Single source for the packaging procedure — used by
+  sdk-ci.yml and community-extensions.yml so the two can never drift.
+
+inputs:
+  version:
+    description: SDK version string to stamp (e.g. 0.0.0-ci)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Package and extract the SDK
+      shell: bash
+      env:
+        VER: ${{ inputs.version }}
+      run: |
+        fw/sdk/package-sdk.sh --version "$VER" --output "$RUNNER_TEMP/rgbx-sdk-pkg"
+        tar -xzf "$RUNNER_TEMP/rgbx-sdk-pkg/rgbx-sdk-$VER.tar.gz" -C "$RUNNER_TEMP/rgbx-sdk-pkg"
+        echo "SDK_DIR=$RUNNER_TEMP/rgbx-sdk-pkg/rgbx-sdk-$VER" >> "$GITHUB_ENV"
+        echo "SDK_TARBALL=$RUNNER_TEMP/rgbx-sdk-pkg/rgbx-sdk-$VER.tar.gz" >> "$GITHUB_ENV"

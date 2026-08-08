@@ -18,6 +18,8 @@ on:
       - 'fw/sim/build-extensions.sh'
       - 'fw/extensions/**'
       - '.github/actions/arm-gnu-toolchain/**'
+      - '.github/actions/wasi-sdk-scoped/**'
+      - '.github/actions/package-rgbx-sdk/**'
       - '.github/workflows/sdk-ci.yml'
   push:
     branches: [main]
@@ -29,6 +31,8 @@ on:
       - 'fw/sim/build-extensions.sh'
       - 'fw/extensions/**'
       - '.github/actions/arm-gnu-toolchain/**'
+      - '.github/actions/wasi-sdk-scoped/**'
+      - '.github/actions/package-rgbx-sdk/**'
       - '.github/workflows/sdk-ci.yml'
 
 jobs:
@@ -44,24 +48,11 @@ jobs:
           node-version: 20
 
       - uses: ./.github/actions/arm-gnu-toolchain
+      - uses: ./.github/actions/wasi-sdk-scoped
 
-      # wasi-sdk, scoped to its own subdir/key (see the note in the
-      # arm-gnu-toolchain action about not caching the whole dir).
-      - name: Compute wasi-sdk cache key
-        id: wasi-key
-        run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: ./.github/actions/package-rgbx-sdk
         with:
-          path: ~/.cache/rgb-sunglasses/wasi-sdk-${{ steps.wasi-key.outputs.version }}
-          key: wasi-sdk-scoped-${{ steps.wasi-key.outputs.version }}
-      - name: Install wasi-sdk (cached)
-        run: fw/sim/scripts/install-toolchain.sh
-
-      - name: Package the SDK
-        run: |
-          fw/sdk/package-sdk.sh --version 0.0.0-ci --output "$RUNNER_TEMP/sdk"
-          tar -xzf "$RUNNER_TEMP/sdk/rgbx-sdk-0.0.0-ci.tar.gz" -C "$RUNNER_TEMP/sdk"
-          echo "SDK_DIR=$RUNNER_TEMP/sdk/rgbx-sdk-0.0.0-ci" >> "$GITHUB_ENV"
+          version: 0.0.0-ci
 
       - name: Build hello + plasma via the SDK (arm, strict)
         run: |

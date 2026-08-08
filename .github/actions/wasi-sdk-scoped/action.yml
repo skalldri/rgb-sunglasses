@@ -1,0 +1,27 @@
+name: wasi-sdk (scoped cache)
+description: >-
+  The pinned wasi-sdk with a cache scoped to its own version-named
+  subdirectory — for jobs that must NOT cache the whole
+  ~/.cache/rgb-sunglasses dir (the sim-wasm-toolchain action caches that
+  whole dir under its own key; a whole-dir save from a job that also
+  installed the ~1 GB ARM toolchain would bloat it — see the
+  arm-gnu-toolchain action). The version pin lives where the install script
+  reads it (WASI_SDK_VERSION in fw/sim/scripts/install-toolchain.sh); this
+  action only greps it. Used by sdk-ci.yml and community-extensions.yml.
+
+runs:
+  using: composite
+  steps:
+    - name: Compute wasi-sdk cache key
+      id: toolchain-key
+      shell: bash
+      run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/rgb-sunglasses/wasi-sdk-${{ steps.toolchain-key.outputs.version }}
+        key: wasi-sdk-scoped-${{ steps.toolchain-key.outputs.version }}
+
+    - name: Install wasi-sdk (cached)
+      shell: bash
+      run: fw/sim/scripts/install-toolchain.sh
