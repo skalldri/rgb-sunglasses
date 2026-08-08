@@ -71,6 +71,7 @@ target_sources_ifdef(CONFIG_FAT_FILESYSTEM_ELM app PRIVATE src/storage/glim_regi
 target_sources_ifdef(CONFIG_APP_SETTINGS_PARTITION_ERASE app PRIVATE src/storage/appcfg_erase.cpp)
 target_sources_ifdef(CONFIG_APP_FACTORY_RESET app PRIVATE src/factory_reset/factory_reset.cpp)
 target_sources_ifdef(CONFIG_APP_FACTORY_RESET app PRIVATE src/factory_reset/factory_reset_core.cpp)
+target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_exports.c)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_host.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_manifest.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_param_persistence.cpp)

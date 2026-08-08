@@ -31,8 +31,14 @@ id `0x40 + slot`.
 exports five symbols — a `rgbx_manifest` (name, framebuffer dims, parameter
 table), a writable `rgbx_inputs` block the host fills before each tick, a
 `rgbx_framebuffer` it renders into, and `rgbx_init`/`rgbx_tick` functions —
-and never calls into the firmware. See `hello/hello.c` for a complete raw-C
-extension exercising the full surface.
+and calls at most the firmware's exported support surface: the string/memory
+functions + `printk`/`vprintk`, plus single-precision libm (`sinf`, `cosf`,
+`atan2f`, `sqrtf`, …), the 64-bit integer-division helpers, and `memmove`
+(`src/extensions/extension_exports.c`, issue #295 — the authoritative list is
+`fw/sdk/arm/allowed-symbols.txt`, and the build gates enforce it). Anything
+else — notably all double-precision math — fails symbol resolution at load.
+See `hello/hello.c` for a complete raw-C extension exercising the full
+surface.
 
 ### Optional exports
 
@@ -129,9 +135,10 @@ flow lives in the root-level `extensions/README.md` (next to
 The `llext-edk.tar.xz` CI artifact that build.yaml still uploads is
 **deprecated as a third-party build path**: it carries none of the SDK's
 build gates, so a C++ TU built without the `ld -r` step is rejected
-on-device (`Region 0 ELF file range ... overlaps with 1`) and a `sinf()`
-call compiles but fails llext symbol resolution at load. If you were
-building against the EDK, switch to the template/SDK flow above.
+on-device (`Region 0 ELF file range ... overlaps with 1`) and a call to any
+symbol outside the exported surface (double-precision `sin()`, `sinhf()`,
+`strtol()`, …) compiles but fails llext symbol resolution at load. If you
+were building against the EDK, switch to the template/SDK flow above.
 
 ## Simulating without hardware
 
@@ -148,9 +155,9 @@ fw/sim/rgbx-sim serve                                        # browser UI, live 
 
 It needs no proto0 build, no board, and no locks — use it as the iteration
 loop, then do the ARM build below before calling anything done (the sim links
-libc/libm statically, so code that fails llext symbol resolution on-device,
-like `sinf()`, still runs in the sim — `fw/sim/PARITY.md` has the full
-divergence list).
+libc/libm statically, so code that fails llext symbol resolution on-device —
+anything outside the exported surface, e.g. double-precision `sin()` — still
+runs in the sim; `fw/sim/PARITY.md` has the full divergence list).
 
 ## Installing on the device
 

@@ -1,7 +1,13 @@
 # The SUPPORTED symbol surface for .llext extensions — the subset of the
 # firmware's export table that extensions may rely on. Sources: Zephyr's
-# subsys/llext/llext_export.c (string/memory functions) and lib/os/printk.c
-# (printk/vprintk). No libm, no libgcc __aeabi_* helpers.
+# subsys/llext/llext_export.c (string/memory functions), lib/os/printk.c
+# (printk/vprintk), and fw/src/extensions/extension_exports.c (single-
+# precision libm, 64-bit division helpers, memmove — issue #295; keep the
+# two files in lockstep, see the invariant note in each).
+#
+# No double-precision math: fpv5-sp-d16 soft-floats doubles through the
+# __aeabi_d* family, which stays deliberately unexported — use float
+# expressions.
 #
 # The built firmware's full export table (zephyr.map .exported_sym) also
 # contains internal symbols (z_impl_* syscall implementations, arch helpers)
@@ -16,5 +22,24 @@ strncmp
 memcmp
 memcpy
 memset
+memmove
 printk
 vprintk
+sinf
+cosf
+tanf
+atan2f
+sqrtf
+expf
+logf
+powf
+fmodf
+floorf
+ceilf
+roundf
+__aeabi_uldivmod
+__aeabi_ldivmod
+__aeabi_ul2f
+__aeabi_l2f
+__aeabi_f2ulz
+__aeabi_f2lz
