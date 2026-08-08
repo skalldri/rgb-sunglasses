@@ -9,6 +9,15 @@ contract itself is `fw/include/rgbx/rgbx_api.h` (flat C, 5 exported symbols) wit
 C++ wrapper in `fw/include/rgbx/rgbx_animation.h`. This skill only routes you and adds
 the failure guardrails that aren't obvious until they bite.
 
+**This skill covers IN-REPO extensions** (`fw/extensions/<name>/`, built via the EDK
+path below). A **standalone/third-party extension** — developed outside this repo,
+published via the community registry — is a different flow: fork the
+`rgbx-extension-template` GitHub repo (builds `.llext` + `.wasm` from the `rgbx-sdk`
+release artifact, no Zephyr checkout), then PR an entry into `extensions/registry.json`
+(see `extensions/README.md` + `fw/docs/standalone-extension-repos.md`). The SDK's build
+gates enforce most of §3's guardrails automatically in that flow. Working on the SDK
+itself lives in `fw/sdk/` (CI: `sdk-ci.yml`).
+
 ## 1. Create: copy a template
 
 New extension = a new directory `fw/extensions/<name>/` containing a **single** `.c`
