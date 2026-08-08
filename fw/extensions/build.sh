@@ -13,10 +13,8 @@
 # modal hashes each on-device .llext and re-uploads the ones that don't match
 # the release's asset digest (see fw/CLAUDE.md, "File management (group 8)").
 #
-# Third-party extension developers don't use this script — they build from
-# the rgbx-extension-template repo against the rgbx-sdk release artifact
-# (no Zephyr/EDK needed; see "Building" in fw/extensions/README.md and
-# fw/docs/standalone-extension-repos.md).
+# Third-party extension developers don't use this script — see "Building" in
+# fw/extensions/README.md for the supported standalone flow.
 
 set -euo pipefail
 

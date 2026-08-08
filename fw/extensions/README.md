@@ -119,11 +119,19 @@ trip the llext loader's region-overlap check.
 Fork the [rgbx-extension-template](https://github.com/skalldri/rgbx-extension-template)
 repo instead: it builds the same single translation unit to both a device
 `.llext` and a simulator `.wasm` using the `rgbx-sdk` tarball attached to
-every `fw-v*` release (pinned toolchains, no Zephyr checkout), and publishes
-through the community registry (`extensions/registry.json` at the repo root —
-see `extensions/README.md` for the flow, and
-`fw/docs/standalone-extension-repos.md` for the design). The worked example
-is [rgbx-demo-wave](https://github.com/skalldri/rgbx-demo-wave).
+firmware releases **fw-v3.0.0 and later** (earlier releases carry no SDK
+asset — a template pin on one fails at the download step). The submission
+flow lives in the root-level `extensions/README.md` (next to
+`extensions/registry.json`), the design in
+`fw/docs/standalone-extension-repos.md`; the worked example is
+[rgbx-demo-wave](https://github.com/skalldri/rgbx-demo-wave).
+
+The `llext-edk.tar.xz` CI artifact that build.yaml still uploads is
+**deprecated as a third-party build path**: it carries none of the SDK's
+build gates, so a C++ TU built without the `ld -r` step is rejected
+on-device (`Region 0 ELF file range ... overlaps with 1`) and a `sinf()`
+call compiles but fails llext symbol resolution at load. If you were
+building against the EDK, switch to the template/SDK flow above.
 
 ## Simulating without hardware
 

@@ -10,12 +10,15 @@ C++ wrapper in `fw/include/rgbx/rgbx_animation.h`. This skill only routes you an
 the failure guardrails that aren't obvious until they bite.
 
 **This skill covers IN-REPO extensions** (`fw/extensions/<name>/`, built via the EDK
-path below). A **standalone/third-party extension** — developed outside this repo,
-published via the community registry — is a different flow: fork the
-`rgbx-extension-template` GitHub repo (builds `.llext` + `.wasm` from the `rgbx-sdk`
-release artifact, no Zephyr checkout), then PR an entry into `extensions/registry.json`
-(see `extensions/README.md` + `fw/docs/standalone-extension-repos.md`). The SDK's build
-gates enforce most of §3's guardrails automatically in that flow. Working on the SDK
+path below). A **standalone/community extension** — developed outside this repo — is a
+different flow: route via the root `CLAUDE.md` task-routing table (its
+standalone-extension row points at the design doc and the root `extensions/README.md`).
+In that flow the SDK's build gates automatically enforce only the *mechanical*
+guardrails — `ld -r` region layout, undefined symbols vs the device's export table,
+llext-heap fit, the wasm zero-import/export contract. **§3's behavioral guardrails
+(the string-param indexing trap, near-255 rendering, globals reset per activation,
+async `rgbx_init` failure surfacing) apply unchanged and are NOT gated** — an
+extension violating them builds green everywhere and misbehaves on-device. SDK code
 itself lives in `fw/sdk/` (CI: `sdk-ci.yml`).
 
 ## 1. Create: copy a template

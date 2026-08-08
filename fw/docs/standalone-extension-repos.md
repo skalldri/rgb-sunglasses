@@ -384,8 +384,11 @@ seeded with the `rgbx-demo-wave` repo (created from the template). Hardened
 per review: env-indirected registry values + charset-tight repo URLs (script
 injection), full-clone reachability check on pinned revs (fork-network SHA
 attack), draft-until-attached releases (no incomplete-asset window). The
-end-to-end proof through app extension-sync onto a device lands with the
-first post-merge `fw-v*` release.
+original acceptance criterion — registry PR → release asset → app
+extension-sync → running on a device — is **deferred, not dropped**: the
+never-yet-exercised release-time path (attach-community publish + app sync,
+including the degraded case of a missing community asset) must be actively
+verified on the first post-merge `fw-v*` release, tracked as **issue #298**.
 
 **Phase 4 — docs rerouted: done** (this change). Remaining optional
 dogfooding — migrating in-repo hello/plasma onto the SDK build path — is
