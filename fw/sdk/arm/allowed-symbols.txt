@@ -1,0 +1,13 @@
+# Symbols the firmware exports to .llext extensions at load time — the
+# complete list an extension's undefined symbols must resolve against.
+# Sources: Zephyr's subsys/llext/llext_export.c (string/memory functions)
+# and lib/os/printk.c (printk). No libm, no libgcc __aeabi_* helpers.
+strcpy
+strncpy
+strlen
+strcmp
+strncmp
+memcmp
+memcpy
+memset
+printk

@@ -1,0 +1,27 @@
+name: arm gnu toolchain
+description: >-
+  The pinned Arm GNU Toolchain (cached) for building rgbx .llext extensions
+  without the Zephyr SDK. The version pin lives where the install script
+  reads it (ARM_TOOLCHAIN_VERSION in fw/sdk/scripts/install-arm-toolchain.sh);
+  this action only greps it. The cache path is deliberately the toolchain's
+  own version-scoped subdirectory, NOT the whole ~/.cache/rgb-sunglasses dir —
+  the sim-wasm-toolchain action caches that whole dir under its own key, and a
+  whole-dir save from a job that also installed this (~1 GB extracted)
+  toolchain would bloat the wasi cache entry.
+
+runs:
+  using: composite
+  steps:
+    - name: Compute ARM toolchain cache key
+      id: toolchain-key
+      shell: bash
+      run: echo "version=$(grep -oP 'ARM_TOOLCHAIN_VERSION="\K[^"]+' fw/sdk/scripts/install-arm-toolchain.sh)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/rgb-sunglasses/arm-gnu-toolchain-${{ steps.toolchain-key.outputs.version }}
+        key: arm-gnu-${{ steps.toolchain-key.outputs.version }}
+
+    - name: Install ARM toolchain (cached)
+      shell: bash
+      run: fw/sdk/scripts/install-arm-toolchain.sh
