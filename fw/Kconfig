@@ -712,13 +712,18 @@ config APP_COREDUMP_WORKQ_STACK_SIZE
 	  was measured at ~5 KB), so the 2 KB system workqueue is not used.
 
 config APP_COREDUMP_REMINDER_PERIOD_S
-	int "Seconds between coredump checks / collection reminders"
+	int "Seconds between coredump partition polls"
 	default 60
 	depends on APP_COREDUMP_MANAGER
 	help
-	  How often the manager polls the coredump partition for a new dump
-	  and re-logs the "dumps awaiting collection" reminder while any
-	  core_*.bin file exists on /NAND:/coredump.
+	  How often the manager polls the coredump partition and drains any
+	  new dump to /NAND:/coredump, freeing the partition for the next
+	  crash.
+
+	  There is no longer a periodic "dumps awaiting collection" reminder
+	  (it re-logged forever until someone ran coredump-fetch.sh). Use
+	  `fs ls /NAND:/coredump` to check on demand. The symbol name is kept
+	  so existing board configs and overlays keep working.
 
 config APP_CRASH_TEST_COMMANDS
 	bool "Shell commands that deliberately crash the firmware"

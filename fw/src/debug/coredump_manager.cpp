@@ -114,10 +114,18 @@ void check_work_handler(struct k_work* work) {
         LOG_WRN("coredump drain failed (%d) — will retry", rc);
     }
 
-    if (coredump_manager_core::any_dump_files(kDumpDir)) {
-        LOG_WRN("crash dump(s) awaiting collection in %s — run fw/scripts/coredump-fetch.sh",
-                kDumpDir);
-    }
+    /* No "dumps awaiting collection" reminder. It re-logged every period for as
+     * long as any core_*.bin sat on /NAND:, which is until someone runs
+     * coredump-fetch.sh — so on a board with an old dump it is a permanent
+     * warning every minute, burying real events (the same log-spam reasoning as
+     * fw/CLAUDE.md's "no info-level logs in steady-state paths"). It also cost an
+     * fs_opendir + readdir sweep of the directory every period purely to decide
+     * whether to print it. `fs ls /NAND:/coredump` answers the same question on
+     * demand. The drain above still runs on this period — that is the part that
+     * matters, since it clears the flash partition so the NEXT crash can be
+     * captured. coredump_manager_core::any_dump_files() is kept (and still
+     * covered by fw/tests/debug/coredump_manager) for callers that want the
+     * check explicitly; nothing polls it now. */
 
     k_work_reschedule_for_queue(&coredump_workq, k_work_delayable_from_work(work),
                                 K_SECONDS(CONFIG_APP_COREDUMP_REMINDER_PERIOD_S));
