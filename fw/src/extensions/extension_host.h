@@ -70,12 +70,32 @@ bool isFaulted(size_t slot);
 bool isRetired(size_t slot);
 
 /**
- * @brief Marks `slot` retired (see isRetired()). The caller is responsible
- * for switching away first if the slot is active (the FILE_MGMT DELETE
- * handler routes through pattern_controller_change_to_animation, which
- * un-marks Is Active and notifies the app via the standard path).
+ * @brief Marks `slot` retired (see isRetired()). The FILE_MGMT DELETE handler
+ * retires BEFORE unlinking so no new activation can queue a lazy load of a
+ * file that is about to disappear; the switch-away (when the slot backs the
+ * currently rendered animation, healthy or faulted) happens after the unlink
+ * succeeds, via pattern_controller_change_to_animation, which un-marks
+ * Is Active and notifies the app on the standard path.
  */
 void retire(size_t slot);
+
+/**
+ * @brief Rolls back retire() after a failed unlink, restoring the slot to
+ * fully usable — DELETE's contract is that a failed unlink is a true no-op.
+ * Only valid when the slot's file is still on disk (i.e. the unlink failed).
+ */
+void unretire(size_t slot);
+
+/**
+ * @brief fs_unlink() serialized against the host's own FAT access: holds the
+ * host lock across the unlink, so an in-flight llext load (boot discovery's
+ * transient loads or a lazy load-on-activate, both of which read the file
+ * under that lock) completes before the clusters are freed. FatFs here runs
+ * FF_FS_LOCK=0 and non-reentrant — an unsynchronized unlink SUCCEEDS against
+ * an open file and frees its cluster chain mid-read, corrupting the volume.
+ * Pair with retire() first so no NEW load can start once the lock drops.
+ */
+int unlinkQuiesced(const char *path);
 
 /** @brief The currently active slot, or -1 (includes pending lazy loads). */
 int activeSlot();
@@ -84,7 +104,13 @@ int activeSlot();
  *  discovered from, or nullptr. */
 const char *fileName(size_t slot);
 
-/** @brief Slot whose file name equals `name`, or -1. */
+/**
+ * @brief Slot whose file name equals `name`, or -1. Case-insensitive: FatFs
+ * name matching is case-insensitive, so "MyExt.llext" and "myext.llext" are
+ * the same file on disk and must resolve to the same slot — a case-sensitive
+ * compare here let a case-differing DELETE unlink the file while skipping
+ * retire + settings purge.
+ */
 int findSlotByFileName(const char *name);
 
 /**
@@ -93,9 +119,10 @@ int findSlotByFileName(const char *name);
  * workqueue (see persistent_value_store::purge_value). Only touches keys this
  * slot actually owns (persistRegistered / shufflePersistRegistered) — a
  * display-name-collision loser owns nothing and purges nothing, so the
- * surviving extension's data is never erased. Blocking; call from a
- * preemptible kernel thread (the SMP workqueue), never the persistence
- * workqueue itself.
+ * surviving extension's data is never erased. Asynchronous: submits the
+ * cleanup and returns immediately (safe from the single SMP transport thread
+ * — a blocking flush there could park every SMP command behind the lowest-
+ * priority persistence workqueue and an in-flight llext load).
  */
 void purgePersistence(size_t slot);
 

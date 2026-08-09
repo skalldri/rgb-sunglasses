@@ -84,12 +84,20 @@ bool encode_err(zcbor_state_t *zse, Error err) {
     return smp_add_cmd_err(zse, extension_mgmt::kGroupId, static_cast<int>(err));
 }
 
+/* Longest file NAME (not path) DELETE accepts and LIST reports — sized to
+ * FatFs LFN (CONFIG_FS_FATFS_MAX_LFN = 255), NOT the registry's 32-byte
+ * loadable-name bound: files the registry can't load (over-long junk) are
+ * exactly what this group must still be able to name and delete. LIST used
+ * to truncate names at 32 bytes while DELETE rejected them at the same
+ * bound, making long-named files listable-but-undeletable forever. */
+constexpr size_t kMaxWireNameLen = 256;
+
 /* Builds "<dir>/<name>" and validates it against the fence. Returns false on
  * any invalid/out-of-fence name. `name` need not be NUL-terminated
- * (zcbor_string); its length is validated against the registry's name bound
- * first so the copy can't truncate silently. */
+ * (zcbor_string); its length is validated against the wire bound first so
+ * the copy can't truncate silently. */
 bool build_fenced_path(const char *dir, const struct zcbor_string &name, char *out, size_t outLen) {
-    if (name.len == 0 || name.len >= extension_registry::kMaxNameLen) {
+    if (name.len == 0 || name.len >= kMaxWireNameLen) {
         return false;
     }
 
@@ -109,7 +117,9 @@ bool encode_entry(zcbor_state_t *zse, const char *name, bool onDisk, int slot) {
     const bool loaded = slot >= 0;
     bool ok = zcbor_map_start_encode(zse, 8) &&
               zcbor_tstr_put_lit(zse, "n") &&
-              zcbor_tstr_put_term(zse, name, extension_registry::kMaxNameLen) &&
+              /* Full name up to the wire bound — a truncated name would
+               * round-trip into a DELETE that can't match the file. */
+              zcbor_tstr_put_term(zse, name, kMaxWireNameLen) &&
               zcbor_tstr_put_lit(zse, "disk") &&
               zcbor_bool_put(zse, onDisk) &&
               zcbor_tstr_put_lit(zse, "loaded") &&
@@ -213,8 +223,15 @@ int list_handler(struct smp_streamer *ctxt) {
                     hasMore = true;
                     break;
                 }
-                ok = encode_entry(zse, entry.name, /*onDisk=*/true,
-                                  extension_host::findSlotByFileName(entry.name));
+                /* A file matching a RETIRED slot is a re-upload over a
+                 * deleted name: the meaningful state is "fresh file, takes
+                 * effect after restart", not "removed" — reporting the ghost
+                 * slot here made a just-installed extension look deleted. */
+                int slot = extension_host::findSlotByFileName(entry.name);
+                if (slot >= 0 && extension_host::isRetired(static_cast<size_t>(slot))) {
+                    slot = -1;
+                }
+                ok = encode_entry(zse, entry.name, /*onDisk=*/true, slot);
                 if (!ok) {
                     break;
                 }
@@ -262,13 +279,24 @@ int list_handler(struct smp_streamer *ctxt) {
 /*
  * Command handler: DELETE (write).
  *
- * Order matters (design §3.3/§3.4): resolve the boot slot first; unlink;
- * only on unlink success switch away from the target if it is the active
- * animation (through the standard pattern_controller path, which un-marks
- * Is Active and notifies the app), then retire the slot and purge its
- * persisted settings. EVERY side effect is gated on the unlink succeeding,
- * so a failed unlink (e.g. the FF_FS_LOCK=0 lingering-upload-handle race,
- * design §5/§7) is a true no-op: slot fully usable, display untouched.
+ * Order matters (design §3.3/§3.4), and it is retire-first:
+ *
+ *  1. retire() the boot slot — from here no new activation can queue a lazy
+ *     load of the file that is about to disappear (a post-unlink retire left
+ *     a window where shuffle or a GATT write could accept an activation
+ *     whose FAT read then finds nothing and faults the slot unrecoverably).
+ *  2. unlinkQuiesced() — the unlink runs under the host lock, so an ALREADY
+ *     in-flight llext load of this file finishes before its clusters are
+ *     freed. FatFs here is FF_FS_LOCK=0 and non-reentrant: an unsynchronized
+ *     unlink SUCCEEDS against an open file and frees the cluster chain
+ *     mid-read, corrupting /NAND: for unrelated files too.
+ *  3. On unlink FAILURE, unretire() — a failed delete stays a true no-op.
+ *  4. On success, switch away if the slot backs the currently rendered
+ *     animation. The test is against pattern_controller's current animation,
+ *     NOT activeSlot(): a FAULTED extension has activeSlot() == -1 while its
+ *     FAULT banner still renders, and deleting it must clear that banner
+ *     rather than leave it scrolling a deleted extension's name forever.
+ *  5. Purge persisted settings (async — never blocks the SMP thread).
  */
 int delete_handler(struct smp_streamer *ctxt) {
     zcbor_state_t *zse = ctxt->writer->zs;
@@ -292,38 +320,56 @@ int delete_handler(struct smp_streamer *ctxt) {
         return encode_err(zse, Error::kKindUnsupported) ? MGMT_ERR_EOK : MGMT_ERR_EMSGSIZE;
     }
 
-    char path[64];
+    /* Static: LFN-sized names (kMaxWireNameLen) would not fit the 2048-byte
+     * SMP workqueue stack budget, and SMP handlers are single-threaded by
+     * construction (one smp_work_queue), so one shared buffer is safe. */
+    static char path[sizeof("/NAND:/ext/") + kMaxWireNameLen];
+    static char fileName[kMaxWireNameLen];
     if (!build_fenced_path(dir, name, path, sizeof(path))) {
         return encode_err(zse, Error::kInvalidName) ? MGMT_ERR_EOK : MGMT_ERR_EMSGSIZE;
     }
 
     /* NUL-terminated copy of just the file name for the slot lookup. */
-    char fileName[extension_registry::kMaxNameLen];
     memcpy(fileName, name.value, name.len);
     fileName[name.len] = '\0';
 
-    const int slot = extension_host::findSlotByFileName(fileName);
+    /* A slot that is ALREADY retired is a previous DELETE's leftover (or a
+     * re-upload over one) — this DELETE targets only the on-disk file, and
+     * must not re-run (or roll back) that slot's lifecycle. */
+    int slot = extension_host::findSlotByFileName(fileName);
+    if (slot >= 0 && extension_host::isRetired(static_cast<size_t>(slot))) {
+        slot = -1;
+    }
 
-    int rc = fs_unlink(path);
+    if (slot >= 0) {
+        extension_host::retire(static_cast<size_t>(slot));
+    }
+
+    int rc = extension_host::unlinkQuiesced(path);
     if (rc != 0) {
+        if (slot >= 0) {
+            extension_host::unretire(static_cast<size_t>(slot));
+        }
         LOG_WRN("DELETE %s failed: %d", path, rc);
         const Error err = (rc == -ENOENT) ? Error::kNotFound : Error::kUnlinkFailed;
         return encode_err(zse, err) ? MGMT_ERR_EOK : MGMT_ERR_EMSGSIZE;
     }
 
-    if (slot >= 0 && extension_host::activeSlot() == slot) {
-        /* Deleting the active animation: switch to the boot-fallback built-in,
-         * persist included, so neither the render loop nor the next boot
-         * points at the file just removed. Deliberately AFTER the unlink so a
-         * failed delete never disturbs the running animation (the loaded copy
-         * is llext-heap-resident — nothing here re-reads the file). Runs on
-         * this (SMP workqueue) thread — pattern_controller_change_to_animation
-         * is documented caller-thread-safe (shell and BT RX already do this). */
+    if (slot >= 0 &&
+        pattern_controller_get_current_animation() ==
+            extension_host::animationId(static_cast<size_t>(slot))) {
+        /* The deleted slot backs whatever is on the glasses right now — a
+         * healthy render OR a fault banner (see the handler comment, step 4).
+         * Switch to the boot-fallback built-in, persist included, so neither
+         * the render loop nor the next boot points at the removed file. Runs
+         * on this (SMP workqueue) thread — pattern_controller_change_to_animation
+         * is documented caller-thread-safe (shell and BT RX already do this),
+         * and the SMP workqueue stack is sized for the switch path (see
+         * CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_STACK_SIZE in the board conf). */
         pattern_controller_change_to_animation(Animation::ZigZag, true);
     }
 
     if (slot >= 0) {
-        extension_host::retire(static_cast<size_t>(slot));
         extension_host::purgePersistence(static_cast<size_t>(slot));
     }
 

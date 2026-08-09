@@ -119,18 +119,8 @@ void delete_value(const char* key) {
 
 namespace {
 
-// One purge = one work item on the persistence workqueue (see purge_value's
-// header comment for why the hop is the point). Stack-allocated by the
-// blocking caller; k_work_flush guarantees the handler is done with it
-// before the frame unwinds.
-struct PurgeWork {
-    struct k_work work;
-    PersistentValueRegistryEntry* entry;
-    const char* key;
-};
-
 void purge_work_handler(struct k_work* work) {
-    auto* purge = CONTAINER_OF(work, PurgeWork, work);
+    auto* purge = CONTAINER_OF(work, PersistentValuePurge, work);
     // -ENOENT (never registered / already unregistered) is fine: the record
     // deletion below is still wanted, e.g. for keys whose owner lost an
     // -EEXIST registration race but whose record predates this boot.
@@ -142,19 +132,23 @@ void purge_work_handler(struct k_work* work) {
 
 }  // namespace
 
-int purge_value(PersistentValueRegistryEntry* entry, const char* key) {
-    if (entry == nullptr) {
+int purge_value(PersistentValuePurge* purge, PersistentValueRegistryEntry* entry,
+                const char* key) {
+    if (purge == nullptr || entry == nullptr) {
         return -EINVAL;
     }
 
-    PurgeWork purge = {};
-    purge.entry = entry;
-    purge.key = key;
-    k_work_init(&purge.work, purge_work_handler);
-    k_work_submit_to_queue(&persistent_value_lowpri_workq, &purge.work);
-
-    struct k_work_sync sync;
-    k_work_flush(&purge.work, &sync);
+    // Caller-owned storage (see the header). A purge record pairs permanently
+    // with one entry/key (it lives next to the entry it purges), so a busy
+    // record means this exact purge is already queued or running — skip
+    // rather than k_work_init a live item, which corrupts the queue.
+    if (k_work_busy_get(&purge->work) != 0) {
+        return 0;
+    }
+    purge->entry = entry;
+    purge->key = key;
+    k_work_init(&purge->work, purge_work_handler);
+    k_work_submit_to_queue(&persistent_value_lowpri_workq, &purge->work);
     return 0;
 }
 
@@ -175,7 +169,7 @@ void save_value(const char*, const void*, size_t) {}
 
 void delete_value(const char*) {}
 
-int purge_value(PersistentValueRegistryEntry*, const char*) {
+int purge_value(PersistentValuePurge*, PersistentValueRegistryEntry*, const char*) {
     return -ENOSYS;
 }
 

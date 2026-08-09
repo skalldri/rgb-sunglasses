@@ -47,6 +47,8 @@
 #include <zephyr/logging/log_ctrl.h>
 #include <zephyr/random/random.h>
 #include <zephyr/shell/shell.h>
+#include <strings.h>
+#include <zephyr/fs/fs.h>
 #include <zephyr/sys/libc-hooks.h>
 #include <zephyr/sys/reboot.h>
 
@@ -113,6 +115,11 @@ struct Slot {
     char shuffleKey[extension_param_persistence::kShuffleKeyMaxLen] = {};
     bool shufflePersistRegistered = false;
     PersistentValueRegistryEntry shufflePersistEntry = {};
+    /* Caller-owned work records for purgePersistence()'s async cleanup (one
+     * per registry entry above) — the purge outlives the DELETE handler's
+     * stack frame, so the storage must live here, not there. */
+    persistent_value_store::PersistentValuePurge persistPurge = {};
+    persistent_value_store::PersistentValuePurge shufflePurge = {};
     /* Tick profiling (cycles), reset on every activation. Wall and CPU are
      * tracked SEPARATELY on purpose (issue #276): wall time includes every
      * higher-priority thread that preempted the sandbox mid-tick, so a single
@@ -978,6 +985,23 @@ void retire(size_t slot) {
     sSlots[slot].retired = true;
 }
 
+void unretire(size_t slot) {
+    if (slot >= sSlotCount) {
+        return;
+    }
+    HostLockGuard lock;
+    sSlots[slot].retired = false;
+}
+
+int unlinkQuiesced(const char *path) {
+    /* Holding sHostLock across the unlink serializes it against every host
+     * FAT read (scan_slot's transient loads, runtime_load's lazy load) — see
+     * the header. The unlink itself is short; the wait is bounded by one
+     * in-flight load. */
+    HostLockGuard lock;
+    return fs_unlink(path);
+}
+
 int activeSlot() {
     HostLockGuard lock;
     return sActiveSlot;
@@ -996,7 +1020,8 @@ int findSlotByFileName(const char *name) {
     }
     for (size_t slot = 0; slot < sSlotCount; slot++) {
         const char *slotFile = extension_registry::name(sSlots[slot].fileIndex);
-        if (slotFile != nullptr && strcmp(slotFile, name) == 0) {
+        /* Case-insensitive to match FatFs name semantics — see the header. */
+        if (slotFile != nullptr && strcasecmp(slotFile, name) == 0) {
             return static_cast<int>(slot);
         }
     }
@@ -1014,12 +1039,13 @@ void purgePersistence(size_t slot) {
      *
      * The flags are read-and-cleared under sHostLock (they're written by
      * setParamValue()/writeParamString() paths on the BT RX thread under the
-     * same lock), but the purge_value() calls happen AFTER releasing it:
-     * purge_value blocks on the persistence workqueue (k_work_flush), and a
-     * queued ext_params_do_save ahead of the purge item takes sHostLock
-     * itself — holding it here would deadlock. Clearing the flags first is
-     * what makes the unlocked window safe: no new mark_dirty can be issued
-     * for these keys once they're false. */
+     * same lock), but the purge_value() submits happen AFTER releasing it:
+     * the queued ext_params_do_save the purge serializes against takes
+     * sHostLock itself on the same workqueue. Clearing the flags first is
+     * what makes the window safe: no new mark_dirty can be issued for these
+     * keys once they're false, and the async purge (see the header) then
+     * unregisters + deletes without this thread ever waiting on the
+     * persistence workqueue. */
     bool purgeParams;
     bool purgeShuffle;
     {
@@ -1030,10 +1056,10 @@ void purgePersistence(size_t slot) {
         s.shufflePersistRegistered = false;
     }
     if (purgeParams) {
-        persistent_value_store::purge_value(&s.persistEntry, s.settingsKey);
+        persistent_value_store::purge_value(&s.persistPurge, &s.persistEntry, s.settingsKey);
     }
     if (purgeShuffle) {
-        persistent_value_store::purge_value(&s.shufflePersistEntry, s.shuffleKey);
+        persistent_value_store::purge_value(&s.shufflePurge, &s.shufflePersistEntry, s.shuffleKey);
     }
 }
 

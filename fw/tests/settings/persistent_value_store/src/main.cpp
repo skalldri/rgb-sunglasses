@@ -198,21 +198,26 @@ ZTEST(persistent_value_store_tests, test_delete_value_missing_record_is_harmless
 ZTEST(persistent_value_store_tests, test_purge_value_unregisters_and_deletes) {
     reset_test_state();
     FakeUint32Entry e{.key = "purge/one", .value = 7};
+    static persistent_value_store::PersistentValuePurge purge;
+    purge = {};
     registerFake(e);
     persistent_value_store::save_value(e.key, &e.value, sizeof(e.value));
 
     // The extension-DELETE cleanup invariant (fw/docs/extension-management.md):
     // even with a dirty flag queued, after purge_value the record is gone AND
     // stays gone — the debounced flush can no longer resurrect it because the
-    // entry left the registry as part of the same workqueue-serialized op.
+    // purge runs as one work item on the same workqueue as the flush.
     persistent_value_registry_mark_dirty(e.key);
     persistent_value_store::request_save();
 
-    int ret = persistent_value_store::purge_value(&e.reg, e.key);
+    int ret = persistent_value_store::purge_value(&purge, &e.reg, e.key);
     zassert_equal(ret, 0, "purge_value failed: %d", ret);
+
+    // The purge is asynchronous (fire-and-forget submit): give the work item
+    // a moment to run, then let the still-queued debounced sweep fire too.
+    k_sleep(K_MSEC(50));
     zassert_equal(persistent_value_registry_count(), 0, "entry should be unregistered");
 
-    // Let any still-queued debounced sweep fire, then confirm nothing came back.
     k_sleep(K_MSEC(CONFIG_APP_SETTINGS_SAVE_DEBOUNCE_MS + 50));
     uint32_t readBack = 0;
     zassert_equal(persistent_value_store::load_value(e.key, &readBack, sizeof(readBack)), 0,
@@ -225,15 +230,20 @@ ZTEST(persistent_value_store_tests, test_purge_value_tolerates_unregistered_entr
     // Entry never registered (e.g. a display-name-collision loser), but a
     // record under the key may predate this boot: purge still deletes it.
     FakeUint32Entry e{.key = "purge/loser", .value = 3};
+    static persistent_value_store::PersistentValuePurge purge;
+    purge = {};
     persistent_value_store::save_value(e.key, &e.value, sizeof(e.value));
 
-    int ret = persistent_value_store::purge_value(&e.reg, e.key);
+    int ret = persistent_value_store::purge_value(&purge, &e.reg, e.key);
     zassert_equal(ret, 0, "purge of an unregistered entry should succeed, got %d", ret);
 
+    k_sleep(K_MSEC(50));
     uint32_t readBack = 0;
     zassert_equal(persistent_value_store::load_value(e.key, &readBack, sizeof(readBack)), 0,
                   "record should be deleted even for an unregistered entry");
 
-    ret = persistent_value_store::purge_value(nullptr, "purge/loser");
+    ret = persistent_value_store::purge_value(&purge, nullptr, "purge/loser");
     zassert_equal(ret, -EINVAL, "null entry must be -EINVAL, got %d", ret);
+    ret = persistent_value_store::purge_value(nullptr, &e.reg, "purge/loser");
+    zassert_equal(ret, -EINVAL, "null purge storage must be -EINVAL, got %d", ret);
 }

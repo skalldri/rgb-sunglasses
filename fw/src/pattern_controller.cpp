@@ -347,6 +347,17 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         if (slot >= 0) {
             startupAnimation = extension_host::animationId(static_cast<size_t>(slot));
         }
+    } else if (sAnimationWasLoaded &&
+               static_cast<uint32_t>(sLoadedAnimation) >= extension_host::kAnimationIdBase) {
+        /* A pre-name-key record pointing at an extension by RAW SLOT ID (the
+         * only format older firmware wrote). Slots renumber alphabetically at
+         * every rescan, so honoring it can start a DIFFERENT extension than
+         * the one that was active — the exact defect the name key above
+         * exists to prevent. Ignore it and fall back to the default; the
+         * stale record is deleted by lastActiveAnimationDoSave on the next
+         * persisted animation change. */
+        LOG_INF("Ignoring legacy last-active record for extension id %u (restore is by name now)",
+                static_cast<uint32_t>(sLoadedAnimation));
     } else if (sAnimationWasLoaded && getAnimation(sLoadedAnimation)) {
         startupAnimation = sLoadedAnimation;
     }
