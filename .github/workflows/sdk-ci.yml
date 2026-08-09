@@ -24,6 +24,9 @@ on:
       - '.github/actions/wasi-sdk-scoped/**'
       - '.github/actions/package-rgbx-sdk/**'
       - '.github/actions/doxygen/**'
+      # The deploy step in pages.yml runs this same docs build; without
+      # it here, editing that step merges with no docs job having run.
+      - '.github/workflows/pages.yml'
       - '.github/workflows/sdk-ci.yml'
   push:
     branches: [main]
@@ -39,6 +42,9 @@ on:
       - '.github/actions/wasi-sdk-scoped/**'
       - '.github/actions/package-rgbx-sdk/**'
       - '.github/actions/doxygen/**'
+      # The deploy step in pages.yml runs this same docs build; without
+      # it here, editing that step merges with no docs job having run.
+      - '.github/workflows/pages.yml'
       - '.github/workflows/sdk-ci.yml'
 
 jobs:
@@ -121,8 +127,7 @@ jobs:
 
       - uses: ./.github/actions/doxygen
 
+      # Same script developers run locally and pages.yml deploys with, so the
+      # gate cannot diverge from either.
       - name: Build extension API docs (warnings are errors)
-        run: |
-          mkdir -p fw/build
-          cd fw/extensions
-          RGBX_DOC_VERSION="$(git describe --tags --match 'fw-v*' --always)" doxygen Doxyfile
+        run: fw/extensions/build-docs.sh

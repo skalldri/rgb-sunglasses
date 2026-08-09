@@ -194,7 +194,37 @@ ln -sf "$(basename "${NCS_ENV_FILE}")" "${NCS_DIR}/env-current.sh"
 info "Installing the extension-simulator wasm toolchain (wasi-sdk)..."
 "$(cd "$(dirname "$0")/.." && pwd)/fw/sim/scripts/install-toolchain.sh" >/dev/null
 
-# --- 9. Summary ----------------------------------------------------------------
+# --- 9. Doxygen (extension API docs) -------------------------------------------
+# fw/extensions/build-docs.sh is a documented pre-PR step for anything touching
+# fw/include/rgbx/, and sdk-ci.yml gates it with WARN_AS_ERROR — so the version
+# has to match the one CI uses or a clean local run can still go red. The pin
+# lives in build-docs.sh (which also asserts it at run time); Homebrew's
+# `doxygen` formula tracks latest, so install the pinned release directly, the
+# same way the devcontainer Dockerfile does.
+DOXYGEN_VERSION="$(grep -oE '^DOXYGEN_VERSION="[^"]+"' \
+    "$(cd "$(dirname "$0")/.." && pwd)/fw/extensions/build-docs.sh" | cut -d'"' -f2)"
+DOXYGEN_PREFIX="${HOME}/.cache/rgb-sunglasses/doxygen-${DOXYGEN_VERSION}"
+if [ -x "${DOXYGEN_PREFIX}/bin/doxygen" ]; then
+    info "Doxygen ${DOXYGEN_VERSION} already installed (${DOXYGEN_PREFIX})"
+else
+    info "Installing Doxygen ${DOXYGEN_VERSION} (extension API docs)..."
+    mkdir -p "${DOXYGEN_PREFIX}"
+    # Upstream ships a universal .dmg for macOS; the tarball is Linux-only, so
+    # mount the dmg and copy the binary out of the app bundle.
+    _dmg="$(mktemp -d)/doxygen.dmg"
+    curl -fsSL --retry 5 --retry-delay 5 \
+        "https://github.com/doxygen/doxygen/releases/download/Release_${DOXYGEN_VERSION//./_}/Doxygen-${DOXYGEN_VERSION}.dmg" \
+        -o "${_dmg}"
+    _mnt="$(hdiutil attach -nobrowse -readonly -mountrandom /tmp "${_dmg}" | awk '/\/tmp\//{print $NF}' | tail -1)"
+    mkdir -p "${DOXYGEN_PREFIX}/bin"
+    cp "${_mnt}/Doxygen.app/Contents/Resources/doxygen" "${DOXYGEN_PREFIX}/bin/doxygen"
+    hdiutil detach -quiet "${_mnt}"
+    rm -f "${_dmg}"
+fi
+# Symlink onto PATH so `doxygen` resolves in non-login shells (agent Bash calls).
+ln -sf "${DOXYGEN_PREFIX}/bin/doxygen" "${BREW_BIN}/doxygen"
+
+# --- 10. Summary ---------------------------------------------------------------
 info "Done."
 echo
 echo "Firmware dev loop on this Mac:"

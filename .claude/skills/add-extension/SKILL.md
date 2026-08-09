@@ -194,15 +194,17 @@ Published at <https://rgb-sunglasses.autom8ed.com/api> (rebuilt from `main` by
 `pages.yml`). To build locally:
 
 ```bash
-mkdir -p fw/build && (cd fw/extensions && RGBX_DOC_VERSION=local doxygen Doxyfile)   # output: fw/build/doxygen/html
+fw/extensions/build-docs.sh   # output: fw/build/doxygen/html
 ```
-
-(The Doxyfile's relative paths resolve against the CWD, so it must be run from
-`fw/extensions/`, and `fw/build` must exist. `RGBX_DOC_VERSION` stamps the
-version in the page header — any string works locally; CI passes `git describe`.)
 
 **If you added or changed anything in `fw/include/rgbx/`, run this before
 opening the PR.** The build sets `WARN_AS_ERROR` + `WARN_IF_UNDOCUMENTED` +
-`WARN_NO_PARAMDOC`, and `sdk-ci.yml`'s `docs` job runs the identical build as a
+`WARN_NO_PARAMDOC`, and `sdk-ci.yml`'s `docs` job runs the identical script as a
 gate — a new function without a `@brief`, or with an undocumented parameter or
 return value, fails CI. Fix the comment; don't relax the Doxyfile.
+
+The script asserts the pinned Doxygen version before building. If it reports the
+wrong version, rebuild the devcontainer (or run `scripts/macos-setup.sh` on a
+Mac) rather than pointing it at whatever `doxygen` is on `PATH`: an older
+Doxygen exits 0 while leaving `header.html`'s template placeholders
+unsubstituted, so the page you preview is not the page that deploys.

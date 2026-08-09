@@ -110,13 +110,22 @@ jobs:
       # pinned-Doxygen action is the SAME one sdk-ci.yml's `docs` job gates
       # with, so a deploy can never use a different Doxygen than the one CI
       # validated (same rationale as sim-wasm-toolchain above).
+      #
+      # These two steps are deliberately FATAL to the deploy rather than
+      # `continue-on-error`, even though that means an upstream Doxygen
+      # download failure (on a cache miss) can block a push that only touched
+      # fw/docs/**. The alternative is worse: the upload below ships the whole
+      # site/ tree, so continuing past a failed docs build would publish a site
+      # with no site/api at all — turning a transient outage into a live 404
+      # for every /api URL. Failing loudly leaves the previous deploy intact.
+      # The download is cached and retried (see the action); the content of
+      # these steps is gated pre-merge by sdk-ci.yml's `docs` job.
       - uses: ./.github/actions/doxygen
 
       - name: Build extension API docs into site/api
         run: |
-          mkdir -p fw/build
-          (cd fw/extensions && \
-            RGBX_DOC_VERSION="$(git describe --tags --match 'fw-v*' --always)" doxygen Doxyfile)
+          # Same script sdk-ci.yml gates with and developers run locally.
+          fw/extensions/build-docs.sh
           # rm first: cp -r nests into an EXISTING destination (dst/html/),
           # which would silently 404 the deployed page. Same trap as site/sim.
           rm -rf site/api

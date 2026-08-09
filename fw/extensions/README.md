@@ -62,13 +62,12 @@ extension, same as the required ones.
 | ------ | ------------------- | ------- |
 | `rgbx_good_moment` (`uint8_t`) | every frame is a good moment | Set during `rgbx_tick()`: nonzero means the frame just rendered ended at a natural switch boundary (end of a scroll/clip/cycle), so the firmware's shuffle mode (issue #121) can switch animations without visual jarring. |
 
-Raw-C extensions define + `EXPORT_SYMBOL` it themselves (see the template's
-[`src/main.c`](https://github.com/skalldri/rgbx-extension-template/blob/main/src/main.c),
-which signals on its scan-head wrap). C++ wrapper extensions get it for free:
-`RGBX_ANIMATION()` always emits the symbol, driven by the `rgbx::Animation::goodMoment()`
-virtual (default `true` — override it to signal real boundaries; the
-[`cpp-waves`](https://github.com/skalldri/rgbx-extension-template/tree/main/examples/cpp-waves)
-example doesn't and needs no changes).
+Raw-C extensions define + `EXPORT_SYMBOL` it themselves — see
+[Getting started](getting-started.md) for a worked example, or the template's
+[`src/main.c`](https://github.com/skalldri/rgbx-extension-template/blob/main/src/main.c).
+C++ wrapper extensions get it for free: `RGBX_ANIMATION()` always emits the
+symbol, driven by the `rgbx::Animation::goodMoment()` virtual (default `true` —
+override it to signal real boundaries).
 
 ### Parameters
 
@@ -109,20 +108,20 @@ instead: subclass
 RGBX_PARAM(...))`. It adds typed accessors (`paramU32/paramColor/paramBool/
 paramString`, `bandEnergy/isBeat/displayBucket`, `buttonWasPressed`, accel/
 gyro getters). Nothing C++ crosses the host boundary — the macro emits the
-same five C symbols. See the template's
+same five C symbols. [Getting started](getting-started.md) builds one
+step by step; the template's
 [`cpp-waves`](https://github.com/skalldri/rgbx-extension-template/tree/main/examples/cpp-waves)
-example, or the registry-shipped
-[rgbx-plasma](https://github.com/skalldri/rgbx-plasma) for a production one.
+example and the registry-shipped
+[rgbx-plasma](https://github.com/skalldri/rgbx-plasma) are further reading.
 
 ### API docs
 
 Every type, macro and function in `include/rgbx/` is documented in the
 generated reference at <https://rgb-sunglasses.autom8ed.com/api>. To build it
-locally (the `cd` matters — Doxygen resolves the Doxyfile's paths against the
-working directory):
+locally:
 
 ```bash
-mkdir -p fw/build && (cd fw/extensions && RGBX_DOC_VERSION=local doxygen Doxyfile)
+fw/extensions/build-docs.sh          # output: fw/build/doxygen/html
 ```
 
 
@@ -141,8 +140,20 @@ publish what you build, see
 [Community extension registry](../../extensions/README.md); the worked example
 is [rgbx-demo-wave](https://github.com/skalldri/rgbx-demo-wave).
 
-Do **not** build against the `llext-edk.tar.xz` release artifact: it is
-deprecated as a third-party path and carries none of the SDK's build gates.
+Do **not** build against the `llext-edk.tar.xz` CI artifact that
+[`build.yaml`](https://github.com/skalldri/rgb-sunglasses/blob/main/.github/workflows/build.yaml)
+still uploads. It is deprecated as a third-party path and carries none of the
+SDK's build gates, so the two failures it lets through only surface on-device,
+with errors that look unrelated to the build you did:
+
+- a C++ translation unit built without the `ld -r` step is rejected by the
+  loader with `Region 0 ELF file range ... overlaps with 1`;
+- a call to any symbol outside the exported surface (double-precision `sin()`,
+  `sinhf()`, `strtol()`, …) compiles fine and then fails llext symbol
+  resolution at load.
+
+If you were building against the EDK, switch to the template/SDK flow above —
+it applies both gates at build time.
 
 ### In-repo extensions (contributors only)
 
@@ -186,21 +197,29 @@ document the simulator and the full divergence list.)
 
 ## Installing on the device
 
-You don't have to build the in-repo extensions yourself: prebuilt `.llext` files
-are attached to every firmware (`fw-vX.Y.Z`) GitHub release, alongside the
-firmware zips they were built with — download the ones matching your installed
-firmware. (An extension is only accepted by firmware with the same
-`RGBX_ABI_VERSION` and display dimensions, so always take firmware + extensions
-from the same release.)
+Copy the `.llext` into `/NAND:/ext/` on the board's USB mass-storage disk, then
+reboot so the firmware re-mounts the filesystem and rescans:
 
 ```bash
 # Mount the board's USB mass-storage disk (see fw/CLAUDE.md "USB Flash Disk"),
 # then:
-cp fw/build/extensions/cpptest.llext /mnt/sunglasses-fs/ext/
+cp <your-extension>.llext /mnt/sunglasses-fs/ext/
 sync && umount /mnt/sunglasses-fs
 # Reboot the board (kernel reboot warm) so the firmware re-mounts FAT and
 # re-discovers extensions.
 ```
+
+An extension is only accepted by firmware with the same `RGBX_ABI_VERSION` and
+display dimensions, so build against the SDK from the release you are running.
+
+You usually don't have to do any of this by hand: extensions in the
+[community registry](../../extensions/README.md) are rebuilt from their pinned
+revision on every `fw-v*` release, attached to it as `.llext` assets, and
+installed onto the device by the companion app automatically. **The in-repo
+extensions are not published that way** — `hello` and `cpptest` are dev/debug
+tools that CI builds as a check and no release ships (see the comment in
+[`release.yaml`](https://github.com/skalldri/rgb-sunglasses/blob/main/.github/workflows/release.yaml)),
+so the manual copy above is the route for anything you build yourself.
 
 ## Debug shell
 

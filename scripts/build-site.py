@@ -34,7 +34,17 @@ SITE_DIR = os.path.join(REPO_ROOT, "site")
 # links also resolve on the served site (page at /<out>/, image at /<out>/images/).
 IMAGES_SRC = os.path.join(REPO_ROOT, "fw", "docs", "images")
 
-# Nav links shared across generated pages (mirrors site/index.html's nav).
+# Nav links shared across generated pages.
+#
+# There are FOUR copies of this nav and they are not generated from one source —
+# keep them in sync, and update this list when you add a copy:
+#   1. here (every page this script renders: /docs, /recovery, the guides)
+#   2. site/index.html            — hand-written home page
+#   3. site/privacy/index.html    — hand-written privacy page
+#   4. fw/extensions/doxygen/header.html — the Doxygen pages at /api
+# (2)-(4) are hand-written HTML; a link added only here silently goes missing on
+# them. /privacy drifted exactly that way, missing both /sim and /api.
+#
 # (href, label, external?)
 NAV_LINKS = [
     ("https://github.com/skalldri/rgb-sunglasses", "GitHub", True),

@@ -1,16 +1,19 @@
 # Doxygen configuration for the rgbx animation-extension API.
 #
-# Doxygen resolves the relative paths below against the CURRENT WORKING
-# DIRECTORY, not this file's location, so it must be run from fw/extensions/
-# and fw/build must already exist:
+# Build it with:
 #
-#   mkdir -p fw/build && (cd fw/extensions && RGBX_DOC_VERSION=local doxygen Doxyfile)
+#   fw/extensions/build-docs.sh
 #
-# Output lands in fw/build/doxygen/html (fw/build is gitignored). The same
-# command runs in CI twice: as a warnings-are-errors gate in sdk-ci.yml, and in
-# pages.yml, which copies the HTML tree to site/api and publishes it at
-# https://rgb-sunglasses.autom8ed.com/api. Both use the pinned Doxygen from
-# .github/actions/doxygen; see doxygen/VENDORED.md for the version contract.
+# Do not invoke `doxygen Doxyfile` directly: the relative paths below resolve
+# against the CURRENT WORKING DIRECTORY rather than this file's location,
+# fw/build must already exist, and the Doxygen version has to match the pin
+# (the HTML header template is version-specific). build-docs.sh handles all
+# three, and is the same script sdk-ci.yml's `docs` gate and pages.yml's deploy
+# run — see doxygen/VENDORED.md for the version contract.
+#
+# Output lands in fw/build/doxygen/html (fw/build is gitignored); pages.yml
+# copies that tree to site/api and publishes it at
+# https://rgb-sunglasses.autom8ed.com/api.
 
 PROJECT_NAME           = "RGB Sunglasses Animation Extension API"
 PROJECT_BRIEF          = "rgbx ABI + C++ wrapper for sandboxed .llext animations"
@@ -38,6 +41,14 @@ INPUT                  = ../include/rgbx \
                          README.md \
                          getting-started.md \
                          ../../extensions/README.md
+
+# Keep the pattern list explicit. INPUT names a DIRECTORY (../include/rgbx), so
+# without this Doxygen falls back to its own default patterns — *.c, *.py, *.dox
+# and a couple of dozen more. Combined with WARN_IF_UNDOCUMENTED +
+# WARN_AS_ERROR below, dropping a generator script or a .dox note into that
+# directory would then fail the docs gate and, on main, abort the Pages deploy
+# for the whole site.
+FILE_PATTERNS          = *.h *.md
 
 # Three inputs are named README.md (fw/extensions, extensions, fw/sim). Doxygen
 # accepts this setting as EITHER a bare basename or a path, and a bare
