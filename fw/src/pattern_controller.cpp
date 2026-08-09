@@ -18,7 +18,6 @@
 #if defined(CONFIG_APP_EXTENSION_HOST)
 #include <extensions/extension_host.h>
 #include <extensions/extension_limits.h>
-#include <extensions/extension_registry.h>
 #endif
 #if defined(CONFIG_APP_SHUFFLE)
 #include <animations/shuffle_controller.h>
@@ -100,16 +99,29 @@ namespace {
  * what makes a settings lookup cheap; without it, settings_nvs_save() walks
  * every name id doing a full NVS scan per id whenever the name is not found,
  * which is exactly what a delete-of-an-absent-key and a first-write-of-a-new-
- * key both do. That cache is now enabled (see the proto0 board .conf), but the
+ * key both do. That cache is now enabled (in fw/prj.conf, so it applies to every
+ * board built from it — the overflow budget has to hold for all of them), but the
  * write is removed as well: an animation switch is a per-interaction event, and
  * the NAND has finite erase/write cycles to spend on things the user actually
  * asked to keep.
  *
- * Consequence, accepted deliberately: the device always boots to the default
- * animation below. Nothing restores the pre-power-cycle selection. Do not
- * reintroduce a write on this path — if boot restore is ever wanted again, it
- * needs a trigger that is not "every switch" (an idle/disconnect checkpoint,
- * or storage that is not NVS). */
+ * Two consequences, both accepted deliberately:
+ *
+ *  1. The device always boots to the default animation below. Nothing restores
+ *     the pre-power-cycle selection.
+ *  2. "All animations off" no longer survives a power cycle either. Animation::None
+ *     IS a registered animation (null_animation_factory, animation_registry_defaults.cpp),
+ *     and turning everything off in the app routes to it via
+ *     PatternControllerActivator::deactivateAnimation — so the old restore path
+ *     booted such a device dark. It now comes up lit on the default instead.
+ *     That is a real loss, not just a convenience one: the panel lights up
+ *     without being asked and draws current. Persisting even a single "booted
+ *     off" bool was considered and rejected — it is still a flash write on a user
+ *     interaction, which is the whole thing this change removes.
+ *
+ * Do not reintroduce a write on this path. If boot restore (or the off state) is
+ * ever wanted again, it needs a trigger that is not "every switch" — an
+ * idle/disconnect checkpoint, or storage that is not NVS. */
 
 #if defined(CONFIG_APP_SHUFFLE)
 
@@ -255,9 +267,15 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     // measured per-switch cost that bought this, and for what any future boot-restore
     // would have to avoid. Records written by earlier firmware under
     // "appcfg/core/last_active_animation" / "appcfg/core/last_active_extension" are
-    // inert: nothing registers those keys any more, so settings_load()'s dispatch
-    // finds no handler and skips them. They are deliberately not deleted — a one-shot
-    // migration delete would be exactly the unnecessary NVS write this change removes.
+    // functionally inert, but NOT silent: the "appcfg" subtree handler still matches
+    // them, persistent_value_registry_dispatch_load() finds no registered entry and
+    // returns -ENOENT, and settings_call_set_handler() logs
+    //     <err> settings: set-value failure. key: appcfg/core/last_active_... error(-2)
+    // once per key at every boot before swallowing it. That is expected on any device
+    // upgraded from a build that wrote them, and it is the same line already seen for
+    // orphaned "appcfg/ext/<name>" blobs. Do not chase it as a fault.
+    // They are deliberately not deleted — a one-shot migration delete would be exactly
+    // the unnecessary NVS write this change removes.
     pattern_controller_change_to_animation(Animation::ZigZag);
 
     // Overrun logging is rate-limited (see the overrun branch at the bottom of the loop).
@@ -407,9 +425,19 @@ int pattern_controller_change_to_animation(Animation animation) {
     ActiveAnimationBinding::setLocalActiveAnimation(animation);
 
     // No settings write here, deliberately — see the note at the top of the
-    // anonymous namespace. This function runs on the caller's thread, which for a
-    // GATT write is the cooperative BT RX thread; keeping it free of flash work is
-    // what stops one tap in the app from costing a visible freeze.
+    // anonymous namespace.
+    //
+    // To be precise about what was removed and what it cost: the deleted code was
+    // persistent_value_registry_mark_dirty() plus request_save(), and request_save()
+    // only does k_work_reschedule_for_queue() onto the lowest-priority persist
+    // workqueue. It never blocked this caller. The 850-1500 ms of NVS work ran on
+    // that workqueue ~1 s later, not here. So this removal is about flash endurance
+    // and system-wide QSPI load, NOT about unblocking the calling thread.
+    //
+    // Do not infer from this comment that a display stall is explained by a settings
+    // flush: measured on proto0, a flush produced zero display-thread overruns
+    // (issue #311), and the ~1 s freezes tracked separately in issue #312 were traced
+    // to something else entirely.
     return 0;
 }
 

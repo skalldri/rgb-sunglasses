@@ -34,10 +34,19 @@ Indicator pattern_controller_get_current_indicator(void);
  * Runs SYNCHRONOUSLY on the caller's thread — the cooperative BT RX thread for a
  * GATT write, the shell thread for `anim set`, the SMP workqueue for a FILE_MGMT
  * delete, and the pattern-controller thread for the boot default and shuffle hops.
- * Nothing here may block: it used to schedule a settings flush, which cost up to
- * 1.5 s of NVS work per switch and a visible ~1 s display stall (issue #311).
+ * No flash or settings work happens on this path — it used to schedule a settings
+ * flush, which cost up to 1.5 s of NVS work per switch (issue #311). Keep it that
+ * way; do not add persistence here.
  *
- * The selection is NOT persisted; the device boots to the default every time.
+ * That is NOT a blanket "this never blocks" guarantee. For an extension slot,
+ * setActive() enters extension_host::activate()/deactivate(), which take the host
+ * lock — and tick() holds that same lock across the one-time lazy .llext load
+ * (FAT I/O plus relocation, measured ~100 ms). So a GATT Is Active write on the
+ * cooperative BT RX thread can still stall there.
+ *
+ * The selection is NOT persisted; the device boots to the default every time, and
+ * an explicit "all animations off" (Animation::None) does not survive a power
+ * cycle either — see the note in pattern_controller.cpp.
  *
  * @return 0, or -ENOEXEC if @p animation is not registered (the current animation
  *         is left untouched).
