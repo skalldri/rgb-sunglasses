@@ -163,6 +163,53 @@ ZTEST(led_controller, test_set_pixel_bounds_and_population) {
  * Frame-pacing stats (issue #267): led_stats_core logic + the shell command.
  * ------------------------------------------------------------------------ */
 
+/* Worst-segment attribution: the label and the CPU figure must travel WITH the
+ * wall max, never independently — otherwise the printed triple describes three
+ * different frames. The CPU figure is what separates "this call was slow" from
+ * "this thread was not running", which is the whole reason it is recorded. */
+ZTEST(led_controller, test_worst_segment_carries_label_and_cpu) {
+    led_stats_core::Stats s{};
+    led_stats_core::reset(s);
+
+    /* A modest segment that genuinely ran: wall and cpu are close. */
+    led_stats_core::recordFrame(s, true, 33000, 5000, 1200, 33300, "strip0", 1100);
+    zassert_equal(s.worstSegmentUs, 1200, "first segment should set the max");
+    zassert_mem_equal(s.worstSegmentLabel, "strip0", 7, "label should follow the max");
+    zassert_equal(s.worstSegmentCpuUs, 1100, "cpu should follow the max");
+
+    /* A shorter segment must not steal the attribution. */
+    led_stats_core::recordFrame(s, true, 33000, 5000, 900, 33300, "claim", 800);
+    zassert_equal(s.worstSegmentUs, 1200, "a shorter segment must not replace the max");
+    zassert_mem_equal(s.worstSegmentLabel, "strip0", 7, "label must not follow a shorter segment");
+    zassert_equal(s.worstSegmentCpuUs, 1100, "cpu must not follow a shorter segment");
+
+    /* A long segment that burned almost no CPU: preempted, not slow. */
+    led_stats_core::recordFrame(s, true, 40000, 9000, 1470000, 33300, "strip1", 900);
+    zassert_equal(s.worstSegmentUs, 1470000, "the longer segment should win");
+    zassert_mem_equal(s.worstSegmentLabel, "strip1", 7, "label should follow the new max");
+    zassert_equal(s.worstSegmentCpuUs, 900, "cpu should follow the new max");
+
+    led_stats_core::Summary sum = led_stats_core::summarize(s);
+    zassert_equal(sum.worstSegmentUs, 1470000, "summary should surface the wall max");
+    zassert_equal(sum.worstSegmentCpuUs, 900, "summary should surface the matching cpu");
+    zassert_mem_equal(sum.worstSegmentLabel, "strip1", 7, "summary should surface the label");
+}
+
+/* reset() must seed the label so a report before any frame never prints a null
+ * pointer through %s. */
+ZTEST(led_controller, test_reset_seeds_segment_label) {
+    led_stats_core::Stats s{};
+    led_stats_core::recordFrame(s, true, 33000, 5000, 1200, 33300, "strip0", 1100);
+    led_stats_core::reset(s);
+
+    zassert_not_null(s.worstSegmentLabel, "reset must leave a printable label");
+    zassert_mem_equal(s.worstSegmentLabel, "none", 5, "reset should seed the label to \"none\"");
+    zassert_equal(s.worstSegmentCpuUs, 0, "reset should clear the segment cpu");
+
+    led_stats_core::Summary sum = led_stats_core::summarize(s);
+    zassert_not_null(sum.worstSegmentLabel, "summary must never surface a null label");
+}
+
 ZTEST(led_controller, test_stats_reset_clears_and_seeds_min) {
     led_stats_core::Stats s{};
     led_stats_core::recordFrame(s, true, 40000, 5000, 1000, 33300);

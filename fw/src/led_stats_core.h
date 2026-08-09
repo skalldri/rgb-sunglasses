@@ -25,6 +25,19 @@ struct Stats {
     uint64_t intervalSumUs;
     uint32_t workMaxUs;       // the display thread's own work per frame
     uint32_t worstSegmentUs;  // longest stretch between two points the loop can yield at
+    // Attribution for that worst segment, so an unattended soak stays diagnosable after
+    // the rate-limited overrun warning has scrolled out of the serial backlog.
+    //
+    // worstSegmentCpuUs is the CPU the display thread itself consumed during that same
+    // stretch. The pair is the whole point: a segment with 1.4 s wall and ~1 ms CPU was
+    // not slow, it was NOT RUNNING - something preempted it. Same wall/CPU split the
+    // extension sandbox uses to tell a runaway extension from a starved one.
+    //
+    // The label is a string literal with static storage duration (the call sites pass
+    // only literals); storing a pointer is safe precisely because of that. Do not pass a
+    // stack buffer.
+    const char* worstSegmentLabel;
+    uint32_t worstSegmentCpuUs;
     uint32_t lateFrames;      // interval > 2x target
 };
 
@@ -36,13 +49,18 @@ inline void reset(Stats& s) {
     s = Stats{};
     // Sentinel so the first recorded interval always wins the min comparison.
     s.intervalMinUs = UINT32_MAX;
+    s.worstSegmentLabel = "none";
 }
 
 // Record one completed frame. haveInterval is false for the very first frame after a reset,
 // where there is no previous wake-up to measure against — without it the min would be
 // pinned at 0 forever by a bogus first sample.
 inline void recordFrame(Stats& s, bool haveInterval, uint32_t intervalUs, uint32_t workUs,
-                        uint32_t segmentUs, uint32_t targetUs) {
+                        uint32_t segmentUs, uint32_t targetUs,
+                        // Defaulted so the many existing pacing tests, which care only
+                        // about interval/work bookkeeping, stay readable. The single
+                        // production caller always passes both explicitly.
+                        const char* segmentLabel = "none", uint32_t segmentCpuUs = 0) {
     s.frames++;
 
     if (workUs > s.workMaxUs) {
@@ -50,6 +68,10 @@ inline void recordFrame(Stats& s, bool haveInterval, uint32_t intervalUs, uint32
     }
     if (segmentUs > s.worstSegmentUs) {
         s.worstSegmentUs = segmentUs;
+        // Label and CPU travel WITH the max, never independently - otherwise the printed
+        // triple would describe three different frames.
+        s.worstSegmentLabel = (segmentLabel != nullptr) ? segmentLabel : "none";
+        s.worstSegmentCpuUs = segmentCpuUs;
     }
 
     if (!haveInterval) {
@@ -83,6 +105,8 @@ struct Summary {
     uint32_t lateFrames;
     uint32_t workMaxUs;
     uint32_t worstSegmentUs;
+    const char* worstSegmentLabel;
+    uint32_t worstSegmentCpuUs;
     uint32_t overruns;
 };
 
@@ -92,6 +116,8 @@ inline Summary summarize(const Stats& s) {
     out.lateFrames = s.lateFrames;
     out.workMaxUs = s.workMaxUs;
     out.worstSegmentUs = s.worstSegmentUs;
+    out.worstSegmentLabel = (s.worstSegmentLabel != nullptr) ? s.worstSegmentLabel : "none";
+    out.worstSegmentCpuUs = s.worstSegmentCpuUs;
     out.overruns = s.overruns;
 
     // Intervals are only recorded from the second frame onwards.

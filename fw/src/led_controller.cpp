@@ -58,6 +58,28 @@ BUILD_ASSERT(CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY >= 0 &&
                  CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
              "CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY must be a valid preemptible priority");
 
+// Refuse to build without CPU accounting rather than silently degrade: display_cpu_us()
+// would return 0, and a zero CPU figure against a long wall time is exactly the signature
+// this code reports as "PREEMPTED" — so a missing config would manufacture a confident
+// wrong verdict. Same stance extension_host.cpp takes for the sandbox budget.
+#if !defined(CONFIG_SCHED_THREAD_USAGE)
+#error "led_controller needs CONFIG_SCHED_THREAD_USAGE for per-segment CPU attribution"
+#endif
+
+// CPU microseconds this thread has actually been given, for telling "slow" apart from
+// "not running". A segment with a long wall time but near-zero CPU delta was preempted,
+// not slow — the display thread is priority 2 but PREEMPTIBLE, and the cooperative
+// Bluetooth threads (BT RX, BT HCI TX) outrank it and can hold the CPU for as long as
+// they like. Same wall-vs-CPU split the extension sandbox uses to tell a runaway
+// extension from a starved one; see extension_tick_budget.h.
+static inline uint32_t display_cpu_us(void) {
+    k_thread_runtime_stats_t st;
+    if (k_thread_runtime_stats_get(led_display_thread, &st) != 0) {
+        return 0;
+    }
+    return k_cyc_to_us_near32((uint32_t)st.execution_cycles);
+}
+
 // Device Tree Node ID's for the LED strips
 #define LED_STRIP_0_NODE_ID DT_ALIAS(led_strip_0)
 #define LED_STRIP_1_NODE_ID DT_ALIAS(led_strip_1)
@@ -473,6 +495,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
     uint32_t windowWorstFrameUs = 0;
     uint32_t windowWorstSegUs = 0;
     const char *windowWorstSegLabel = "none";
+    uint32_t windowWorstSegCpuUs = 0;
 
     while (true) {
         // Update LED strips with current framebuffer contents
@@ -496,14 +519,19 @@ void led_display_thread_func(void *a, void *b, void *c) {
         // a lock held by someone else, or preemption.
         uint32_t worstSegUs = 0;
         const char *worstSegLabel = "none";
+        uint32_t worstSegCpuUs = 0;
         // Seeded AFTER the preamble reads below, not from wakeUs — otherwise the first
         // segment silently includes k_uptime_ticks(), the cycle read, and the virtual
         // getDisplayRateMs() call, all billed to a label that says "claim".
         uint32_t segStartUs = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
+        uint32_t segStartCpuUs = display_cpu_us();
         auto markSegment = [&](const char *label) {
             uint32_t now = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
+            uint32_t nowCpu = display_cpu_us();
             uint32_t seg = now - segStartUs;
+            uint32_t segCpu = nowCpu - segStartCpuUs;
             segStartUs = now;
+            segStartCpuUs = nowCpu;
             // k_cycle_get_32() wraps every ~36.4 h at 32768 Hz, and k_cyc_to_us_near32()
             // truncates AFTER 64-bit math — so the derived microsecond timeline is NOT
             // linear mod 2^32 and one frame per wrap yields a garbage delta (~2.07e9 us).
@@ -516,6 +544,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
             if (seg > worstSegUs) {
                 worstSegUs = seg;
                 worstSegLabel = label;
+                worstSegCpuUs = segCpu;
             }
         };
 
@@ -580,7 +609,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
         if (sampleSane) {
             K_SPINLOCK(&sStatsLock) {
                 led_stats_core::recordFrame(sStats, haveInterval, intervalUs, workUs, worstSegUs,
-                                            targetUs);
+                                            targetUs, worstSegLabel, worstSegCpuUs);
             }
         }
         prevWakeUs = wakeUs;
@@ -594,6 +623,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 windowWorstFrameUs = workUs;
                 windowWorstSegUs = worstSegUs;
                 windowWorstSegLabel = worstSegLabel;
+                windowWorstSegCpuUs = worstSegCpuUs;
             }
             // Rate-limited so a sustained overrun can't bury every other log line.
             const int64_t nowMs = k_uptime_get();
@@ -615,22 +645,30 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 if (segmentExplainsFrame) {
                     LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
                             "(worst frame work %u us vs %u us budget; longest segment '%s' "
-                            "%u us) — cannot keep framerate",
+                            "%u us wall / %u us cpu%s) — cannot keep framerate",
                             overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
-                            targetUs, windowWorstSegLabel, windowWorstSegUs);
+                            targetUs, windowWorstSegLabel, windowWorstSegUs,
+                            windowWorstSegCpuUs,
+                            // The verdict, not just the numbers: a segment that burned
+                            // almost no CPU was not slow, it was not scheduled.
+                            (windowWorstSegUs > 4 * (windowWorstSegCpuUs + 1))
+                                ? " — PREEMPTED, not slow"
+                                : "");
                 } else {
                     LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
                             "(worst frame work %u us vs %u us budget; NO segment accounts for "
-                            "it — longest was '%s' %u us, so look outside the LED path) — "
-                            "cannot keep framerate",
+                            "it — longest was '%s' %u us wall / %u us cpu, so look outside "
+                            "the LED path) — cannot keep framerate",
                             overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
-                            targetUs, windowWorstSegLabel, windowWorstSegUs);
+                            targetUs, windowWorstSegLabel, windowWorstSegUs,
+                            windowWorstSegCpuUs);
                 }
                 lastOverrunLogMs = nowMs;
                 overrunsSinceLog = 0;
                 windowWorstFrameUs = 0;
                 windowWorstSegUs = 0;
                 windowWorstSegLabel = "none";
+                windowWorstSegCpuUs = 0;
             }
             // Yield unconditionally even when we blew the budget. Previously this branch
             // looped with no sleep at all, which is survivable only because this thread is
@@ -699,8 +737,13 @@ static int cmd_led_stats(const struct shell *shell, size_t argc, char **argv) {
     shell_print(shell, "late (>%ux):    %u frame(s)", led_stats_core::kLateFrameMultiple,
                 s.lateFrames);
     shell_print(shell, "work max:      %u us", s.workMaxUs);
-    shell_print(shell, "worst segment: %u us  (upper bound - includes SPI wait)",
-                s.worstSegmentUs);
+    // wall + cpu + which call, so an unattended soak stays diagnosable after the
+    // rate-limited overrun warning has scrolled out of the serial backlog.
+    shell_print(shell, "worst segment: %u us wall / %u us cpu  in '%s'%s", s.worstSegmentUs,
+                s.worstSegmentCpuUs, s.worstSegmentLabel,
+                (s.worstSegmentUs > 4 * (s.worstSegmentCpuUs + 1))
+                    ? "  <- PREEMPTED (wall >> cpu): the thread was not running, not slow"
+                    : "");
     shell_print(shell, "overruns:      %u", s.overruns);
     return 0;
 }
