@@ -135,6 +135,14 @@ Iterate here until the sim is clean, THEN do the ARM build (§2) — both must p
 - Optionally `twister -T fw/tests/extensions/manifest -p native_sim` (suite
   `extensions.manifest`) — but this validates the **host's manifest validator**, not
   your extension.
+- **Cost can depend on how long you've been running, so measure late.** The exported
+  `sinf`/`cosf` are cheap only while `|x| <= 201.06`; past that picolibc switches to a
+  multi-precision reduction costing several times more. An extension with an unbounded
+  phase accumulator therefore looks fine for the first minute or two and then degrades
+  — and since globals reset on activation, a fresh `ext stats` never shows it, nor does
+  a short sim run (the sim links wasi-libc, which has no such cliff). Bound your
+  accumulators, and read `ext stats` after **minutes** of one continuous activation.
+  See issue #304 and `fw/extensions/README.md`.
 - **Honest claim wording**: "compiles for ARM; passes sim scenarios X/Y/Z; on-device
   load/render verification pending". The sim does NOT prove llext loading, MPU
   behavior, or timing budgets.

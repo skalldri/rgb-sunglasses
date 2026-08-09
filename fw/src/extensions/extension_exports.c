@@ -36,6 +36,19 @@
  * affordable at this display size (40x12 @ 128 MHz) but not free — the
  * budget enforcement (CONFIG_APP_EXT_TICK_CPU_BUDGET_MS) is the backstop,
  * and `ext stats` on the shell shows the actual per-tick cost.
+ *
+ * ...but "affordable" has a range limit, and it is not obvious. The trig
+ * exported here is picolibc's fdlibm implementation, which takes a cheap
+ * Cody-Waite argument reduction only while |x| <= 2^7*(pi/2) = 201.06
+ * (newlib/libm/math/sf_rem_pio2.c). Above that it enters __kernel_rem_pio2f,
+ * a multi-precision Payne-Hanek reduction that costs several times more and
+ * keeps growing with the argument's exponent. An extension that lets a phase
+ * accumulator free-run therefore starts fast and silently degrades minutes
+ * later: that is exactly what happened to the plasma extension (issue #304),
+ * whose per-tick cost climbed 3.4 ms -> 25 ms over the first five minutes of
+ * every activation and overran the render interval on every frame. Extensions
+ * must keep phase/angle accumulators bounded — see fw/extensions/README.md,
+ * and tilt_animation.cpp for the in-tree precedent.
  */
 
 #include <math.h>

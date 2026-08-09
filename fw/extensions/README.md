@@ -192,6 +192,21 @@ extension's own cost and is what the per-tick budget is enforced against; the
 **wall** row additionally contains whatever preempted the sandbox and will run
 higher under load, by design (issue #276). Read cpu when judging an extension.
 
+**Keep phase/angle accumulators bounded, and measure after minutes rather than
+seconds.** The exported `sinf`/`cosf` are cheap only while `|x| <= 201.06`; past
+that picolibc switches to a multi-precision reduction costing several times more
+and growing with the argument. So an extension that lets a phase accumulator
+free-run runs at full speed for a minute or two and then quietly gets slower —
+and because globals reset on every activation, `ext stats` right after
+`ext select` only ever shows the fast phase. Wrap the accumulator at a period
+where every rate you use completes a whole number of cycles (or `fmodf` each
+phase into `[0, 2*pi)`); `fw/src/animations/tilt_animation.cpp` does this
+in-tree. This is what issue #304 was: plasma climbed 3.4 ms -> 25 ms per tick
+over five minutes and overran the render interval on essentially every frame.
+Note also that `min`/`avg`/`max` accumulate from activation and reset only on
+`ext select`, so a single late reading averages the fast and slow phases
+together — sample repeatedly over one continuous activation to see a trend.
+
 `hello` doubles as the sandbox-recovery test: its `Crash` bool makes the next
 tick MPU-fault; `Hang` makes it spin until it exceeds its CPU budget. `Crash` is
 reported as soon as the sandbox thread is seen dead; `Hang` takes as long as the
