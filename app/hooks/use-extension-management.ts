@@ -10,7 +10,7 @@ import {
     syncExtensions,
 } from '@/services/extension-sync';
 import { GitHubAsset } from '@/services/github-releases';
-import { DeviceFileEntry, SmpCommandError } from '@/services/mcumgr';
+import { DeviceFileEntry, FileMgmtError, SmpCommandError, SmpGroup } from '@/services/mcumgr';
 import { useMcuMgrClientContext } from '@/context/mcumgr-client-context';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -30,15 +30,26 @@ export interface ExtensionManagementController {
      */
     mutated: boolean;
     refresh: () => Promise<void>;
-    /** Upload one release extension (install, update and repair are all this). */
-    installOne: (entry: ExtensionSyncEntry) => Promise<boolean>;
-    /** Delete one device file by bare name via FILE_MGMT. */
-    removeOne: (name: string) => Promise<boolean>;
+    /**
+     * Upload one release extension (install, update and repair are all this).
+     * `skipRefresh` lets a batch caller (the guided flow's apply loop) re-plan
+     * ONCE after the whole batch instead of after every item — a per-item
+     * re-plan is a full hash sweep + LIST over serialized SMP, so N items
+     * would cost O(N²) BLE round trips in the pre-restart window.
+     */
+    installOne: (entry: ExtensionSyncEntry, options?: { skipRefresh?: boolean }) => Promise<boolean>;
+    /** Delete one device file by bare name via FILE_MGMT. Same `skipRefresh` contract. */
+    removeOne: (name: string, options?: { skipRefresh?: boolean }) => Promise<boolean>;
     /** OS-group reset — the manage → restart → re-list loop's restart. */
     reboot: () => Promise<void>;
 }
 
-const EMPTY_PLAN: ExtensionManagementPlan = { released: [], unmanaged: [], listAvailable: false };
+const EMPTY_PLAN: ExtensionManagementPlan = {
+    released: [],
+    unmanaged: [],
+    listAvailable: false,
+    releaseKnown: false,
+};
 
 /**
  * State and actions for the extension-management screen and the guided flow's
@@ -50,7 +61,14 @@ const EMPTY_PLAN: ExtensionManagementPlan = { released: [], unmanaged: [], listA
  * per-row install is plain fs_mgmt upload and still works there.
  */
 export function useExtensionManagement(
-    releaseAssets: GitHubAsset[]
+    releaseAssets: GitHubAsset[],
+    /**
+     * True only when the release lookup actually SUCCEEDED. An empty asset
+     * list with this false means "unknown", not "the release ships nothing" —
+     * and no removal may ever be suggested against an unknown release (a
+     * failed GitHub lookup would otherwise flag every installed extension).
+     */
+    releaseKnown: boolean
 ): ExtensionManagementController {
     const { client } = useMcuMgrClientContext();
 
@@ -68,32 +86,43 @@ export function useExtensionManagement(
         setError('');
         try {
             const syncEntries =
-                releaseAssets.length > 0 ? await planExtensionSync(client, releaseAssets) : [];
+                releaseKnown && releaseAssets.length > 0
+                    ? await planExtensionSync(client, releaseAssets)
+                    : [];
 
-            let deviceFiles: DeviceFileEntry[] | null;
+            let deviceFiles: DeviceFileEntry[] | null = null;
+            let listError: string | null = null;
             try {
                 deviceFiles = await client.listDeviceFiles('ext');
             } catch (e: unknown) {
                 // A group-less error (bare rc, typically ENOTSUP) is old firmware
-                // without the group: expected, not a failure. An error carrying a
-                // group — 64 or otherwise — is a real device-side refusal.
-                if (e instanceof SmpCommandError && e.group === undefined) {
-                    deviceFiles = null;
-                } else {
-                    throw e;
+                // without the group: expected, not a failure. Anything else (a
+                // group-64 refusal, a transport timeout) is a real error — but it
+                // must not discard the release plan just computed: per-row install
+                // is plain fs_mgmt upload and still works without LIST.
+                if (!(e instanceof SmpCommandError && e.group === undefined)) {
+                    listError = e instanceof Error ? e.message : String(e);
                 }
             }
 
-            setPlan(planExtensionManagement(syncEntries, deviceFiles));
-            setState('ready');
+            setPlan(planExtensionManagement(syncEntries, deviceFiles, releaseKnown));
+            if (listError !== null) {
+                setError(listError);
+                setState('error');
+            } else {
+                setState('ready');
+            }
         } catch (e: unknown) {
             setError(e instanceof Error ? e.message : String(e));
             setState('error');
         }
-    }, [client, releaseAssets]);
+    }, [client, releaseAssets, releaseKnown]);
 
     const installOne = useCallback(
-        async (entry: ExtensionSyncEntry): Promise<boolean> => {
+        async (
+            entry: ExtensionSyncEntry,
+            options?: { skipRefresh?: boolean }
+        ): Promise<boolean> => {
             if (!client) return false;
             setBusyName(entry.name);
             setProgress(null);
@@ -103,13 +132,20 @@ export function useExtensionManagement(
                 // per-extension user choice (design §6).
                 await syncExtensions(client, [entry], downloadExtensionAsset, setProgress);
                 setMutated(true);
-                await refresh();
+                if (!options?.skipRefresh) {
+                    await refresh();
+                }
                 return true;
             } catch (e: unknown) {
-                setError(e instanceof Error ? e.message : String(e));
+                const message = e instanceof Error ? e.message : String(e);
                 // Keep the plan on screen: a failed upload leaves the previous
                 // listing valid, and the row's own action is the retry affordance.
-                await refresh().catch(() => undefined);
+                // The error is (re)set AFTER the refresh — refresh() clears it on
+                // entry, and a blanked message renders as an empty red box.
+                if (!options?.skipRefresh) {
+                    await refresh();
+                }
+                setError(message);
                 setState('error');
                 return false;
             } finally {
@@ -121,17 +157,40 @@ export function useExtensionManagement(
     );
 
     const removeOne = useCallback(
-        async (name: string): Promise<boolean> => {
+        async (name: string, options?: { skipRefresh?: boolean }): Promise<boolean> => {
             if (!client) return false;
             setBusyName(name);
             try {
-                await client.deleteDeviceFile(name, 'ext');
+                try {
+                    await client.deleteDeviceFile(name, 'ext');
+                } catch (e: unknown) {
+                    // NOT_FOUND means the file is already gone — most commonly the
+                    // retry after a delete whose response timed out even though the
+                    // unlink completed. The desired end state holds either way, so
+                    // treat it as success (idempotent delete).
+                    if (
+                        !(
+                            e instanceof SmpCommandError &&
+                            e.group === SmpGroup.FILE_MGMT &&
+                            e.rc === FileMgmtError.NOT_FOUND
+                        )
+                    ) {
+                        throw e;
+                    }
+                }
                 setMutated(true);
-                await refresh();
+                if (!options?.skipRefresh) {
+                    await refresh();
+                }
                 return true;
             } catch (e: unknown) {
-                setError(e instanceof Error ? e.message : String(e));
-                await refresh().catch(() => undefined);
+                const message = e instanceof Error ? e.message : String(e);
+                // Same ordering rule as installOne: refresh first, then set the
+                // error, so refresh()'s own setError('') can't blank the message.
+                if (!options?.skipRefresh) {
+                    await refresh();
+                }
+                setError(message);
                 setState('error');
                 return false;
             } finally {

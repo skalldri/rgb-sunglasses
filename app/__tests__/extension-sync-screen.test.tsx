@@ -284,6 +284,124 @@ describe('ExtensionManagementScreen', () => {
     ).toBeTruthy();
   });
 
+  it('keeps the release rows and shows the error when only LIST fails', async () => {
+    // A transport failure on LIST must not hide install buttons that still
+    // work — per-row install is plain fs_mgmt upload, no FILE_MGMT needed.
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    mockClientMethods({
+      listDeviceFiles: async () => {
+        throw new Error('SMP request timeout after 5000ms');
+      },
+    });
+    jest
+      .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
+      .mockImplementation(async () => null); // both missing → installable
+    jest
+      .spyOn(McuMgrModule.McuMgrClient.prototype, 'uploadFile')
+      .mockImplementation(async () => undefined);
+
+    const { findByText, findByTestId, queryByTestId } = renderWithMcuMgr(
+      <ExtensionManagementScreen />
+    );
+
+    expect(await findByText(/SMP request timeout/)).toBeTruthy();
+    expect(await findByTestId('ext-mgmt-install-plasma.llext')).toBeTruthy();
+    // The unmanaged section is unknowable without LIST — hidden, not empty.
+    expect(queryByTestId('ext-mgmt-unmanaged')).toBeNull();
+  });
+
+  it('suggests no removals when the release lookup failed', async () => {
+    // Offline/rate-limited GitHub must never turn every installed extension
+    // into a highlighted "removal suggested" row.
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({
+      fetchLatestFirmwareRelease: async () => {
+        throw new Error('API rate limit exceeded');
+      },
+    });
+    mockExtensionClient({}, [
+      { name: 'demo_wave.llext', onDisk: true, loaded: true },
+      { name: 'plasma.llext', onDisk: true, loaded: true },
+    ]);
+
+    const { findByText, queryByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
+
+    expect(
+      await findByText(/files on your sunglasses cannot be compared against an unknown release/)
+    ).toBeTruthy();
+    expect(queryByTestId('ext-mgmt-unmanaged-demo_wave.llext')).toBeNull();
+    expect(queryByTestId('ext-mgmt-remove-demo_wave.llext')).toBeNull();
+  });
+
+  it('does not claim the release ships nothing when the check itself failed', async () => {
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    mockClientMethods();
+    jest
+      .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
+      .mockImplementation(async () => {
+        // Firmware with no FS group at all: group-less rc, whole check fails.
+        throw new McuMgrModule.SmpCommandError('File hash error: rc=8', 8, undefined);
+      });
+
+    const { findByText, queryByText } = renderWithMcuMgr(<ExtensionManagementScreen />);
+
+    expect(
+      await findByText('Extension check failed — release extensions cannot be shown.')
+    ).toBeTruthy();
+    expect(queryByText('This release ships no animation extensions.')).toBeNull();
+  });
+
+  it('renders the failure message after a failed remove instead of a blank error card', async () => {
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    const spies = mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      },
+      [{ name: 'hello.llext', onDisk: true, loaded: true }]
+    );
+    spies.deleteDeviceFile.mockImplementation(async () => {
+      throw new Error('SMP request timeout after 30000ms');
+    });
+    autoConfirmRemove();
+
+    const { findByTestId, findByText } = renderWithMcuMgr(<ExtensionManagementScreen />);
+    fireEvent.press(await findByTestId('ext-mgmt-remove-hello.llext'));
+
+    // The refresh that follows a failure must not blank the message.
+    expect(await findByText(/SMP request timeout after 30000ms/)).toBeTruthy();
+  });
+
+  it('treats NOT_FOUND on remove as success (idempotent delete)', async () => {
+    // The retry after a timed-out-but-completed delete answers NOT_FOUND; the
+    // desired end state holds, so the restart offer must still appear.
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    const spies = mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      },
+      [{ name: 'hello.llext', onDisk: true, loaded: true }]
+    );
+    spies.deleteDeviceFile.mockImplementation(async () => {
+      throw new McuMgrModule.SmpCommandError(
+        'Delete hello.llext error: group=64, rc=3',
+        McuMgrModule.FileMgmtError.NOT_FOUND,
+        McuMgrModule.SmpGroup.FILE_MGMT
+      );
+    });
+    autoConfirmRemove();
+
+    const { findByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
+    fireEvent.press(await findByTestId('ext-mgmt-remove-hello.llext'));
+
+    expect(await findByTestId('ext-mgmt-restart')).toBeTruthy();
+  });
+
   it('does not re-issue SMP traffic when the context yields fresh identities', async () => {
     // The regression app/CLAUDE.md mandates: an effect that issues BLE traffic and
     // writes the result into state must not be re-armed by its own writes. Uses

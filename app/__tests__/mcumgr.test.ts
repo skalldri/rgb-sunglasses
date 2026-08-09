@@ -1065,6 +1065,21 @@ describe('McuMgrClient deleteDeviceFile', () => {
     expect(spy.mock.calls[1][1]).toBe(SmpGroup.FILE_MGMT);
     expect(spy.mock.calls[1][2]).toBe(FileMgmtCmd.DELETE);
     expect(spy.mock.calls[1][3]).toEqual({ kind: 'ext', name: 'hello.llext' });
+    // Deletes do real work device-side (close + unlink + retire + purge); the
+    // 5 s default made a COMPLETED delete look failed on a slow FAT op.
+    expect(spy.mock.calls[1][4]).toBe(30000);
+  });
+
+  it('rejects wire-overlength names locally with an explanation', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    const spy = jest.spyOn(internal, 'sendRequest');
+
+    await expect(client.deleteDeviceFile('x'.repeat(256) + '.llext')).rejects.toThrow(
+      'not deletable over SMP'
+    );
+    await expect(client.deleteDeviceFile('')).rejects.toThrow('not deletable over SMP');
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('still deletes when the close is refused device-side', async () => {

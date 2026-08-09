@@ -37,6 +37,12 @@ export type DeviceFileState =
 
 export function deviceFileState(entry: DeviceFileEntry): DeviceFileState {
     if (entry.loaded && !entry.onDisk) return 'removed';
+    // A retired slot whose file is back on disk is a remove-then-reinstall:
+    // the firmware refuses to activate the slot until the next boot rescans,
+    // so "installed" would be a lie — the restart caption is the truth.
+    // (Current firmware already reports this shape as loaded:false; this
+    // branch covers the wire contract for builds that still join them.)
+    if (entry.retired) return 'pending-restart';
     if (entry.onDisk && !entry.loaded) return 'pending-restart';
     if (entry.faulted) return 'faulted';
     return 'installed';
@@ -64,29 +70,57 @@ export interface ExtensionManagementPlan {
     unmanaged: UnmanagedExtensionRow[];
     /** False when the firmware exposes no FILE_MGMT group — `unmanaged` is then unknowable, not empty. */
     listAvailable: boolean;
+    /**
+     * False when the release side is UNKNOWN (lookup failed or still running)
+     * rather than known-empty. `unmanaged` is forced empty then: with no
+     * release to compare against, "not in this release" is unknowable, and
+     * computing it from an empty asset list would flag every installed
+     * extension for removal after any offline/rate-limited GitHub lookup.
+     */
+    releaseKnown: boolean;
 }
 
 /**
  * Join the release plan with the device's LIST.
  *
- * Everything keys on the bare FILE name — the same identity the firmware uses —
- * never the manifest display name, which nothing guarantees corresponds.
+ * Everything keys on the bare FILE name — the same identity the firmware uses.
+ * Never the manifest display name, which nothing guarantees corresponds — and
+ * the name comparison is CASE-INSENSITIVE, because FatFs resolves names
+ * case-insensitively: `Plasma.llext` on disk IS the release's `plasma.llext`,
+ * and an exact-case join would report the same file as both installed and
+ * junk-suggested-for-removal.
  */
 export function planExtensionManagement(
     syncEntries: ExtensionSyncEntry[],
-    deviceFiles: DeviceFileEntry[] | null
+    deviceFiles: DeviceFileEntry[] | null,
+    releaseKnown: boolean = true
 ): ExtensionManagementPlan {
+    // Dedupe device entries case-insensitively too (first wins) — FatFs can't
+    // actually hold two files whose names differ only by case.
+    const seenDevice = new Set<string>();
+    const dedupedFiles = (deviceFiles ?? []).filter(d => {
+        const key = d.name.toLowerCase();
+        if (seenDevice.has(key)) return false;
+        seenDevice.add(key);
+        return true;
+    });
+
     const released = syncEntries.map(entry => ({
         entry,
-        device: deviceFiles?.find(d => d.name === entry.name),
+        device:
+            deviceFiles === null
+                ? undefined
+                : dedupedFiles.find(d => d.name.toLowerCase() === entry.name.toLowerCase()),
     }));
 
-    const releasedNames = new Set(syncEntries.map(e => e.name));
-    const unmanaged = (deviceFiles ?? [])
-        .filter(d => !releasedNames.has(d.name))
-        .map(device => ({ device, state: deviceFileState(device) }));
+    const releasedNames = new Set(syncEntries.map(e => e.name.toLowerCase()));
+    const unmanaged = !releaseKnown
+        ? []
+        : dedupedFiles
+              .filter(d => !releasedNames.has(d.name.toLowerCase()))
+              .map(device => ({ device, state: deviceFileState(device) }));
 
-    return { released, unmanaged, listAvailable: deviceFiles !== null };
+    return { released, unmanaged, listAvailable: deviceFiles !== null, releaseKnown };
 }
 
 // ============================================================================

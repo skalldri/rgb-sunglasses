@@ -53,8 +53,12 @@ export default function FirmwareUpdateFlow() {
     const [loadError, setLoadError] = useState('');
 
     const flow = useFirmwareUpdateFlow(pkg);
-    const { releaseAssets } = useFirmwareRelease();
-    const extensions = useExtensionManagement(releaseAssets);
+    const { releaseAssets, updateCheckState } = useFirmwareRelease();
+    // "Known" means the lookup SUCCEEDED — an errored/in-flight lookup must
+    // never be read as "the release ships nothing" (that would suggest
+    // removing every installed extension).
+    const releaseKnown = updateCheckState === 'upToDate' || updateCheckState === 'updateAvailable';
+    const extensions = useExtensionManagement(releaseAssets, releaseKnown);
     const { setBusy } = useFirmwareBusy();
     const [syncingExtensions, setSyncingExtensions] = useState(false);
 
@@ -73,7 +77,12 @@ export default function FirmwareUpdateFlow() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pickerSignature]);
 
-    const selectedItems = pickerItems.filter(i => picked[i.name]);
+    // Only a picker the user can actually SEE may contribute work to the
+    // restart: in `checking`/`error` states the card is replaced by an
+    // explicit affordance, and silently applying preselections from a plan
+    // the user never saw would be a hidden bulk action.
+    const selectedItems =
+        extensions.state === 'ready' ? pickerItems.filter(i => picked[i.name]) : [];
 
     // Claim the shared busy flag for as long as a transfer or restart is in flight, so
     // the debug page's destructive actions stay disabled underneath us.
@@ -103,11 +112,16 @@ export default function FirmwareUpdateFlow() {
         if (selectedItems.length > 0) {
             setSyncingExtensions(true);
             try {
+                // skipRefresh: a per-item re-plan is a full hash sweep + LIST
+                // over serialized SMP — O(N²) round trips for N items. One
+                // refresh after the batch keeps the picker/plan honest for the
+                // (rare) case where the user cancels the restart... which they
+                // can't from here, but the post-reboot screens re-plan anyway.
                 for (const item of selectedItems) {
                     if (item.action === 'remove') {
-                        await extensions.removeOne(item.name);
+                        await extensions.removeOne(item.name, { skipRefresh: true });
                     } else if (item.syncEntry) {
-                        await extensions.installOne(item.syncEntry);
+                        await extensions.installOne(item.syncEntry, { skipRefresh: true });
                     }
                 }
             } finally {
@@ -300,8 +314,14 @@ export default function FirmwareUpdateFlow() {
                         {/* The per-extension picker replaces the old bulk sync: only the
                             rows the user leaves ticked are applied by "Restart and
                             Install" below — extensions are written before the restart,
-                            so the two actions stay one decision, one button. */}
-                        {extensions.state !== 'idle' && (
+                            so the two actions stay one decision, one button.
+
+                            Strictly gated on state === 'ready': for `checking`/`error`
+                            the picker's empty branch would read as a green "nothing to
+                            change", and restarting past a failed check is exactly the
+                            old-ABI-extensions-vanish trap the pre-restart sync exists
+                            to prevent — so those states get explicit affordances. */}
+                        {extensions.state === 'ready' && (
                             <ExtensionPickerCard
                                 items={pickerItems}
                                 selected={picked}
@@ -312,6 +332,28 @@ export default function FirmwareUpdateFlow() {
                                 busyName={extensions.busyName}
                                 progress={extensions.progress}
                             />
+                        )}
+                        {extensions.state === 'checking' && (
+                            <Card testID="extension-picker-checking" style={styles.card}>
+                                <ActivityIndicator size="small" color={c.primary} />
+                                <ThemedText type="caption" style={styles.centered}>
+                                    Checking extensions…
+                                </ThemedText>
+                            </Card>
+                        )}
+                        {extensions.state === 'error' && (
+                            <Card
+                                testID="extension-picker-error"
+                                style={[styles.card, { borderColor: c.warning }]}>
+                                <ThemedText type="caption" style={{ color: c.warning }}>
+                                    Extension check failed: {extensions.error}
+                                </ThemedText>
+                                <ThemedText type="caption">
+                                    Restarting now will NOT change any extensions — ones built
+                                    for older firmware may stop loading until they are updated
+                                    from the Extensions screen afterwards.
+                                </ThemedText>
+                            </Card>
                         )}
 
                         <Card style={[styles.card, { borderColor: c.success }]}>

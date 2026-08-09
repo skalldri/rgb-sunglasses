@@ -36,6 +36,15 @@ describe('deviceFileState', () => {
             'removed'
         );
     });
+
+    it('reports a retired slot with its file back on disk as pending-restart', () => {
+        // Remove-then-reinstall: the firmware refuses to activate the retired
+        // slot until the next boot, so "installed" would claim a working
+        // extension that silently does nothing.
+        expect(
+            deviceFileState(deviceFile('a.llext', { retired: true }))
+        ).toBe('pending-restart');
+    });
 });
 
 describe('planExtensionManagement', () => {
@@ -72,6 +81,39 @@ describe('planExtensionManagement', () => {
         expect(plan.listAvailable).toBe(false);
         expect(plan.unmanaged).toEqual([]);
         expect(plan.released[0].device).toBeUndefined();
+    });
+
+    it('joins case-insensitively, matching FatFs name semantics', () => {
+        // A USB copy preserves source casing: `Plasma.llext` on disk IS the
+        // release's `plasma.llext`. An exact-case join reported the same file
+        // as both installed and junk-suggested-for-removal.
+        const plan = planExtensionManagement(
+            [syncEntry('plasma.llext', 'up-to-date')],
+            [deviceFile('Plasma.llext')]
+        );
+
+        expect(plan.released[0].device?.name).toBe('Plasma.llext');
+        expect(plan.unmanaged).toEqual([]);
+    });
+
+    it('dedupes device entries that differ only by case', () => {
+        const plan = planExtensionManagement(
+            [],
+            [deviceFile('hello.llext'), deviceFile('HELLO.llext')]
+        );
+        expect(plan.unmanaged.map(u => u.device.name)).toEqual(['hello.llext']);
+    });
+
+    it('suppresses all unmanaged rows when the release is unknown', () => {
+        // A failed GitHub lookup yields an empty asset list — which must read
+        // as "unknown", never "the release ships nothing": otherwise every
+        // installed extension gets a removal suggestion.
+        const plan = planExtensionManagement([], [deviceFile('plasma.llext')], false);
+
+        expect(plan.releaseKnown).toBe(false);
+        expect(plan.unmanaged).toEqual([]);
+        // The device list itself is still available (LIST worked).
+        expect(plan.listAvailable).toBe(true);
     });
 });
 

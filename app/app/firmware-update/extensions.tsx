@@ -90,7 +90,10 @@ export default function ExtensionManagementScreen() {
     const { client } = useMcuMgrClientContext();
     const { releaseAssets, latestVersion, updateCheckState, updateCheckError } =
         useFirmwareRelease();
-    const mgmt = useExtensionManagement(releaseAssets);
+    // "Known" = the lookup succeeded. On error/in-flight the plan must treat
+    // the release as unknown, never as empty — see useExtensionManagement.
+    const releaseKnown = updateCheckState === 'upToDate' || updateCheckState === 'updateAvailable';
+    const mgmt = useExtensionManagement(releaseAssets, releaseKnown);
 
     async function handleRemove(name: string) {
         if (await confirmRemove(name)) {
@@ -224,9 +227,15 @@ export default function ExtensionManagementScreen() {
                     <ThemedText type="overline">From this release</ThemedText>
                     {mgmt.plan.released.length === 0 ? (
                         <ThemedText type="caption">
-                            {updateCheckState === 'error'
+                            {/* "Ships no extensions" is a factual claim — only make it
+                                when the check actually SUCCEEDED. A failed check (old
+                                firmware, transport error) must say so, not assert an
+                                empty release. */}
+                            {!releaseKnown
                                 ? 'Release lookup failed, so release extensions cannot be shown.'
-                                : 'This release ships no animation extensions.'}
+                                : mgmt.state === 'error'
+                                  ? 'Extension check failed — release extensions cannot be shown.'
+                                  : 'This release ships no animation extensions.'}
                         </ThemedText>
                     ) : (
                         mgmt.plan.released.map(renderReleasedRow)
@@ -236,7 +245,12 @@ export default function ExtensionManagementScreen() {
                 {mgmt.plan.listAvailable ? (
                     <Card testID="ext-mgmt-unmanaged" style={styles.card}>
                         <ThemedText type="overline">Not in this release</ThemedText>
-                        {mgmt.plan.unmanaged.length === 0 ? (
+                        {!mgmt.plan.releaseKnown ? (
+                            <ThemedText type="caption">
+                                Unavailable until the release lookup succeeds — files on your
+                                sunglasses cannot be compared against an unknown release.
+                            </ThemedText>
+                        ) : mgmt.plan.unmanaged.length === 0 ? (
                             <ThemedText type="caption">
                                 Everything on your sunglasses comes from this release.
                             </ThemedText>

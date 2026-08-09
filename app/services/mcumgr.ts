@@ -1217,6 +1217,9 @@ export class McuMgrClient {
      * On the device this is more than an unlink: if the file backs the active
      * animation it switches away first, and the matching boot slot is retired
      * (activation rejected until restart) with its persisted settings purged.
+     * That work is why the timeout is far above the 5 s default — a slow FAT
+     * op making a COMPLETED delete look failed invites a doomed NOT_FOUND
+     * retry and hides the restart-needed state.
      *
      * Always closes any lingering fs_mgmt handle first — see closeOpenedFile().
      *
@@ -1224,12 +1227,19 @@ export class McuMgrClient {
      * device-side refusals (NOT_FOUND, INVALID_NAME, ...).
      */
     async deleteDeviceFile(name: string, kind: DeviceFileKind = 'ext'): Promise<void> {
+        // Mirror of the firmware's kMaxWireNameLen (extension_mgmt.cpp): DELETE
+        // rejects names >= 256 bytes, so fail locally with an explanation
+        // instead of a bare INVALID_NAME from the device.
+        if (name.length === 0 || name.length >= 256) {
+            throw new Error(`File name is not deletable over SMP (length ${name.length})`);
+        }
         await this.closeOpenedFile();
         const response = await this.sendRequest(
             SmpOp.WRITE_REQUEST,
             SmpGroup.FILE_MGMT,
             FileMgmtCmd.DELETE,
-            { kind, name }
+            { kind, name },
+            30000
         );
         throwOnSmpError(response, `Delete ${name} error`);
     }
