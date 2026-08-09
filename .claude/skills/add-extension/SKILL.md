@@ -135,6 +135,11 @@ Iterate here until the sim is clean, THEN do the ARM build (§2) — both must p
 - Optionally `twister -T fw/tests/extensions/manifest -p native_sim` (suite
   `extensions.manifest`) — but this validates the **host's manifest validator**, not
   your extension.
+- **The sim cannot show you time-dependent transcendental cost.** Its libm reaches the
+  expensive argument-reduction path ~2e6x further out than the device's does, and per
+  `fw/sim/PARITY.md` sim CPU cost is only wall-clock-approximated on a host 50-100x
+  faster than the M33 — so a long, clean sim run is *not* evidence that a phase
+  accumulator is bounded. That check belongs on hardware (§5).
 - **Honest claim wording**: "compiles for ARM; passes sim scenarios X/Y/Z; on-device
   load/render verification pending". The sim does NOT prove llext loading, MPU
   behavior, or timing budgets.
@@ -154,6 +159,24 @@ Debug over the Zephyr shell (`mcp__serial__*`, see `fw/CLAUDE.md`):
 A crashed/hung extension shows `[FAULTED]`, its BLE activation is rejected, and
 **only `ext select <slot>` clears the fault** — that's deliberate recovery design,
 not a bug.
+
+**Soak before you sign off — a ten-second `ext stats` proves nothing about cost.**
+If your extension uses `sinf`/`cosf`/`tanf` with a phase accumulator, its per-tick
+cost can grow with elapsed time (issue #304: 3.4 ms -> 25 ms over five minutes), and
+the statistics are **reset on every activation** — the shell command, an app/BLE
+switch, a shuffle rotation, or the boot restore — so a reading taken just after
+selecting only ever shows the fast phase. While you hold the lock:
+
+1. Leave it running **several minutes** on one uninterrupted activation, then read
+   `ext stats` — don't switch animations in between, or you have zeroed it.
+2. Watch the console for `Render overran the tick interval ...`. That is the direct
+   symptom and it appears long before anything approaches the CPU budget, which sits
+   ~4.5x above the render interval and will not catch this.
+3. To compress the timeline, raise the speed parameter — cost that depends on elapsed
+   animation-time arrives proportionally sooner.
+
+Background and the correct wrap idiom: "Bound your phase accumulators" in
+`fw/extensions/README.md`.
 
 ## API docs
 

@@ -40,3 +40,21 @@ the firmware; fix and PR a new rev to ride the next release.
 ```bash
 node extensions/validate-registry.mjs
 ```
+
+## Before you submit: bound your phase accumulators
+
+Nothing in CI can catch this, so it is on you and on the reviewer.
+
+If your extension calls `sinf`/`cosf`/`tanf` on a phase that accumulates every tick,
+**wrap that accumulator**. The device's libm is cheap only while `|x| <= 201.06` and
+gets continuously more expensive above it, so an unwrapped accumulator makes an
+extension run at full speed for a minute or two and then degrade — invisibly to a
+short test, because the accumulator resets every time the extension is activated.
+
+This is not hypothetical: both extensions in this registry shipped with it. Issue
+[#304](https://github.com/skalldri/rgb-sunglasses/issues/304) — plasma's per-tick cost
+climbed 3.4 ms -> 25 ms over five minutes and missed essentially every frame.
+
+Full explanation, the wrap idiom, the `fmodf` sign trap, and how to soak-test it:
+**"Bound your phase accumulators"** in
+[`fw/extensions/README.md`](../fw/extensions/README.md).

@@ -4,7 +4,7 @@
     {
       "name": "plasma",
       "repo": "https://github.com/skalldri/rgbx-plasma",
-      "rev": "308eef7dc29057324badda9dbd28e339876d2d82",
+      "rev": "5ce6dc7df26c93469ee1d96edf7a0a53cbb819a6",
       "description": "Classic three-wave interference plasma with tunable color, speed, and an invert toggle - formerly the in-repo C++ extension, now sinf-based",
       "author": "skalldri",
       "license": "MIT"
@@ -12,7 +12,7 @@
     {
       "name": "demo_wave",
       "repo": "https://github.com/skalldri/rgbx-demo-wave",
-      "rev": "4fdc53fc282e8bdb9c221a4302a6b77b24cb5489",
+      "rev": "9a0517a3d6236ba35d180f5a99da30b263b519e9",
       "description": "Audio-reactive wave: parameterized crest color and speed, amplitude swells with audio energy, beats flash the crest column",
       "author": "skalldri",
       "license": "MIT"
