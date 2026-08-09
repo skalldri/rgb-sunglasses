@@ -35,6 +35,12 @@ export interface RunOptions {
   scenarioDir: string; // for resolving relative file references
   seed: number;
   ticks: number;
+  /** Ticks to run BEFORE recording starts, so a scenario can be replayed from a
+   *  non-zero animation time. Cost that grows with a free-running accumulator only
+   *  shows up minutes in, which is otherwise unreachable outside a hardware session.
+   *  Recorded tick indices are numbered from 0 at the START of the recorded window,
+   *  so two runs with different warm-ups stay directly comparable. */
+  warmupTicks: number;
   dtMs: number;
   budgetMs: number;
   backstopMs: number;
@@ -221,9 +227,10 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
       }
     }
 
-    for (let t = 0; t < opts.ticks; t++) {
-      // Timeline events due at or before the CURRENT sim time fire before
-      // the tick that first covers them.
+    // Timeline events due at or before the CURRENT sim time fire before the tick
+    // that first covers them. Shared by the warm-up and recording loops so a
+    // warmed-up run sees exactly the same event ordering as a cold one.
+    const pumpTimeline = (): void => {
       while (timelineAt < timeline.length && timeline[timelineAt].atMs <= host.simTimeMs) {
         const ev = timeline[timelineAt++];
         if (ev.set !== undefined) {
@@ -238,6 +245,21 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
           host.pressButton(BUTTON_INDEX[ev.press]);
         }
       }
+    };
+
+    // Warm-up ticks advance the extension's internal state but are NOT recorded:
+    // no frames, no timing samples, no checks. A fault here is still a fault and
+    // stops the run — it is reported against the warm-up tick index.
+    for (let t = 0; t < opts.warmupTicks && fault === null; t++) {
+      pumpTimeline();
+      const warm = await host.tick();
+      if (warm.status === "fault") {
+        fault = warm.fault;
+      }
+    }
+
+    for (let t = 0; fault === null && t < opts.ticks; t++) {
+      pumpTimeline();
 
       const out = await host.tick();
       if (out.status === "fault") {
@@ -245,7 +267,7 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
         break;
       }
       stats.record(
-        host.tickIndex - 1,
+        host.tickIndex - 1 - opts.warmupTicks,
         out.framebuffer,
         out.wallMs,
         out.beatMask,

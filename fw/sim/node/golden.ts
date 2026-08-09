@@ -62,6 +62,9 @@ async function runForGolden(spec: { ext: string; scenario: string }): Promise<Go
     scenarioDir: SCENARIO_DIR,
     seed,
     ticks,
+    // Goldens are always cold-start: a warm-up would change every recorded digest
+    // and make the stored frames depend on a flag rather than on the extension.
+    warmupTicks: 0,
     dtMs,
     budgetMs: 50,
     backstopMs: 500,

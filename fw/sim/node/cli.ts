@@ -35,6 +35,10 @@ function usage(): never {
 run flags:
   --scenario <name|file.json>  stimulus (default: silence)
   --seconds N | --ticks N      duration (default: 5 s ~ 454 ticks at dt=11)
+  --start-time-ms N            warm-up: advance N ms of animation time BEFORE
+                               recording starts, so a scenario can be replayed
+                               from a non-zero animation time (default 0).
+                               Recorded ticks are still numbered from 0.
   --seed N                     RNG seed (default: scenario's, else 0)
   --param Name=value           initial param override (repeatable; COLOR
                                accepts 0xMMRRGGBB with the mode byte)
@@ -172,6 +176,14 @@ async function cmdRun(argv: string[]): Promise<void> {
   const dtMs = 11;
   const seconds = num(flags, "seconds", scenario.durationMs / 1000);
   const ticks = Math.round(num(flags, "ticks", (seconds * 1000) / dtMs));
+  // Warm-up ticks are not part of the recorded run: a defect whose cost grows with
+  // a free-running accumulator is only reachable minutes in, and simulating that
+  // whole warm-up is otherwise the only way to get there.
+  const startTimeMs = num(flags, "start-time-ms", 0);
+  if (startTimeMs < 0) {
+    fail(`--start-time-ms must be >= 0, got ${startTimeMs}`);
+  }
+  const warmupTicks = Math.round(startTimeMs / dtMs);
   const seed = num(flags, "seed", scenario.seed ?? 0);
 
   const paramOverrides: Record<string, string> = {};
@@ -195,6 +207,7 @@ async function cmdRun(argv: string[]): Promise<void> {
     scenarioDir: dir,
     seed,
     ticks,
+    warmupTicks,
     dtMs,
     budgetMs: num(flags, "budget-ms", 50),
     backstopMs: num(flags, "backstop-ms", 500),

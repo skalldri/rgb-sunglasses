@@ -489,7 +489,7 @@ Then copy both into `/NAND:/glim/` on the board and reset. If the NAND disk on a
 
 ```
 kernel version          # print Zephyr/NCS version
-kernel threads          # list all threads and their stack usage
+kernel thread list      # list all threads and their stack usage
 bt connect              # (if shell BT commands are enabled)
 bt_state                 # SNAPSHOT of BLE link health: state (advertising/connected),
                          # peer addr, security level, negotiated ATT MTU, conn params.

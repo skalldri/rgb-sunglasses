@@ -54,7 +54,7 @@ function withDebugResources(config) {
         path.join(valuesDir, 'strings.xml'),
         '<?xml version="1.0" encoding="utf-8"?>\n' +
           '<resources>\n' +
-          '    <string name="app_name">RGB Sunglasses (Dev)</string>\n' +
+          '    <string name="app_name">RGB Glasses (Dev)</string>\n' +
           '</resources>\n'
       );
 
