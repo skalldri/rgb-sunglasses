@@ -470,13 +470,19 @@ void led_display_thread_func(void *a, void *b, void *c) {
         float kTargetFrameIntervalMs = getLedConfig().getDisplayRateMs();
 
         // Longest stretch so far this frame between two points where the loop can yield.
+        // The label rides along so an overrun can name WHICH call blocked (issue #312):
+        // a single aggregate number told us ~the whole frame sat in one segment, but not
+        // whether that was the render thread holding displayBufferMutex or the SPI write
+        // itself — which are completely different bugs.
         uint32_t worstSegUs = 0;
+        const char *worstSegLabel = "none";
         uint32_t segStartUs = wakeUs;
-        auto markSegment = [&]() {
+        auto markSegment = [&](const char *label) {
             uint32_t now = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
             uint32_t seg = now - segStartUs;  // unsigned wraparound is correct here
             if (seg > worstSegUs) {
                 worstSegUs = seg;
+                worstSegLabel = label;
             }
             segStartUs = now;
         };
@@ -486,28 +492,28 @@ void led_display_thread_func(void *a, void *b, void *c) {
         if (ret) {
             LOG_ERR("Error claiming display buffer!");
         }
-        markSegment();  // claim can block on displayBufferMutex
+        markSegment("claim");  // claim can block on displayBufferMutex
 
         switch (atomic_get(&panelOutputMode)) {
             case PANEL_OUTPUT_NORMAL:
                 led_strip_update_rgb(led_strip_0, led_0[bufferId], LED_STRIP_0_NUM_PIXELS);
-                markSegment();
+                markSegment("strip0");
                 led_strip_update_rgb(led_strip_1, led_1[bufferId], LED_STRIP_1_NUM_PIXELS);
-                markSegment();
+                markSegment("strip1");
 #if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
                 led_strip_update_rgb(led_strip_2, led_2[bufferId], LED_STRIP_2_NUM_PIXELS);
-                markSegment();
+                markSegment("strip2");
 #endif
                 break;
             case PANEL_OUTPUT_BLANK:
                 // Same clocking as NORMAL, but all-black data
                 led_strip_update_rgb(led_strip_0, blackFrame, LED_STRIP_0_NUM_PIXELS);
-                markSegment();
+                markSegment("strip0-blank");
                 led_strip_update_rgb(led_strip_1, blackFrame, LED_STRIP_1_NUM_PIXELS);
-                markSegment();
+                markSegment("strip1-blank");
 #if DT_HAS_ALIAS(led_strip_2) && !IS_ENABLED(CONFIG_STATUS_LED)
                 led_strip_update_rgb(led_strip_2, blackFrame, LED_STRIP_2_NUM_PIXELS);
-                markSegment();
+                markSegment("strip2-blank");
 #endif
                 break;
             case PANEL_OUTPUT_OFF:
@@ -520,7 +526,7 @@ void led_display_thread_func(void *a, void *b, void *c) {
         if (ret) {
             LOG_ERR("Error releasing display buffer!");
         }
-        markSegment();
+        markSegment("release");
 
         int64_t endTicks = k_uptime_ticks();
         int64_t updateTicks = endTicks - startTicks;
@@ -548,9 +554,13 @@ void led_display_thread_func(void *a, void *b, void *c) {
             // Rate-limited so a sustained overrun can't bury every other log line.
             const int64_t nowMs = k_uptime_get();
             if (nowMs - lastOverrunLogMs >= 5000) {
+                // workUs is THIS frame's work, not a running max — the old "worst work"
+                // wording read as cumulative and cost real misattribution time (issue #312).
                 LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
-                        "(worst work %u us vs %u us budget) — cannot keep framerate",
-                        overrunsSinceLog, nowMs - lastOverrunLogMs, workUs, targetUs);
+                        "(this frame %u us vs %u us budget; longest segment '%s' %u us) — "
+                        "cannot keep framerate",
+                        overrunsSinceLog, nowMs - lastOverrunLogMs, workUs, targetUs,
+                        worstSegLabel, worstSegUs);
                 lastOverrunLogMs = nowMs;
                 overrunsSinceLog = 0;
             }
