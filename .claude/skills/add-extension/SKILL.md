@@ -151,8 +151,12 @@ extension (plus GLIM assets) and verifies via `ext list`. For a single-file manu
 push, follow "Installing on the device" in `fw/extensions/README.md` (mount the USB
 mass-storage disk per `fw/CLAUDE.md` "USB Flash Disk", `cp` the `.llext` into the
 `ext/` subdirectory, `sync`, `umount`, then reboot the board — the firmware only
-re-discovers extensions on boot). If you changed **host-side** extension code
-(`fw/src/extensions/`), that's a firmware change: use `/flash-and-verify`.
+re-discovers extensions on boot). Files can also be listed and **removed over
+BLE/SMP** via the firmware's FILE_MGMT group (64) — the companion app's
+Extensions screen, or the wire surface in `fw/src/extensions/extension_mgmt.h`
+(`fw/CLAUDE.md` "File management"); a delete retires the slot until the next
+reboot. If you changed **host-side** extension code (`fw/src/extensions/`),
+that's a firmware change: use `/flash-and-verify`.
 
 Debug over the Zephyr shell (`mcp__serial__*`, see `fw/CLAUDE.md`):
 `ext list` / `ext select <slot>` / `ext param <slot> <idx> [<value>]` / `ext stats`.

@@ -332,23 +332,30 @@ the count could only imply. The corresponding caveat paragraphs in
 
 ## 10. Implementation phases
 
-**PR 1 — firmware**: `extension_path.{h,cpp}` extraction; `extension_mgmt.cpp`
-(group 64, kind dispatch, paginated LIST union, DELETE + retire);
-`persistent_value_registry_unregister()` + `delete_value()` +
+**PR 1 — firmware** (✅ merged as #303): `extension_path.{h,cpp}` extraction;
+`extension_mgmt.cpp` (group 64, kind dispatch, paginated LIST union, DELETE +
+retire); `persistent_value_registry_unregister()` + `delete_value()` +
 workqueue-serialized cleanup; name-key last-active persistence; Kconfig;
-native_sim tests. Full `/submit-pr` gate with on-device + app verification
-(the app side of the gate uses a dev build of PR 2's client methods, or the
-debug page's raw SMP path).
+native_sim tests. Hardware-verified end to end, including deleting the active
+extension and the boot-restore-by-name across slot renumbering. Review
+hardening landed in the same PR: retire-first + host-lock-quiesced unlink
+(the FF_FS_LOCK=0 corruption race), faulted-slot switch-away, async settings
+purge, case-insensitive slot lookup, LFN-sized wire names, and a 4096-byte
+SMP workqueue stack (measured 1,672 B peak on the deepest delete path).
 
-**PR 2 — app**: SMP client group + methods (incl. `closeOpenedFile`), the
-management screen (sections, per-row actions, reboot button), guided-flow
-picker replacing bulk sync, jest suites, `/validate-app`.
+**PR 2 — app** (✅ merged as #305): SMP client group + methods (incl.
+`closeOpenedFile`), the management screen (sections, per-row actions, reboot
+button), guided-flow picker replacing bulk sync, jest suites, `/validate-app`
++ on-device verification. Review hardening: release-unknown ≠ release-empty
+(no removal suggestions after a failed GitHub lookup), picker gated on a
+successful check, case-insensitive joins, idempotent delete.
 
-**PR 3 — docs/skills**: `fw/CLAUDE.md` (new group, retire semantics, retired
-count-not-name paragraphs), `app/CLAUDE.md` (same + no-bulk-install),
-`/add-extension` + `/provision-device` + `/debug-ble` touch-ups,
-release-notes template note about the behavior change.
+**PR 3 — docs/skills** (this change): `fw/CLAUDE.md` (new group, retire
+semantics, replacing the count-not-name paragraphs), `app/CLAUDE.md` (same +
+no-bulk-install), `/add-extension` + `/debug-ble` touch-ups, release-skill
+note about the behavior change.
 
 **Then**: a release (the first whose update flow can clean up hello
-everywhere), and the hardware verification session doubles as the real-world
-proof on your own board.
+everywhere). The PR 1/2 hardware sessions already ran the real-world proof:
+the dev board's stale `hello.llext` was listed, named and removed over BLE
+through the product path.
