@@ -1,3 +1,4 @@
+#include <storage/fs_util.h>
 #include "coredump_manager_core.h"
 
 #include <zephyr/fs/fs.h>
@@ -49,35 +50,16 @@ int parse_dump_index(const char* name) {
     return static_cast<int>(value);
 }
 
-/* Calls `fn(name)` for every entry in `dir`. Returns 0, or a negative errno if
- * the directory can't be opened/read (missing dir returns -ENOENT). */
-template <typename Fn>
-int for_each_dir_entry(const char* dir, Fn&& fn) {
-    struct fs_dir_t dirp;
-    fs_dir_t_init(&dirp);
-    int rc = fs_opendir(&dirp, dir);
-    if (rc < 0) {
-        return rc;
-    }
-    struct fs_dirent entry;
-    while ((rc = fs_readdir(&dirp, &entry)) == 0 && entry.name[0] != '\0') {
-        if (entry.type == FS_DIR_ENTRY_FILE) {
-            fn(entry.name);
-        }
-    }
-    fs_closedir(&dirp);
-    return rc;
-}
-
 }  // namespace
 
 int max_dump_index(const char* dir, int* out_max) {
     int maxIndex = -1;
-    int rc = for_each_dir_entry(dir, [&maxIndex](const char* name) {
+    int rc = fs_util::for_each_file(dir, [&maxIndex](const char* name) {
         int index = parse_dump_index(name);
         if (index > maxIndex) {
             maxIndex = index;
         }
+        return true;  // always walk the whole directory: we want the max
     });
     if (rc < 0) {
         return rc;
@@ -96,10 +78,11 @@ int format_dump_path(char* out, size_t cap, const char* dir, unsigned int index)
 
 bool any_dump_files(const char* dir) {
     bool found = false;
-    (void)for_each_dir_entry(dir, [&found](const char* name) {
+    (void)fs_util::for_each_file(dir, [&found](const char* name) {
         if (parse_dump_index(name) >= 0) {
             found = true;
         }
+        return !found;  // one match answers the question — stop walking
     });
     return found;
 }

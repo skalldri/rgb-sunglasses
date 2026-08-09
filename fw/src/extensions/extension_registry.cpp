@@ -1,3 +1,4 @@
+#include <storage/fs_util.h>
 #include <extensions/extension_registry.h>
 
 #include <zephyr/fs/fs.h>
@@ -35,41 +36,20 @@ void init() {
         return;
     }
 
-    struct fs_dir_t dir;
-    fs_dir_t_init(&dir);
-
-    rc = fs_opendir(&dir, kDirectory);
+    // Stops at kMaxFiles: the table is fixed-size, and silently overrunning it
+    // would be worse than ignoring the tail of an over-full directory.
+    rc = fs_util::for_each_file(kDirectory, [](const char *name) {
+        if (hasLlextExtension(name)) {
+            strncpy(sNames[sCount], name, kMaxNameLen - 1);
+            sNames[sCount][kMaxNameLen - 1] = '\0';
+            sCount++;
+        }
+        return sCount < kMaxFiles;
+    });
     if (rc < 0) {
-        LOG_ERR("Failed to open %s: %d", kDirectory, rc);
+        LOG_ERR("Failed to walk %s: %d", kDirectory, rc);
         return;
     }
-
-    while (sCount < kMaxFiles) {
-        struct fs_dirent entry;
-        rc = fs_readdir(&dir, &entry);
-        if (rc < 0) {
-            LOG_ERR("fs_readdir failed: %d", rc);
-            break;
-        }
-
-        if (entry.name[0] == '\0') {
-            break;  // End of directory.
-        }
-
-        if (entry.type != FS_DIR_ENTRY_FILE) {
-            continue;
-        }
-
-        if (!hasLlextExtension(entry.name)) {
-            continue;
-        }
-
-        strncpy(sNames[sCount], entry.name, kMaxNameLen - 1);
-        sNames[sCount][kMaxNameLen - 1] = '\0';
-        sCount++;
-    }
-
-    fs_closedir(&dir);
 
     // Sort by filename (insertion sort — at most kMaxFiles entries) so that
     // slot indices, and therefore extension animation IDs and BLE service
