@@ -29,6 +29,11 @@ static ConfigurationProvider &getLedConfig() {
     return *sLedConfigProvider;
 }
 
+// Any measured interval at or beyond this is a 32-bit cycle-counter wrap artefact
+// rather than a real stall (see markSegment()). The worst genuine display stall
+// measured on proto0 is ~1.5 s (issue #312), so 10 s separates them with room.
+static constexpr uint32_t kImplausibleUs = 10U * 1000U * 1000U;
+
 void led_display_thread_func(void *a, void *b, void *c);
 
 // Kernel-only thread: K_KERNEL_* skips the 1KB CONFIG_USERSPACE privileged stack;
@@ -459,6 +464,15 @@ void led_display_thread_func(void *a, void *b, void *c) {
     // them instead and report periodically.
     int64_t lastOverrunLogMs = 0;
     uint32_t overrunsSinceLog = 0;
+    // Worst overrunning frame in the CURRENT rate-limit window, reset with the
+    // counter below. Tracking these per-frame instead made the log incoherent: the
+    // count summarised 5 s while the label described whichever overrunning frame
+    // happened to land when the timer expired, so 149 marginal SPI overruns plus one
+    // 25 ms mutex stall could print the SPI label and send the reader to the wrong
+    // subsystem.
+    uint32_t windowWorstFrameUs = 0;
+    uint32_t windowWorstSegUs = 0;
+    const char *windowWorstSegLabel = "none";
 
     while (true) {
         // Update LED strips with current framebuffer contents
@@ -470,21 +484,39 @@ void led_display_thread_func(void *a, void *b, void *c) {
         float kTargetFrameIntervalMs = getLedConfig().getDisplayRateMs();
 
         // Longest stretch so far this frame between two points where the loop can yield.
-        // The label rides along so an overrun can name WHICH call blocked (issue #312):
-        // a single aggregate number told us ~the whole frame sat in one segment, but not
-        // whether that was the render thread holding displayBufferMutex or the SPI write
-        // itself — which are completely different bugs.
+        // The label rides along so an overrun can point at a call (issue #312): a single
+        // aggregate number told us ~the whole frame sat in one segment, but not which.
+        //
+        // READ THE LABEL AS "WHERE THE TIME LANDED", NOT "WHAT WAS SLOW". These are
+        // wall-clock deltas on a PREEMPTIBLE thread, not time spent inside the call. The
+        // cooperative Bluetooth threads (BT RX at -8, HCI TX at -9) outrank this one, so
+        // if they run for 20 ms mid-transfer, markSegment("strip1") bills all 20 ms to
+        // strip 1 and the reader goes hunting in the WS2812 driver for a stall that was
+        // really CPU starvation. Three explanations fit any label: a genuinely slow call,
+        // a lock held by someone else, or preemption.
         uint32_t worstSegUs = 0;
         const char *worstSegLabel = "none";
-        uint32_t segStartUs = wakeUs;
+        // Seeded AFTER the preamble reads below, not from wakeUs — otherwise the first
+        // segment silently includes k_uptime_ticks(), the cycle read, and the virtual
+        // getDisplayRateMs() call, all billed to a label that says "claim".
+        uint32_t segStartUs = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
         auto markSegment = [&](const char *label) {
             uint32_t now = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
-            uint32_t seg = now - segStartUs;  // unsigned wraparound is correct here
+            uint32_t seg = now - segStartUs;
+            segStartUs = now;
+            // k_cycle_get_32() wraps every ~36.4 h at 32768 Hz, and k_cyc_to_us_near32()
+            // truncates AFTER 64-bit math — so the derived microsecond timeline is NOT
+            // linear mod 2^32 and one frame per wrap yields a garbage delta (~2.07e9 us).
+            // Unfiltered that pins led_stats' all-time maxima until `led_stats reset` and
+            // would print a confident, fictional segment label. Anything past this bound
+            // is a wrap, not a stall — the worst real stall measured is ~1.5 s (#312).
+            if (seg >= kImplausibleUs) {
+                return;
+            }
             if (seg > worstSegUs) {
                 worstSegUs = seg;
                 worstSegLabel = label;
             }
-            segStartUs = now;
         };
 
         size_t bufferId = 0;
@@ -540,9 +572,16 @@ void led_display_thread_func(void *a, void *b, void *c) {
 
         // prevWakeUs == 0 only before the first frame, so there is no interval to record yet.
         const bool haveInterval = (prevWakeUs != 0);
-        K_SPINLOCK(&sStatsLock) {
-            led_stats_core::recordFrame(sStats, haveInterval, wakeUs - prevWakeUs, workUs,
-                                        worstSegUs, targetUs);
+        // Drop the whole frame's sample across a cycle-counter wrap rather than let a
+        // ~2.07e9 us artefact become led_stats' permanent all-time maximum (it is a
+        // running max, only cleared by `led_stats reset`).
+        const uint32_t intervalUs = wakeUs - prevWakeUs;
+        const bool sampleSane = workUs < kImplausibleUs && (!haveInterval || intervalUs < kImplausibleUs);
+        if (sampleSane) {
+            K_SPINLOCK(&sStatsLock) {
+                led_stats_core::recordFrame(sStats, haveInterval, intervalUs, workUs, worstSegUs,
+                                            targetUs);
+            }
         }
         prevWakeUs = wakeUs;
 
@@ -551,18 +590,47 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 led_stats_core::recordOverrun(sStats);
             }
             overrunsSinceLog++;
+            if (sampleSane && workUs > windowWorstFrameUs) {
+                windowWorstFrameUs = workUs;
+                windowWorstSegUs = worstSegUs;
+                windowWorstSegLabel = worstSegLabel;
+            }
             // Rate-limited so a sustained overrun can't bury every other log line.
             const int64_t nowMs = k_uptime_get();
             if (nowMs - lastOverrunLogMs >= 5000) {
-                // workUs is THIS frame's work, not a running max — the old "worst work"
-                // wording read as cumulative and cost real misattribution time (issue #312).
-                LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
-                        "(this frame %u us vs %u us budget; longest segment '%s' %u us) — "
-                        "cannot keep framerate",
-                        overrunsSinceLog, nowMs - lastOverrunLogMs, workUs, targetUs,
-                        worstSegLabel, worstSegUs);
+                /* Only name a segment when it actually accounts for the frame. The marked
+                 * segments do NOT tile the frame — the stats/spinlock tail after "release"
+                 * is unmeasured — so a 25 ms preemption there would leave an ordinary
+                 * ~1.2 ms SPI segment as "longest" while explaining 4% of the frame.
+                 * "Unaccounted" is itself the useful finding: it says look outside the
+                 * LED path. This also covers the all-segments-round-to-zero case (e.g.
+                 * PANEL_OUTPUT_OFF, where no SPI runs at all), which would otherwise
+                 * print a placeholder 'none' label.
+                 *
+                 * `worst frame work` is deliberately not called the compared quantity:
+                 * the overrun test above is on tick-quantized updateTimeMs, while this is
+                 * a cycle-clock read, and near the threshold the two can disagree. */
+                const bool segmentExplainsFrame =
+                    windowWorstSegUs > 0 && windowWorstSegUs >= windowWorstFrameUs / 2;
+                if (segmentExplainsFrame) {
+                    LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
+                            "(worst frame work %u us vs %u us budget; longest segment '%s' "
+                            "%u us) — cannot keep framerate",
+                            overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
+                            targetUs, windowWorstSegLabel, windowWorstSegUs);
+                } else {
+                    LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
+                            "(worst frame work %u us vs %u us budget; NO segment accounts for "
+                            "it — longest was '%s' %u us, so look outside the LED path) — "
+                            "cannot keep framerate",
+                            overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
+                            targetUs, windowWorstSegLabel, windowWorstSegUs);
+                }
                 lastOverrunLogMs = nowMs;
                 overrunsSinceLog = 0;
+                windowWorstFrameUs = 0;
+                windowWorstSegUs = 0;
+                windowWorstSegLabel = "none";
             }
             // Yield unconditionally even when we blew the budget. Previously this branch
             // looped with no sleep at all, which is survivable only because this thread is
