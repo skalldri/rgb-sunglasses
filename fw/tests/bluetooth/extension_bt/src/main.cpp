@@ -165,8 +165,7 @@ Animation pattern_controller_get_current_animation(void) {
     return gCurrentAnimation;
 }
 
-int pattern_controller_change_to_animation(Animation animation, bool persist) {
-    (void)persist;
+int pattern_controller_change_to_animation(Animation animation) {
     if (gRefuseNextChange) {
         gRefuseNextChange = false;
         return 0;

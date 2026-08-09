@@ -175,6 +175,18 @@ Both are pre-existing quirks that DELETE turns from theoretical into routine:
 
 ### 4.1 Last-active persistence: a separate name key for extensions
 
+> **SUPERSEDED (issue #311).** Both keys described below, and the boot restore
+> they fed, were removed. Persisting the active animation cost 850-1500 ms of
+> NVS work on **every** switch — the sibling key is either deleted-when-absent or
+> first-written-when-new, and both are `settings_nvs_save()` misses, which walk
+> every name id. It also spent flash endurance on a per-interaction event. The
+> device now always boots to the default animation, and an explicit "all
+> animations off" does not survive a power cycle either.
+>
+> The section is kept because it explains why the design looked like this, and
+> because the `delete_value()` / unregister work in §4.2 is still live and still
+> used by the DELETE path. Do not re-add a write on the switch path.
+
 `core/last_active_animation` persists the raw animation id as 4 bytes, and
 the loader accepts a record only when `len == 4` — so overloading the same
 key with a name string would collide (a 3-character name is exactly 4 bytes

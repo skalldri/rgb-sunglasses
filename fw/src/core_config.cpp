@@ -59,8 +59,9 @@ BtGattPersistentCharacteristic<"core/status_led_brightness", "Status LED Brightn
 
 // Position 4 (auto-UUID suffix ...0004) — APPEND-ONLY, see the comment above.
 // Read + notify, NOT writable (the app switches animations by writing the
-// per-animation Is Active characteristics), NOT persisted (boot restore is
-// pattern_controller.cpp's core/last_active_animation key). Value: uint32
+// per-animation Is Active characteristics), NOT persisted — and as of issue #311
+// nothing else persists it either: there is no boot restore, the device always
+// comes up on the default animation. Value: uint32
 // Animation id (animation_types.h); extensions are 0x40+slot
 // (extension_limits.h); 0 = Animation::None. This is the ONE notification that
 // replaces the per-animation Is Active notifies (see

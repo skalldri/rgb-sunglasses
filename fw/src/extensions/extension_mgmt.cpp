@@ -363,13 +363,15 @@ int delete_handler(struct smp_streamer *ctxt) {
             extension_host::animationId(static_cast<size_t>(slot))) {
         /* The deleted slot backs whatever is on the glasses right now — a
          * healthy render OR a fault banner (see the handler comment, step 4).
-         * Switch to the boot-fallback built-in, persist included, so neither
-         * the render loop nor the next boot points at the removed file. Runs
-         * on this (SMP workqueue) thread — pattern_controller_change_to_animation
-         * is documented caller-thread-safe (shell and BT RX already do this),
-         * and the SMP workqueue stack is sized for the switch path (see
+         * Switch to the boot-fallback built-in so the render loop stops
+         * pointing at the removed file. The next boot needs no help here: the
+         * active animation is no longer persisted at all, so it always comes
+         * up on this same default. Runs on this (SMP workqueue) thread —
+         * pattern_controller_change_to_animation is documented
+         * caller-thread-safe (shell and BT RX already do this), and the SMP
+         * workqueue stack is sized for the switch path (see
          * CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_STACK_SIZE in the board conf). */
-        pattern_controller_change_to_animation(Animation::ZigZag, true);
+        pattern_controller_change_to_animation(Animation::ZigZag);
     }
 
     if (slot >= 0) {
