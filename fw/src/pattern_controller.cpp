@@ -11,8 +11,6 @@
 #include <core_config.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
-#include <settings/persistent_value_registry.h>
-#include <settings/persistent_value_store.h>
 
 #if defined(CONFIG_FAT_FILESYSTEM_ELM)
 #include <storage/glim_registry.h>
@@ -84,110 +82,34 @@ float sBrightnessForFrame = 0.1f;
 
 namespace {
 
-constexpr const char *kLastActiveAnimationKey = "core/last_active_animation";
-/* Extensions persist by FILE NAME under their own key, never by raw id in the
- * key above: extension animation ids are kAnimationIdBase + slot, and slots
- * renumber alphabetically at every boot rescan — after a runtime file delete
- * (FILE_MGMT DELETE) a persisted id would silently restore a DIFFERENT
- * extension. Same name-not-index principle the glim player established.
- * A separate key (rather than overloading the one above with a second payload
- * type) keeps the id record's `len == 4` acceptance test unambiguous — a
- * 3-character name is exactly 4 bytes with its NUL. */
-constexpr const char *kLastActiveExtensionKey = "core/last_active_extension";
-
-Animation sLoadedAnimation = Animation::None;
-bool sAnimationWasLoaded = false;
-
-#if defined(CONFIG_APP_EXTENSION_HOST)
-char sLoadedExtensionName[extension_registry::kMaxNameLen] = {};
-bool sExtensionNameWasLoaded = false;
-
-bool currentAnimationIsExtension() {
-    return static_cast<uint32_t>(currentAnimation) >= extension_host::kAnimationIdBase;
-}
-#else
-bool currentAnimationIsExtension() { return false; }
-#endif
-
-void lastActiveAnimationDoLoad(void *, const void *data, size_t len) {
-    if (len != sizeof(uint32_t)) {
-        return;
-    }
-    uint32_t raw;
-    memcpy(&raw, data, sizeof(raw));
-    sLoadedAnimation = static_cast<Animation>(raw);
-    sAnimationWasLoaded = true;
-}
-
-/* The two save callbacks each own one key and DELETE it when the other kind
- * of animation is active, so at most one of the pair ever holds a record and
- * a stale one can't shadow the fresh one at the next boot. Both run on the
- * persistence workqueue (save_all sweep), where delete_value is safe. */
-void lastActiveAnimationDoSave(void *) {
-    if (currentAnimationIsExtension()) {
-        persistent_value_store::delete_value(kLastActiveAnimationKey);
-        return;
-    }
-    uint32_t raw = static_cast<uint32_t>(currentAnimation);
-    persistent_value_store::save_value(kLastActiveAnimationKey, &raw, sizeof(raw));
-}
-
-#if defined(CONFIG_APP_EXTENSION_HOST)
-void lastActiveExtensionDoLoad(void *, const void *data, size_t len) {
-    if (len == 0 || len >= sizeof(sLoadedExtensionName)) {
-        return;
-    }
-    memcpy(sLoadedExtensionName, data, len);
-    sLoadedExtensionName[len] = '\0';
-    sExtensionNameWasLoaded = true;
-}
-
-void lastActiveExtensionDoSave(void *) {
-    if (!currentAnimationIsExtension()) {
-        persistent_value_store::delete_value(kLastActiveExtensionKey);
-        return;
-    }
-    const size_t slot =
-        static_cast<uint32_t>(currentAnimation) - extension_host::kAnimationIdBase;
-    const char *fileName = extension_host::fileName(slot);
-    if (fileName == nullptr) {
-        return;
-    }
-    /* Name without its NUL — doLoad re-terminates from the record length. */
-    persistent_value_store::save_value(kLastActiveExtensionKey, fileName, strlen(fileName));
-}
-#endif
-
-// Caller-owned registry storage (see persistent_value_registry.h) - a file-scope static,
-// since this value has no natural per-value object (its state lives in the file statics
-// above). Zero flash when persistence is off; the registration below is dead-code-
-// eliminated via IS_ENABLED when CONFIG_APP_PERSIST_BT_CONFIG=n.
-PersistentValueRegistryEntry sLastActiveAnimationEntry{};
-#if defined(CONFIG_APP_EXTENSION_HOST)
-PersistentValueRegistryEntry sLastActiveExtensionEntry{};
-#endif
-
-struct LastActiveAnimationRegistrar {
-    LastActiveAnimationRegistrar() {
-        // Skipped entirely (doLoad/doSave become unreferenced and get linked out) when
-        // CONFIG_APP_PERSIST_BT_CONFIG=n, e.g. on the legacy DK board (dk-support
-        // branch) - see fw/Kconfig.
-        // Failures are logged inside persistent_value_registry_register() itself.
-        if (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-            persistent_value_registry_register(&sLastActiveAnimationEntry,
-                                               kLastActiveAnimationKey, nullptr,
-                                               lastActiveAnimationDoLoad,
-                                               lastActiveAnimationDoSave);
-#if defined(CONFIG_APP_EXTENSION_HOST)
-            persistent_value_registry_register(&sLastActiveExtensionEntry,
-                                               kLastActiveExtensionKey, nullptr,
-                                               lastActiveExtensionDoLoad,
-                                               lastActiveExtensionDoSave);
-#endif
-        }
-    }
-};
-[[maybe_unused]] LastActiveAnimationRegistrar sLastActiveAnimationRegistrar;
+/* The active animation is deliberately NOT persisted (issue #311).
+ *
+ * It used to be, under "core/last_active_animation" plus a companion
+ * "core/last_active_extension" name key. Every user-initiated switch marked
+ * both dirty, so each switch cost one settings write AND one delete of the
+ * sibling key. Measured on proto0 running fw-v3.2.0, per switch:
+ *
+ *   built-in -> built-in     ~850-900 ms
+ *   built-in -> extension    ~920 ms
+ *   extension -> built-in   ~1400 ms
+ *   over BLE, to an extension: a 1504 ms save, inside which the LED display
+ *                              thread stalled for 1035 ms (one visible freeze
+ *                              about a second after the switch)
+ *
+ * The cost is not the flash write itself. CONFIG_SETTINGS_NVS_NAME_CACHE is
+ * what makes a settings lookup cheap; without it, settings_nvs_save() walks
+ * every name id doing a full NVS scan per id whenever the name is not found,
+ * which is exactly what a delete-of-an-absent-key and a first-write-of-a-new-
+ * key both do. That cache is now enabled (see the proto0 board .conf), but the
+ * write is removed as well: an animation switch is a per-interaction event, and
+ * the NAND has finite erase/write cycles to spend on things the user actually
+ * asked to keep.
+ *
+ * Consequence, accepted deliberately: the device always boots to the default
+ * animation below. Nothing restores the pre-power-cycle selection. Do not
+ * reintroduce a write on this path — if boot restore is ever wanted again, it
+ * needs a trigger that is not "every switch" (an idle/disconnect checkpoint,
+ * or storage that is not NVS). */
 
 #if defined(CONFIG_APP_SHUFFLE)
 
@@ -328,46 +250,15 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     // registration failure here can't also permanently block BLE advertising.
     boot_gate_notify_ready();
 
-    // Resume whatever animation was active before the last power-cycle, if any was
-    // persisted and is still registered (e.g. its CONFIG_ANIMATION_* might have been
-    // disabled in a later firmware build) - otherwise fall back to ZigZag. Safe to read
-    // the sLoaded* statics here with no synchronization: settings_load()
-    // (SYS_INIT APPLICATION prio 1, in bluetooth_init) always completes before this
-    // K_THREAD_DEFINE thread starts.
-    //
-    // Extensions restore by FILE NAME (see kLastActiveExtensionKey's comment):
-    // the name key wins when present, resolved against the registry this boot
-    // just scanned (extension_host::init() above) — so a delete or install
-    // that renumbered the slots still restores the same extension, and a name
-    // whose file is gone falls back exactly like an unregistered built-in id.
-    Animation startupAnimation = Animation::ZigZag;
-#if defined(CONFIG_APP_EXTENSION_HOST)
-    if (sExtensionNameWasLoaded) {
-        const int slot = extension_host::findSlotByFileName(sLoadedExtensionName);
-        if (slot >= 0) {
-            startupAnimation = extension_host::animationId(static_cast<size_t>(slot));
-        }
-    } else if (sAnimationWasLoaded &&
-               static_cast<uint32_t>(sLoadedAnimation) >= extension_host::kAnimationIdBase) {
-        /* A pre-name-key record pointing at an extension by RAW SLOT ID (the
-         * only format older firmware wrote). Slots renumber alphabetically at
-         * every rescan, so honoring it can start a DIFFERENT extension than
-         * the one that was active — the exact defect the name key above
-         * exists to prevent. Ignore it and fall back to the default; the
-         * stale record is deleted by lastActiveAnimationDoSave on the next
-         * persisted animation change. */
-        LOG_INF("Ignoring legacy last-active record for extension id %u (restore is by name now)",
-                static_cast<uint32_t>(sLoadedAnimation));
-    } else if (sAnimationWasLoaded && getAnimation(sLoadedAnimation)) {
-        startupAnimation = sLoadedAnimation;
-    }
-#else
-    if (sAnimationWasLoaded && getAnimation(sLoadedAnimation)) {
-        startupAnimation = sLoadedAnimation;
-    }
-#endif
-    // Restore without scheduling a save — this is a read-back, not a user-initiated change.
-    pattern_controller_change_to_animation(startupAnimation, false);
+    // Always start from the default. The previously-active animation is no longer
+    // persisted — see the comment at the top of the anonymous namespace for the
+    // measured per-switch cost that bought this, and for what any future boot-restore
+    // would have to avoid. Records written by earlier firmware under
+    // "appcfg/core/last_active_animation" / "appcfg/core/last_active_extension" are
+    // inert: nothing registers those keys any more, so settings_load()'s dispatch
+    // finds no handler and skips them. They are deliberately not deleted — a one-shot
+    // migration delete would be exactly the unnecessary NVS write this change removes.
+    pattern_controller_change_to_animation(Animation::ZigZag);
 
     // Overrun logging is rate-limited (see the overrun branch at the bottom of the loop).
     int64_t lastRenderOverrunLogMs = 0;
@@ -435,9 +326,9 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
                     shuffleCur ? shuffleCur->isAtGoodSwitchPoint() : true,
                     shuffleCur ? shuffleCur->goodSwitchPointGraceMs() : 0u);
                 if (d.switchNow) {
-                    // persist=false: shuffle hops must not churn settings flash — the
-                    // last MANUALLY chosen animation stays the persisted boot animation.
-                    pattern_controller_change_to_animation(d.next, false);
+                    // Shuffle hops never touched settings flash even when manual switches
+                    // did; now nothing on this path does.
+                    pattern_controller_change_to_animation(d.next);
                 }
             }
 #endif
@@ -490,7 +381,7 @@ Animation pattern_controller_get_current_animation(void) {
     return currentAnimation;
 }
 
-int pattern_controller_change_to_animation(Animation animation, bool persist) {
+int pattern_controller_change_to_animation(Animation animation) {
     // Try to get the next animation
     BaseAnimation *next = getAnimation(animation);
 
@@ -515,17 +406,10 @@ int pattern_controller_change_to_animation(Animation animation, bool persist) {
     // caller's thread — BT RX, shell, or this file's thread (see file header).
     ActiveAnimationBinding::setLocalActiveAnimation(animation);
 
-    if (persist && IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
-        // Both keys flush together: each save callback either writes its own
-        // record or deletes it (see the callbacks above), so the pair always
-        // reflects exactly one of {built-in id, extension name}.
-        persistent_value_registry_mark_dirty(kLastActiveAnimationKey);
-#if defined(CONFIG_APP_EXTENSION_HOST)
-        persistent_value_registry_mark_dirty(kLastActiveExtensionKey);
-#endif
-        persistent_value_store::request_save();
-    }
-
+    // No settings write here, deliberately — see the note at the top of the
+    // anonymous namespace. This function runs on the caller's thread, which for a
+    // GATT write is the cooperative BT RX thread; keeping it free of flash work is
+    // what stops one tap in the app from costing a visible freeze.
     return 0;
 }
 

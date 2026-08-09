@@ -28,7 +28,21 @@ int pattern_controller_reset_indicator();
  */
 Indicator pattern_controller_get_current_indicator(void);
 
-int pattern_controller_change_to_animation(Animation animation, bool persist = true);
+/**
+ * @brief Switch the active animation.
+ *
+ * Runs SYNCHRONOUSLY on the caller's thread — the cooperative BT RX thread for a
+ * GATT write, the shell thread for `anim set`, the SMP workqueue for a FILE_MGMT
+ * delete, and the pattern-controller thread for the boot default and shuffle hops.
+ * Nothing here may block: it used to schedule a settings flush, which cost up to
+ * 1.5 s of NVS work per switch and a visible ~1 s display stall (issue #311).
+ *
+ * The selection is NOT persisted; the device boots to the default every time.
+ *
+ * @return 0, or -ENOEXEC if @p animation is not registered (the current animation
+ *         is left untouched).
+ */
+int pattern_controller_change_to_animation(Animation animation);
 
 Animation pattern_controller_get_current_animation(void);
 
