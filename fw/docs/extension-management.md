@@ -1,7 +1,8 @@
 # In-app extension management: list, install choice, and remote delete
 
-Status: **design** — approved direction, not yet implemented. Implementation is
-phased (§10).
+Status: **implemented** — firmware #303, app #305 (phases and their review
+hardening: §10). This document remains the authoritative wire-contract and
+semantics reference.
 
 ## 1. Motivation
 
@@ -103,9 +104,10 @@ response budget, then returns `off` for the client to continue from.
 Ordering within one pass is FAT directory order; the app re-lists from
 offset 0 after any mutation (its own delete/upload) rather than trusting
 cross-call stability. The handler keeps exactly one `struct fs_dirent`
-(~264 B) on the SMP workqueue stack (2048 B — the documented
-`MCUMGR_GRP_FS_DL_CHUNK_SIZE` stack incident is the cautionary tale; one
-dirent is fine, arrays are not).
+(~264 B) on the SMP workqueue stack (4096 B on proto0, raised from the
+2048 default for the DELETE switch-away path — see fw/docs/threading.md;
+the documented `MCUMGR_GRP_FS_DL_CHUNK_SIZE` stack incident is the
+cautionary tale; one dirent is fine, arrays are not).
 
 ### 3.3 DELETE (command 1, write)
 
@@ -293,7 +295,7 @@ the count could only imply. The corresponding caveat paragraphs in
 | Unbounded directory | LIST pagination (§3.2) |
 | Bulk sync resurrecting uninstalled extensions | Bulk install no longer exists (§6) |
 | Old firmware without group 64 | Group-less-error detection hides management UI |
-| SMP workqueue stack (2048 B) | One `fs_dirent` at a time in LIST; response budget drives pagination |
+| SMP workqueue stack (4096 B on proto0; invariant in fw/docs/threading.md) | One `fs_dirent` at a time in LIST; response budget drives pagination; delete's switch-away path measured 1,672 B peak |
 
 ## 8. Compatibility
 
@@ -353,7 +355,12 @@ successful check, case-insensitive joins, idempotent delete.
 **PR 3 — docs/skills** (this change): `fw/CLAUDE.md` (new group, retire
 semantics, replacing the count-not-name paragraphs), `app/CLAUDE.md` (same +
 no-bulk-install), `/add-extension` + `/debug-ble` touch-ups, release-skill
-note about the behavior change.
+note about the behavior change, and the SMP-stack invariant recorded in
+`fw/docs/threading.md`. `/provision-device` needs no procedural change — it
+deliberately (re)installs the in-repo dev extensions (`hello`, `cpptest`) on
+dev boards, which is provisioning's job, not a regression of this feature;
+its skill now says so explicitly so a fresh `hello.llext` after provisioning
+is read as expected, not as the cleanup failing.
 
 **Then**: a release (the first whose update flow can clean up hello
 everywhere). The PR 1/2 hardware sessions already ran the real-world proof:

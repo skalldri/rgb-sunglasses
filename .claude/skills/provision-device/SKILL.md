@@ -80,6 +80,16 @@ Over `mcp__serial__*`:
   device that has also synced from a release will additionally show the
   registry extensions, e.g. `demo_wave` and `plasma`), none marked `[FAULTED]`.
 
+Note on the in-repo dev extensions: provisioning **deliberately (re)installs
+them**, including on a board whose owner previously removed `hello` through
+the app's extension management (FILE_MGMT DELETE, PR #303/#305) — installing
+every dev asset is this skill's job. Expect the companion app to list them
+under "Not in this release" with removal suggested afterwards; that's the
+management UI working as designed, not junk detection gone wrong. Conversely,
+`hello` being ABSENT on a board that was never re-provisioned after its owner
+removed it is correct — don't flag a cleaned device as a provisioning failure
+unless this skill's own run just pushed the files.
+
 Report a short summary table to the user: filesystem health, GLIM files present, extensions present.
 
 ---

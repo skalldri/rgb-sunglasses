@@ -30,7 +30,7 @@ Bash) on that file when you don't hold a lock.
 | Device vanished from scans after an app reload or a discovery throw | Orphaned native BLE link — force-stop the app | 7 |
 | Firmware log: `bt_att: No ATT channel for MTU N` + `Notify failed ... -12`; app silently keeps a stale value | Notify payload exceeds negotiated ATT MTU (`bt_gatt_notify` can't fragment) | 8 |
 | Panel keeps showing the pairing passkey (and shuffle is frozen) after a pairing that failed/timed out | Stale `BtPairing` indicator overlay — fixed in issue #242; on older firmware clear it with `anim indicator clear` | 9 |
-| An extension's Is Active write is rejected (252) and it won't start, but it isn't `[FAULTED]` | Slot is RETIRED — its file was deleted this boot via FILE_MGMT (group 64); by design activation stays rejected until a restart rescans. Check `ext list` for `[RETIRED]`, or the `r` flag in the app's LIST. Re-uploading the same name doesn't revive the slot mid-boot (the fresh file loads at the next boot). | — |
+| An extension's Is Active write is rejected (252) and it won't start, but it isn't `[FAULTED]` | Slot is RETIRED — its file was deleted this boot via FILE_MGMT (group 64); by design activation stays rejected until a restart rescans. Confirm with `ext list`: the shell prints `RETIRED - file deleted, restart to rescan` (not a bare `[RETIRED]` token). The app-side LIST shows `r: true` only while the file is still absent — once the same name is re-uploaded, the firmware deliberately reports the file as fresh/not-loaded with NO slot annotations at all (no `r`), so don't read a missing `r` as "not retired" on a re-installed name. Either way the slot revives only at the next boot. | — |
 
 ## 1. Split-brain / stale Android GATT cache
 

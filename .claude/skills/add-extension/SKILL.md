@@ -155,7 +155,13 @@ re-discovers extensions on boot). Files can also be listed and **removed over
 BLE/SMP** via the firmware's FILE_MGMT group (64) — the companion app's
 Extensions screen, or the wire surface in `fw/src/extensions/extension_mgmt.h`
 (`fw/CLAUDE.md` "File management"); a delete retires the slot until the next
-reboot. If you changed **host-side** extension code (`fw/src/extensions/`),
+reboot. **Heads-up when driving the app against a dev board**: in-repo dev
+extensions are never release assets (see `/release`), so the app files your
+USB-installed `.llext` under "Not in this release" with removal *suggested* —
+in the management screen and as a highlighted unticked row in the update
+flow's picker. Don't accept that suggestion for an extension you're actively
+developing: the delete retires its slot until reboot and re-installing means
+another USB mount + copy + reboot cycle. If you changed **host-side** extension code (`fw/src/extensions/`),
 that's a firmware change: use `/flash-and-verify`.
 
 Debug over the Zephyr shell (`mcp__serial__*`, see `fw/CLAUDE.md`):
