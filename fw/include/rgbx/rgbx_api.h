@@ -160,28 +160,51 @@ struct rgbx_inputs {
 /**
  * @brief Initializer for one scalar (UINT32/COLOR/BOOL) rgbx_param_desc
  * entry. Usable from both C and C++ manifests.
+ *
+ * @param name_        Display name (CUD string); must be a string literal.
+ * @param type_        One of RGBX_PARAM_UINT32, RGBX_PARAM_COLOR or
+ *                     RGBX_PARAM_BOOL. Use RGBX_PARAM_STR() for strings.
+ * @param default_u32_ Initial value, before any BLE write arrives. For
+ *                     RGBX_PARAM_COLOR it is 0x00RRGGBB; for RGBX_PARAM_BOOL,
+ *                     0 or 1.
  */
 #define RGBX_PARAM(name_, type_, default_u32_) \
     {(name_), (type_), {.u32 = (default_u32_)}}
 
 /**
  * @brief Initializer for one RGBX_PARAM_STRING rgbx_param_desc entry.
- * `default_str_` must be a string literal (at most RGBX_PARAM_STRING_MAX-1
- * bytes).
+ *
+ * @param name_        Display name (CUD string); must be a string literal.
+ * @param default_str_ Initial value; must be a string literal at most
+ *                     RGBX_PARAM_STRING_MAX-1 bytes long.
  */
 #define RGBX_PARAM_STR(name_, default_str_) \
     {(name_), RGBX_PARAM_STRING, {.str = (default_str_)}}
 
-/** @brief Byte offset of pixel (x, y) in `rgbx_framebuffer` for a display
- *  `w` pixels wide. Layout is row-major, 3 bytes per pixel: R, G, B. */
+/**
+ * @brief Byte offset of pixel (x, y) in #rgbx_framebuffer for a display `w`
+ * pixels wide. Layout is row-major, 3 bytes per pixel: R, G, B.
+ *
+ * Performs no bounds checking — the caller is responsible for keeping x and y
+ * inside the manifest's width/height. (The C++ wrapper's
+ * rgbx::Animation::setPixel() does that check for you.)
+ *
+ * @param w Display width in pixels (rgbx_manifest::width).
+ * @param x Column, 0 .. w-1.
+ * @param y Row, 0 .. height-1.
+ * @return Byte offset of the pixel's red channel; green and blue follow it.
+ */
 #define RGBX_PIXEL_INDEX(w, x, y) ((((size_t)(y) * (size_t)(w)) + (size_t)(x)) * 3u)
 
-/*
- * === Required exports ======================================================
+/**
+ * @name Required exports
+ *
  * Every extension must define all five of the following symbols and mark
  * each with EXPORT_SYMBOL(<name>) (from <zephyr/llext/symbol.h>) so the host
  * can resolve them with llext_find_sym(). The declarations below let the
  * C++ wrapper (and extension code itself) reference them type-safely.
+ *
+ * @{
  */
 
 /** @brief The extension's manifest (const data). */
@@ -207,16 +230,25 @@ void rgbx_init(void);
  *  unloaded. */
 void rgbx_tick(void);
 
-/** @brief Names the host uses with llext_find_sym(); kept next to the
- *  declarations so the two can't drift apart. */
+/* The symbol names the host passes to llext_find_sym(), kept next to the
+ * declarations above so the two can't drift apart. */
+
+/** @brief llext symbol name of #rgbx_manifest. */
 #define RGBX_SYM_MANIFEST "rgbx_manifest"
+/** @brief llext symbol name of #rgbx_inputs. */
 #define RGBX_SYM_INPUTS "rgbx_inputs"
+/** @brief llext symbol name of #rgbx_framebuffer. */
 #define RGBX_SYM_FRAMEBUFFER "rgbx_framebuffer"
+/** @brief llext symbol name of rgbx_init(). */
 #define RGBX_SYM_INIT "rgbx_init"
+/** @brief llext symbol name of rgbx_tick(). */
 #define RGBX_SYM_TICK "rgbx_tick"
 
-/*
- * === Optional exports ======================================================
+/** @} */
+
+/**
+ * @name Optional exports
+ *
  * Optional capabilities are negotiated by SYMBOL PRESENCE, not by the ABI
  * version: the host resolves each of these with a nullptr-tolerant
  * llext_find_sym() and applies a documented default when the symbol is
@@ -226,6 +258,8 @@ void rgbx_tick(void);
  * rejected every already-provisioned .llext for a purely advisory signal).
  * An optional export that IS present is still bounds-checked like the
  * required ones; a present-but-invalid symbol rejects the extension.
+ *
+ * @{
  */
 
 /** @brief OPTIONAL. If exported, the extension sets it during rgbx_tick():
@@ -236,7 +270,10 @@ void rgbx_tick(void);
  *  writable global (extension .data/.bss, not .rodata). */
 extern uint8_t rgbx_good_moment;
 
+/** @brief llext symbol name of #rgbx_good_moment. */
 #define RGBX_SYM_GOOD_MOMENT "rgbx_good_moment"
+
+/** @} */
 
 #ifdef __cplusplus
 } /* extern "C" */

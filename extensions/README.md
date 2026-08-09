@@ -3,16 +3,21 @@
 This directory is the registry of **community rgbx animation extensions** —
 extensions developed in standalone repos (from
 [rgbx-extension-template](https://github.com/skalldri/rgbx-extension-template))
-and shipped on this repo's firmware releases. Design:
-`fw/docs/standalone-extension-repos.md`. The worked example is
-[rgbx-demo-wave](https://github.com/skalldri/rgbx-demo-wave).
+and shipped on this repo's firmware releases. The worked example is
+[rgbx-demo-wave](https://github.com/skalldri/rgbx-demo-wave); the design
+rationale is in
+[`fw/docs/standalone-extension-repos.md`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/docs/standalone-extension-repos.md).
 
 ## Publishing your extension
 
-1. Develop it from the template (see the template README: build with
-   `./build.sh`, test by dragging the `.wasm` onto
+1. Develop it from the template (see the
+   [template README](https://github.com/skalldri/rgbx-extension-template#readme):
+   build with
+   [`./build.sh`](https://github.com/skalldri/rgbx-extension-template/blob/main/build.sh),
+   test by dragging the `.wasm` onto
    <https://rgb-sunglasses.autom8ed.com/sim/>).
-2. Open a PR against this repo adding one entry to `registry.json`:
+2. Open a PR against this repo adding one entry to
+   [`registry.json`](https://github.com/skalldri/rgb-sunglasses/blob/main/extensions/registry.json):
    - `name` — must equal your CMake `project()` name and match
      `^[a-z0-9_]{1,25}$` (it becomes the `.llext` filename on the device)
    - `repo` — your public GitHub repo
@@ -20,7 +25,8 @@ and shipped on this repo's firmware releases. Design:
      changing it later means another reviewed PR)
    - `description`, `author`, `license` (OSI-approved; your repo must carry
      the license file)
-3. CI (`community-extensions.yml`) validates the registry and builds your
+3. CI ([`community-extensions.yml`](https://github.com/skalldri/rgb-sunglasses/blob/main/.github/workflows/community-extensions.yml))
+   validates the registry and builds your
    pinned commit from source — both targets, pinned toolchains, all gates
    (undefined symbols vs the device's export table, section layout, heap
    fit, wasm import/export contract).
@@ -40,6 +46,8 @@ the firmware; fix and PR a new rev to ride the next release.
 ```bash
 node extensions/validate-registry.mjs
 ```
+
+([`validate-registry.mjs`](https://github.com/skalldri/rgb-sunglasses/blob/main/extensions/validate-registry.mjs))
 
 ## Before you submit: bound your phase accumulators
 

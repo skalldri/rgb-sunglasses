@@ -1,0 +1,256 @@
+<!-- HTML header for doxygen 1.12.0
+     Generated with `doxygen -w html header.html footer.html /dev/null`, then
+     customized (see the two "RGB Sunglasses site" blocks below) to carry the
+     project site's nav bar so /api matches the rest of
+     rgb-sunglasses.autom8ed.com. Regenerate from the same command if a Doxygen
+     upgrade changes the expected $placeholders, then re-apply those blocks. -->
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "https://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="$langISO">
+<head>
+<meta http-equiv="Content-Type" content="text/xhtml;charset=UTF-8"/>
+<meta http-equiv="X-UA-Compatible" content="IE=11"/>
+<meta name="generator" content="Doxygen $doxygenversion"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<!--BEGIN PROJECT_NAME--><title>$projectname: $title</title><!--END PROJECT_NAME-->
+<!--BEGIN !PROJECT_NAME--><title>$title</title><!--END !PROJECT_NAME-->
+<!--BEGIN PROJECT_ICON-->
+<link rel="icon" href="$relpath^$projecticon" type="image/x-icon" />
+<!--END PROJECT_ICON-->
+<link href="$relpath^tabs.css" rel="stylesheet" type="text/css"/>
+<!--BEGIN DISABLE_INDEX-->
+  <!--BEGIN FULL_SIDEBAR-->
+<script type="text/javascript">var page_layout=1;</script>
+  <!--END FULL_SIDEBAR-->
+<!--END DISABLE_INDEX-->
+<script type="text/javascript" src="$relpath^jquery.js"></script>
+<script type="text/javascript" src="$relpath^dynsections.js"></script>
+<!--BEGIN COPY_CLIPBOARD-->
+<script type="text/javascript" src="$relpath^clipboard.js"></script>
+<!--END COPY_CLIPBOARD-->
+$treeview
+$search
+$mathjax
+$darkmode
+<link href="$relpath^$stylesheet" rel="stylesheet" type="text/css" />
+$extrastylesheet
+<!-- BEGIN RGB Sunglasses site: dark-mode toggle + nav bar ------------------
+     The toggle follows the OS `prefers-color-scheme` by default, matching how
+     the rest of the site themes itself (site/assets/style.css) — without it
+     /api would stay light while /docs went dark.
+
+     The nav styles are deliberately inlined and scoped to `.rgbx-nav` rather
+     than pulling in /assets/style.css: that file sets global `body`, `a` and
+     `*` rules which would override doxygen-awesome's own typography and link
+     colors. Colors below are copied from style.css's :root tokens so the two
+     stay visually identical; update both together. -->
+<script type="text/javascript" src="$relpath^doxygen-awesome-darkmode-toggle.js"></script>
+<script type="text/javascript">
+  DoxygenAwesomeDarkModeToggle.init()
+</script>
+<style>
+  /* Desktop layout: let the browser size the sidebar header.
+     ---------------------------------------------------------------------
+     doxygen-awesome-sidebar-only.css lays the desktop view out with a single
+     magic constant, --top-height: #top gets that fixed height with
+     overflow:hidden, #side-nav is offset by it (`top: var(--top-height)`),
+     and #doc-content pads by it. That works only while #top starts at
+     viewport y=0 and its contents (title + version + brief + the search bar,
+     which also lives inside #top) happen to fit the constant.
+
+     Neither holds here. We add a site nav bar above #top, so every one of
+     those viewport-relative offsets is short by the nav's height — which is
+     what put the nav tree underneath the search bar. And the header's
+     contents are not fixed-size: PROJECT_NUMBER is a `git describe` string
+     whose length varies per build, so any constant is a guess that silently
+     clips when it is wrong.
+
+     So replace the offsets with a grid and let the browser do the
+     arithmetic. `auto` rows size to their content; the nav tree and the
+     content pane each take the remaining height and scroll internally. No
+     measurement, nothing to re-tune when the title or version changes. */
+  @media screen and (min-width: 768px) {
+    body {
+      display: grid;
+      /* col 1: sidebar (width still the theme's, so #nav-path lines up).
+         col 2: content. minmax(0,…) lets wide content scroll rather than
+         stretching the column. */
+      grid-template-columns: var(--side-nav-fixed-width) minmax(0, 1fr);
+      /* row 1: site nav.  row 2: doxygen header (auto = fits its content).
+         row 3: nav tree, taking whatever is left. */
+      grid-template-rows: auto auto minmax(0, 1fr);
+      height: 100vh;
+      overflow: hidden;
+      margin: 0;
+    }
+
+    .rgbx-nav {
+      grid-column: 1 / -1;
+      grid-row: 1;
+      position: static; /* already permanently visible as its own row */
+    }
+
+    #top {
+      grid-column: 1;
+      grid-row: 2;
+      /* Undo the fixed-height box: this is what was clipping. */
+      height: auto;
+      max-width: none;
+      margin-bottom: 0;
+      overflow: visible;
+      border-right: 1px solid var(--separator-color);
+    }
+
+    #side-nav {
+      grid-column: 1;
+      grid-row: 3;
+      /* Undo the viewport-relative offset + height. width is !important
+         because resize.js writes an inline width on this element. */
+      position: static;
+      top: auto;
+      width: auto !important;
+      min-width: 0;
+      max-width: none;
+      height: auto !important;
+      min-height: 0;
+      overflow: hidden;
+      border-right: 1px solid var(--separator-color);
+    }
+
+    #nav-tree {
+      height: 100% !important;
+      max-height: none;
+      overflow-y: auto;
+    }
+
+    /* The 1px separator is drawn by the borders above; the theme's handle
+       fakes it with a box-shadow sized from --top-height, which no longer
+       corresponds to anything. */
+    #splitbar {
+      display: none;
+    }
+
+    #doc-content {
+      grid-column: 2;
+      grid-row: 2 / -1;
+      height: auto !important;
+      max-height: none;
+      margin-left: 0 !important;
+      padding-top: calc(2 * var(--spacing-large));
+      overflow-y: auto;
+    }
+  }
+
+  /* The title can now wrap freely — the row grows to fit — but the table it
+     sits in must be told to respect the column width, or it sizes to its
+     widest content and overflows horizontally. */
+  #titlearea table {
+    width: 100%;
+    table-layout: fixed;
+  }
+  #projectname {
+    white-space: normal;
+    overflow-wrap: break-word;
+    line-height: 1.25;
+  }
+
+  .rgbx-nav {
+    position: sticky; top: 0; z-index: 100;
+    backdrop-filter: saturate(180%) blur(12px);
+    background: rgba(255, 255, 255, 0.85);
+    border-bottom: 1px solid #e3e7ee;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 17px; line-height: 1.6;
+  }
+  html.dark-mode .rgbx-nav { background: rgba(15, 18, 22, 0.85); border-bottom-color: #262c35; }
+  .rgbx-nav .rgbx-nav-inner {
+    max-width: 960px; margin: 0 auto; padding: 0.85rem 1.25rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  }
+  .rgbx-nav a { text-decoration: none; }
+  .rgbx-nav a:hover { text-decoration: underline; }
+  .rgbx-nav .rgbx-brand {
+    font-weight: 700; color: #1a1d23;
+    display: inline-flex; align-items: center; gap: 0.5rem;
+  }
+  html.dark-mode .rgbx-nav .rgbx-brand { color: #e7eaf0; }
+  .rgbx-nav .rgbx-brand:hover { text-decoration: none; }
+  .rgbx-nav .rgbx-brand-dot {
+    width: 0.8rem; height: 0.8rem; border-radius: 50%;
+    background: linear-gradient(135deg, #6c4bd6, #d6417f);
+    box-shadow: 0 0 10px #d6417f;
+  }
+  .rgbx-nav .rgbx-nav-links { display: flex; flex-wrap: wrap; gap: 1.25rem; font-size: 0.95rem; }
+  .rgbx-nav .rgbx-nav-links a { color: #565e6b; }
+  .rgbx-nav .rgbx-nav-links a:hover { color: #1a1d23; }
+  html.dark-mode .rgbx-nav .rgbx-nav-links a { color: #9aa4b2; }
+  html.dark-mode .rgbx-nav .rgbx-nav-links a:hover { color: #e7eaf0; }
+  .rgbx-nav .rgbx-nav-links a.rgbx-current { color: #6c4bd6; font-weight: 600; }
+  html.dark-mode .rgbx-nav .rgbx-nav-links a.rgbx-current { color: #a78bfa; }
+</style>
+<!-- END RGB Sunglasses site -->
+</head>
+<body>
+<!-- BEGIN RGB Sunglasses site: nav bar (mirrors site/index.html's nav — keep
+     the link list in sync with NAV_LINKS in scripts/build-site.py too). -->
+<nav class="rgbx-nav">
+  <div class="rgbx-nav-inner">
+    <a class="rgbx-brand" href="/"><span class="rgbx-brand-dot"></span>RGB Sunglasses</a>
+    <div class="rgbx-nav-links">
+      <a href="https://github.com/skalldri/rgb-sunglasses" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/skalldri/rgb-sunglasses/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="/docs">Docs</a>
+      <a href="/sim">Simulator</a>
+      <a href="/api" class="rgbx-current">API</a>
+      <a href="/privacy">Privacy</a>
+    </div>
+  </div>
+</nav>
+<!-- END RGB Sunglasses site -->
+<!--BEGIN DISABLE_INDEX-->
+  <!--BEGIN FULL_SIDEBAR-->
+<div id="side-nav" class="ui-resizable side-nav-resizable"><!-- do not remove this div, it is closed by doxygen! -->
+  <!--END FULL_SIDEBAR-->
+<!--END DISABLE_INDEX-->
+
+<div id="top"><!-- do not remove this div, it is closed by doxygen! -->
+
+<!--BEGIN TITLEAREA-->
+<div id="titlearea">
+<table cellspacing="0" cellpadding="0">
+ <tbody>
+ <tr id="projectrow">
+  <!--BEGIN PROJECT_LOGO-->
+  <td id="projectlogo"><img alt="Logo" src="$relpath^$projectlogo"$logosize/></td>
+  <!--END PROJECT_LOGO-->
+  <!--BEGIN PROJECT_NAME-->
+  <td id="projectalign">
+   <div id="projectname">$projectname<!--BEGIN PROJECT_NUMBER--><span id="projectnumber">&#160;$projectnumber</span><!--END PROJECT_NUMBER-->
+   </div>
+   <!--BEGIN PROJECT_BRIEF--><div id="projectbrief">$projectbrief</div><!--END PROJECT_BRIEF-->
+  </td>
+  <!--END PROJECT_NAME-->
+  <!--BEGIN !PROJECT_NAME-->
+   <!--BEGIN PROJECT_BRIEF-->
+    <td>
+    <div id="projectbrief">$projectbrief</div>
+    </td>
+   <!--END PROJECT_BRIEF-->
+  <!--END !PROJECT_NAME-->
+  <!--BEGIN DISABLE_INDEX-->
+   <!--BEGIN SEARCHENGINE-->
+     <!--BEGIN !FULL_SIDEBAR-->
+    <td>$searchbox</td>
+     <!--END !FULL_SIDEBAR-->
+   <!--END SEARCHENGINE-->
+  <!--END DISABLE_INDEX-->
+ </tr>
+  <!--BEGIN SEARCHENGINE-->
+   <!--BEGIN FULL_SIDEBAR-->
+   <tr><td colspan="2">$searchbox</td></tr>
+   <!--END FULL_SIDEBAR-->
+  <!--END SEARCHENGINE-->
+ </tbody>
+</table>
+</div>
+<!--END TITLEAREA-->
+<!-- end header part -->

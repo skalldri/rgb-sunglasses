@@ -1,0 +1,64 @@
+name: doxygen
+description: >-
+  Installs a PINNED Doxygen release binary for building the rgbx extension API
+  docs. Single source of truth for the version — used by both sdk-ci.yml (the
+  warnings-are-errors pre-merge gate) and pages.yml (the deploy that publishes
+  /api), so the gate can never validate with a different Doxygen than the one
+  that ships the docs. Same rationale as ./sim-wasm-toolchain.
+
+  Why pin at all: the docs build runs with WARN_AS_ERROR=FAIL_ON_WARNINGS, and
+  Doxygen's warning set changes between releases — an unpinned `apt-get install
+  doxygen` would let a runner-image bump turn a green PR red with no repo
+  change. The version must also stay inside the range supported by the vendored
+  doxygen-awesome-css theme; see fw/extensions/doxygen/VENDORED.md, which is the
+  contract this action implements.
+
+  Keep DOXYGEN_VERSION below in sync with .devcontainer/Dockerfile (local
+  preview) — same duplication, and same reason, as the wasi-sdk pin there.
+
+inputs:
+  version:
+    description: Doxygen version to install.
+    required: false
+    default: '1.12.0'
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Doxygen binary
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/rgb-sunglasses/doxygen
+        key: doxygen-${{ inputs.version }}-linux-x86_64
+
+    - name: Install Doxygen
+      shell: bash
+      env:
+        DOXYGEN_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        dest="$HOME/.cache/rgb-sunglasses/doxygen"
+        if [ ! -x "$dest/bin/doxygen" ]; then
+          mkdir -p "$dest"
+          # Release tags spell the version with underscores (1.12.0 -> 1_12_0),
+          # while the asset filename keeps the dots.
+          tag="Release_${DOXYGEN_VERSION//./_}"
+          # The tarball's top-level dir is doxygen-<version>/; strip it so the
+          # binary always lands at $dest/bin/doxygen.
+          curl -fsSL --retry 3 \
+            "https://github.com/doxygen/doxygen/releases/download/${tag}/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
+            | tar -xz -C "$dest" --strip-components=1
+        fi
+        echo "$dest/bin" >> "$GITHUB_PATH"
+
+    - name: Verify the pinned version is what actually runs
+      shell: bash
+      run: |
+        set -euo pipefail
+        actual="$(doxygen --version | cut -d' ' -f1)"
+        if [ "$actual" != "${{ inputs.version }}" ]; then
+          echo "::error::expected Doxygen ${{ inputs.version }}, got $actual" >&2
+          exit 1
+        fi
+        echo "Doxygen $actual"

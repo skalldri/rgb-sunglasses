@@ -43,6 +43,11 @@ NAV_LINKS = [
     # The extension simulator is a Vite bundle built by pages.yml into
     # site/sim/ (not rendered by this script) — see fw/sim/README.md.
     ("/sim", "Simulator", False),
+    # The extension API reference is Doxygen output built by pages.yml into
+    # site/api/ (not rendered by this script) — see fw/extensions/Doxyfile.
+    # Its own nav lives in fw/extensions/doxygen/header.html; keep the two in
+    # sync, along with the hardcoded nav in site/index.html.
+    ("/api", "API", False),
     ("/privacy", "Privacy", False),
 ]
 

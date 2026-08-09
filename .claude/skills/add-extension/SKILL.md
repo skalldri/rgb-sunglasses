@@ -190,9 +190,19 @@ Background and the correct wrap idiom: "Bound your phase accumulators" in
 
 ## API docs
 
+Published at <https://rgb-sunglasses.autom8ed.com/api> (rebuilt from `main` by
+`pages.yml`). To build locally:
+
 ```bash
-mkdir -p fw/build && (cd fw/extensions && doxygen Doxyfile)   # output: fw/build/doxygen/html
+mkdir -p fw/build && (cd fw/extensions && RGBX_DOC_VERSION=local doxygen Doxyfile)   # output: fw/build/doxygen/html
 ```
 
 (The Doxyfile's relative paths resolve against the CWD, so it must be run from
-`fw/extensions/`, and `fw/build` must exist.)
+`fw/extensions/`, and `fw/build` must exist. `RGBX_DOC_VERSION` stamps the
+version in the page header — any string works locally; CI passes `git describe`.)
+
+**If you added or changed anything in `fw/include/rgbx/`, run this before
+opening the PR.** The build sets `WARN_AS_ERROR` + `WARN_IF_UNDOCUMENTED` +
+`WARN_NO_PARAMDOC`, and `sdk-ci.yml`'s `docs` job runs the identical build as a
+gate — a new function without a `@brief`, or with an undocumented parameter or
+return value, fails CI. Fix the comment; don't relax the Doxyfile.

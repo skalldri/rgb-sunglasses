@@ -26,6 +26,8 @@ site/proto0-hardware-guide/
 site/developer-setup/
 # The extension simulator bundle (vite build output copied in by pages.yml).
 site/sim/
+# The rgbx extension API reference (Doxygen output copied in by pages.yml).
+site/api/
 
 # Beat-detection tuning corpus (issue #264). Deliberately NOT committed: the
 # clips are large (~2 MB per 60 s WAV) and cheap to regenerate — see

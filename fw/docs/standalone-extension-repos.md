@@ -1,7 +1,10 @@
 # Standalone extension repos: SDK artifact, template repo, and registry
 
-Status: **design** — approved direction, not yet implemented. Implementation is
-phased (§10); nothing in this doc exists yet unless explicitly marked as such.
+Status: **implemented** — all five phases are complete (§10). This started life
+as a design doc and is kept as the reference for *why* the SDK, template repo
+and registry are shaped the way they are; §10 records what shipped in which PR,
+including the two acceptance criteria deliberately deferred to a hardware
+session and to the first post-merge `fw-v*` release (issues #295 and #298).
 
 ## 1. Motivation and goals
 
