@@ -598,11 +598,20 @@ is attached (DHCSR C_DEBUGEN), in which case it halts for GDB as before. Expect 
 freeze during capture (16-page partition erase + write, IRQs locked) — including on
 recoverable sandbox faults.
 
-**Drain + reminder** (`src/debug/coredump_manager.cpp`, `CONFIG_APP_COREDUMP_MANAGER`):
+**Drain** (`src/debug/coredump_manager.cpp`, `CONFIG_APP_COREDUMP_MANAGER`):
 every `CONFIG_APP_COREDUMP_REMINDER_PERIOD_S` (60 s) a dedicated workqueue checks the
-partition, copies any verified dump to `/NAND:/coredump/core_NNNN.bin`, invalidates the
-partition, and logs a `LOG_WRN` reminder while any `core_*.bin` remains on disk. Delete
-the files (e.g. `coredump-fetch.sh --delete` + board reboot) to stop the reminder. The
+partition, copies any verified dump to `/NAND:/coredump/core_NNNN.bin`, and invalidates
+the partition. **There is no recurring "awaiting collection" reminder** — it was removed
+because it re-logged every 60 s forever on any board carrying an uncollected dump. Check
+on demand with `coredump_mgr status`, and collect with `coredump-fetch.sh` (`--delete` frees
+the space; the board must be rebooted after, see the FAT note below).
+
+**That 60 s period is a data-loss window, not just a poll interval.** The NCS flash
+backend erases the whole coredump partition at the *start* of every capture
+(`coredump_flash_backend_start()` → `flash_area_flatten()`), so the next crash is always
+captured — what the drain rescues is the *previous* dump. A second fault inside the
+period destroys the first one, which on a boot-looping board is the dump you actually
+wanted. Do not raise it to quiet logs. The
 pure logic lives in `coredump_manager_core.cpp` behind a `PartitionOps` seam so
 `tests/debug/coredump_manager` covers it on native_sim (where `DEBUG_COREDUMP` doesn't
 exist).

@@ -8,8 +8,9 @@
 # destination directory, and unmounts.
 #
 # Usage: coredump-fetch.sh [--delete] [dest-dir]
-#   --delete   remove the dump files from the board after copying (stops the
-#              firmware's periodic "awaiting collection" reminder). NOTE: the
+#   --delete   remove the dump files from the board after copying, freeing the
+#              space they occupy on /NAND: (there is no periodic firmware
+#              reminder to silence — use `coredump_mgr status`). NOTE: the
 #              firmware caches the FAT state it mounted at boot — reboot the
 #              board after deleting so it re-reads the filesystem (see
 #              fw/CLAUDE.md "FAT concurrent access causes read corruption").

@@ -9,6 +9,7 @@ extern "C" {
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/shell/shell.h>
 
 #include <cerrno>
 
@@ -17,14 +18,25 @@ extern "C" {
 /* Coredump manager (issue #80): periodically drains crash dumps captured in
  * the internal-flash coredump_partition (written by the NCS
  * DEBUG_COREDUMP_BACKEND_NRF_FLASH_PARTITION backend during a fatal fault)
- * into /NAND:/coredump/core_NNNN.bin, and nags over the log until the files
- * are collected (fw/scripts/coredump-fetch.sh) and deleted.
+ * into /NAND:/coredump/core_NNNN.bin. Collect them with
+ * fw/scripts/coredump-fetch.sh; check for them on demand with `coredump_mgr status`.
+ * There is deliberately no recurring "awaiting collection" log — see the note in
+ * check_work_handler().
  *
  * The check runs every CONFIG_APP_COREDUMP_REMINDER_PERIOD_S rather than only
  * at boot: extension-sandbox faults are demoted to a thread abort by
  * k_sys_fatal_error_handler (extension_host.cpp) and never reboot, but
  * z_fatal_error() captures their coredump before the handler runs — the
- * periodic pass harvests those dumps while the system keeps running. */
+ * periodic pass harvests those dumps while the system keeps running.
+ *
+ * THAT PERIOD IS A DATA-LOSS WINDOW, not just a polling interval. The NCS flash
+ * backend erases the WHOLE coredump partition at the start of every capture
+ * (coredump_flash_backend_start() -> flash_area_flatten(), see
+ * subsys/debug/coredump/coredump_backend_flash_partition.c). So the next crash is
+ * always captured whether or not the drain has run — what the drain protects is
+ * the PREVIOUS dump. A second fault inside this period destroys the first, which
+ * on a boot-looping or repeatedly-faulting board is exactly the root-cause dump
+ * you wanted. Raising the period is not free. */
 
 /* The log module is REGISTERed once in coredump_manager_core.cpp (which the
  * native_sim test links on its own); this glue file, compiled only into the
@@ -97,10 +109,16 @@ void check_work_handler(struct k_work* work) {
      * "failed to create directory (-17)" once the directory is there. So this
      * stat-then-mkdir stays completely quiet whether the directory already
      * exists (skip mkdir) or is absent (mkdir creates it, silent on success),
-     * and only surfaces a log on a genuine, unexpected mkdir failure. Without
-     * it, any_dump_files() logged that spurious "-2" every period on a board
-     * that had never captured a dump. Runs here, not at init, because FATFS
-     * calls are stack-hungry and this workqueue has the larger stack for them. */
+     * and only surfaces a log on a genuine, unexpected mkdir failure.
+     *
+     * DO NOT DELETE THIS AS DEAD CODE. It originally existed to stop
+     * any_dump_files() logging a spurious "-2" every period, and that caller is
+     * gone — but it still has a job: drain_to_dir() only mkdirs when a dump
+     * actually exists, so on a board that has never crashed this block is the
+     * ONLY thing that creates /NAND:/coredump. Without it, `coredump_mgr status` and
+     * `fs ls /NAND:/coredump` fail with -ENOENT instead of reporting an empty
+     * directory. Runs here, not at init, because FATFS calls are stack-hungry and
+     * this workqueue has the larger stack for them. */
     struct fs_dirent dir_stat;
     if (fs_stat(kDumpDir, &dir_stat) == -ENOENT) {
         int mkrc = fs_mkdir(kDumpDir);
@@ -114,10 +132,23 @@ void check_work_handler(struct k_work* work) {
         LOG_WRN("coredump drain failed (%d) — will retry", rc);
     }
 
-    if (coredump_manager_core::any_dump_files(kDumpDir)) {
-        LOG_WRN("crash dump(s) awaiting collection in %s — run fw/scripts/coredump-fetch.sh",
-                kDumpDir);
-    }
+    /* No "dumps awaiting collection" reminder. It re-logged every period for as
+     * long as any core_*.bin sat on /NAND:, which is until someone runs
+     * coredump-fetch.sh — so on a board with an old dump it is a permanent
+     * warning every minute, burying real events (the same log-spam reasoning as
+     * fw/CLAUDE.md's "no info-level logs in steady-state paths"). It also cost an
+     * fs_opendir + readdir sweep of the directory every period purely to decide
+     * whether to print it. `coredump_mgr status` answers the same question on
+     * demand. The drain above still runs on this period — that is the part that
+     * matters — but note what it actually protects: the backend erases the whole
+     * partition at the start of every capture, so draining does not enable the
+     * next dump, it rescues the PREVIOUS one (see the file header).
+     *
+     * The tradeoff accepted here: there is no longer any REPEATING announcement
+     * that uncollected dumps exist. If a board panics and reboots unattended, the
+     * one-shot drain LOG_INF is emitted before anyone attaches a terminal, and a
+     * later attach sees a clean log. `coredump_mgr status` (below) is the on-demand
+     * replacement, and is the caller for any_dump_files(). */
 
     k_work_reschedule_for_queue(&coredump_workq, k_work_delayable_from_work(work),
                                 K_SECONDS(CONFIG_APP_COREDUMP_REMINDER_PERIOD_S));
@@ -143,4 +174,43 @@ static_assert(CONFIG_APP_COREDUMP_MANAGER_INIT_PRIORITY > CONFIG_APPLICATION_INI
 
 SYS_INIT(coredump_manager_init, APPLICATION, CONFIG_APP_COREDUMP_MANAGER_INIT_PRIORITY);
 
+/* `coredump_mgr status` — the on-demand replacement for the removed periodic reminder,
+ * and the production caller for any_dump_files() (without it that helper would be
+ * exported and tested but exercised by nothing that ships).
+ *
+ * Deliberately NOT gated on CONFIG_APP_CRASH_TEST_COMMANDS: that symbol guards
+ * commands that deliberately crash the firmware, whereas this is read-only and is
+ * exactly what you want available on a board that has already crashed. */
+int cmd_coredump_status(const struct shell *sh, size_t, char **) {
+    if (coredump_manager_core::any_dump_files(kDumpDir)) {
+        shell_print(sh, "crash dump(s) awaiting collection in %s", kDumpDir);
+        shell_print(sh, "collect with: fw/scripts/coredump-fetch.sh [--delete]");
+        shell_print(sh, "list with:    fs ls %s", kDumpDir);
+        return 0;
+    }
+    /* Distinguish "nothing to collect" from "the drain has not created the
+     * directory yet", since the latter looks identical from `fs ls`. */
+    struct fs_dirent st;
+    if (fs_stat(kDumpDir, &st) == -ENOENT) {
+        shell_print(sh, "no dumps (%s does not exist yet)", kDumpDir);
+    } else {
+        shell_print(sh, "no dumps awaiting collection in %s", kDumpDir);
+    }
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(
+    sub_coredump_mgr,
+    SHELL_CMD(status, NULL, "Report whether crash dumps are awaiting collection",
+              cmd_coredump_status),
+    SHELL_SUBCMD_SET_END);
+
 }  // namespace
+
+/* Registered outside the anonymous namespace: SHELL_CMD_REGISTER emits a section
+ * symbol that must have external linkage. Named `coredump_mgr` rather than
+ * `coredump` because Zephyr's own DEBUG_COREDUMP shell already owns `coredump`
+ * (that is where `coredump find` lives) and two roots with the same name silently
+ * shadow each other. */
+SHELL_CMD_REGISTER(coredump_mgr, &sub_coredump_mgr,
+                   "Coredump drain manager (see also Zephyr's own `coredump`)", NULL);
