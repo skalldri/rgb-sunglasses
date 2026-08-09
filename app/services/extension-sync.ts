@@ -16,7 +16,6 @@
  * directly testable.
  */
 
-import { animationServiceUuidForId } from '@/constants/bluetooth';
 import { sha256 } from 'js-sha256';
 import { GitHubAsset } from './github-releases';
 import { isSmpGroupError, McuMgrClient, SmpGroup } from './mcumgr';
@@ -203,74 +202,12 @@ export function entriesNeedingUpload(entries: ExtensionSyncEntry[]): ExtensionSy
     return entries.filter(e => e.status !== 'up-to-date');
 }
 
-/**
- * Firmware animation-id range for extension slots: `kAnimationIdBase` (0x40)
- * through `kAnimationIdBase + kMaxExtensions - 1`, per
- * `fw/src/extensions/extension_limits.h`.
- */
-const EXTENSION_ANIMATION_ID_MIN = 0x40;
-const EXTENSION_ANIMATION_ID_MAX = 0x4f;
-
-/**
- * The full set of extension animation service UUIDs, built through
- * `animationServiceUuidForId` so the UUID scheme lives in exactly one place
- * (constants/bluetooth.ts) rather than being re-derived here.
- *
- * Matching whole UUIDs rather than just the id field also avoids counting an
- * unrelated service that merely happens to land in the same numeric range —
- * a future app service is one character away (suffix `56789abc0000` vs the
- * animation services' `56789abd0000`).
- */
-const EXTENSION_SERVICE_UUIDS: ReadonlySet<string> = new Set(
-    Array.from(
-        { length: EXTENSION_ANIMATION_ID_MAX - EXTENSION_ANIMATION_ID_MIN + 1 },
-        (_, i) => animationServiceUuidForId(EXTENSION_ANIMATION_ID_MIN + i).toLowerCase()
-    )
-);
-
-/**
- * How many extension animation services the device exposed at connect time —
- * i.e. how many `.llext` files the firmware successfully loaded from
- * `/NAND:/ext`.
- */
-export function countDeviceExtensions(serviceUuids: string[]): number {
-    return serviceUuids.filter(uuid => EXTENSION_SERVICE_UUIDS.has(uuid.toLowerCase())).length;
-}
-
-/**
- * How many extensions the device is *running* that this release does not ship.
- *
- * MCUmgr's FS group has no delete command and no way to list a directory, so
- * these can neither be removed nor named over BLE — the count is surfaced so
- * the user knows to look, and removal is a USB mass-storage job.
- *
- * Counting rather than naming is deliberate. The device's extension *services*
- * carry the manifest display name ("Hello Extension"), while the release ships
- * *file* names ("hello.llext"), and hardware confirms those do not correspond —
- * so matching them up would produce a confident-looking list that is sometimes
- * simply wrong.
- *
- * **Both inputs must describe the same boot.** `deviceExtensionCount` comes
- * from GATT services, which only change when the firmware re-scans at boot, so
- * `entries` has to be the plan as it looked *before* any sync. Re-running this
- * against a post-sync plan quietly returns 0: freshly uploaded files count as
- * present while the service count still reflects the old boot, so the warning
- * would vanish while the stale extensions are still installed and still
- * loading. The modal therefore computes this once per connection.
- *
- * @param deviceExtensionCount from countDeviceExtensions()
- * @param entries the pre-sync plan from planExtensionSync()
- */
-export function countUnmanagedExtensions(
-    deviceExtensionCount: number,
-    entries: ExtensionSyncEntry[]
-): number {
-    // deviceSha256 is non-null only for a file the device could actually hash,
-    // which is the same condition under which it could have been loaded - a
-    // zero-length ('unreadable') file is correctly not counted as present.
-    const releasedAndLoaded = entries.filter(e => e.deviceSha256 !== null).length;
-    return Math.max(0, deviceExtensionCount - releasedAndLoaded);
-}
+// The old `countDeviceExtensions`/`countUnmanagedExtensions` heuristic — count
+// GATT extension services, subtract release-shipped files the device could hash,
+// valid only when both inputs describe the same boot — is gone: the FILE_MGMT
+// LIST (`McuMgrClient.listDeviceFiles`, services/extension-management.ts) names
+// every device file directly, including the loaded-but-deleted state the count
+// could only imply.
 
 export interface ExtensionSyncProgress {
     /** Entry currently being uploaded. */

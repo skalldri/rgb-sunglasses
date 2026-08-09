@@ -108,10 +108,10 @@ describe('FirmwareUpdateFlow screen', () => {
         expect(await findByText(/Unknown update source: carrier-pigeon/)).toBeTruthy();
     });
 
-    it('lists the extensions on the restart step instead of only counting them', async () => {
-        // The staged step embeds the real ExtensionSyncCard, so the user can see which
-        // files are involved and watch the upload progress - a bare "1 extension will be
-        // updated" line gave no way to tell what was about to change.
+    it('offers the extension picker on the restart step with updates preselected', async () => {
+        // The staged step renders the per-extension picker: every change the restart
+        // will apply is a named, individually toggleable row — updates of extensions
+        // the user already has come preselected, and nothing is bulk-installed.
         mockParams = { source: 'file', uri: 'file:///cache/fw.zip', name: 'fw.zip' };
         jest.spyOn(FirmwareSource, 'loadPackage').mockResolvedValue({
             manifest: { 'format-version': 1, time: 0, name: 'fw', files: [] },
@@ -151,14 +151,20 @@ describe('FirmwareUpdateFlow screen', () => {
             'b'.repeat(64)
         );
 
-        const { findByText } = renderWithMcuMgr(<FirmwareUpdateFlow />);
+        const { findByText, findByTestId, queryByText } = renderWithMcuMgr(<FirmwareUpdateFlow />);
         fireEvent.press(await findByText('Install'));
 
-        // Named, with its status - not just a count.
-        expect(await findByText('plasma.llext')).toBeTruthy();
-        expect(await findByText('Update available')).toBeTruthy();
-        // The card must not offer a competing Sync button here; the restart drives it.
+        // Named with its action, individually toggleable, preselected as an update.
+        expect(await findByText('Update plasma.llext')).toBeTruthy();
+        const row = await findByTestId('extension-picker-item-plasma.llext');
+        expect(row.props.accessibilityState.checked).toBe(true);
+        expect(await findByText(/Restarting will apply 1 extension change first/)).toBeTruthy();
         expect(await findByText('Restart and Install')).toBeTruthy();
+
+        // Unticking the row drops it from the restart's work.
+        fireEvent.press(row);
+        expect(await findByText(/Restart now to install it/)).toBeTruthy();
+        expect(queryByText(/Restarting will apply/)).toBeNull();
     });
 
     it('exposes stable testIDs for hardware validation runs', async () => {

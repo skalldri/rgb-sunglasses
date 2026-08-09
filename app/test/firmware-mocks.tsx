@@ -59,6 +59,9 @@ export type MockClientSpies = {
   eraseImage: jest.SpyInstance;
   destroy: jest.SpyInstance;
   getOsInfo: jest.SpyInstance;
+  listDeviceFiles: jest.SpyInstance;
+  deleteDeviceFile: jest.SpyInstance;
+  closeOpenedFile: jest.SpyInstance;
 };
 
 export const defaultSelectedDevice = {
@@ -118,6 +121,15 @@ export function mockClientMethods(overrides?: Partial<Record<keyof MockClientSpi
     getOsInfo: jest
       .spyOn(McuMgrModule.McuMgrClient.prototype, 'getOsInfo')
       .mockImplementation(overrides?.getOsInfo ?? (async () => 'rgb_sunglasses_proto0_nrf5340_cpuapp')),
+    listDeviceFiles: jest
+      .spyOn(McuMgrModule.McuMgrClient.prototype, 'listDeviceFiles')
+      .mockImplementation(overrides?.listDeviceFiles ?? (async () => [])),
+    deleteDeviceFile: jest
+      .spyOn(McuMgrModule.McuMgrClient.prototype, 'deleteDeviceFile')
+      .mockImplementation(overrides?.deleteDeviceFile ?? (async () => undefined)),
+    closeOpenedFile: jest
+      .spyOn(McuMgrModule.McuMgrClient.prototype, 'closeOpenedFile')
+      .mockImplementation(overrides?.closeOpenedFile ?? (async () => undefined)),
   };
 }
 

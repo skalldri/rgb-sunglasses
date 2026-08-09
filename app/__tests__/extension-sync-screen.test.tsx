@@ -1,10 +1,10 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { ExtensionSyncCard } from '@/components/extension-sync-card';
+import { fireEvent, waitFor } from '@testing-library/react-native';
 import React from 'react';
+import { Alert } from 'react-native';
 import * as BluetoothContext from '@/context/bluetooth-context';
 import { sha256 } from 'js-sha256';
 
-import ExtensionSyncScreen from '@/app/firmware-update/extensions';
+import ExtensionManagementScreen from '@/app/firmware-update/extensions';
 import * as GitHubReleases from '@/services/github-releases';
 import * as McuMgrModule from '@/services/mcumgr';
 import {
@@ -21,7 +21,7 @@ jest.mock('expo-router', () => {
     return { ...actual, useRouter: () => ({ push: jest.fn(), back: jest.fn() }) };
 });
 
-describe('ExtensionSyncScreen', () => {
+describe('ExtensionManagementScreen', () => {
   beforeEach(() => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -42,8 +42,8 @@ describe('ExtensionSyncScreen', () => {
       ...mockRelease.assets,
       {
         id: 30,
-        name: 'hello.llext',
-        browser_download_url: 'https://example.com/hello.llext',
+        name: 'demo_wave.llext',
+        browser_download_url: 'https://example.com/demo_wave.llext',
         size: 3216,
         content_type: 'application/octet-stream',
         digest: `sha256:${HASH_A}`,
@@ -81,223 +81,328 @@ describe('ExtensionSyncScreen', () => {
     }));
   }
 
-  function mockExtensionClient(hashes: Record<string, string | null>) {
+  function mockExtensionClient(
+    hashes: Record<string, string | null>,
+    deviceFiles: McuMgrModule.DeviceFileEntry[] | 'unsupported' = []
+  ) {
+    const spies = mockClientMethods({
+      listDeviceFiles:
+        deviceFiles === 'unsupported'
+          ? async () => {
+              // Old firmware: the group answers with a bare MGMT_ERR_ENOTSUP rc.
+              throw new McuMgrModule.SmpCommandError('File list error: rc=8', 8, undefined);
+            }
+          : async () => deviceFiles,
+    });
     const getFileSha256 = jest
       .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
       .mockImplementation(async (path: string) => hashes[path] ?? null);
     const uploadFile = jest
       .spyOn(McuMgrModule.McuMgrClient.prototype, 'uploadFile')
       .mockImplementation(async () => undefined);
-    return { getFileSha256, uploadFile };
+    return { ...spies, getFileSha256, uploadFile };
   }
 
-  it('reports each extension as up to date, outdated or not installed', async () => {
-    mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
-    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
-    mockExtensionClient({
-      '/NAND:/ext/hello.llext': HASH_A, // matches the release
-      '/NAND:/ext/plasma.llext': HASH_B, // differs
+  /** Auto-accept the destructive confirm; returns the spy for assertions. */
+  function autoConfirmRemove() {
+    return jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, buttons) => {
+      const destructive = buttons?.find(b => b.style === 'destructive');
+      destructive?.onPress?.();
     });
+  }
 
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
+  it('reports each released extension with its status and action', async () => {
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A, // matches the release
+        '/NAND:/ext/plasma.llext': HASH_B, // differs
+      },
+      [
+        { name: 'demo_wave.llext', onDisk: true, loaded: true },
+        { name: 'plasma.llext', onDisk: true, loaded: true },
+      ]
+    );
 
-    expect(await findByText('Extensions')).toBeTruthy();
-    expect(await findByText('hello.llext')).toBeTruthy();
-    expect(await findByText('Up to date')).toBeTruthy();
+    const { findByText, findByTestId, queryByTestId } = renderWithMcuMgr(
+      <ExtensionManagementScreen />
+    );
+
+    expect(await findByText('demo_wave.llext')).toBeTruthy();
+    expect(await findByText('Installed · up to date')).toBeTruthy();
     expect(await findByText('plasma.llext')).toBeTruthy();
     expect(await findByText('Update available')).toBeTruthy();
+    expect(await findByTestId('ext-mgmt-install-plasma.llext')).toBeTruthy();
+    // Up to date offers no install action.
+    expect(queryByTestId('ext-mgmt-install-demo_wave.llext')).toBeNull();
+    expect(await findByText('Everything on your sunglasses comes from this release.')).toBeTruthy();
   });
 
-  it('offers to install an extension the device does not have', async () => {
+  it('names and highlights device files the release does not ship', async () => {
+    // The whole point of FILE_MGMT LIST: hello.llext is finally visible and
+    // removable over BLE instead of a nameless count.
     mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
     mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
-    mockExtensionClient({ '/NAND:/ext/hello.llext': HASH_A }); // plasma absent
+    mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      },
+      [
+        { name: 'demo_wave.llext', onDisk: true, loaded: true },
+        { name: 'plasma.llext', onDisk: true, loaded: true },
+        { name: 'hello.llext', onDisk: true, loaded: true, displayName: 'Hello Extension' },
+      ]
+    );
 
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
+    const { findByText, findByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
 
-    expect(await findByText('Not installed')).toBeTruthy();
-    expect(await findByText('Sync Extensions')).toBeTruthy();
+    expect(await findByTestId('ext-mgmt-unmanaged-hello.llext')).toBeTruthy();
+    expect(await findByText('hello.llext')).toBeTruthy();
+    expect(await findByText('Hello Extension')).toBeTruthy();
+    expect(await findByText('Not part of this release')).toBeTruthy();
+    expect(await findByTestId('ext-mgmt-remove-hello.llext')).toBeTruthy();
   });
 
-  it('uploads only the extensions that differ, to their device paths', async () => {
+  it('renders the boot-scoped divergent states from LIST flags', async () => {
     mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
-    // The release must advertise the digest of the bytes the download actually
-    // returns, or the integrity check below refuses to upload them.
-    mockGitHub({
-      fetchLatestFirmwareRelease: async () => releaseServing(PLASMA_BYTES),
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      },
+      [
+        { name: 'demo_wave.llext', onDisk: true, loaded: true },
+        { name: 'plasma.llext', onDisk: true, loaded: true },
+        // Uploaded since boot: on disk, no slot yet.
+        { name: 'fresh.llext', onDisk: true, loaded: false },
+        // Deleted since boot: slot ghost, persistent until restart.
+        { name: 'gone.llext', onDisk: false, loaded: true, retired: true },
+      ]
+    );
+
+    const { findByText, queryByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
+
+    expect(await findByText('Takes effect after restart')).toBeTruthy();
+    expect(await findByText('Removed — restart to free the slot')).toBeTruthy();
+    // A ghost has no file to delete, so no Remove button.
+    await waitFor(() => expect(queryByTestId('ext-mgmt-remove-gone.llext')).toBeNull());
+  });
+
+  it('removes a file after the destructive confirm and offers a restart', async () => {
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    const spies = mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      },
+      [
+        { name: 'demo_wave.llext', onDisk: true, loaded: true },
+        { name: 'plasma.llext', onDisk: true, loaded: true },
+        { name: 'hello.llext', onDisk: true, loaded: true },
+      ]
+    );
+    const alert = autoConfirmRemove();
+
+    const { findByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
+    fireEvent.press(await findByTestId('ext-mgmt-remove-hello.llext'));
+
+    await waitFor(() => expect(spies.deleteDeviceFile).toHaveBeenCalledWith('hello.llext', 'ext'));
+    expect(alert).toHaveBeenCalled();
+    // Extension changes are boot-scoped, so a successful mutation surfaces the
+    // restart offer, driven by the OS-group reset.
+    const restart = await findByTestId('ext-mgmt-restart');
+    fireEvent.press(restart);
+    await waitFor(() => expect(spies.reset).toHaveBeenCalled());
+  });
+
+  it('does not delete when the confirm is cancelled', async () => {
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    const spies = mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      },
+      [{ name: 'hello.llext', onDisk: true, loaded: true }]
+    );
+    jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, buttons) => {
+      buttons?.find(b => b.style === 'cancel')?.onPress?.();
     });
-    const { uploadFile } = mockExtensionClient({
-      '/NAND:/ext/hello.llext': HASH_A,
-      '/NAND:/ext/plasma.llext': HASH_B,
-    });
+
+    const { findByTestId, queryByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
+    fireEvent.press(await findByTestId('ext-mgmt-remove-hello.llext'));
+
+    await waitFor(() => expect(spies.deleteDeviceFile).not.toHaveBeenCalled());
+    expect(queryByTestId('ext-mgmt-restart')).toBeNull();
+  });
+
+  it('installs a single extension per row, never in bulk', async () => {
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseServing(PLASMA_BYTES) });
+    const spies = mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_B, // also outdated — must NOT be uploaded
+        '/NAND:/ext/plasma.llext': null, // absent
+      },
+      [{ name: 'demo_wave.llext', onDisk: true, loaded: true }]
+    );
     mockDownload(PLASMA_BYTES);
 
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
-    fireEvent.press(await findByText('Sync Extensions'));
+    const { findByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
+    fireEvent.press(await findByTestId('ext-mgmt-install-plasma.llext'));
 
-    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
-    expect(uploadFile.mock.calls[0][0]).toBe('/NAND:/ext/plasma.llext');
+    await waitFor(() => expect(spies.uploadFile).toHaveBeenCalledTimes(1));
+    expect(spies.uploadFile.mock.calls[0][0]).toBe('/NAND:/ext/plasma.llext');
   });
 
-  it('refuses to upload a download that does not match the release digest', async () => {
-    // A truncated CDN response would otherwise overwrite a working extension
-    // with corrupt bytes that only fail at the next boot.
+  it('hides list/remove but keeps per-row install on firmware without the group', async () => {
     mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
-    mockGitHub({
-      fetchLatestFirmwareRelease: async () => releaseServing(PLASMA_BYTES),
-    });
-    const { uploadFile } = mockExtensionClient({
-      '/NAND:/ext/hello.llext': HASH_A,
-      '/NAND:/ext/plasma.llext': HASH_B,
-    });
-    mockDownload(Uint8Array.from([9, 9, 9])); // not what the digest promises
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': null,
+      },
+      'unsupported'
+    );
 
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
-    fireEvent.press(await findByText('Sync Extensions'));
+    const { findByText, findByTestId, queryByTestId } = renderWithMcuMgr(
+      <ExtensionManagementScreen />
+    );
 
-    // Nothing is written to the device, and the failure is surfaced with a
-    // retry. (The exact message is asserted in the extension-sync unit tests.)
-    expect(await findByText(/Extension sync failed/)).toBeTruthy();
-    expect(await findByText('Retry Sync')).toBeTruthy();
-    expect(uploadFile).not.toHaveBeenCalled();
+    // The release section still works: install is plain fs_mgmt upload.
+    expect(await findByTestId('ext-mgmt-install-plasma.llext')).toBeTruthy();
+    // No unmanaged section, no remove buttons, and an explanation instead.
+    expect(queryByTestId('ext-mgmt-unmanaged')).toBeNull();
+    expect(queryByTestId('ext-mgmt-remove-demo_wave.llext')).toBeNull();
+    expect(
+      await findByText(/cannot list or remove extension files over Bluetooth/)
+    ).toBeTruthy();
   });
 
-  it('keeps the entry list and a retry button when a sync fails part-way', async () => {
+  it('keeps the release rows and shows the error when only LIST fails', async () => {
+    // A transport failure on LIST must not hide install buttons that still
+    // work — per-row install is plain fs_mgmt upload, no FILE_MGMT needed.
     mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
-    mockGitHub({
-      fetchLatestFirmwareRelease: async () => releaseServing(PLASMA_BYTES),
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    mockClientMethods({
+      listDeviceFiles: async () => {
+        throw new Error('SMP request timeout after 5000ms');
+      },
     });
-    mockExtensionClient({
-      '/NAND:/ext/hello.llext': HASH_A,
-      '/NAND:/ext/plasma.llext': HASH_B,
-    });
+    jest
+      .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
+      .mockImplementation(async () => null); // both missing → installable
     jest
       .spyOn(McuMgrModule.McuMgrClient.prototype, 'uploadFile')
-      .mockImplementation(async () => {
-        throw new Error('SMP request timeout after 5000ms');
-      });
-    mockDownload(PLASMA_BYTES);
+      .mockImplementation(async () => undefined);
 
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
-    fireEvent.press(await findByText('Sync Extensions'));
+    const { findByText, findByTestId, queryByTestId } = renderWithMcuMgr(
+      <ExtensionManagementScreen />
+    );
 
-    expect(await findByText(/Extension sync failed/)).toBeTruthy();
-    expect(await findByText('plasma.llext')).toBeTruthy();
-    expect(await findByText('Retry Sync')).toBeTruthy();
+    expect(await findByText(/SMP request timeout/)).toBeTruthy();
+    expect(await findByTestId('ext-mgmt-install-plasma.llext')).toBeTruthy();
+    // The unmanaged section is unknowable without LIST — hidden, not empty.
+    expect(queryByTestId('ext-mgmt-unmanaged')).toBeNull();
   });
 
-  it('treats an unhashable file as needing repair instead of failing the whole check', async () => {
-    // A sync interrupted by a BLE drop leaves a zero-length file, which
-    // fs_mgmt answers with FILE_EMPTY (16) - not FILE_NOT_FOUND. Without
-    // per-entry handling, that one file made every extension unsyncable.
+  it('suggests no removals when the release lookup failed', async () => {
+    // Offline/rate-limited GitHub must never turn every installed extension
+    // into a highlighted "removal suggested" row.
     mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
-    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
-    jest
-      .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
-      .mockImplementation(async (path: string) => {
-        if (path.includes('plasma')) {
-          throw new McuMgrModule.SmpCommandError(
-            'File hash error: group=8, rc=16',
-            McuMgrModule.FsMgmtError.FILE_EMPTY,
-            McuMgrModule.SmpGroup.FS
-          );
-        }
-        return HASH_A;
-      });
+    mockGitHub({
+      fetchLatestFirmwareRelease: async () => {
+        throw new Error('API rate limit exceeded');
+      },
+    });
+    mockExtensionClient({}, [
+      { name: 'demo_wave.llext', onDisk: true, loaded: true },
+      { name: 'plasma.llext', onDisk: true, loaded: true },
+    ]);
 
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
+    const { findByText, queryByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
 
-    expect(await findByText('Needs repair')).toBeTruthy();
-    // The healthy one is still listed and the card still offers a sync.
-    expect(await findByText('Up to date')).toBeTruthy();
-    expect(await findByText('Sync Extensions')).toBeTruthy();
+    expect(
+      await findByText(/files on your sunglasses cannot be compared against an unknown release/)
+    ).toBeTruthy();
+    expect(queryByTestId('ext-mgmt-unmanaged-demo_wave.llext')).toBeNull();
+    expect(queryByTestId('ext-mgmt-remove-demo_wave.llext')).toBeNull();
   });
 
-  it('still fails the whole check for an error that is not file-specific', async () => {
-    // Firmware with no file-management group answers with a group-less rc;
-    // reporting "needs upload" there would start an upload that cannot work.
+  it('does not claim the release ships nothing when the check itself failed', async () => {
     mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
     mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    mockClientMethods();
     jest
       .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
       .mockImplementation(async () => {
+        // Firmware with no FS group at all: group-less rc, whole check fails.
         throw new McuMgrModule.SmpCommandError('File hash error: rc=8', 8, undefined);
       });
 
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
-
-    expect(await findByText(/Extension check unavailable/)).toBeTruthy();
-  });
-
-  it('says nothing needs doing when every extension matches', async () => {
-    mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
-    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
-    mockExtensionClient({
-      '/NAND:/ext/hello.llext': HASH_A,
-      '/NAND:/ext/plasma.llext': HASH_A,
-    });
-
-    const { findByText, queryByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
-
-    expect(await findByText('All extensions match this release.')).toBeTruthy();
-    expect(queryByText('Sync Extensions')).toBeNull();
-  });
-
-  it('surfaces a firmware without file management instead of failing the modal', async () => {
-    // Firmware predating CONFIG_MCUMGR_GRP_FS answers every FS command with an
-    // error; that must not look like a broken update.
-    mockBluetooth(defaultSelectedDevice);
-    mockClientMethods();
-    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
-    jest
-      .spyOn(McuMgrModule.McuMgrClient.prototype, 'getFileSha256')
-      .mockImplementation(async () => {
-        throw new Error('File hash error: rc=8');
-      });
-
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
+    const { findByText, queryByText } = renderWithMcuMgr(<ExtensionManagementScreen />);
 
     expect(
-      await findByText('Extension check unavailable: File hash error: rc=8')
+      await findByText('Extension check failed — release extensions cannot be shown.')
     ).toBeTruthy();
+    expect(queryByText('This release ships no animation extensions.')).toBeNull();
   });
 
-  it('reports extensions on the device that the release does not ship', async () => {
-    // Device exposes three extension animation services but the release ships
-    // two, so one is unmanaged. Counted, not named: the device reports manifest
-    // display names while the release ships file names.
-    mockBluetooth({
-      ...defaultSelectedDevice,
-      characteristicsByService: {
-        '12345678-1234-5678-4000-56789abd0000': {},
-        '12345678-1234-5678-4100-56789abd0000': {},
-        '12345678-1234-5678-4200-56789abd0000': {},
-        '12345678-1234-5678-0500-56789abd0000': {}, // built-in, must not count
+  it('renders the failure message after a failed remove instead of a blank error card', async () => {
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    const spies = mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
       },
+      [{ name: 'hello.llext', onDisk: true, loaded: true }]
+    );
+    spies.deleteDeviceFile.mockImplementation(async () => {
+      throw new Error('SMP request timeout after 30000ms');
     });
-    mockClientMethods();
-    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
-    mockExtensionClient({
-      '/NAND:/ext/hello.llext': HASH_A,
-      '/NAND:/ext/plasma.llext': HASH_A,
-    });
+    autoConfirmRemove();
 
-    const { findByText } = renderWithMcuMgr(<ExtensionSyncScreen />);
+    const { findByTestId, findByText } = renderWithMcuMgr(<ExtensionManagementScreen />);
+    fireEvent.press(await findByTestId('ext-mgmt-remove-hello.llext'));
 
-    expect(
-      await findByText(/1 extension on this device is not part of this release\./)
-    ).toBeTruthy();
+    // The refresh that follows a failure must not blank the message.
+    expect(await findByText(/SMP request timeout after 30000ms/)).toBeTruthy();
   });
 
-  it('does not re-hash extensions when the context yields fresh identities', async () => {
+  it('treats NOT_FOUND on remove as success (idempotent delete)', async () => {
+    // The retry after a timed-out-but-completed delete answers NOT_FOUND; the
+    // desired end state holds, so the restart offer must still appear.
+    mockBluetooth(defaultSelectedDevice);
+    mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
+    const spies = mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      },
+      [{ name: 'hello.llext', onDisk: true, loaded: true }]
+    );
+    spies.deleteDeviceFile.mockImplementation(async () => {
+      throw new McuMgrModule.SmpCommandError(
+        'Delete hello.llext error: group=64, rc=3',
+        McuMgrModule.FileMgmtError.NOT_FOUND,
+        McuMgrModule.SmpGroup.FILE_MGMT
+      );
+    });
+    autoConfirmRemove();
+
+    const { findByTestId } = renderWithMcuMgr(<ExtensionManagementScreen />);
+    fireEvent.press(await findByTestId('ext-mgmt-remove-hello.llext'));
+
+    expect(await findByTestId('ext-mgmt-restart')).toBeTruthy();
+  });
+
+  it('does not re-issue SMP traffic when the context yields fresh identities', async () => {
     // The regression app/CLAUDE.md mandates: an effect that issues BLE traffic and
     // writes the result into state must not be re-armed by its own writes. Uses
     // mockImplementation so every render returns a NEW selectedDevice object.
@@ -305,100 +410,33 @@ describe('ExtensionSyncScreen', () => {
     jest.spyOn(BluetoothContext, 'useBluetooth').mockImplementation(
       () =>
         ({
-          selectedDevice: { ...defaultSelectedDevice, characteristicsByService: {} },
+          selectedDevice: { ...defaultSelectedDevice },
           setSelectedDevice,
         }) as any
     );
-    mockClientMethods();
     mockGitHub({ fetchLatestFirmwareRelease: async () => releaseWithExtensions });
-    const { getFileSha256 } = mockExtensionClient({
-      '/NAND:/ext/hello.llext': HASH_A,
-      '/NAND:/ext/plasma.llext': HASH_A,
-    });
+    const spies = mockExtensionClient(
+      {
+        '/NAND:/ext/demo_wave.llext': HASH_A,
+        '/NAND:/ext/plasma.llext': HASH_A,
+      },
+      []
+    );
 
-    const { findByText, rerender } = renderWithMcuMgr(<ExtensionSyncScreen />);
-    await findByText('All extensions match this release.');
+    const { findAllByText, rerender } = renderWithMcuMgr(<ExtensionManagementScreen />);
+    await findAllByText('Installed · up to date');
 
-    const callsAfterFirstCheck = getFileSha256.mock.calls.length;
-    expect(callsAfterFirstCheck).toBe(2); // one per released extension
+    // The check legitimately runs once before the release lookup lands (empty
+    // assets) and once after — what must NOT happen is any growth from renders.
+    const hashCalls = spies.getFileSha256.mock.calls.length;
+    const listCalls = spies.listDeviceFiles.mock.calls.length;
+    expect(hashCalls).toBe(2); // one per released extension, once
 
     // Re-render the SAME tree several times with fresh context identities.
     for (let i = 0; i < 3; i++) {
-      rerender(<ExtensionSyncScreen />);
+      rerender(<ExtensionManagementScreen />);
     }
-    await waitFor(() => expect(getFileSha256).toHaveBeenCalledTimes(callsAfterFirstCheck));
+    await waitFor(() => expect(spies.getFileSha256).toHaveBeenCalledTimes(hashCalls));
+    expect(spies.listDeviceFiles).toHaveBeenCalledTimes(listCalls);
   });
-});
-
-/**
- * The guided flow embeds this same card on its "Ready to restart" step, so it can name
- * the extensions it is about to change and show the upload running. That reuse is the
- * whole point of `showSyncButton` — the flow drives the sync from its own "Restart and
- * Install" button, and a second Sync button on the card would be a competing control.
- */
-describe('ExtensionSyncCard embedded in the flow', () => {
-    const entries = [
-        {
-            name: 'plasma.llext',
-            status: 'outdated' as const,
-            path: '/NAND:/ext/plasma.llext',
-            expectedSha256: 'a'.repeat(64),
-            deviceSha256: 'b'.repeat(64),
-            asset: {
-                id: 30,
-                name: 'plasma.llext',
-                browser_download_url: 'https://example.com/plasma.llext',
-                size: 5024,
-                content_type: 'application/octet-stream',
-            },
-        },
-    ];
-
-    it('shows per-file upload progress while the flow drives the sync', () => {
-        const { getByText, queryByText } = render(
-            <ExtensionSyncCard
-                state="ready"
-                entries={entries}
-                unmanagedCount={0}
-                error=""
-                isSyncing
-                progress={{
-                    entry: entries[0],
-                    index: 0,
-                    total: 1,
-                    bytesSent: 2512,
-                    bytesTotal: 5024,
-                }}
-                onSync={jest.fn()}
-                disabled
-                showSyncButton={false}
-            />
-        );
-
-        expect(getByText('Uploading plasma.llext (1/1)')).toBeTruthy();
-        expect(getByText('50%')).toBeTruthy();
-        // The flow owns the action; the card must not offer its own.
-        expect(queryByText('Sync Extensions')).toBeNull();
-    });
-
-    it('still offers its own Sync button on the standalone screen', () => {
-        const { getByText, getByTestId } = render(
-            <ExtensionSyncCard
-                state="ready"
-                entries={entries}
-                unmanagedCount={0}
-                error=""
-                isSyncing={false}
-                progress={null}
-                onSync={jest.fn()}
-                disabled={false}
-            />
-        );
-        expect(getByText('plasma.llext')).toBeTruthy();
-        expect(getByText('Sync Extensions')).toBeTruthy();
-        // /drive-app handles — see the flow-screen testID test.
-        expect(getByTestId('extension-sync-button')).toBeTruthy();
-        expect(getByTestId('extension-sync-ready')).toBeTruthy();
-        expect(getByTestId('extension-sync-entry-plasma.llext')).toBeTruthy();
-    });
 });
