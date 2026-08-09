@@ -138,6 +138,15 @@ last `fw-v*` tag; if either applies, the notes need a prominent **Upgrading** se
 Confirm the check ran even when the answer is no ("GATT layout unchanged since
 fw-vX.Y.Z") so the omission is a decision rather than an oversight.
 
+**One-time note for the first releases carrying extension management** (fw
+PR #303 / app PR #305, design `fw/docs/extension-management.md` §8): firmware
+updates **no longer auto-install every release extension**. The update flow
+shows a per-extension picker — updates of installed extensions come
+preselected, new extensions are an explicit opt-in, and files the release
+doesn't ship are suggested for removal. Both the firmware and app notes for
+those releases must state this behavior change; drop this paragraph once both
+have shipped.
+
 **App releases additionally need a ≤500-character Google Play "what's new" summary.**
 It ships as the **annotated tag message** (see step 6) — the Play upload runs during
 CI, before the curated GitHub notes are attached, so the tag message is the only
@@ -207,9 +216,11 @@ The app tag is **annotated** (`-a -m`): its message becomes the Google Play
   gh release edit fw-v<version> --draft=false
   ```
   Undrafting without the upload publishes exactly the incomplete asset list the
-  draft gate exists to prevent (the app syncs every `.llext` on the latest
-  release and would miss the community extensions). `gh release edit
-  --notes-file` in step 7 works on drafts and published releases alike.
+  draft gate exists to prevent (the app's extension management compares the
+  device against every `.llext` on the latest release — a missing asset makes
+  an installed extension look "not in this release" and suggests removing it).
+  `gh release edit --notes-file` in step 7 works on drafts and published
+  releases alike.
 - Watch each to completion: `gh run watch <id> --exit-status`. Observed durations,
   as of 2026-07 — re-verify: firmware `release.yaml` ~9–13 min (one pristine
   proto0 NCS build since issue #203), MCUboot `mcuboot-release.yaml` ~9 min, app

@@ -7,8 +7,9 @@
  * Runs on the MCUmgr SMP workqueue — a preemptible kernel thread (priority
  * CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_THREAD_PRIO, default 3), the same
  * context fs_mgmt's own flash I/O uses, so fs_* calls here respect the
- * no-flash-I/O-from-cooperative-threads rule. Stack budget (2048 B,
- * CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_STACK_SIZE) is the resource to guard:
+ * no-flash-I/O-from-cooperative-threads rule. Stack budget
+ * (CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_STACK_SIZE — 4096 on proto0, an
+ * invariant documented in fw/docs/threading.md) is the resource to guard:
  * exactly one struct fs_dirent (~264 B with FATFS LFN) lives on it at a
  * time, never an array — see the MCUMGR_GRP_FS_DL_CHUNK_SIZE stack-overflow
  * precedent documented in the board conf.
@@ -320,9 +321,11 @@ int delete_handler(struct smp_streamer *ctxt) {
         return encode_err(zse, Error::kKindUnsupported) ? MGMT_ERR_EOK : MGMT_ERR_EMSGSIZE;
     }
 
-    /* Static: LFN-sized names (kMaxWireNameLen) would not fit the 2048-byte
-     * SMP workqueue stack budget, and SMP handlers are single-threaded by
-     * construction (one smp_work_queue), so one shared buffer is safe. */
+    /* Static: ~520 B of LFN-sized buffers (kMaxWireNameLen) have no place
+     * on the SMP workqueue stack (4096 B on proto0, an invariant sized for
+     * the switch-away path below — fw/docs/threading.md), and SMP handlers
+     * are single-threaded by construction (one smp_work_queue), so one
+     * shared buffer is safe. */
     static char path[sizeof("/NAND:/ext/") + kMaxWireNameLen];
     static char fileName[kMaxWireNameLen];
     if (!build_fenced_path(dir, name, path, sizeof(path))) {

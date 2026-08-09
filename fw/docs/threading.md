@@ -115,6 +115,20 @@ the on-device capture is what settles it.)
 | `charger_status_thread` | `CONFIG_APP_CHARGER_STATUS_THREAD_STACK_SIZE` | 1024 |
 | extension sandbox | `CONFIG_APP_EXT_HOST_STACK_SIZE` | 2048 |
 | persistent-value-store wq | `CONFIG_APP_PERSIST_WORKQ_STACK_SIZE` | 2048 |
+| `mcumgr smp` workqueue | `CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_STACK_SIZE` | **4096 on proto0** (Zephyr default 2048) |
+
+**The SMP workqueue's 4096 is an invariant, not headroom to reclaim.** The
+FILE_MGMT DELETE handler (`extension_mgmt.cpp`, PR #303) runs the full
+animation-switch path on this thread when the deleted extension backs the
+current animation — `pattern_controller_change_to_animation` → deactivate /
+`unload_resident` (thread abort + llext teardown) → `bt_gatt_notify` — a
+callee set that had only ever run on the BT RX (4096) or shell (6656) stacks.
+Measured on hardware at the deepest path (delete of the faulted-active
+extension, live BLE subscription): **1,672 B peak**, which would have left
+only ~376 B of the old 2,048 B default — the same stack a 2,048-byte
+`fs_mgmt` chunk array once overflowed with a board-resetting crash (see the
+`DL_CHUNK_SIZE` comment in the proto0 conf). Set in
+`fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`.
 | coredump manager wq | `CONFIG_APP_COREDUMP_WORKQ_STACK_SIZE` | 3072 |
 | MCUboot updater wq | `CONFIG_APP_MCUBOOT_UPDATER_STACK_SIZE` | 4096 |
 | TPS25750 wq | `CONFIG_TPS25750_WORKQ_STACK_SIZE` | 1024 |

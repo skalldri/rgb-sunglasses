@@ -1,7 +1,8 @@
 # In-app extension management: list, install choice, and remote delete
 
-Status: **design** — approved direction, not yet implemented. Implementation is
-phased (§10).
+Status: **implemented** — firmware #303, app #305 (phases and their review
+hardening: §10). This document remains the authoritative wire-contract and
+semantics reference.
 
 ## 1. Motivation
 
@@ -103,9 +104,10 @@ response budget, then returns `off` for the client to continue from.
 Ordering within one pass is FAT directory order; the app re-lists from
 offset 0 after any mutation (its own delete/upload) rather than trusting
 cross-call stability. The handler keeps exactly one `struct fs_dirent`
-(~264 B) on the SMP workqueue stack (2048 B — the documented
-`MCUMGR_GRP_FS_DL_CHUNK_SIZE` stack incident is the cautionary tale; one
-dirent is fine, arrays are not).
+(~264 B) on the SMP workqueue stack (4096 B on proto0, raised from the
+2048 default for the DELETE switch-away path — see fw/docs/threading.md;
+the documented `MCUMGR_GRP_FS_DL_CHUNK_SIZE` stack incident is the
+cautionary tale; one dirent is fine, arrays are not).
 
 ### 3.3 DELETE (command 1, write)
 
@@ -293,7 +295,7 @@ the count could only imply. The corresponding caveat paragraphs in
 | Unbounded directory | LIST pagination (§3.2) |
 | Bulk sync resurrecting uninstalled extensions | Bulk install no longer exists (§6) |
 | Old firmware without group 64 | Group-less-error detection hides management UI |
-| SMP workqueue stack (2048 B) | One `fs_dirent` at a time in LIST; response budget drives pagination |
+| SMP workqueue stack (4096 B on proto0; invariant in fw/docs/threading.md) | One `fs_dirent` at a time in LIST; response budget drives pagination; delete's switch-away path measured 1,672 B peak |
 
 ## 8. Compatibility
 
@@ -332,23 +334,35 @@ the count could only imply. The corresponding caveat paragraphs in
 
 ## 10. Implementation phases
 
-**PR 1 — firmware**: `extension_path.{h,cpp}` extraction; `extension_mgmt.cpp`
-(group 64, kind dispatch, paginated LIST union, DELETE + retire);
-`persistent_value_registry_unregister()` + `delete_value()` +
+**PR 1 — firmware** (✅ merged as #303): `extension_path.{h,cpp}` extraction;
+`extension_mgmt.cpp` (group 64, kind dispatch, paginated LIST union, DELETE +
+retire); `persistent_value_registry_unregister()` + `delete_value()` +
 workqueue-serialized cleanup; name-key last-active persistence; Kconfig;
-native_sim tests. Full `/submit-pr` gate with on-device + app verification
-(the app side of the gate uses a dev build of PR 2's client methods, or the
-debug page's raw SMP path).
+native_sim tests. Hardware-verified end to end, including deleting the active
+extension and the boot-restore-by-name across slot renumbering. Review
+hardening landed in the same PR: retire-first + host-lock-quiesced unlink
+(the FF_FS_LOCK=0 corruption race), faulted-slot switch-away, async settings
+purge, case-insensitive slot lookup, LFN-sized wire names, and a 4096-byte
+SMP workqueue stack (measured 1,672 B peak on the deepest delete path).
 
-**PR 2 — app**: SMP client group + methods (incl. `closeOpenedFile`), the
-management screen (sections, per-row actions, reboot button), guided-flow
-picker replacing bulk sync, jest suites, `/validate-app`.
+**PR 2 — app** (✅ merged as #305): SMP client group + methods (incl.
+`closeOpenedFile`), the management screen (sections, per-row actions, reboot
+button), guided-flow picker replacing bulk sync, jest suites, `/validate-app`
++ on-device verification. Review hardening: release-unknown ≠ release-empty
+(no removal suggestions after a failed GitHub lookup), picker gated on a
+successful check, case-insensitive joins, idempotent delete.
 
-**PR 3 — docs/skills**: `fw/CLAUDE.md` (new group, retire semantics, retired
-count-not-name paragraphs), `app/CLAUDE.md` (same + no-bulk-install),
-`/add-extension` + `/provision-device` + `/debug-ble` touch-ups,
-release-notes template note about the behavior change.
+**PR 3 — docs/skills** (this change): `fw/CLAUDE.md` (new group, retire
+semantics, replacing the count-not-name paragraphs), `app/CLAUDE.md` (same +
+no-bulk-install), `/add-extension` + `/debug-ble` touch-ups, release-skill
+note about the behavior change, and the SMP-stack invariant recorded in
+`fw/docs/threading.md`. `/provision-device` needs no procedural change — it
+deliberately (re)installs the in-repo dev extensions (`hello`, `cpptest`) on
+dev boards, which is provisioning's job, not a regression of this feature;
+its skill now says so explicitly so a fresh `hello.llext` after provisioning
+is read as expected, not as the cleanup failing.
 
 **Then**: a release (the first whose update flow can clean up hello
-everywhere), and the hardware verification session doubles as the real-world
-proof on your own board.
+everywhere). The PR 1/2 hardware sessions already ran the real-world proof:
+the dev board's stale `hello.llext` was listed, named and removed over BLE
+through the product path.
