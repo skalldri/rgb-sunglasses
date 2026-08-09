@@ -188,7 +188,12 @@ ssize_t write_is_active(struct bt_conn *, const struct bt_gatt_attr *attr, const
     const bool active = *static_cast<const uint8_t *>(buf) != 0;
     const Animation id = extension_host::animationId(bs->slot);
     if (active) {
-        if (extension_host::isFaulted(bs->slot)) {
+        /* Retired (file deleted this boot) is rejected like faulted: the slot's
+         * GATT service deliberately stays registered (removing it would shift
+         * handles mid-connection — the issue #90/#115 stale-cache hazard), so
+         * this ATT error is what makes the app's optimistic toggle revert
+         * instead of switching the display to an animation that can't load. */
+        if (extension_host::isFaulted(bs->slot) || extension_host::isRetired(bs->slot)) {
             return BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED);
         }
         pattern_controller_change_to_animation(id);

@@ -215,3 +215,70 @@ ZTEST(persistent_value_registry_tests, test_registry_has_no_capacity_cap) {
                   "Expected all %zu entries registered, got %zu", kN,
                   persistent_value_registry_count());
 }
+
+ZTEST(persistent_value_registry_tests, test_unregister_removes_entry) {
+    reset_test_state();
+    PersistentValueRegistryEntry e{};
+    int ret = registerEntry(e, "foo/bar");
+    zassert_equal(ret, 0, "Failed to register: %d", ret);
+
+    ret = persistent_value_registry_unregister(&e);
+    zassert_equal(ret, 0, "Expected unregister to succeed, got %d", ret);
+    zassert_equal(persistent_value_registry_count(), 0, "Entry should be gone");
+
+    // Loads no longer dispatch to it...
+    uint32_t value = 7;
+    FakeReadCtx ctx{&value, sizeof(value)};
+    ret = persistent_value_registry_dispatch_load("foo/bar", sizeof(value), fake_read_cb, &ctx);
+    zassert_equal(ret, -ENOENT, "Unregistered key should be -ENOENT, got %d", ret);
+    zassert_equal(sLoadCallCount, 0, "Load must not run after unregister");
+
+    // ...and a queued dirty state can't resurrect it through save_all — this is
+    // the extension-DELETE cleanup invariant (fw/docs/extension-management.md):
+    // without unregister, the next debounced flush re-saved the purged records.
+    persistent_value_registry_mark_dirty("foo/bar");
+    persistent_value_registry_save_all();
+    zassert_equal(sSaveCallCount, 0, "Save must not run after unregister");
+}
+
+ZTEST(persistent_value_registry_tests, test_unregister_clears_dirty_for_reregistration) {
+    reset_test_state();
+    PersistentValueRegistryEntry e{};
+    zassert_equal(registerEntry(e, "foo/bar"), 0, "register failed");
+    persistent_value_registry_mark_dirty("foo/bar");
+
+    zassert_equal(persistent_value_registry_unregister(&e), 0, "unregister failed");
+
+    // Re-registering the same storage must start clean: a stale dirty flag
+    // would make the next save_all() sweep flush a value nobody changed.
+    zassert_equal(registerEntry(e, "foo/bar"), 0, "re-register failed");
+    persistent_value_registry_save_all();
+    zassert_equal(sSaveCallCount, 0, "Re-registered entry must not start dirty");
+}
+
+ZTEST(persistent_value_registry_tests, test_unregister_unlinked_returns_enoent) {
+    reset_test_state();
+    PersistentValueRegistryEntry never_linked{};
+    int ret = persistent_value_registry_unregister(&never_linked);
+    zassert_equal(ret, -ENOENT, "Expected -ENOENT for an unlinked entry, got %d", ret);
+
+    ret = persistent_value_registry_unregister(nullptr);
+    zassert_equal(ret, -EINVAL, "Expected -EINVAL for null, got %d", ret);
+}
+
+ZTEST(persistent_value_registry_tests, test_unregister_leaves_other_entries_intact) {
+    reset_test_state();
+    PersistentValueRegistryEntry a{}, b{}, c{};
+    zassert_equal(registerEntry(a, "k/a"), 0, "register a failed");
+    zassert_equal(registerEntry(b, "k/b"), 0, "register b failed");
+    zassert_equal(registerEntry(c, "k/c"), 0, "register c failed");
+
+    zassert_equal(persistent_value_registry_unregister(&b), 0, "unregister b failed");
+    zassert_equal(persistent_value_registry_count(), 2, "a and c should remain");
+
+    // The survivors still save when dirty (the list wasn't corrupted mid-walk).
+    persistent_value_registry_mark_dirty("k/a");
+    persistent_value_registry_mark_dirty("k/c");
+    persistent_value_registry_save_all();
+    zassert_equal(sSaveCallCount, 2, "Both surviving entries should save");
+}

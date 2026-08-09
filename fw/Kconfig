@@ -494,6 +494,25 @@ config APP_EXT_FILE_TRANSFER
 	  and overwrite any path on the disk (including the MCUboot staging
 	  image). Disable it only alongside CONFIG_MCUMGR_GRP_FS itself.
 
+config APP_EXT_FILE_MANAGEMENT
+	bool "Let the companion app list and delete extension files over MCUmgr"
+	depends on APP_EXTENSION_HOST && MCUMGR
+	default y
+	help
+	  Registers the FILE_MGMT custom SMP command group (id 64, see
+	  fw/src/extensions/extension_mgmt.cpp and
+	  fw/docs/extension-management.md): LIST (paginated union of the
+	  extension directory's disk contents and the boot snapshot) and
+	  DELETE (path_allowed-fenced fs_unlink, retiring the matching boot
+	  slot and purging its persisted settings). This is what makes
+	  remotely-uninstalling extensions — including retired ones no release
+	  ships anymore — possible without USB mass storage.
+
+	  Deliberately independent of APP_EXT_FILE_TRANSFER /
+	  MCUMGR_GRP_FS: the fence predicate lives in extension_path.cpp
+	  (compiled with the extension host itself), so disabling the fs_mgmt
+	  group or its fence never strips the fence from this one.
+
 # Forces on MCUmgr's SHA256 file-hash group, which the extension sync above
 # depends on. This is an override of an upstream Zephyr symbol, so it needs
 # justifying:

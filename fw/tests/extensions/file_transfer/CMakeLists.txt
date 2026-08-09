@@ -10,6 +10,9 @@ target_sources(app PRIVATE src/main.cpp)
 # linking it would drag fs_* (and therefore a filesystem stack) into a test
 # that only exercises string handling.
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/extensions/extension_file_transfer.cpp)
+# The predicate itself (shared with the FILE_MGMT custom group) lives in its
+# own pure translation unit — see extension_path.h.
+target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/extensions/extension_path.cpp)
 
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src)
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../include)

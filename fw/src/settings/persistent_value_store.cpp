@@ -104,6 +104,54 @@ ssize_t load_value(const char* key, void* buf, size_t bufLen) {
     return len;
 }
 
+void delete_value(const char* key) {
+    char fullKey[SETTINGS_MAX_NAME_LEN + 1];
+    int ret = snprintf(fullKey, sizeof(fullKey), "%s/%s", kSubtreeName, key);
+    if (ret < 0 || static_cast<size_t>(ret) >= sizeof(fullKey)) {
+        return;
+    }
+
+    int err = settings_delete(fullKey);
+    if (err) {
+        LOG_ERR("Failed to delete persisted value '%s' (err: %d)", fullKey, err);
+    }
+}
+
+namespace {
+
+void purge_work_handler(struct k_work* work) {
+    auto* purge = CONTAINER_OF(work, PersistentValuePurge, work);
+    // -ENOENT (never registered / already unregistered) is fine: the record
+    // deletion below is still wanted, e.g. for keys whose owner lost an
+    // -EEXIST registration race but whose record predates this boot.
+    persistent_value_registry_unregister(purge->entry);
+    if (purge->key != nullptr) {
+        delete_value(purge->key);
+    }
+}
+
+}  // namespace
+
+int purge_value(PersistentValuePurge* purge, PersistentValueRegistryEntry* entry,
+                const char* key) {
+    if (purge == nullptr || entry == nullptr) {
+        return -EINVAL;
+    }
+
+    // Caller-owned storage (see the header). A purge record pairs permanently
+    // with one entry/key (it lives next to the entry it purges), so a busy
+    // record means this exact purge is already queued or running — skip
+    // rather than k_work_init a live item, which corrupts the queue.
+    if (k_work_busy_get(&purge->work) != 0) {
+        return 0;
+    }
+    purge->entry = entry;
+    purge->key = key;
+    k_work_init(&purge->work, purge_work_handler);
+    k_work_submit_to_queue(&persistent_value_lowpri_workq, &purge->work);
+    return 0;
+}
+
 void cancel_pending_save() {
     struct k_work_sync sync;
     k_work_cancel_delayable_sync(&sSaveWork, &sync);
@@ -118,6 +166,12 @@ namespace persistent_value_store {
 void request_save() {}
 
 void save_value(const char*, const void*, size_t) {}
+
+void delete_value(const char*) {}
+
+int purge_value(PersistentValuePurge*, PersistentValueRegistryEntry*, const char*) {
+    return -ENOSYS;
+}
 
 void cancel_pending_save() {}
 

@@ -1,8 +1,11 @@
 #pragma once
 
 #include <sys/types.h>
+#include <zephyr/kernel.h>
 
 #include <cstddef>
+
+struct PersistentValueRegistryEntry;
 
 /**
  * @brief Debounced flash persistence for values registered with
@@ -52,6 +55,50 @@ void save_value(const char *key, const void *data, size_t len);
  *         saved, or a negative errno on a storage error.
  */
 ssize_t load_value(const char *key, void *buf, size_t bufLen);
+
+/**
+ * @brief Immediately deletes one persisted value's record under "appcfg/".
+ *
+ * Safe from the persistence workqueue (the save sweep's own thread) — used by
+ * save callbacks that clear a sibling key (e.g. the last-active id/name pair)
+ * and by purge_value() below. A missing record is not an error.
+ */
+void delete_value(const char *key);
+
+/**
+ * @brief Caller-owned storage for one purge_value() request. Must outlive the
+ * purge (embed it next to the PersistentValueRegistryEntry it purges — e.g.
+ * an extension Slot field — never on the caller's stack).
+ */
+struct PersistentValuePurge {
+    struct k_work work;
+    PersistentValueRegistryEntry *entry;
+    const char *key;
+};
+
+/**
+ * @brief Asynchronously unregisters @p entry and deletes its persisted record,
+ * executed ON the persistence workqueue.
+ *
+ * The workqueue hop is the point: unregistration mutates the registry list
+ * that save_all() walks, and a queued debounced flush would otherwise re-save
+ * the record this call just deleted — running the whole purge as one work item
+ * on that queue serializes it against both.
+ *
+ * Fire-and-forget by design: the submit returns immediately. The caller that
+ * matters (the SMP workqueue's extension DELETE handler) runs on the single
+ * thread servicing every SMP command, and a blocking flush there could park
+ * all SMP traffic behind the lowest-priority persistence workqueue — whose
+ * in-flight save can itself block on the extension host lock through an
+ * entire llext FAT load. @p entry may be unregistered already (its record is
+ * still deleted); a null @p key skips the record deletion. Re-submitting a
+ * @p purge that is still queued is a harmless no-op (k_work semantics).
+ *
+ * @return 0 on submit (including "was not registered"), -EINVAL on null
+ *         @p purge / @p entry.
+ */
+int purge_value(PersistentValuePurge *purge, PersistentValueRegistryEntry *entry,
+                const char *key);
 
 /**
  * @brief Synchronously cancels any pending debounced save.

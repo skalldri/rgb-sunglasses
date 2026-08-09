@@ -43,6 +43,7 @@ namespace {
 struct FakeSlot {
     bool loaded = false;
     bool faulted = false;
+    bool retired = false;
     char name[extension_host::kMaxNameLen] = {};
     Animation animId = Animation::None;
     size_t paramCount = 0;
@@ -90,6 +91,10 @@ bool isLoaded(size_t slot) {
 
 bool isFaulted(size_t slot) {
     return slot < kMaxExtensions && sFakeSlots[slot].faulted;
+}
+
+bool isRetired(size_t slot) {
+    return slot < kMaxExtensions && sFakeSlots[slot].retired;
 }
 
 const char *name(size_t slot) {
@@ -371,6 +376,14 @@ ZTEST(extension_bt, test_register_uuid_and_is_active_lifecycle) {
     zassert_equal(do_write(isActiveAttr, &one, sizeof(one)),
                  BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED));
     sFakeSlots[slot].faulted = false;
+
+    /* A retired slot (file deleted this boot) rejects the same way — its GATT
+     * service deliberately outlives the file, so the ATT error is the only
+     * thing keeping the app from switching the display to a dead animation. */
+    sFakeSlots[slot].retired = true;
+    zassert_equal(do_write(isActiveAttr, &one, sizeof(one)),
+                 BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED));
+    sFakeSlots[slot].retired = false;
 
     /* A synchronously-refused switch (bs->isActive stays 0) is also rejected,
      * so the app's optimistic toggle reverts instead of sticking on. */

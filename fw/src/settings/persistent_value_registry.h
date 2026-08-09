@@ -60,6 +60,25 @@ int persistent_value_registry_register(PersistentValueRegistryEntry *entry, cons
                                        PersistentValueSaveFn save);
 
 /**
+ * @brief Unlinks a previously registered entry from the registry.
+ *
+ * The entry's storage is caller-owned and untouched; after this returns the
+ * registry will no longer dispatch loads to it, mark it dirty, or save it.
+ *
+ * THREADING: registration is single-threaded at static-init/boot, but
+ * unregistration happens at runtime (extension delete over SMP) while the
+ * persistence workqueue may be walking the list in save_all() — so this must
+ * only be called FROM that workqueue (see persistent_value_store::purge_value,
+ * which posts it there); save_all() relies on that same-queue serialization,
+ * not a lock. The unlink itself additionally holds an internal spinlock so
+ * mark_dirty()'s traversal (any thread — e.g. a GATT param write on the BT RX
+ * thread) can never walk through a node mid-removal.
+ *
+ * @return 0 on success, -EINVAL on null, -ENOENT if @p entry is not linked.
+ */
+int persistent_value_registry_unregister(PersistentValueRegistryEntry *entry);
+
+/**
  * @brief Dispatches a settings_load() callback to the matching registered entry.
  *
  * Intended to be called from the one shared SETTINGS_STATIC_HANDLER_DEFINE's h_set.
@@ -76,6 +95,9 @@ int persistent_value_registry_dispatch_load(const char *name, size_t len, settin
  * Call this before request_save() when a value changes via a non-BLE path (e.g. a shell
  * setter) or from a custom onWrite() that bypasses BtGattPersistentCharacteristic. Does
  * nothing (and does not log) if the key is not found - safe to call speculatively.
+ *
+ * THREADING: safe from any thread — the lookup walk holds an internal spinlock
+ * against a concurrent unregister() on the persistence workqueue.
  */
 void persistent_value_registry_mark_dirty(const char *key);
 
