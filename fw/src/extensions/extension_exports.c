@@ -33,22 +33,24 @@
  *    firmware that lacks them).
  *
  * Per-tick CPU budget note: transcendentals in a per-pixel loop are
- * affordable at this display size (40x12 @ 128 MHz) but not free — the
- * budget enforcement (CONFIG_APP_EXT_TICK_CPU_BUDGET_MS) is the backstop,
- * and `ext stats` on the shell shows the actual per-tick cost.
+ * affordable at this display size (40x12 @ 128 MHz) but not free, and
+ * `ext stats` on the shell shows the actual per-tick cost.
  *
- * ...but "affordable" has a range limit, and it is not obvious. The trig
- * exported here is picolibc's fdlibm implementation, which takes a cheap
- * Cody-Waite argument reduction only while |x| <= 2^7*(pi/2) = 201.06
- * (newlib/libm/math/sf_rem_pio2.c). Above that it enters __kernel_rem_pio2f,
- * a multi-precision Payne-Hanek reduction that costs several times more and
- * keeps growing with the argument's exponent. An extension that lets a phase
- * accumulator free-run therefore starts fast and silently degrades minutes
- * later: that is exactly what happened to the plasma extension (issue #304),
- * whose per-tick cost climbed 3.4 ms -> 25 ms over the first five minutes of
- * every activation and overran the render interval on every frame. Extensions
- * must keep phase/angle accumulators bounded — see fw/extensions/README.md,
- * and tilt_animation.cpp for the in-tree precedent.
+ * CONFIG_APP_EXT_TICK_CPU_BUDGET_MS is NOT a backstop for that cost — it
+ * only catches gross overruns. At its 50 ms default it sits ~4.5x above the
+ * 11.1 ms render interval, so an extension can miss every single frame
+ * without ever faulting. Issue #304 is the worked example: plasma peaked at
+ * 46.5 ms per tick, dropped the render rate from 90 Hz to 28 Hz, and never
+ * tripped the budget. Judge transcendental cost against the render interval,
+ * not the budget.
+ *
+ * "Affordable" also has a range limit: the trig exported here (sinf, cosf,
+ * tanf) is cheap only while |x| <= 2^7*(pi/2) = 201.06, and degrades
+ * continuously above that. Extensions must keep phase accumulators bounded.
+ * Full explanation, the detection procedure and the correct wrap idiom live
+ * in fw/extensions/README.md, "Bound your phase accumulators" — deliberately
+ * not restated here (same single-source-of-truth rule as fw/docs/threading.md
+ * for the budget itself).
  */
 
 #include <math.h>

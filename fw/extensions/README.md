@@ -192,20 +192,56 @@ extension's own cost and is what the per-tick budget is enforced against; the
 **wall** row additionally contains whatever preempted the sandbox and will run
 higher under load, by design (issue #276). Read cpu when judging an extension.
 
-**Keep phase/angle accumulators bounded, and measure after minutes rather than
-seconds.** The exported `sinf`/`cosf` are cheap only while `|x| <= 201.06`; past
-that picolibc switches to a multi-precision reduction costing several times more
-and growing with the argument. So an extension that lets a phase accumulator
-free-run runs at full speed for a minute or two and then quietly gets slower —
-and because globals reset on every activation, `ext stats` right after
-`ext select` only ever shows the fast phase. Wrap the accumulator at a period
-where every rate you use completes a whole number of cycles (or `fmodf` each
-phase into `[0, 2*pi)`); `fw/src/animations/tilt_animation.cpp` does this
-in-tree. This is what issue #304 was: plasma climbed 3.4 ms -> 25 ms per tick
-over five minutes and overran the render interval on essentially every frame.
-Note also that `min`/`avg`/`max` accumulate from activation and reset only on
-`ext select`, so a single late reading averages the fast and slow phases
-together — sample repeatedly over one continuous activation to see a trend.
+### Bound your phase accumulators (issue #304)
+
+This section is the **single source of truth** for the argument-range cliff; other
+places (`extension_exports.c`, `/add-extension`, the rgbx-extension-template README)
+point here rather than restating the numbers.
+
+**The exported trig — `sinf`, `cosf` and `tanf` alike — is cheap only while
+`|x| <= 201.06`** (`2^7*(pi/2)`). All three route through picolibc's
+`__ieee754_rem_pio2f`, which past that threshold falls into `__kernel_rem_pio2f`, a
+multi-precision reduction costing several times more *and getting more expensive as
+the argument grows*. So an extension that lets a phase accumulator free-run runs at
+full speed for a minute or two and then degrades continuously from there.
+
+That is what issue #304 was: plasma's per-tick cost climbed 3.4 ms -> 25 ms over the
+first five minutes of every activation and overran the render interval on essentially
+every frame.
+
+**Bound the accumulator.** Wrap it at a period where every rate you use completes a
+whole number of cycles — for rates 1.1/0.7/1.7 rad/s that is `20*pi` s, because
+11 : 7 : 17 share a common period. Then the wrap is seamless *and* the argument is
+bounded for any speed multiplier, because the bound is on the accumulator rather than
+on the rate.
+
+If your rates share no common period, reduce each phase instead — but note
+**`fmodf` keeps the dividend's sign**, so `fmodf(phase, kTwoPi)` yields
+`(-2*pi, 0]` for a phase that can go negative (a direction toggle, an IMU-driven
+angle). That is fine for feeding `sinf`/`cosf` directly, which accept negative
+arguments — `tilt_animation.cpp:127` relies on exactly that. It is **not** fine if
+you then index a table with the result: copy `wrapPos()` (`tilt_animation.cpp:89`),
+which adds the period back when the result is negative. Getting this wrong converts
+a negative float to a huge `size_t`, reads outside the sandbox's MPU region, and
+faults the extension.
+
+**Detecting it.** Two signals, cheapest first:
+
+- **Watch the console for `Render overran the tick interval N time(s) ...`**
+  (`pattern_controller.cpp`, rate-limited to one line per 5 s). This is the direct
+  symptom and it costs nothing to notice — during #304 it was printing continuously
+  while `ext stats` still looked unremarkable.
+- **`ext stats`, read after minutes rather than seconds.** `min`/`avg`/`max`
+  accumulate from activation and are **reset on every activation** — not just the
+  `ext select` shell command, but any app/BLE animation switch, a shuffle rotation,
+  or the boot-time restore (`extension_host.cpp:111`). So a reading taken shortly
+  after *anything* re-activated the extension only shows the fast phase, and a single
+  late reading averages the fast and slow phases together. Sample repeatedly across
+  one uninterrupted activation and look for a trend.
+
+Note the CPU budget (`CONFIG_APP_EXT_TICK_CPU_BUDGET_MS`, 50 ms) will **not** catch
+this: it is ~4.5x the 11.1 ms render interval, so an extension can miss every frame
+without ever faulting. #304 peaked at 46.5 ms and never tripped it.
 
 `hello` doubles as the sandbox-recovery test: its `Crash` bool makes the next
 tick MPU-fault; `Hang` makes it spin until it exceeds its CPU budget. `Crash` is
