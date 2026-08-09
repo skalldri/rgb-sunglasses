@@ -292,3 +292,49 @@ This is the project's **single** routing table — other docs link here, never c
 | Cut a release | /release |
 
 Four things sound alike — don't mix them up: a **built-in C++ animation** compiled into firmware = /add-animation; an in-repo **loadable `.llext` extension** = /add-extension; a **community extension** (same `.llext` on the device, but developed in a standalone repo against the released `rgbx-sdk`, never the in-repo EDK path) = the standalone-extension row above; a **`.glim` asset file** (stored animation data) = `fw/src/storage/GLIM_FORMAT.md` + the `fw/tools/` converters (see `fw/CLAUDE.md`).
+
+## Code review — always run it on Opus 5
+
+**Every workflow-backed code review must run on Opus 5** (user instruction, 2026-08-08). The
+built-in `code-review` workflow pins no model, so its agents silently inherit the session
+model — which is usually *not* Opus. Launch the pinned variant instead:
+
+```
+Workflow({scriptPath: "/workspaces/rgb-sunglasses/.claude/workflows/code-review-opus.js",
+          args: "high PR <n> and post feedback as PR comments"})
+```
+
+`.claude/workflows/code-review-opus.js` is the built-in script with `model: "opus"` added to
+all five `agent()` call sites (scope, find, verify, sweep, synthesize).
+
+Two traps:
+
+- **It must be invoked by `scriptPath`, not `name`.** `Workflow({name: "code-review-opus"})`
+  fails — workflow *name* resolution only sees built-ins (`code-review`, `deep-research`), not
+  `.claude/workflows/`. Invoking `name: "code-review"` silently gets the unpinned built-in.
+- **Verify the model actually took**, don't assume: after launching, check the run's
+  `*.meta.json` files under
+  `~/.claude/projects/<project>/<session>/subagents/workflows/<runId>/` — each should read
+  `"model":"opus"`.
+
+If the built-in script changes upstream, re-derive the variant from the newest persisted
+`code-review-wf_*.js` rather than hand-patching this copy.
+
+### Scoping trap: the review diffs against LOCAL `main`
+
+The workflow's scope agent builds `git diff main...<pr-ref>` using the **local** `main` ref. In
+a long-lived checkout that ref goes stale as PRs merge, and the review then silently analyzes
+dozens of unrelated files from already-merged branches (observed 2026-08-08 on PR #299: 35
+files diffed instead of the PR's 9, producing findings entirely about other PRs' code).
+
+Before any review, refresh it:
+
+- `main` **not** checked out: `git fetch origin main && git branch -f main origin/main`.
+- `main` **is** checked out: `git branch -f` refuses — use `git pull --ff-only origin main`
+  instead (and never force-move the ref out from under a dirty tree).
+
+**Always sanity-check that the workflow's reported changed-file list matches
+`gh pr view <n> --json files` before posting anything** — a mismatch means the review is
+invalid, and the findings must be discarded, not posted. That cross-check, not the ref
+refresh, is what actually caught the PR #299 case; keep doing it even when `main` looks
+current.
