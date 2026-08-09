@@ -59,6 +59,47 @@ bool isLoaded(size_t slot);
 bool isFaulted(size_t slot);
 
 /**
+ * @brief True if `slot` was retired by a runtime file delete (FILE_MGMT
+ * DELETE, see extension_mgmt.cpp): its .llext is gone from disk, so
+ * re-activation would fail the load-on-activate FAT read. Retired slots
+ * reject activate(), are skipped by shuffle, and stay registered (slot
+ * numbering and GATT services never change mid-boot) until the next boot's
+ * rescan forgets them. NOT cleared by clearFault() — there is no file to
+ * come back to.
+ */
+bool isRetired(size_t slot);
+
+/**
+ * @brief Marks `slot` retired (see isRetired()). The caller is responsible
+ * for switching away first if the slot is active (the FILE_MGMT DELETE
+ * handler routes through pattern_controller_change_to_animation, which
+ * un-marks Is Active and notifies the app via the standard path).
+ */
+void retire(size_t slot);
+
+/** @brief The currently active slot, or -1 (includes pending lazy loads). */
+int activeSlot();
+
+/** @brief The .llext file name (not path, not display name) `slot` was
+ *  discovered from, or nullptr. */
+const char *fileName(size_t slot);
+
+/** @brief Slot whose file name equals `name`, or -1. */
+int findSlotByFileName(const char *name);
+
+/**
+ * @brief Deletes `slot`'s persisted settings records (params + shuffle flag)
+ * and unregisters their registry entries, serialized onto the persistence
+ * workqueue (see persistent_value_store::purge_value). Only touches keys this
+ * slot actually owns (persistRegistered / shufflePersistRegistered) — a
+ * display-name-collision loser owns nothing and purges nothing, so the
+ * surviving extension's data is never erased. Blocking; call from a
+ * preemptible kernel thread (the SMP workqueue), never the persistence
+ * workqueue itself.
+ */
+void purgePersistence(size_t slot);
+
+/**
  * @brief Shuffle mode's good-switch-point signal for a slot (issue #121): the value the
  * extension's optional rgbx_good_moment export held after its most recent completed
  * tick. True when the slot is invalid, faulted, not yet loaded, or its extension does

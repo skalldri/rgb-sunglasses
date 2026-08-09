@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/spinlock.h>
 
 // When the feature is disabled (CONFIG_APP_PERSIST_BT_CONFIG=n, as on the legacy DK
 // board on the dk-support branch), compile out the registry (and the log module that reports failures
@@ -17,11 +18,24 @@ namespace {
 // Intrusive list of caller-owned PersistentValueRegistryEntry records (each links in via
 // its embedded .node). No fixed capacity - append is O(1) and can never fail for lack of
 // space, so registration cannot be silently dropped. Same idiom as Zephyr's own settings
-// backend (settings_store.c: sys_slist_t settings_load_srcs). Registration is single-
-// threaded at static-init/boot, so no locking is needed (unchanged invariant).
+// backend (settings_store.c: sys_slist_t settings_load_srcs).
+//
+// Locking: registration is still effectively single-threaded (static-init/boot), but
+// unregister() runs at runtime on the persistence workqueue (extension DELETE purge)
+// while mark_dirty() traverses the same list from arbitrary threads (BT RX via
+// extension_host::setParamValue(), the shell) — an unlink concurrent with a traversal
+// corrupts a bare sys_slist. sListLock covers every list-structure operation and
+// traversal EXCEPT the two below that must stay lock-free because they invoke
+// callbacks that block (flash I/O):
+//  - save_all(): runs only on the persistence workqueue, the same queue unregister()
+//    is confined to, so the list cannot change under it; mark_dirty() only flips the
+//    word-sized dirty flag, which cannot corrupt the walk.
+//  - dispatch_load(): boot-time only (settings_load replay + scan_slot's load_value),
+//    strictly before any runtime unregister can exist.
 sys_slist_t sRegistry = SYS_SLIST_STATIC_INIT(&sRegistry);
+k_spinlock sListLock;
 
-PersistentValueRegistryEntry *findRegistryEntry(const char *key) {
+PersistentValueRegistryEntry *findRegistryEntryLocked(const char *key) {
     PersistentValueRegistryEntry *e;
     SYS_SLIST_FOR_EACH_CONTAINER(&sRegistry, e, node) {
         if (strcmp(e->key, key) == 0) {
@@ -42,26 +56,58 @@ int persistent_value_registry_register(PersistentValueRegistryEntry *entry, cons
 
     // One walk checks both hazards: a duplicate key, and this exact record already being
     // linked (sys_slist_append on a linked node self-loops or truncates the list, hanging
-    // every later traversal - refuse rather than corrupt).
+    // every later traversal - refuse rather than corrupt). Logging happens after the
+    // unlock — no blocking work under a spinlock.
+    int ret = 0;
+    k_spinlock_key_t lk = k_spin_lock(&sListLock);
     PersistentValueRegistryEntry *e;
     SYS_SLIST_FOR_EACH_CONTAINER(&sRegistry, e, node) {
         if (e == entry) {
-            LOG_ERR("Entry for '%s' is already linked into the registry (as '%s')", key, e->key);
-            return -EALREADY;
+            ret = -EALREADY;
+            break;
         }
         if (strcmp(e->key, key) == 0) {
-            LOG_ERR("Persisted value '%s' is already registered", key);
-            return -EEXIST;
+            ret = -EEXIST;
+            break;
         }
     }
+    if (ret == 0) {
+        entry->key = key;
+        entry->target = target;
+        entry->load = load;
+        entry->save = save;
+        entry->dirty = false;
+        sys_slist_append(&sRegistry, &entry->node);
+    }
+    k_spin_unlock(&sListLock, lk);
 
-    entry->key = key;
-    entry->target = target;
-    entry->load = load;
-    entry->save = save;
-    entry->dirty = false;
-    sys_slist_append(&sRegistry, &entry->node);
-    return 0;
+    if (ret == -EALREADY) {
+        LOG_ERR("Entry for '%s' is already linked into the registry", key);
+    } else if (ret == -EEXIST) {
+        LOG_ERR("Persisted value '%s' is already registered", key);
+    }
+    return ret;
+}
+
+int persistent_value_registry_unregister(PersistentValueRegistryEntry *entry) {
+    if (entry == nullptr) {
+        return -EINVAL;
+    }
+    // sys_slist_find_and_remove returns whether the node was present, making
+    // "never registered" (or already unregistered) a clean -ENOENT instead of
+    // list corruption. sListLock guards the unlink against a concurrent
+    // mark_dirty() traversal (BT RX thread); serialization against save_all()'s
+    // callback-invoking walk comes from the persistence-workqueue-only calling
+    // contract (see the header), not from this lock.
+    int ret = 0;
+    k_spinlock_key_t lk = k_spin_lock(&sListLock);
+    if (sys_slist_find_and_remove(&sRegistry, &entry->node)) {
+        entry->dirty = false;
+    } else {
+        ret = -ENOENT;
+    }
+    k_spin_unlock(&sListLock, lk);
+    return ret;
 }
 
 int persistent_value_registry_dispatch_load(const char *name, size_t len, settings_read_cb read_cb,
@@ -91,9 +137,15 @@ int persistent_value_registry_dispatch_load(const char *name, size_t len, settin
 }
 
 void persistent_value_registry_mark_dirty(const char *key) {
-    PersistentValueRegistryEntry *e = findRegistryEntry(key);
-    if (e != nullptr) {
-        e->dirty = true;
+    // Callable from any thread (BT RX, shell, workqueues): the walk holds
+    // sListLock so a concurrent unregister() can't unlink a node out from
+    // under the traversal. The walk is a handful of strcmp()s — fine under a
+    // spinlock.
+    K_SPINLOCK(&sListLock) {
+        PersistentValueRegistryEntry *e = findRegistryEntryLocked(key);
+        if (e != nullptr) {
+            e->dirty = true;
+        }
     }
 }
 
@@ -121,6 +173,10 @@ size_t persistent_value_registry_count() {
 
 int persistent_value_registry_register(PersistentValueRegistryEntry *, const char *, void *,
                                        PersistentValueLoadFn, PersistentValueSaveFn) {
+    return -ENOSYS;
+}
+
+int persistent_value_registry_unregister(PersistentValueRegistryEntry *) {
     return -ENOSYS;
 }
 

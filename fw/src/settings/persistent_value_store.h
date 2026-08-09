@@ -4,6 +4,8 @@
 
 #include <cstddef>
 
+struct PersistentValueRegistryEntry;
+
 /**
  * @brief Debounced flash persistence for values registered with
  * persistent_value_registry. BT-free by design: do not give this module a
@@ -52,6 +54,33 @@ void save_value(const char *key, const void *data, size_t len);
  *         saved, or a negative errno on a storage error.
  */
 ssize_t load_value(const char *key, void *buf, size_t bufLen);
+
+/**
+ * @brief Immediately deletes one persisted value's record under "appcfg/".
+ *
+ * Safe from the persistence workqueue (the save sweep's own thread) — used by
+ * save callbacks that clear a sibling key (e.g. the last-active id/name pair)
+ * and by purge_value() below. A missing record is not an error.
+ */
+void delete_value(const char *key);
+
+/**
+ * @brief Synchronously unregisters @p entry and deletes its persisted record,
+ * executed ON the persistence workqueue.
+ *
+ * The workqueue hop is the point: unregistration mutates the registry list
+ * that save_all() walks, and a queued debounced flush would otherwise re-save
+ * the record this call just deleted — running the whole purge as one work item
+ * on that queue serializes it against both. Blocks until done.
+ *
+ * MUST NOT be called from the persistence workqueue itself (it would deadlock
+ * waiting on its own queue) — callers are runtime management paths (the SMP
+ * workqueue's extension DELETE handler). @p entry may be unregistered already
+ * (its record is still deleted); a null @p key skips the record deletion.
+ *
+ * @return 0 on success (including "was not registered"), -EINVAL on null entry.
+ */
+int purge_value(PersistentValueRegistryEntry *entry, const char *key);
 
 /**
  * @brief Synchronously cancels any pending debounced save.

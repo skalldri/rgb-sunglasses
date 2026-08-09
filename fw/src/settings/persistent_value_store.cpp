@@ -104,6 +104,60 @@ ssize_t load_value(const char* key, void* buf, size_t bufLen) {
     return len;
 }
 
+void delete_value(const char* key) {
+    char fullKey[SETTINGS_MAX_NAME_LEN + 1];
+    int ret = snprintf(fullKey, sizeof(fullKey), "%s/%s", kSubtreeName, key);
+    if (ret < 0 || static_cast<size_t>(ret) >= sizeof(fullKey)) {
+        return;
+    }
+
+    int err = settings_delete(fullKey);
+    if (err) {
+        LOG_ERR("Failed to delete persisted value '%s' (err: %d)", fullKey, err);
+    }
+}
+
+namespace {
+
+// One purge = one work item on the persistence workqueue (see purge_value's
+// header comment for why the hop is the point). Stack-allocated by the
+// blocking caller; k_work_flush guarantees the handler is done with it
+// before the frame unwinds.
+struct PurgeWork {
+    struct k_work work;
+    PersistentValueRegistryEntry* entry;
+    const char* key;
+};
+
+void purge_work_handler(struct k_work* work) {
+    auto* purge = CONTAINER_OF(work, PurgeWork, work);
+    // -ENOENT (never registered / already unregistered) is fine: the record
+    // deletion below is still wanted, e.g. for keys whose owner lost an
+    // -EEXIST registration race but whose record predates this boot.
+    persistent_value_registry_unregister(purge->entry);
+    if (purge->key != nullptr) {
+        delete_value(purge->key);
+    }
+}
+
+}  // namespace
+
+int purge_value(PersistentValueRegistryEntry* entry, const char* key) {
+    if (entry == nullptr) {
+        return -EINVAL;
+    }
+
+    PurgeWork purge = {};
+    purge.entry = entry;
+    purge.key = key;
+    k_work_init(&purge.work, purge_work_handler);
+    k_work_submit_to_queue(&persistent_value_lowpri_workq, &purge.work);
+
+    struct k_work_sync sync;
+    k_work_flush(&purge.work, &sync);
+    return 0;
+}
+
 void cancel_pending_save() {
     struct k_work_sync sync;
     k_work_cancel_delayable_sync(&sSaveWork, &sync);
@@ -118,6 +172,12 @@ namespace persistent_value_store {
 void request_save() {}
 
 void save_value(const char*, const void*, size_t) {}
+
+void delete_value(const char*) {}
+
+int purge_value(PersistentValueRegistryEntry*, const char*) {
+    return -ENOSYS;
+}
 
 void cancel_pending_save() {}
 

@@ -73,6 +73,10 @@ target_sources_ifdef(CONFIG_APP_FACTORY_RESET app PRIVATE src/factory_reset/fact
 target_sources_ifdef(CONFIG_APP_FACTORY_RESET app PRIVATE src/factory_reset/factory_reset_core.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_exports.c)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_host.cpp)
+# The shared path fence — compiled with the host itself so neither consumer's
+# Kconfig (APP_EXT_FILE_TRANSFER, APP_EXT_FILE_MANAGEMENT) can drop it.
+target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_path.cpp)
+target_sources_ifdef(CONFIG_APP_EXT_FILE_MANAGEMENT app PRIVATE src/extensions/extension_mgmt.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_manifest.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_param_persistence.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_registry.cpp)

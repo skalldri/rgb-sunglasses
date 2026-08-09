@@ -20,6 +20,7 @@
 #if defined(CONFIG_APP_EXTENSION_HOST)
 #include <extensions/extension_host.h>
 #include <extensions/extension_limits.h>
+#include <extensions/extension_registry.h>
 #endif
 #if defined(CONFIG_APP_SHUFFLE)
 #include <animations/shuffle_controller.h>
@@ -84,9 +85,29 @@ float sBrightnessForFrame = 0.1f;
 namespace {
 
 constexpr const char *kLastActiveAnimationKey = "core/last_active_animation";
+/* Extensions persist by FILE NAME under their own key, never by raw id in the
+ * key above: extension animation ids are kAnimationIdBase + slot, and slots
+ * renumber alphabetically at every boot rescan — after a runtime file delete
+ * (FILE_MGMT DELETE) a persisted id would silently restore a DIFFERENT
+ * extension. Same name-not-index principle the glim player established.
+ * A separate key (rather than overloading the one above with a second payload
+ * type) keeps the id record's `len == 4` acceptance test unambiguous — a
+ * 3-character name is exactly 4 bytes with its NUL. */
+constexpr const char *kLastActiveExtensionKey = "core/last_active_extension";
 
 Animation sLoadedAnimation = Animation::None;
 bool sAnimationWasLoaded = false;
+
+#if defined(CONFIG_APP_EXTENSION_HOST)
+char sLoadedExtensionName[extension_registry::kMaxNameLen] = {};
+bool sExtensionNameWasLoaded = false;
+
+bool currentAnimationIsExtension() {
+    return static_cast<uint32_t>(currentAnimation) >= extension_host::kAnimationIdBase;
+}
+#else
+bool currentAnimationIsExtension() { return false; }
+#endif
 
 void lastActiveAnimationDoLoad(void *, const void *data, size_t len) {
     if (len != sizeof(uint32_t)) {
@@ -98,16 +119,53 @@ void lastActiveAnimationDoLoad(void *, const void *data, size_t len) {
     sAnimationWasLoaded = true;
 }
 
+/* The two save callbacks each own one key and DELETE it when the other kind
+ * of animation is active, so at most one of the pair ever holds a record and
+ * a stale one can't shadow the fresh one at the next boot. Both run on the
+ * persistence workqueue (save_all sweep), where delete_value is safe. */
 void lastActiveAnimationDoSave(void *) {
+    if (currentAnimationIsExtension()) {
+        persistent_value_store::delete_value(kLastActiveAnimationKey);
+        return;
+    }
     uint32_t raw = static_cast<uint32_t>(currentAnimation);
     persistent_value_store::save_value(kLastActiveAnimationKey, &raw, sizeof(raw));
 }
+
+#if defined(CONFIG_APP_EXTENSION_HOST)
+void lastActiveExtensionDoLoad(void *, const void *data, size_t len) {
+    if (len == 0 || len >= sizeof(sLoadedExtensionName)) {
+        return;
+    }
+    memcpy(sLoadedExtensionName, data, len);
+    sLoadedExtensionName[len] = '\0';
+    sExtensionNameWasLoaded = true;
+}
+
+void lastActiveExtensionDoSave(void *) {
+    if (!currentAnimationIsExtension()) {
+        persistent_value_store::delete_value(kLastActiveExtensionKey);
+        return;
+    }
+    const size_t slot =
+        static_cast<uint32_t>(currentAnimation) - extension_host::kAnimationIdBase;
+    const char *fileName = extension_host::fileName(slot);
+    if (fileName == nullptr) {
+        return;
+    }
+    /* Name without its NUL — doLoad re-terminates from the record length. */
+    persistent_value_store::save_value(kLastActiveExtensionKey, fileName, strlen(fileName));
+}
+#endif
 
 // Caller-owned registry storage (see persistent_value_registry.h) - a file-scope static,
 // since this value has no natural per-value object (its state lives in the file statics
 // above). Zero flash when persistence is off; the registration below is dead-code-
 // eliminated via IS_ENABLED when CONFIG_APP_PERSIST_BT_CONFIG=n.
 PersistentValueRegistryEntry sLastActiveAnimationEntry{};
+#if defined(CONFIG_APP_EXTENSION_HOST)
+PersistentValueRegistryEntry sLastActiveExtensionEntry{};
+#endif
 
 struct LastActiveAnimationRegistrar {
     LastActiveAnimationRegistrar() {
@@ -120,6 +178,12 @@ struct LastActiveAnimationRegistrar {
                                                kLastActiveAnimationKey, nullptr,
                                                lastActiveAnimationDoLoad,
                                                lastActiveAnimationDoSave);
+#if defined(CONFIG_APP_EXTENSION_HOST)
+            persistent_value_registry_register(&sLastActiveExtensionEntry,
+                                               kLastActiveExtensionKey, nullptr,
+                                               lastActiveExtensionDoLoad,
+                                               lastActiveExtensionDoSave);
+#endif
         }
     }
 };
@@ -144,6 +208,9 @@ class RegistryShufflePool : public ShuffleAnimationPool {
             const size_t slot = v - extension_host::kAnimationIdBase;
             if (extension_host::isFaulted(slot)) {
                 return false;  // never shuffle INTO a faulted extension (escape is separate)
+            }
+            if (extension_host::isRetired(slot)) {
+                return false;  // file deleted at runtime — activation would only fail
             }
             // Extensions consult the host directly (same precedent as isFaulted) rather
             // than a registry getter — avoids another post-proxy registration whose
@@ -264,13 +331,30 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     // Resume whatever animation was active before the last power-cycle, if any was
     // persisted and is still registered (e.g. its CONFIG_ANIMATION_* might have been
     // disabled in a later firmware build) - otherwise fall back to ZigZag. Safe to read
-    // sLoadedAnimation/sAnimationWasLoaded here with no synchronization: settings_load()
+    // the sLoaded* statics here with no synchronization: settings_load()
     // (SYS_INIT APPLICATION prio 1, in bluetooth_init) always completes before this
     // K_THREAD_DEFINE thread starts.
+    //
+    // Extensions restore by FILE NAME (see kLastActiveExtensionKey's comment):
+    // the name key wins when present, resolved against the registry this boot
+    // just scanned (extension_host::init() above) — so a delete or install
+    // that renumbered the slots still restores the same extension, and a name
+    // whose file is gone falls back exactly like an unregistered built-in id.
     Animation startupAnimation = Animation::ZigZag;
+#if defined(CONFIG_APP_EXTENSION_HOST)
+    if (sExtensionNameWasLoaded) {
+        const int slot = extension_host::findSlotByFileName(sLoadedExtensionName);
+        if (slot >= 0) {
+            startupAnimation = extension_host::animationId(static_cast<size_t>(slot));
+        }
+    } else if (sAnimationWasLoaded && getAnimation(sLoadedAnimation)) {
+        startupAnimation = sLoadedAnimation;
+    }
+#else
     if (sAnimationWasLoaded && getAnimation(sLoadedAnimation)) {
         startupAnimation = sLoadedAnimation;
     }
+#endif
     // Restore without scheduling a save — this is a read-back, not a user-initiated change.
     pattern_controller_change_to_animation(startupAnimation, false);
 
@@ -421,7 +505,13 @@ int pattern_controller_change_to_animation(Animation animation, bool persist) {
     ActiveAnimationBinding::setLocalActiveAnimation(animation);
 
     if (persist && IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        // Both keys flush together: each save callback either writes its own
+        // record or deletes it (see the callbacks above), so the pair always
+        // reflects exactly one of {built-in id, extension name}.
         persistent_value_registry_mark_dirty(kLastActiveAnimationKey);
+#if defined(CONFIG_APP_EXTENSION_HOST)
+        persistent_value_registry_mark_dirty(kLastActiveExtensionKey);
+#endif
         persistent_value_store::request_save();
     }
 

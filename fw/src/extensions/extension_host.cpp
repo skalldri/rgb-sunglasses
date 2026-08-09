@@ -81,6 +81,11 @@ constexpr size_t kNumButtons = 5;
 struct Slot {
     bool loaded = false;   // discovered, validated, and registered (NOT llext-resident)
     bool faulted = false;
+    /* Retired by a runtime FILE_MGMT delete: the .llext is gone from disk, so
+     * re-activation (which re-reads FAT — load-on-activate) can only fail.
+     * Rejected by activate(), skipped by shuffle, NOT cleared by clearFault();
+     * forgotten naturally at the next boot's rescan. */
+    bool retired = false;
     size_t fileIndex = 0;  // extension_registry index this slot was loaded from
     extension_manifest::Metadata meta = {};
     /* Authoritative parameter values (host-owned so BLE reads/writes work
@@ -961,11 +966,83 @@ bool isFaulted(size_t slot) {
     return slot < sSlotCount && sSlots[slot].faulted;
 }
 
+bool isRetired(size_t slot) {
+    return slot < sSlotCount && sSlots[slot].retired;
+}
+
+void retire(size_t slot) {
+    if (slot >= sSlotCount) {
+        return;
+    }
+    HostLockGuard lock;
+    sSlots[slot].retired = true;
+}
+
+int activeSlot() {
+    HostLockGuard lock;
+    return sActiveSlot;
+}
+
+const char *fileName(size_t slot) {
+    if (slot >= sSlotCount) {
+        return nullptr;
+    }
+    return extension_registry::name(sSlots[slot].fileIndex);
+}
+
+int findSlotByFileName(const char *name) {
+    if (name == nullptr) {
+        return -1;
+    }
+    for (size_t slot = 0; slot < sSlotCount; slot++) {
+        const char *slotFile = extension_registry::name(sSlots[slot].fileIndex);
+        if (slotFile != nullptr && strcmp(slotFile, name) == 0) {
+            return static_cast<int>(slot);
+        }
+    }
+    return -1;
+}
+
+void purgePersistence(size_t slot) {
+    if (slot >= sSlotCount || !IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
+        return;
+    }
+    Slot &s = sSlots[slot];
+    /* Ownership rule (see the Slot fields): only purge keys THIS slot
+     * registered — a display-name-collision loser owns nothing, and purging
+     * by key string alone would erase the surviving extension's records.
+     *
+     * The flags are read-and-cleared under sHostLock (they're written by
+     * setParamValue()/writeParamString() paths on the BT RX thread under the
+     * same lock), but the purge_value() calls happen AFTER releasing it:
+     * purge_value blocks on the persistence workqueue (k_work_flush), and a
+     * queued ext_params_do_save ahead of the purge item takes sHostLock
+     * itself — holding it here would deadlock. Clearing the flags first is
+     * what makes the unlocked window safe: no new mark_dirty can be issued
+     * for these keys once they're false. */
+    bool purgeParams;
+    bool purgeShuffle;
+    {
+        HostLockGuard lock;
+        purgeParams = s.persistRegistered;
+        s.persistRegistered = false;
+        purgeShuffle = s.shufflePersistRegistered;
+        s.shufflePersistRegistered = false;
+    }
+    if (purgeParams) {
+        persistent_value_store::purge_value(&s.persistEntry, s.settingsKey);
+    }
+    if (purgeShuffle) {
+        persistent_value_store::purge_value(&s.shufflePersistEntry, s.shuffleKey);
+    }
+}
+
 bool atGoodSwitchPoint(size_t slot) {
-    /* Anything not actively rendering (invalid slot, faulted, mid-lazy-load) reports
-     * true so shuffle mode can always switch away from a fault banner and can never be
-     * pinned by an extension that never finishes loading. */
-    if (slot >= sSlotCount || sSlots[slot].faulted) {
+    /* Anything not actively rendering (invalid slot, faulted, retired,
+     * mid-lazy-load) reports true so shuffle mode can always switch away from
+     * a fault banner and can never be pinned by an extension that never
+     * finishes loading. */
+    if (slot >= sSlotCount || sSlots[slot].faulted || sSlots[slot].retired) {
         return true;
     }
     return sSlots[slot].goodMoment;
@@ -1091,6 +1168,15 @@ bool activate(size_t slot) {
         return false;
     }
 
+    /* A retired slot's file is gone (runtime FILE_MGMT delete) — the lazy
+     * load below could only fail its FAT read, so reject up front. Unlike a
+     * fault there is no reset path: the file does not come back. */
+    if (s.retired) {
+        LOG_WRN("extension '%s' was deleted — activation rejected (restart to rescan)",
+                s.meta.displayName);
+        return false;
+    }
+
     /* Cheap host-side work only (this commonly runs on the BLE RX thread):
      * tear down whatever is resident and defer the FAT load + sandbox
      * bring-up to the pattern-controller thread's first tick(). */
@@ -1119,6 +1205,9 @@ void clearFault(size_t slot) {
         return;
     }
     HostLockGuard lock;
+    /* Deliberately does NOT clear `retired`: a fault is recoverable (the code
+     * is still on disk, `ext select` retries it), but a retired slot's file
+     * was deleted — nothing to retry until the next boot rescan. */
     sSlots[slot].faulted = false;
 }
 
@@ -1261,11 +1350,12 @@ int cmd_ext_list(const struct shell *sh, size_t, char **) {
         return 0;
     }
     for (size_t i = 0; i < sSlotCount; i++) {
-        shell_print(sh, "[%zu] id=0x%02x '%s' file=%s params=%zu%s%s", i,
+        shell_print(sh, "[%zu] id=0x%02x '%s' file=%s params=%zu%s%s%s", i,
                     (unsigned)(kAnimationIdBase + i), sSlots[i].meta.displayName,
                     extension_registry::name(sSlots[i].fileIndex), sSlots[i].meta.paramCount,
                     sActiveSlot == (int)i ? " [active]" : "",
-                    sSlots[i].faulted ? " [FAULTED]" : "");
+                    sSlots[i].faulted ? " [FAULTED]" : "",
+                    sSlots[i].retired ? " [RETIRED - file deleted, restart to rescan]" : "");
     }
     return 0;
 }
