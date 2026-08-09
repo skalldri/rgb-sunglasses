@@ -1,7 +1,5 @@
 import {
     EXTENSION_DIRECTORY,
-    countDeviceExtensions,
-    countUnmanagedExtensions,
     entriesNeedingUpload,
     extensionPathFor,
     findExtensionAssets,
@@ -237,61 +235,6 @@ describe('entriesNeedingUpload', () => {
             { name: 'c', status: 'missing' },
         ] as any;
         expect(entriesNeedingUpload(entries).map((e: any) => e.name)).toEqual(['b', 'c']);
-    });
-});
-
-describe('countDeviceExtensions', () => {
-    // Extension slots are animation ids 0x40..0x4f, landing in the 4th UUID group
-    // shifted left by 8 (animationServiceUuidForId).
-    const extensionSlot0 = '12345678-1234-5678-4000-56789abd0000';
-    const extensionSlot1 = '12345678-1234-5678-4100-56789abd0000';
-    const extensionSlot15 = '12345678-1234-5678-4f00-56789abd0000';
-    const builtInRainbow = '12345678-1234-5678-0500-56789abd0000';
-    const coreConfig = '12345678-1234-5678-0001-56789abc0000';
-
-    it('counts only extension animation services', () => {
-        expect(
-            countDeviceExtensions([coreConfig, builtInRainbow, extensionSlot0, extensionSlot1])
-        ).toBe(2);
-    });
-
-    it('covers the whole extension slot range', () => {
-        expect(countDeviceExtensions([extensionSlot0, extensionSlot15])).toBe(2);
-    });
-
-    it('excludes built-in animations and non-animation services', () => {
-        expect(countDeviceExtensions([coreConfig, builtInRainbow])).toBe(0);
-    });
-
-    it('ignores malformed UUIDs rather than counting them', () => {
-        expect(countDeviceExtensions(['not-a-uuid', ''])).toBe(0);
-    });
-});
-
-describe('countUnmanagedExtensions', () => {
-    const present = (name: string) =>
-        ({ name, deviceSha256: HASH_A, status: 'up-to-date' } as any);
-    const absent = (name: string) => ({ name, deviceSha256: null, status: 'missing' } as any);
-
-    it('reports the device extensions this release does not account for', () => {
-        // Device runs 3 extensions; the release ships 2 and both are present, so
-        // the third is unmanaged.
-        expect(countUnmanagedExtensions(3, [present('a'), present('b')])).toBe(1);
-    });
-
-    it('does not count a released extension that is missing from the device', () => {
-        // Device runs 1 extension, release ships 2 of which only one is installed.
-        expect(countUnmanagedExtensions(1, [present('a'), absent('b')])).toBe(0);
-    });
-
-    it('returns zero when every device extension came from this release', () => {
-        expect(countUnmanagedExtensions(2, [present('a'), present('b')])).toBe(0);
-    });
-
-    it('never goes negative', () => {
-        // Can happen transiently: a file exists on disk but failed to load, so it
-        // has a hash but no service.
-        expect(countUnmanagedExtensions(0, [present('a')])).toBe(0);
     });
 });
 

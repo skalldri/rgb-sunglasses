@@ -237,7 +237,7 @@ export default function FirmwareUpdateLanding() {
                     <Link href="/firmware-update/extensions" asChild>
                         <AppButton
                             testID="fw-update-landing-sync-extensions"
-                            title="Sync Extensions"
+                            title="Manage Extensions"
                             variant="secondary"
                             style={styles.stackedButton}
                             disabled={!isConnected}

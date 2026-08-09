@@ -5,6 +5,8 @@ import {
   encodeCbor,
   formatHash,
   formatBytes,
+  FileMgmtCmd,
+  FileMgmtError,
   FsCmd,
   FsMgmtError,
   ImageCmd,
@@ -939,6 +941,171 @@ describe('McuMgrClient getFileSha256', () => {
     expect(spy.mock.calls[0][1]).toBe(SmpGroup.FS);
     expect(spy.mock.calls[0][2]).toBe(FsCmd.HASH);
     expect(spy.mock.calls[0][3]).toEqual({ name: '/NAND:/ext/x.llext', type: 'sha256' });
+  });
+});
+
+describe('McuMgrClient listDeviceFiles', () => {
+  it('decodes the wire entries into named fields', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    const spy = jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({
+      entries: [
+        { n: 'plasma.llext', disk: true, loaded: true, d: 'Plasma', s: 1, f: false, a: true, r: false },
+        // A file uploaded since boot carries no slot fields at all.
+        { n: 'new.llext', disk: true, loaded: false },
+      ],
+    });
+
+    const files = await client.listDeviceFiles('ext');
+
+    expect(spy.mock.calls[0][0]).toBe(SmpOp.READ_REQUEST);
+    expect(spy.mock.calls[0][1]).toBe(SmpGroup.FILE_MGMT);
+    expect(spy.mock.calls[0][2]).toBe(FileMgmtCmd.LIST);
+    // No `off` on the first request.
+    expect(spy.mock.calls[0][3]).toEqual({ kind: 'ext' });
+
+    expect(files).toEqual([
+      {
+        name: 'plasma.llext',
+        onDisk: true,
+        loaded: true,
+        displayName: 'Plasma',
+        slot: 1,
+        faulted: false,
+        active: true,
+        retired: false,
+      },
+      {
+        name: 'new.llext',
+        onDisk: true,
+        loaded: false,
+        displayName: undefined,
+        slot: undefined,
+        faulted: undefined,
+        active: undefined,
+        retired: undefined,
+      },
+    ]);
+  });
+
+  it('follows the off continuation across pages', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    const spy = jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({
+        entries: [{ n: 'a.llext', disk: true, loaded: true }],
+        off: 1,
+      })
+      .mockResolvedValueOnce({
+        entries: [{ n: 'b.llext', disk: true, loaded: true }],
+      });
+
+    const files = await client.listDeviceFiles('ext');
+
+    expect(files.map(f => f.name)).toEqual(['a.llext', 'b.llext']);
+    expect(spy.mock.calls[1][3]).toEqual({ kind: 'ext', off: 1 });
+  });
+
+  it('surfaces a FILE_MGMT group error as a typed SmpCommandError', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({
+      err: { group: SmpGroup.FILE_MGMT, rc: FileMgmtError.KIND_UNSUPPORTED },
+    });
+
+    await expect(client.listDeviceFiles('ext')).rejects.toMatchObject({
+      group: SmpGroup.FILE_MGMT,
+      rc: FileMgmtError.KIND_UNSUPPORTED,
+    });
+  });
+
+  it('surfaces old firmware as the group-less legacy rc shape', async () => {
+    // Firmware without the group answers with a bare MGMT_ERR_ENOTSUP rc — the
+    // signal callers use to hide management affordances. It must stay
+    // distinguishable from a group-64 error (group undefined, not 64).
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest.spyOn(internal, 'sendRequest').mockResolvedValueOnce({ rc: 8 });
+
+    await expect(client.listDeviceFiles('ext')).rejects.toMatchObject({
+      group: undefined,
+      rc: 8,
+    });
+  });
+
+  it('refuses to follow continuations forever', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest.spyOn(internal, 'sendRequest').mockResolvedValue({ entries: [], off: 1 });
+
+    await expect(client.listDeviceFiles('ext')).rejects.toThrow(
+      'kept returning LIST continuations'
+    );
+  });
+});
+
+describe('McuMgrClient deleteDeviceFile', () => {
+  it('closes any lingering fs_mgmt handle before deleting', async () => {
+    // FF_FS_LOCK=0: a delete racing a lingering upload handle could corrupt the
+    // FAT, so close-first is load-bearing, not politeness.
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    const spy = jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({}) // FS CLOSE
+      .mockResolvedValueOnce({}); // FILE_MGMT DELETE
+
+    await client.deleteDeviceFile('hello.llext');
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[0][1]).toBe(SmpGroup.FS);
+    expect(spy.mock.calls[0][2]).toBe(FsCmd.CLOSE);
+    expect(spy.mock.calls[1][0]).toBe(SmpOp.WRITE_REQUEST);
+    expect(spy.mock.calls[1][1]).toBe(SmpGroup.FILE_MGMT);
+    expect(spy.mock.calls[1][2]).toBe(FileMgmtCmd.DELETE);
+    expect(spy.mock.calls[1][3]).toEqual({ kind: 'ext', name: 'hello.llext' });
+  });
+
+  it('still deletes when the close is refused device-side', async () => {
+    // Nothing open (or old firmware) answers CLOSE with an error; that must not
+    // turn a safe delete into a failure.
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    const spy = jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({ rc: 8 }) // CLOSE: ENOTSUP
+      .mockResolvedValueOnce({}); // DELETE
+
+    await expect(client.deleteDeviceFile('hello.llext')).resolves.toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates a transport failure from the close instead of deleting blind', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    const spy = jest
+      .spyOn(internal, 'sendRequest')
+      .mockRejectedValueOnce(new Error('SMP request timeout after 5000ms'));
+
+    await expect(client.deleteDeviceFile('hello.llext')).rejects.toThrow('timeout');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces device-side refusals with the FILE_MGMT group and rc', async () => {
+    const client = new McuMgrClient({} as never);
+    const internal = client as any;
+    jest
+      .spyOn(internal, 'sendRequest')
+      .mockResolvedValueOnce({}) // CLOSE
+      .mockResolvedValueOnce({
+        err: { group: SmpGroup.FILE_MGMT, rc: FileMgmtError.NOT_FOUND },
+      });
+
+    await expect(client.deleteDeviceFile('gone.llext')).rejects.toMatchObject({
+      group: SmpGroup.FILE_MGMT,
+      rc: FileMgmtError.NOT_FOUND,
+    });
   });
 });
 

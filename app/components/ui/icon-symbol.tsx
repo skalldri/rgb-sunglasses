@@ -28,6 +28,8 @@ const MAPPING = {
   'shuffle': 'shuffle',
   'text.line.first.and.arrowtriangle.forward': 'playlist-play',
   'play.fill': 'play-arrow',
+  'checkmark.square.fill': 'check-box',
+  'square': 'check-box-outline-blank',
 } as IconMapping;
 
 /**

@@ -1,19 +1,20 @@
 import { ThemedText } from '@/components/themed-text';
-import { ExtensionSyncCard } from '@/components/extension-sync-card';
+import { ExtensionPickerCard } from '@/components/extension-picker-card';
 import { AppButton } from '@/components/ui/app-button';
 import { Card } from '@/components/ui/card';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { Spacing } from '@/constants/theme';
 import { useFirmwareBusy, useFirmwareRelease } from '@/context/firmware-update-context';
-import { useExtensionSync } from '@/hooks/use-extension-sync';
+import { useExtensionManagement } from '@/hooks/use-extension-management';
 import { useFirmwareUpdateFlow, isTerminalStep, type FlowStep } from '@/hooks/use-firmware-update-flow';
 import { useThemeColors } from '@/hooks/use-theme-color';
+import { buildExtensionPicker } from '@/services/extension-management';
 import { FirmwarePackage } from '@/services/firmware-package';
 import { loadPackage, type FirmwareSource } from '@/services/firmware-source';
 import { formatBytes } from '@/services/mcumgr';
 import { Link, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -53,9 +54,26 @@ export default function FirmwareUpdateFlow() {
 
     const flow = useFirmwareUpdateFlow(pkg);
     const { releaseAssets } = useFirmwareRelease();
-    const extensions = useExtensionSync(releaseAssets);
+    const extensions = useExtensionManagement(releaseAssets);
     const { setBusy } = useFirmwareBusy();
     const [syncingExtensions, setSyncingExtensions] = useState(false);
+
+    // The per-extension picker (design §6): what the restart may change, each row
+    // individually toggleable. Selection is keyed by file name and re-seeded from
+    // the preselection rules whenever the picker's composition changes.
+    const pickerItems = useMemo(() => buildExtensionPicker(extensions.plan), [extensions.plan]);
+    const [picked, setPicked] = useState<Record<string, boolean>>({});
+    const pickerSignature = pickerItems.map(i => `${i.action}:${i.name}`).join(',');
+    useEffect(() => {
+        // Never re-seed mid-apply: each applied item triggers a refresh that
+        // shrinks the picker, and resetting selection then would drop the user's
+        // remaining choices while they are being worked through.
+        if (syncingExtensions) return;
+        setPicked(Object.fromEntries(pickerItems.map(i => [i.name, i.preselected])));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pickerSignature]);
+
+    const selectedItems = pickerItems.filter(i => picked[i.name]);
 
     // Claim the shared busy flag for as long as a transfer or restart is in flight, so
     // the debug page's destructive actions stay disabled underneath us.
@@ -66,7 +84,7 @@ export default function FirmwareUpdateFlow() {
     }, [busy, setBusy]);
 
     /**
-     * Sync extensions, then restart.
+     * Apply the chosen extension changes, then restart.
      *
      * Order matters and is the behaviour the old single-screen modal had: extensions
      * live on the FAT disk and are read at boot, so writing them BEFORE the activating
@@ -74,14 +92,24 @@ export default function FirmwareUpdateFlow() {
      * reboots into new firmware with old-ABI extensions the loader rejects — the
      * animations simply vanish until the user notices and syncs manually.
      *
-     * A sync failure does not block the restart: the firmware images are already
-     * staged, and extensions can be retried from the success screen afterwards.
+     * Unlike the pre-picker flow this never bulk-installs: only the rows the user
+     * left ticked are applied — updates come preselected, installs don't, and
+     * removals (of files this release doesn't ship) are suggested, never silent.
+     *
+     * A failed item does not block the restart: the firmware images are already
+     * staged, and extensions can be retried from the management screen afterwards.
      */
     async function handleRestart() {
-        if (extensions.pendingCount > 0) {
+        if (selectedItems.length > 0) {
             setSyncingExtensions(true);
             try {
-                await extensions.sync();
+                for (const item of selectedItems) {
+                    if (item.action === 'remove') {
+                        await extensions.removeOne(item.name);
+                    } else if (item.syncEntry) {
+                        await extensions.installOne(item.syncEntry);
+                    }
+                }
             } finally {
                 setSyncingExtensions(false);
             }
@@ -269,22 +297,20 @@ export default function FirmwareUpdateFlow() {
                     <>
                         {renderImageCards()}
 
-                        {/* The real extension card, not a summary line: it already lists
-                            each file with its status and renders the upload progress
-                            bar, which is exactly what this step needs. Its own Sync
-                            button is hidden — "Restart and Install" below drives the
-                            sync, because extensions are written before the restart. */}
+                        {/* The per-extension picker replaces the old bulk sync: only the
+                            rows the user leaves ticked are applied by "Restart and
+                            Install" below — extensions are written before the restart,
+                            so the two actions stay one decision, one button. */}
                         {extensions.state !== 'idle' && (
-                            <ExtensionSyncCard
-                                state={extensions.state}
-                                entries={extensions.entries}
-                                unmanagedCount={extensions.unmanagedCount}
-                                error={extensions.error}
-                                isSyncing={syncingExtensions}
+                            <ExtensionPickerCard
+                                items={pickerItems}
+                                selected={picked}
+                                onToggle={name =>
+                                    setPicked(prev => ({ ...prev, [name]: !prev[name] }))
+                                }
+                                disabled={syncingExtensions}
+                                busyName={extensions.busyName}
                                 progress={extensions.progress}
-                                onSync={extensions.sync}
-                                disabled
-                                showSyncButton={false}
                             />
                         )}
 
@@ -293,11 +319,11 @@ export default function FirmwareUpdateFlow() {
                                 Firmware uploaded and verified on the device.
                             </ThemedText>
                             <ThemedText type="caption">
-                                {extensions.pendingCount > 0
-                                    ? `Restarting will update ${
-                                          extensions.pendingCount === 1
-                                              ? '1 animation extension'
-                                              : `${extensions.pendingCount} animation extensions`
+                                {selectedItems.length > 0
+                                    ? `Restarting will apply ${
+                                          selectedItems.length === 1
+                                              ? '1 extension change'
+                                              : `${selectedItems.length} extension changes`
                                       } first, then install the firmware. Your sunglasses will be unavailable for up to a minute, then reconnect on their own.`
                                     : 'Restart now to install it. Your sunglasses will be unavailable for up to a minute, then reconnect on their own.'}
                             </ThemedText>
@@ -306,7 +332,7 @@ export default function FirmwareUpdateFlow() {
                                     testID="fw-update-restart"
                                     title={
                                         syncingExtensions
-                                            ? 'Updating extensions…'
+                                            ? 'Applying extension changes…'
                                             : 'Restart and Install'
                                     }
                                     variant="primary"
@@ -370,13 +396,13 @@ export default function FirmwareUpdateFlow() {
                         {renderImageCards()}
                         <Card style={styles.card}>
                             <ThemedText type="caption">
-                                Animation extensions are stored separately and may also need
-                                updating.
+                                Animation extensions are stored separately and can be installed,
+                                updated or removed at any time.
                             </ThemedText>
                             <Link href="/firmware-update/extensions" asChild>
                                 <AppButton
                                     testID="fw-update-success-sync-extensions"
-                                    title="Sync Extensions"
+                                    title="Manage Extensions"
                                     variant="primary"
                                     style={styles.stackedButton}
                                 />

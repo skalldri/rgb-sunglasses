@@ -41,6 +41,11 @@ export enum SmpGroup {
     FS = 8,           // File management
     SHELL = 9,        // Shell management
     ZEPHYR = 63,      // Zephyr Management Group
+    // This firmware's own file-management group (MGMT_GROUP_ID_PERUSER) —
+    // list/delete for boot-scoped asset files. The id, the `kind` field and the
+    // CBOR schema are an app↔firmware compatibility surface, append-only, defined
+    // in fw/src/extensions/extension_mgmt.h and fw/docs/extension-management.md.
+    FILE_MGMT = 64,
 }
 
 // Image Management Commands (Group 1)
@@ -98,6 +103,32 @@ export enum FsMgmtError {
     READ_ONLY_FILESYSTEM = 15,
     FILE_EMPTY = 16,
 }
+
+// FILE_MGMT commands (group 64), mirroring extension_mgmt.h's CommandId.
+export enum FileMgmtCmd {
+    LIST = 0,
+    DELETE = 1,
+}
+
+// FILE_MGMT group error codes, mirroring extension_mgmt.h's Error enum.
+// Append-only: the firmware promises never to renumber these.
+export enum FileMgmtError {
+    OK = 0,
+    /** The `kind` is not supported by this firmware (e.g. "glim" today). */
+    KIND_UNSUPPORTED = 1,
+    /** Name failed the on-device path fence (too long, traversal, separator). */
+    INVALID_NAME = 2,
+    NOT_FOUND = 3,
+    UNLINK_FAILED = 4,
+    /** File was deleted but post-delete cleanup (retire/purge) failed. */
+    CLEANUP_FAILED = 5,
+}
+
+/**
+ * File kinds the FILE_MGMT group is parameterized over. Only extensions exist
+ * today; "glim" is reserved by the design for stored-animation assets.
+ */
+export type DeviceFileKind = 'ext';
 
 // SMP Error Codes
 export enum SmpError {
@@ -248,6 +279,31 @@ export interface FileHashResponse {
      * so both are possible here.
      */
     output: number | Uint8Array | ArrayBuffer;
+}
+
+/**
+ * One file the device reported from a FILE_MGMT LIST — the union of what is on
+ * disk and what the boot scan loaded, so divergent states ("uploaded since
+ * boot", "deleted since boot but still loaded") are named rather than implied.
+ *
+ * The slot fields (displayName/slot/faulted/active/retired) are only present
+ * when `loaded` is true — a file uploaded since boot has no slot yet.
+ */
+export interface DeviceFileEntry {
+    /** Bare file name, e.g. "plasma.llext". */
+    name: string;
+    /** The file currently exists on the FAT disk. */
+    onDisk: boolean;
+    /** A boot slot is associated with this file name. */
+    loaded: boolean;
+    /** Manifest display name, e.g. "Plasma". */
+    displayName?: string;
+    slot?: number;
+    faulted?: boolean;
+    /** This slot is the currently rendering animation. */
+    active?: boolean;
+    /** File was deleted this boot; the slot is parked until restart. */
+    retired?: boolean;
 }
 
 // ============================================================================
@@ -1063,6 +1119,119 @@ export class McuMgrClient {
                 return payload;
             },
         });
+    }
+
+    /**
+     * Close whatever file handle the device's fs_mgmt is still holding open.
+     *
+     * fs_mgmt keeps the last upload/download handle open for an idle window, and
+     * FatFs here is compiled without file locking (FF_FS_LOCK=0), so a delete
+     * racing that lingering handle could corrupt the FAT. Deleting always closes
+     * first; combined with this client's fully serialized request chain that
+     * removes the race from this app instance. (Another SMP client mid-upload is
+     * a residual, accepted risk — see fw/docs/extension-management.md §5.)
+     *
+     * Best-effort by design: a device-side error (nothing open, old firmware)
+     * must not turn a perfectly safe delete into a failure, so only transport
+     * errors propagate.
+     */
+    async closeOpenedFile(): Promise<void> {
+        try {
+            const response = await this.sendRequest(
+                SmpOp.WRITE_REQUEST,
+                SmpGroup.FS,
+                FsCmd.CLOSE,
+                {}
+            );
+            throwOnSmpError(response, 'Close opened file error');
+        } catch (e: unknown) {
+            if (e instanceof SmpCommandError) {
+                return;
+            }
+            throw e;
+        }
+    }
+
+    // ========================================================================
+    // FILE_MGMT Commands (Group 64) — this firmware's own file management
+    // ========================================================================
+
+    /**
+     * List every file of `kind` the device knows about: the union of the fenced
+     * directory's disk contents and the boot slot registry, so files uploaded
+     * since boot and files deleted-but-still-loaded both appear (see
+     * DeviceFileEntry).
+     *
+     * Follows the firmware's `off` continuation automatically — LIST is
+     * paginated (page max 8) because the response has to fit one SMP buffer.
+     *
+     * Firmware without the group rejects this with a group-less SMP error
+     * (MGMT_ERR_ENOTSUP as a bare `rc`); callers use that to hide management
+     * affordances rather than showing buttons that always fail.
+     */
+    async listDeviceFiles(kind: DeviceFileKind = 'ext'): Promise<DeviceFileEntry[]> {
+        const entries: DeviceFileEntry[] = [];
+        let off: number | undefined;
+
+        // The device caps `off` by construction (it walks a bounded directory),
+        // but a defensive page cap keeps a buggy/hostile peer from looping us
+        // forever: 64 pages × 8 entries is far beyond any real disk here.
+        for (let page = 0; page < 64; page++) {
+            const request: any = { kind };
+            if (off !== undefined) {
+                request.off = off;
+            }
+            const response = await this.sendRequest(
+                SmpOp.READ_REQUEST,
+                SmpGroup.FILE_MGMT,
+                FileMgmtCmd.LIST,
+                request
+            );
+            throwOnSmpError(response, 'File list error');
+
+            for (const raw of response.entries ?? []) {
+                entries.push({
+                    name: raw.n,
+                    onDisk: !!raw.disk,
+                    loaded: !!raw.loaded,
+                    displayName: raw.d,
+                    slot: raw.s,
+                    faulted: raw.f,
+                    active: raw.a,
+                    retired: raw.r,
+                });
+            }
+
+            if (response.off === undefined) {
+                return entries;
+            }
+            off = response.off;
+        }
+        throw new Error('Device kept returning LIST continuations past any plausible directory size');
+    }
+
+    /**
+     * Delete a file of `kind` by bare name (never a path — the device builds and
+     * fences the path itself).
+     *
+     * On the device this is more than an unlink: if the file backs the active
+     * animation it switches away first, and the matching boot slot is retired
+     * (activation rejected until restart) with its persisted settings purged.
+     *
+     * Always closes any lingering fs_mgmt handle first — see closeOpenedFile().
+     *
+     * Throws SmpCommandError with group=64 and a FileMgmtError rc for
+     * device-side refusals (NOT_FOUND, INVALID_NAME, ...).
+     */
+    async deleteDeviceFile(name: string, kind: DeviceFileKind = 'ext'): Promise<void> {
+        await this.closeOpenedFile();
+        const response = await this.sendRequest(
+            SmpOp.WRITE_REQUEST,
+            SmpGroup.FILE_MGMT,
+            FileMgmtCmd.DELETE,
+            { kind, name }
+        );
+        throwOnSmpError(response, `Delete ${name} error`);
     }
 
     // ========================================================================
