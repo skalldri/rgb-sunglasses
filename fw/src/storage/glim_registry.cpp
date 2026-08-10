@@ -1,3 +1,4 @@
+#include <storage/fs_util.h>
 #include <storage/glim_registry.h>
 
 #include <zephyr/fs/fs.h>
@@ -15,15 +16,6 @@ std::array<char[kMaxNameLen], kMaxFiles> sNames = {};
 size_t sCount = 0;
 
 constexpr const char *kGlimExtension = ".glim";
-
-bool hasGlimExtension(const char *fileName) {
-    size_t nameLen = strlen(fileName);
-    size_t extLen = strlen(kGlimExtension);
-    if (nameLen < extLen) {
-        return false;
-    }
-    return strcmp(fileName + (nameLen - extLen), kGlimExtension) == 0;
-}
 }  // namespace
 
 void init() {
@@ -35,41 +27,23 @@ void init() {
         return;
     }
 
-    struct fs_dir_t dir;
-    fs_dir_t_init(&dir);
+    const fs_util::CollectResult found = fs_util::collect_names(kDirectory, kGlimExtension, sNames);
+    sCount = found.count;
 
-    rc = fs_opendir(&dir, kDirectory);
-    if (rc < 0) {
-        LOG_ERR("Failed to open %s: %d", kDirectory, rc);
-        return;
+    // Report the count on the error path too, not just the happy one. Partial
+    // success and total failure look identical from "Failed to walk ...: -5" alone,
+    // and the realistic report is "most of my animations disappeared" — an operator
+    // reading the boot log should be able to tell "3 of 12 registered before the
+    // volume errored" without reproducing the walk.
+    if (found.rc < 0) {
+        LOG_ERR("Failed to walk %s: %d — serving the %zu file(s) found before the error",
+                kDirectory, found.rc, sCount);
     }
-
-    while (sCount < kMaxFiles) {
-        struct fs_dirent entry;
-        rc = fs_readdir(&dir, &entry);
-        if (rc < 0) {
-            LOG_ERR("fs_readdir failed: %d", rc);
-            break;
-        }
-
-        if (entry.name[0] == '\0') {
-            break;  // End of directory.
-        }
-
-        if (entry.type != FS_DIR_ENTRY_FILE) {
-            continue;
-        }
-
-        if (!hasGlimExtension(entry.name)) {
-            continue;
-        }
-
-        strncpy(sNames[sCount], entry.name, kMaxNameLen - 1);
-        sNames[sCount][kMaxNameLen - 1] = '\0';
-        sCount++;
+    if (found.skipped > 0) {
+        LOG_WRN("%s holds %zu more .glim file(s) than the %zu-entry table; keeping the "
+                "alphabetically first %zu — the rest will not appear in `glim list`",
+                kDirectory, found.skipped, kMaxFiles, sCount);
     }
-
-    fs_closedir(&dir);
 
     LOG_INF("Discovered %zu file(s) in %s", sCount, kDirectory);
 }

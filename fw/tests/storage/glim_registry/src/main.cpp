@@ -3,6 +3,7 @@
 #include <storage/glim_registry.h>
 
 #include <zephyr/fs/fs.h>
+#include <cstdio>
 #include <cstring>
 
 extern "C" {
@@ -129,4 +130,74 @@ ZTEST(glim_registry_di, test_filters_non_glim_files) {
     zassert_true(containsName("video.glim"));
     zassert_false(containsName("README.txt"));
     zassert_false(containsName("noextension"));
+}
+
+/* Exactly kMaxFiles must fill the table with no truncation reported, and the names
+ * must come back sorted. The capacity check used to be a post-write test rather than
+ * a precondition, so the boundary was correct only by an invariant nothing stated and
+ * nothing exercised. */
+ZTEST(glim_registry_di, test_exactly_at_capacity) {
+    glim_registry::init();
+
+    char path[64];
+    for (size_t i = 0; i < glim_registry::kMaxFiles; i++) {
+        snprintf(path, sizeof(path), "/NAND:/glim/f%02zu.glim", i);
+        createEmptyFile(path);
+    }
+
+    glim_registry::init();
+    zassert_equal(glim_registry::count(), glim_registry::kMaxFiles,
+                  "a full table must hold exactly kMaxFiles, got %zu", glim_registry::count());
+    for (size_t i = 1; i < glim_registry::count(); i++) {
+        zassert_true(strcmp(glim_registry::name(i - 1), glim_registry::name(i)) < 0,
+                     "names must be sorted ascending: %s then %s", glim_registry::name(i - 1),
+                     glim_registry::name(i));
+    }
+}
+
+/* One file past capacity must not overrun the table, and — the part that matters for
+ * slot stability — the RETAINED set must be the alphabetically first kMaxFiles, not
+ * whichever kMaxFiles the filesystem happened to hand over first. Slot indices become
+ * animation IDs and BLE service UUIDs, so a retained set that varied with FAT order
+ * would remap a user's stored selection between boots. */
+ZTEST(glim_registry_di, test_one_past_capacity_keeps_alphabetical_prefix) {
+    glim_registry::init();
+
+    char path[64];
+    // Created in DESCENDING name order, so "first seen" and "alphabetically first"
+    // cannot accidentally agree and let a FAT-order-dependent implementation pass.
+    for (size_t i = glim_registry::kMaxFiles + 1; i > 0; i--) {
+        snprintf(path, sizeof(path), "/NAND:/glim/f%02zu.glim", i - 1);
+        createEmptyFile(path);
+    }
+
+    glim_registry::init();
+    zassert_equal(glim_registry::count(), glim_registry::kMaxFiles,
+                  "an over-full directory must clamp to kMaxFiles, got %zu",
+                  glim_registry::count());
+
+    for (size_t i = 0; i < glim_registry::kMaxFiles; i++) {
+        char expected[32];
+        snprintf(expected, sizeof(expected), "f%02zu.glim", i);
+        zassert_equal(strcmp(glim_registry::name(i), expected), 0,
+                      "slot %zu must be %s, got %s", i, expected, glim_registry::name(i));
+    }
+    // The one that sorts last is the one dropped.
+    char dropped[32];
+    snprintf(dropped, sizeof(dropped), "f%02zu.glim", glim_registry::kMaxFiles);
+    zassert_false(containsName(dropped), "%s sorts last and must be the entry dropped", dropped);
+}
+
+/* init() must be idempotent and must not accumulate across calls — every test above
+ * relies on this, and the count reset lives on a different line from the collection. */
+ZTEST(glim_registry_di, test_init_is_idempotent) {
+    glim_registry::init();
+    createEmptyFile("/NAND:/glim/one.glim");
+    createEmptyFile("/NAND:/glim/two.glim");
+
+    glim_registry::init();
+    const size_t first = glim_registry::count();
+    glim_registry::init();
+    zassert_equal(glim_registry::count(), first, "re-running init() must not accumulate entries");
+    zassert_equal(first, 2u, "expected exactly the two files created");
 }
