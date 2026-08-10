@@ -86,13 +86,22 @@ static inline uint32_t display_cpu_us(void) {
 //
 //   thread time  = d(total_cycles)                 - some other thread ran
 //   idle time    = d(execution_cycles - total)     - the CPU had nothing to run
-//   ISR time     = d(wall) - d(execution_cycles)   - time in no thread at all
+//   unaccounted  = d(wall) - d(execution_cycles)   - no accounting window was open
 //
 // Those three plus this thread's own CPU account for the whole window, which turns
-// "something stalled us" into a number per suspect. The distinction matters: ISR time
-// means an interrupt handler is hogging the core, while IDLE time would mean nobody
-// was running and this thread simply was not woken - a timer/wakeup bug, not
-// contention. They need completely different fixes.
+// "something stalled us" into a number per suspect. IDLE time would mean nobody was
+// running and this thread simply was not woken - a timer/wakeup bug, not contention,
+// and a completely different fix.
+//
+// THE THIRD BUCKET IS NOT "ISR TIME" ON THIS ARCH. Zephyr calls z_sched_usage_stop()
+// on interrupt entry only on x86/arc/arm64/xtensa/sparc; the Cortex-M path does not
+// (kernel/thread.c z_thread_mark_switched_out/in, driven from PendSV). So on nRF5340
+// an ISR's time is billed to whichever thread it interrupted, and the only way to
+// land in this bucket is the PendSV switch window itself, where usage0 == 0 - which
+// interrupts can extend, since PendSV is the lowest-priority exception. Read it as
+// "context-switch churn", which heavy interrupt activity inflates, NOT as a direct
+// measurement of time spent in handlers. Measured baseline: 0.28% of wall over a
+// whole 229 s boot, and nearly all of that inside one stall.
 struct CpuSplit {
     uint32_t threadUs;  // non-idle thread time (all threads, this one included)
     uint32_t idleUs;
@@ -105,6 +114,109 @@ static inline CpuSplit cpu_split(void) {
     return CpuSplit{k_cyc_to_us_near32((uint32_t)st.total_cycles),
                     k_cyc_to_us_near32((uint32_t)(st.execution_cycles - st.total_cycles))};
 }
+
+// DIAGNOSTIC ONLY (#312) — names the "other thread" share of a stalled segment.
+//
+// cpu_split() proves time went to SOME other thread but not WHICH, and the two
+// candidates need opposite fixes:
+//
+//   * a thread that OUTRANKS this one (priority < CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY,
+//     i.e. the cooperative band at -1..-16) means genuine preemption;
+//   * only threads that RANK BELOW this one means this thread was not READY at all —
+//     it was blocked inside the call, and the lower-priority threads ran legitimately.
+//
+// So the priority column, not the time column, is what settles it.
+#if defined(CONFIG_THREAD_MONITOR) && defined(CONFIG_THREAD_NAME)
+#define LED_SEGMENT_THREAD_ATTRIBUTION 1
+
+// Only walk the thread list for a segment long enough to be the phenomenon under
+// study; a normal frame's segments are sub-millisecond and must not pay for this.
+static constexpr uint32_t kThreadReportThresholdUs = 100U * 1000U;
+static constexpr size_t kMaxTrackedThreads = 40;
+
+struct ThreadSnapshot {
+    const struct k_thread *tid[kMaxTrackedThreads];
+    uint64_t cycles[kMaxTrackedThreads];
+    size_t count;
+};
+
+static ThreadSnapshot sSegStartThreads;
+static ThreadSnapshot sSegEndThreads;
+
+static void snapshot_thread_cb(const struct k_thread *thread, void *user_data) {
+    ThreadSnapshot *snap = static_cast<ThreadSnapshot *>(user_data);
+    if (snap->count >= kMaxTrackedThreads) {
+        return;
+    }
+    k_thread_runtime_stats_t st;
+    if (k_thread_runtime_stats_get(const_cast<k_tid_t>(thread), &st) != 0) {
+        return;
+    }
+    snap->tid[snap->count] = thread;
+    snap->cycles[snap->count] = st.execution_cycles;
+    snap->count++;
+}
+
+static void snapshot_threads(ThreadSnapshot &out) {
+    out.count = 0;
+    // _unlocked so the walk does not hold the scheduler spinlock across every
+    // k_thread_runtime_stats_get(); the set of threads is static after boot here.
+    k_thread_foreach_unlocked(snapshot_thread_cb, &out);
+}
+
+// Diffs the two snapshots and logs the biggest consumers, worst first.
+static void report_thread_deltas(const char *label, uint32_t segUs) {
+    struct Row {
+        const struct k_thread *tid;
+        uint32_t us;
+    };
+    Row rows[kMaxTrackedThreads];
+    size_t n = 0;
+
+    for (size_t i = 0; i < sSegEndThreads.count && n < kMaxTrackedThreads; i++) {
+        const struct k_thread *tid = sSegEndThreads.tid[i];
+        // A thread created during the window has no start sample; count it whole.
+        uint64_t before = 0;
+        for (size_t j = 0; j < sSegStartThreads.count; j++) {
+            if (sSegStartThreads.tid[j] == tid) {
+                before = sSegStartThreads.cycles[j];
+                break;
+            }
+        }
+        uint64_t after = sSegEndThreads.cycles[i];
+        if (after <= before) {
+            continue;
+        }
+        uint32_t us = k_cyc_to_us_near32(static_cast<uint32_t>(after - before));
+        if (us == 0) {
+            continue;
+        }
+        rows[n++] = Row{tid, us};
+    }
+
+    LOG_WRN("#312 segment '%s' %u us — thread attribution (display prio %d):", label, segUs,
+            CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY);
+    // Selection sort of the top few; n is ~27 and this runs only on a stall.
+    const size_t kTop = 8;
+    for (size_t slot = 0; slot < kTop && slot < n; slot++) {
+        size_t best = slot;
+        for (size_t i = slot + 1; i < n; i++) {
+            if (rows[i].us > rows[best].us) {
+                best = i;
+            }
+        }
+        Row tmp = rows[slot];
+        rows[slot] = rows[best];
+        rows[best] = tmp;
+
+        const char *name = k_thread_name_get(const_cast<k_tid_t>(rows[slot].tid));
+        int prio = k_thread_priority_get(const_cast<k_tid_t>(rows[slot].tid));
+        LOG_WRN("  %-16s prio %3d  %8u us  %s", (name != nullptr && name[0] != '\0') ? name : "?",
+                prio, rows[slot].us,
+                prio < CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY ? "<-- OUTRANKS display" : "");
+    }
+}
+#endif  // CONFIG_THREAD_MONITOR && CONFIG_THREAD_NAME
 
 // Device Tree Node ID's for the LED strips
 #define LED_STRIP_0_NODE_ID DT_ALIAS(led_strip_0)
@@ -558,6 +670,9 @@ void led_display_thread_func(void *a, void *b, void *c) {
         uint32_t segStartUs = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
         uint32_t segStartCpuUs = display_cpu_us();
         CpuSplit segStartSplit = cpu_split();
+#if defined(LED_SEGMENT_THREAD_ATTRIBUTION)
+        snapshot_threads(sSegStartThreads);
+#endif
         auto markSegment = [&](const char *label) {
             uint32_t now = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
             uint32_t nowCpu = display_cpu_us();
@@ -580,6 +695,18 @@ void led_display_thread_func(void *a, void *b, void *c) {
             if (seg >= kImplausibleUs) {
                 return;
             }
+#if defined(LED_SEGMENT_THREAD_ATTRIBUTION)
+            // The snapshot pair brackets THIS segment exactly (re-snapshotted below for
+            // the next one), so the deltas cannot be contaminated by neighbouring
+            // segments in the same frame.
+            if (seg >= kThreadReportThresholdUs) {
+                snapshot_threads(sSegEndThreads);
+                report_thread_deltas(label, seg);
+            }
+            // Re-seed unconditionally: a cheap segment still has to advance the window,
+            // or the next segment's delta would silently include it.
+            snapshot_threads(sSegStartThreads);
+#endif
             if (seg > worstSegUs) {
                 worstSegUs = seg;
                 worstSegLabel = label;
@@ -691,15 +818,16 @@ void led_display_thread_func(void *a, void *b, void *c) {
                     LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
                             "(worst frame work %u us vs %u us budget; longest segment '%s' "
                             "%u us wall = %u us self + %u us other-thread + %u us idle + "
-                            "%u us ISR)%s — cannot keep framerate",
+                            "%u us unaccounted)%s — cannot keep framerate",
                             overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
                             targetUs, windowWorstSegLabel, windowWorstSegUs,
                             windowWorstSegCpuUs, windowWorstOtherUs, windowWorstIdleUs,
                             windowWorstIsrUs,
-                            // Name the dominant consumer outright. ISR and idle need
-                            // opposite fixes: ISR means a handler is hogging the core,
+                            // Name the dominant consumer outright; each points somewhere
+                            // different. Unaccounted = context-switch churn (see the
+                            // CpuSplit comment — NOT a direct ISR measurement on Cortex-M);
                             // idle means nobody ran and we simply were not woken.
-                            (windowWorstIsrUs > windowWorstSegUs / 2)   ? " <- ISR CONTEXT"
+                            (windowWorstIsrUs > windowWorstSegUs / 2)   ? " <- UNACCOUNTED (switch churn)"
                             : (windowWorstIdleUs > windowWorstSegUs / 2) ? " <- IDLE (not woken)"
                             : (windowWorstOtherUs > windowWorstSegUs / 2)
                                 ? " <- ANOTHER THREAD"
