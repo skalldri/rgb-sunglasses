@@ -998,3 +998,23 @@ config APP_MCUBOOT_UPDATER_WORKQ_PRIORITY
 endmenu
 
 rsource "drivers/Kconfig"
+config APP_LED_SEGMENT_CPU_ATTRIBUTION
+	bool "Per-segment CPU attribution for the display thread"
+	default y
+	select THREAD_RUNTIME_STATS
+	select SCHED_THREAD_USAGE
+	select SCHED_THREAD_USAGE_ALL
+	select SCHED_THREAD_USAGE_AUTO_ENABLE
+	help
+	  Records, for each display-thread segment, how its wall time split between
+	  this thread's own CPU, other threads, and idle — so an overrun can say
+	  whether the thread was slow, starved, or blocked waiting on hardware.
+
+	  This carries its dependencies with it rather than relying on the board conf,
+	  following APP_EXTENSION_HOST's "select THREAD_RUNTIME_STATS" precedent.
+	  led_controller.cpp is compiled into every board build and #errors without
+	  these symbols, so without the selects the first ROM-reduction pass that
+	  turned off the board conf's debug/instrumentation cluster would fail the
+	  whole firmware link from a file it never touched. Turn this off to drop the
+	  instrumentation deliberately; the overrun warning then reports wall time
+	  only and offers no verdict.

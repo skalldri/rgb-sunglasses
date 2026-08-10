@@ -163,6 +163,53 @@ ZTEST(led_controller, test_set_pixel_bounds_and_population) {
  * Frame-pacing stats (issue #267): led_stats_core logic + the shell command.
  * ------------------------------------------------------------------------ */
 
+/* Worst-segment attribution: the label and the CPU figure must travel WITH the
+ * wall max, never independently — otherwise the printed triple describes three
+ * different frames. The CPU figure is what separates "this call was slow" from
+ * "this thread was not running", which is the whole reason it is recorded. */
+ZTEST(led_controller, test_worst_segment_carries_label_and_cpu) {
+    led_stats_core::Stats s{};
+    led_stats_core::reset(s);
+
+    /* A modest segment that genuinely ran: wall and cpu are close. */
+    led_stats_core::recordFrame(s, true, 33000, 5000, 1200, 33300, "strip0", 1100);
+    zassert_equal(s.worstSegmentUs, 1200, "first segment should set the max");
+    zassert_mem_equal(s.worstSegmentLabel, "strip0", 7, "label should follow the max");
+    zassert_equal(s.worstSegmentCpuUs, 1100, "cpu should follow the max");
+
+    /* A shorter segment must not steal the attribution. */
+    led_stats_core::recordFrame(s, true, 33000, 5000, 900, 33300, "claim", 800);
+    zassert_equal(s.worstSegmentUs, 1200, "a shorter segment must not replace the max");
+    zassert_mem_equal(s.worstSegmentLabel, "strip0", 7, "label must not follow a shorter segment");
+    zassert_equal(s.worstSegmentCpuUs, 1100, "cpu must not follow a shorter segment");
+
+    /* A long segment that burned almost no CPU: preempted, not slow. */
+    led_stats_core::recordFrame(s, true, 40000, 9000, 1470000, 33300, "strip1", 900);
+    zassert_equal(s.worstSegmentUs, 1470000, "the longer segment should win");
+    zassert_mem_equal(s.worstSegmentLabel, "strip1", 7, "label should follow the new max");
+    zassert_equal(s.worstSegmentCpuUs, 900, "cpu should follow the new max");
+
+    led_stats_core::Summary sum = led_stats_core::summarize(s);
+    zassert_equal(sum.worstSegmentUs, 1470000, "summary should surface the wall max");
+    zassert_equal(sum.worstSegmentCpuUs, 900, "summary should surface the matching cpu");
+    zassert_mem_equal(sum.worstSegmentLabel, "strip1", 7, "summary should surface the label");
+}
+
+/* reset() must seed the label so a report before any frame never prints a null
+ * pointer through %s. */
+ZTEST(led_controller, test_reset_seeds_segment_label) {
+    led_stats_core::Stats s{};
+    led_stats_core::recordFrame(s, true, 33000, 5000, 1200, 33300, "strip0", 1100);
+    led_stats_core::reset(s);
+
+    zassert_not_null(s.worstSegmentLabel, "reset must leave a printable label");
+    zassert_mem_equal(s.worstSegmentLabel, "none", 5, "reset should seed the label to \"none\"");
+    zassert_equal(s.worstSegmentCpuUs, 0, "reset should clear the segment cpu");
+
+    led_stats_core::Summary sum = led_stats_core::summarize(s);
+    zassert_not_null(sum.worstSegmentLabel, "summary must never surface a null label");
+}
+
 ZTEST(led_controller, test_stats_reset_clears_and_seeds_min) {
     led_stats_core::Stats s{};
     led_stats_core::recordFrame(s, true, 40000, 5000, 1000, 33300);
@@ -264,3 +311,123 @@ ZTEST(led_controller, test_led_stats_shell_command) {
 }
 
 ZTEST_SUITE(led_controller, NULL, NULL, NULL, NULL, NULL);
+
+/* ---- classifySegment: the verdict, which used to be duplicated inline at two log
+ * sites with a bare `4` in each and no coverage at all. ---- */
+
+/* An led_strip_update_rgb() segment is off-CPU by design — it sleeps on the SPIM
+ * completion semaphore — so an ordinary healthy frame must NOT be reported as
+ * starvation. What separates the two is where the wall time went, not the ratio:
+ * here the core was idle, because nothing else wanted it. */
+ZTEST(led_controller, test_verdict_blocked_spi_wait_is_not_starvation) {
+    // ~10.4 ms strip transfer: 800 us of buffer work, the rest asleep.
+    const auto v = led_stats_core::classifySegment(10400, 800, /*other=*/50, /*idle=*/9500);
+    zassert_equal(v, led_stats_core::SegmentVerdict::OffCpuIdle,
+                  "a blocking SPI wait must read as BLOCKED, not STARVED");
+}
+
+/* The #312 signature: same low CPU, but the time went to another thread. */
+ZTEST(led_controller, test_verdict_starvation_when_another_thread_ran) {
+    const auto v = led_stats_core::classifySegment(1171661, 1068, /*other=*/625733, /*idle=*/5768);
+    zassert_equal(v, led_stats_core::SegmentVerdict::OffCpuContended,
+                  "another thread holding the CPU must read as STARVED");
+}
+
+/* A segment that really did burn its own CPU is neither. */
+ZTEST(led_controller, test_verdict_on_cpu_when_the_thread_ran) {
+    const auto v = led_stats_core::classifySegment(4000, 3800, /*other=*/100, /*idle=*/100);
+    zassert_equal(v, led_stats_core::SegmentVerdict::OnCpu);
+    zassert_mem_equal(led_stats_core::verdictText(v), "", 1, "OnCpu must add no suffix");
+}
+
+/* Resolution floor: at 32768 Hz a tick is 30.5 us, so a short but fully on-CPU segment
+ * measures 0 cpu. Without the floor that reads as off-CPU — the opposite of the truth.
+ * PANEL_OUTPUT_OFF makes this the *worst* segment of the frame, so it would be printed. */
+ZTEST(led_controller, test_verdict_silent_below_resolution_floor) {
+    const auto v = led_stats_core::classifySegment(120, 0, /*other=*/0, /*idle=*/0);
+    zassert_equal(v, led_stats_core::SegmentVerdict::Unknown,
+                  "a sub-resolution segment must not get a verdict");
+    zassert_mem_equal(led_stats_core::verdictText(v), "", 1, "Unknown must add no suffix");
+}
+
+/* A corrupt/implausible CPU figure must SUPPRESS the verdict, never invert it. The old
+ * inline rule was `wall > 4 * (cpu + 1)` — unsigned 32-bit with no bound on cpu, so
+ * cpu = UINT32_MAX made `cpu + 1` zero and the threshold zero, and every segment then
+ * printed the verdict next to a cpu figure larger than its own wall time. */
+ZTEST(led_controller, test_verdict_survives_an_absurd_cpu_figure) {
+    zassert_equal(led_stats_core::classifySegment(10400, UINT32_MAX, 0, 9500),
+                  led_stats_core::SegmentVerdict::OnCpu,
+                  "cpu = UINT32_MAX must not wrap the threshold to zero");
+    zassert_equal(led_stats_core::classifySegment(10400, 1100000000u, 0, 9500),
+                  led_stats_core::SegmentVerdict::OnCpu,
+                  "a large cpu figure must suppress the off-CPU verdict, not trigger it");
+}
+
+/* Off-CPU but with nothing recorded in either bucket (CPU attribution compiled out, or
+ * both buckets rounded to zero) is honestly "unknown" rather than a guess. */
+ZTEST(led_controller, test_verdict_unknown_without_attribution) {
+    zassert_equal(led_stats_core::classifySegment(10400, 0, /*other=*/0, /*idle=*/0),
+                  led_stats_core::SegmentVerdict::Unknown);
+}
+
+/* The buckets must travel with the wall max, like the label and cpu already do. */
+ZTEST(led_controller, test_segment_buckets_follow_the_worst_segment) {
+    led_stats_core::Stats s{};
+    led_stats_core::reset(s);
+
+    led_stats_core::recordFrame(s, true, 33000, 12000, 10400, 33300, "strip0", 800, 50, 9500);
+    led_stats_core::recordFrame(s, true, 33000, 2000, 1200, 33300, "claim", 1100, 10, 20);
+
+    zassert_equal(s.worstSegmentUs, 10400u, "the longer segment must win");
+    zassert_equal(s.worstSegmentOtherUs, 50u, "other-thread must follow the max");
+    zassert_equal(s.worstSegmentIdleUs, 9500u, "idle must follow the max");
+
+    const auto sum = led_stats_core::summarize(s);
+    zassert_equal(sum.worstSegmentOtherUs, 50u, "summary must surface other-thread");
+    zassert_equal(sum.worstSegmentIdleUs, 9500u, "summary must surface idle");
+}
+
+/* verdictText() is what a reader actually sees, and the two off-CPU strings are the whole
+ * point of the split — a test that only checks the enum would pass with both wired to the
+ * same message, or to each other's. */
+ZTEST(led_controller, test_verdict_text_names_the_two_off_cpu_cases_distinctly) {
+    const char* blocked =
+        led_stats_core::verdictText(led_stats_core::SegmentVerdict::OffCpuIdle);
+    const char* starved =
+        led_stats_core::verdictText(led_stats_core::SegmentVerdict::OffCpuContended);
+
+    zassert_not_null(blocked);
+    zassert_not_null(starved);
+    zassert_true(strlen(blocked) > 0, "BLOCKED must produce a message");
+    zassert_true(strlen(starved) > 0, "STARVED must produce a message");
+    zassert_true(strcmp(blocked, starved) != 0,
+                 "the two off-CPU verdicts must not print the same text");
+    zassert_not_null(strstr(blocked, "BLOCKED"), "blocked text: %s", blocked);
+    zassert_not_null(strstr(starved, "STARVED"), "starved text: %s", starved);
+}
+
+/* The tie case: equal other/idle must not read as starvation. Contention is the claim
+ * that costs a reader the most time to chase, so it should require strict evidence. */
+ZTEST(led_controller, test_verdict_tie_prefers_blocked_over_starved) {
+    zassert_equal(led_stats_core::classifySegment(10400, 100, /*other=*/2000, /*idle=*/2000),
+                  led_stats_core::SegmentVerdict::OffCpuIdle,
+                  "an even split must not be reported as starvation");
+}
+
+/* Exactly at the ratio boundary the thread counts as having run. */
+ZTEST(led_controller, test_verdict_ratio_boundary_is_on_cpu) {
+    // wall / 4 == cpu exactly.
+    zassert_equal(led_stats_core::classifySegment(4000, 1000, 0, 3000),
+                  led_stats_core::SegmentVerdict::OnCpu);
+    // One microsecond of CPU less tips it over.
+    zassert_equal(led_stats_core::classifySegment(4000, 999, 0, 3000),
+                  led_stats_core::SegmentVerdict::OffCpuIdle);
+}
+
+/* Exactly at the resolution floor the verdict is allowed to speak. */
+ZTEST(led_controller, test_verdict_floor_boundary) {
+    zassert_equal(led_stats_core::classifySegment(led_stats_core::kVerdictMinWallUs - 1, 0, 0, 400),
+                  led_stats_core::SegmentVerdict::Unknown);
+    zassert_equal(led_stats_core::classifySegment(led_stats_core::kVerdictMinWallUs, 0, 0, 400),
+                  led_stats_core::SegmentVerdict::OffCpuIdle);
+}

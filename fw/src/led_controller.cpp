@@ -58,6 +58,87 @@ BUILD_ASSERT(CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY >= 0 &&
                  CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY < CONFIG_NUM_PREEMPT_PRIORITIES,
              "CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY must be a valid preemptible priority");
 
+// Three separate config paths can each leave the CPU figure frozen, wrongly scaled, or
+// zero — and every one of them produces "no CPU against a long wall time", which is
+// exactly the signature this code reads as off-CPU. A missing config must not be able to
+// manufacture a confident wrong verdict, so each is a hard build failure rather than a
+// silent degrade. CONFIG_APP_LED_SEGMENT_CPU_ATTRIBUTION selects the first two, so these
+// only fire if someone forces them off explicitly.
+#if IS_ENABLED(CONFIG_APP_LED_SEGMENT_CPU_ATTRIBUTION)
+#if !defined(CONFIG_SCHED_THREAD_USAGE)
+#error "APP_LED_SEGMENT_CPU_ATTRIBUTION needs SCHED_THREAD_USAGE (it selects it)"
+#endif
+// Zephyr initialises every thread's usage.track_usage from AUTO_ENABLE (kernel/thread.c),
+// and sched_thread_update_usage() is skipped entirely when it is false — so without this
+// k_thread_runtime_stats_get() returns success with execution_cycles frozen at 0, every
+// segment delta is 0, and every log line claims off-CPU.
+#if !defined(CONFIG_SCHED_THREAD_USAGE_AUTO_ENABLE)
+#error "APP_LED_SEGMENT_CPU_ATTRIBUTION needs SCHED_THREAD_USAGE_AUTO_ENABLE (it selects it)"
+#endif
+// Clock-domain guard, the half of extension_host.cpp's stance that is easy to miss:
+// kernel/usage.c's usage_now() switches from k_cycle_get_32() to timing_counter_get() —
+// the DWT counter at 64/128 MHz — under this symbol, while k_cyc_to_us_near32() below
+// assumes CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC (32768 here). Enabling it silently scales
+// every CPU figure by ~1950x, so it reads larger than its own wall time.
+#if defined(CONFIG_THREAD_RUNTIME_STATS_USE_TIMING_FUNCTIONS)
+#error "led_controller's CPU attribution assumes the k_cycle_get_32() clock domain; \
+CONFIG_THREAD_RUNTIME_STATS_USE_TIMING_FUNCTIONS makes usage.c count DWT cycles instead"
+#endif
+#endif  // CONFIG_APP_LED_SEGMENT_CPU_ATTRIBUTION
+
+// Raw CPU CYCLES this thread has been given. Deliberately NOT converted to microseconds
+// here and NOT truncated to 32 bits: execution_cycles is 64-bit precisely so it does not
+// wrap, and casting it down reintroduces the same non-linear-modular-arithmetic hazard the
+// wall-clock path guards against with kImplausibleUs — except the CPU figure had no such
+// guard, so one straddling frame would pin a ~2.07e9 us value into led_stats' sticky
+// all-time maximum and, because the ratio then inverts, silence the verdict for the rest
+// of the run. Subtract in 64-bit, convert the (small) delta at the end.
+static inline uint64_t display_cpu_cycles(void) {
+#if IS_ENABLED(CONFIG_APP_LED_SEGMENT_CPU_ATTRIBUTION)
+    k_thread_runtime_stats_t st;
+    if (k_thread_runtime_stats_get(led_display_thread, &st) != 0) {
+        return 0;
+    }
+    return st.execution_cycles;
+#else
+    return 0;
+#endif
+}
+
+// Where the wall time went when it did not go to this thread. Zephyr defines, for the CPU
+// aggregate, execution_cycles = non-idle + idle and total_cycles = non-idle (kernel
+// usage.c), so across a window:
+//
+//   other-thread = d(total_cycles) - this thread's own CPU
+//   idle         = d(execution_cycles - total_cycles)
+//
+// That distinction is the whole reason this exists. A low CPU delta alone cannot tell
+// STARVED from BLOCKED, and led_strip_update_rgb() blocks by design — it sleeps on the
+// SPIM completion semaphore for ~10.4 ms per strip, so treating "off-CPU" as "preempted"
+// libels every healthy frame. Idle time means nobody else wanted the core and this thread
+// was waiting on hardware; other-thread time means it was actually starved.
+//
+// Caveat worth knowing before trusting a HIGH cpu figure: Zephyr closes a usage window
+// only at context switch, and the Cortex-M path does not call z_sched_usage_stop() on
+// interrupt entry the way x86/arc/arm64/xtensa/sparc do — so an ISR's cycles are billed to
+// whichever thread it interrupted. A segment stretched by an interrupt burst therefore
+// reports cpu ~= wall and stays silent. High CPU rules out starvation, not interference.
+struct CpuSplit {
+    uint64_t threadCycles;  // non-idle, all threads including this one
+    uint64_t idleCycles;
+};
+static inline CpuSplit cpu_split(void) {
+#if IS_ENABLED(CONFIG_APP_LED_SEGMENT_CPU_ATTRIBUTION)
+    k_thread_runtime_stats_t st;
+    if (k_thread_runtime_stats_cpu_get(0, &st) != 0) {
+        return CpuSplit{0, 0};
+    }
+    return CpuSplit{st.total_cycles, st.execution_cycles - st.total_cycles};
+#else
+    return CpuSplit{0, 0};
+#endif
+}
+
 // Device Tree Node ID's for the LED strips
 #define LED_STRIP_0_NODE_ID DT_ALIAS(led_strip_0)
 #define LED_STRIP_1_NODE_ID DT_ALIAS(led_strip_1)
@@ -473,6 +554,9 @@ void led_display_thread_func(void *a, void *b, void *c) {
     uint32_t windowWorstFrameUs = 0;
     uint32_t windowWorstSegUs = 0;
     const char *windowWorstSegLabel = "none";
+    uint32_t windowWorstSegCpuUs = 0;
+    uint32_t windowWorstOtherUs = 0;
+    uint32_t windowWorstIdleUs = 0;
 
     while (true) {
         // Update LED strips with current framebuffer contents
@@ -496,14 +580,33 @@ void led_display_thread_func(void *a, void *b, void *c) {
         // a lock held by someone else, or preemption.
         uint32_t worstSegUs = 0;
         const char *worstSegLabel = "none";
+        uint32_t worstSegCpuUs = 0;
+        uint32_t worstSegOtherUs = 0;  // other threads ran
+        uint32_t worstSegIdleUs = 0;   // CPU had nothing to run
         // Seeded AFTER the preamble reads below, not from wakeUs — otherwise the first
         // segment silently includes k_uptime_ticks(), the cycle read, and the virtual
         // getDisplayRateMs() call, all billed to a label that says "claim".
         uint32_t segStartUs = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
+        uint64_t segStartCpuCycles = display_cpu_cycles();
+        CpuSplit segStartSplit = cpu_split();
         auto markSegment = [&](const char *label) {
             uint32_t now = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
+            const uint64_t nowCpuCycles = display_cpu_cycles();
+            const CpuSplit nowSplit = cpu_split();
             uint32_t seg = now - segStartUs;
+            // Deltas are taken in 64-bit and only then narrowed: each is bounded by the
+            // segment's own wall time, so the conversion cannot overflow the way a
+            // truncated accumulator could.
+            const uint32_t segCpu = k_cyc_to_us_near32(
+                static_cast<uint32_t>(nowCpuCycles - segStartCpuCycles));
+            const uint32_t segAllThreads = k_cyc_to_us_near32(
+                static_cast<uint32_t>(nowSplit.threadCycles - segStartSplit.threadCycles));
+            const uint32_t segIdle = k_cyc_to_us_near32(
+                static_cast<uint32_t>(nowSplit.idleCycles - segStartSplit.idleCycles));
+            const uint32_t segOther = (segAllThreads > segCpu) ? segAllThreads - segCpu : 0;
             segStartUs = now;
+            segStartCpuCycles = nowCpuCycles;
+            segStartSplit = nowSplit;
             // k_cycle_get_32() wraps every ~36.4 h at 32768 Hz, and k_cyc_to_us_near32()
             // truncates AFTER 64-bit math — so the derived microsecond timeline is NOT
             // linear mod 2^32 and one frame per wrap yields a garbage delta (~2.07e9 us).
@@ -516,6 +619,9 @@ void led_display_thread_func(void *a, void *b, void *c) {
             if (seg > worstSegUs) {
                 worstSegUs = seg;
                 worstSegLabel = label;
+                worstSegCpuUs = segCpu;
+                worstSegOtherUs = segOther;
+                worstSegIdleUs = segIdle;
             }
         };
 
@@ -580,7 +686,8 @@ void led_display_thread_func(void *a, void *b, void *c) {
         if (sampleSane) {
             K_SPINLOCK(&sStatsLock) {
                 led_stats_core::recordFrame(sStats, haveInterval, intervalUs, workUs, worstSegUs,
-                                            targetUs);
+                                            targetUs, worstSegLabel, worstSegCpuUs,
+                                            worstSegOtherUs, worstSegIdleUs);
             }
         }
         prevWakeUs = wakeUs;
@@ -594,6 +701,9 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 windowWorstFrameUs = workUs;
                 windowWorstSegUs = worstSegUs;
                 windowWorstSegLabel = worstSegLabel;
+                windowWorstSegCpuUs = worstSegCpuUs;
+                windowWorstOtherUs = worstSegOtherUs;
+                windowWorstIdleUs = worstSegIdleUs;
             }
             // Rate-limited so a sustained overrun can't bury every other log line.
             const int64_t nowMs = k_uptime_get();
@@ -612,25 +722,31 @@ void led_display_thread_func(void *a, void *b, void *c) {
                  * a cycle-clock read, and near the threshold the two can disagree. */
                 const bool segmentExplainsFrame =
                     windowWorstSegUs > 0 && windowWorstSegUs >= windowWorstFrameUs / 2;
-                if (segmentExplainsFrame) {
-                    LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
-                            "(worst frame work %u us vs %u us budget; longest segment '%s' "
-                            "%u us) — cannot keep framerate",
-                            overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
-                            targetUs, windowWorstSegLabel, windowWorstSegUs);
-                } else {
-                    LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
-                            "(worst frame work %u us vs %u us budget; NO segment accounts for "
-                            "it — longest was '%s' %u us, so look outside the LED path) — "
-                            "cannot keep framerate",
-                            overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
-                            targetUs, windowWorstSegLabel, windowWorstSegUs);
-                }
+                /* ONE call, not a branch of near-duplicate format strings. The two had
+                 * already drifted three times, and the drift mattered: the verdict was
+                 * attached only to the branch where a segment explains the frame, while
+                 * the OTHER branch — time going somewhere no segment measured — is the
+                 * one where an interpretation actually helps. Both now get it. */
+                const led_stats_core::SegmentVerdict verdict = led_stats_core::classifySegment(
+                    windowWorstSegUs, windowWorstSegCpuUs, windowWorstOtherUs,
+                    windowWorstIdleUs);
+                LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
+                        "(worst frame work %u us vs %u us budget; %s '%s' %u us wall = "
+                        "%u us self + %u us other-thread + %u us idle)%s — cannot keep framerate",
+                        overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs, targetUs,
+                        segmentExplainsFrame ? "longest segment"
+                                             : "NO segment accounts for it; longest was",
+                        windowWorstSegLabel, windowWorstSegUs, windowWorstSegCpuUs,
+                        windowWorstOtherUs, windowWorstIdleUs,
+                        led_stats_core::verdictText(verdict));
                 lastOverrunLogMs = nowMs;
                 overrunsSinceLog = 0;
                 windowWorstFrameUs = 0;
                 windowWorstSegUs = 0;
                 windowWorstSegLabel = "none";
+                windowWorstSegCpuUs = 0;
+                windowWorstOtherUs = 0;
+                windowWorstIdleUs = 0;
             }
             // Yield unconditionally even when we blew the budget. Previously this branch
             // looped with no sleep at all, which is survivable only because this thread is
@@ -699,8 +815,15 @@ static int cmd_led_stats(const struct shell *shell, size_t argc, char **argv) {
     shell_print(shell, "late (>%ux):    %u frame(s)", led_stats_core::kLateFrameMultiple,
                 s.lateFrames);
     shell_print(shell, "work max:      %u us", s.workMaxUs);
-    shell_print(shell, "worst segment: %u us  (upper bound - includes SPI wait)",
-                s.worstSegmentUs);
+    // wall + cpu + which call, so an unattended soak stays diagnosable after the
+    // rate-limited overrun warning has scrolled out of the serial backlog.
+    shell_print(shell, "worst segment: %u us wall = %u us self + %u us other-thread + "
+                       "%u us idle  in '%s'%s",
+                s.worstSegmentUs, s.worstSegmentCpuUs, s.worstSegmentOtherUs,
+                s.worstSegmentIdleUs, s.worstSegmentLabel,
+                led_stats_core::verdictText(led_stats_core::classifySegment(
+                    s.worstSegmentUs, s.worstSegmentCpuUs, s.worstSegmentOtherUs,
+                    s.worstSegmentIdleUs)));
     shell_print(shell, "overruns:      %u", s.overruns);
     return 0;
 }
