@@ -1,0 +1,81 @@
+name: doxygen
+description: >-
+  Installs the PINNED Doxygen used to build the rgbx extension API docs. Used by
+  both sdk-ci.yml (the warnings-are-errors pre-merge gate) and pages.yml (the
+  deploy that publishes /api), so the gate can never validate with a different
+  Doxygen than the one that ships the docs. Same rationale as
+  ./sim-wasm-toolchain.
+
+  Why pin: the docs build runs with WARN_AS_ERROR=FAIL_ON_WARNINGS and its HTML
+  header template is version-specific, so an unpinned `apt-get install doxygen`
+  would let a runner-image bump turn a green PR red — or silently emit pages
+  with unsubstituted template placeholders — with no repo change.
+
+  The version is NOT declared here: it is read from fw/extensions/build-docs.sh,
+  which is the authoritative pin and the script developers run locally. Same
+  grep-the-consumer pattern as sim-wasm-toolchain and WASI_SDK_VERSION.
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the pinned Doxygen version
+      id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        v="$(grep -oP '^DOXYGEN_VERSION="\K[^"]+' fw/extensions/build-docs.sh)"
+        if [ -z "$v" ]; then
+          echo "::error::could not read DOXYGEN_VERSION from fw/extensions/build-docs.sh" >&2
+          exit 1
+        fi
+        echo "version=$v" >> "$GITHUB_OUTPUT"
+
+    # The cache path is version-scoped, matching ./arm-gnu-toolchain. It must
+    # be: ./sim-wasm-toolchain caches the whole of ~/.cache/rgb-sunglasses under
+    # a wasi-sdk-<v> key, and pages.yml runs it immediately before this action —
+    # so an unversioned ~/.cache/rgb-sunglasses/doxygen would be swept into the
+    # wasi entry. A later version bump would then miss its own key, restore the
+    # STALE binary from the wasi cache, skip the download (the binary exists),
+    # and die at the verify step below — blocking the only workflow that
+    # deploys Pages, for a reason nothing in the diff points at.
+    - name: Cache Doxygen
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/rgb-sunglasses/doxygen-${{ steps.pin.outputs.version }}
+        key: doxygen-${{ steps.pin.outputs.version }}-linux-x86_64
+
+    - name: Install Doxygen
+      shell: bash
+      env:
+        DOXYGEN_VERSION: ${{ steps.pin.outputs.version }}
+      run: |
+        set -euo pipefail
+        dest="$HOME/.cache/rgb-sunglasses/doxygen-${DOXYGEN_VERSION}"
+        if [ ! -x "$dest/bin/doxygen" ]; then
+          mkdir -p "$dest"
+          # Release tags spell the version with underscores (1.12.0 -> 1_12_0),
+          # while the asset filename keeps the dots.
+          tag="Release_${DOXYGEN_VERSION//./_}"
+          # The tarball's top-level dir is doxygen-<version>/; strip it so the
+          # binary always lands at $dest/bin/doxygen.
+          # Retries are generous on purpose: on a cache miss this download is a
+          # hard dependency of the Pages deploy (see the comment on the docs
+          # step in pages.yml).
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            "https://github.com/doxygen/doxygen/releases/download/${tag}/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
+            | tar -xz -C "$dest" --strip-components=1
+        fi
+        echo "$dest/bin" >> "$GITHUB_PATH"
+
+    - name: Verify the pinned version is what actually runs
+      shell: bash
+      env:
+        DOXYGEN_VERSION: ${{ steps.pin.outputs.version }}
+      run: |
+        set -euo pipefail
+        actual="$(doxygen --version | cut -d' ' -f1)"
+        if [ "$actual" != "$DOXYGEN_VERSION" ]; then
+          echo "::error::expected Doxygen $DOXYGEN_VERSION, got $actual" >&2
+          exit 1
+        fi
+        echo "Doxygen $actual"

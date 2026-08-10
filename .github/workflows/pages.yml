@@ -7,7 +7,13 @@ name: Deploy Project Site (GitHub Pages)
 # recovery guide at /recovery, sourced from fw/docs/flashing-without-jlink.md.
 # Only the `site/` folder is uploaded, so internal design docs under `docs/plans/`
 # are never published. The extension simulator (fw/sim) is built here as a Vite
-# bundle and composed into site/sim/ — served at /sim.
+# bundle and composed into site/sim/ — served at /sim. The rgbx extension API
+# reference is built with Doxygen and composed into site/api/ — served at /api.
+#
+# This is the ONLY workflow that deploys Pages: GitHub allows a single
+# deployment source, and the upload below ships the whole `site/` tree. A second
+# workflow calling deploy-pages would replace all of it (/docs, /sim, /api,
+# /privacy), so compose new sub-sites in here rather than adding one.
 
 on:
   push:
@@ -24,10 +30,16 @@ on:
       - 'fw/docs/images/**'
       # The extension simulator ships at /sim — redeploy when it (or the
       # extensions/DSP its bundled .wasm modules are built from) changes.
+      # fw/extensions/** and fw/include/rgbx/** additionally cover the API
+      # reference at /api: the Doxyfile, its vendored theme, the front-page
+      # README, and the documented headers.
       - 'fw/sim/**'
       - 'fw/extensions/**'
       - 'fw/include/rgbx/**'
       - 'fw/src/sound/audio_dsp*'
+      # The remaining page rendered into /api by Doxygen.
+      - 'extensions/README.md'
+      - '.github/actions/doxygen/**'
   workflow_dispatch:
 
 permissions:
@@ -49,6 +61,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The API docs stamp PROJECT_NUMBER from `git describe` against the
+          # fw-v* tags, which a shallow clone doesn't have.
+          fetch-depth: 0
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
@@ -88,6 +104,32 @@ jobs:
           # have site/sim, but keep the step idempotent regardless.
           rm -rf ../../site/sim
           cp -r dist/browser ../../site/sim
+
+      # ---- Extension API reference (served at /api) ----------------------
+      # Doxygen over fw/include/rgbx plus the extension-author guides. The
+      # pinned-Doxygen action is the SAME one sdk-ci.yml's `docs` job gates
+      # with, so a deploy can never use a different Doxygen than the one CI
+      # validated (same rationale as sim-wasm-toolchain above).
+      #
+      # These two steps are deliberately FATAL to the deploy rather than
+      # `continue-on-error`, even though that means an upstream Doxygen
+      # download failure (on a cache miss) can block a push that only touched
+      # fw/docs/**. The alternative is worse: the upload below ships the whole
+      # site/ tree, so continuing past a failed docs build would publish a site
+      # with no site/api at all — turning a transient outage into a live 404
+      # for every /api URL. Failing loudly leaves the previous deploy intact.
+      # The download is cached and retried (see the action); the content of
+      # these steps is gated pre-merge by sdk-ci.yml's `docs` job.
+      - uses: ./.github/actions/doxygen
+
+      - name: Build extension API docs into site/api
+        run: |
+          # Same script sdk-ci.yml gates with and developers run locally.
+          fw/extensions/build-docs.sh
+          # rm first: cp -r nests into an EXISTING destination (dst/html/),
+          # which would silently 404 the deployed page. Same trap as site/sim.
+          rm -rf site/api
+          cp -r fw/build/doxygen/html site/api
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3

@@ -1,6 +1,21 @@
 FROM ghcr.io/skalldri/nrf-connect-sdk-docker:3.1.1
 RUN /lib/systemd/systemd-udevd --daemon
-RUN apt-get update && apt-get install -y --no-install-recommends lcov ffmpeg qrencode dosfstools doxygen screen jq shellcheck && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends lcov ffmpeg qrencode dosfstools screen jq shellcheck && rm -rf /var/lib/apt/lists/*
+
+# Doxygen — builds the rgbx extension API docs published at /api. Installed
+# from the upstream release tarball rather than apt (which ships 1.9.1 here)
+# because the docs build runs with WARN_AS_ERROR and Doxygen's warning set
+# varies by release: a version mismatch between here and CI would mean "clean
+# locally, red in CI". The version must stay in sync with
+# .github/actions/doxygen/action.yml, which is the authoritative pin, and stay
+# inside the range the vendored theme supports — see
+# fw/extensions/doxygen/VENDORED.md. (Same duplicate-the-pin pattern, and same
+# reason, as the wasi-sdk install further down.)
+# (wget, not curl: curl is only apt-installed further down, but the base image
+# already provides wget — see the J-Link download below.)
+RUN wget -qO- https://github.com/doxygen/doxygen/releases/download/Release_1_12_0/doxygen-1.12.0.linux.bin.tar.gz \
+        | tar -xz -C /opt \
+    && ln -s /opt/doxygen-1.12.0/bin/doxygen /usr/local/bin/doxygen
 RUN mkdir -p /jlink
 RUN wget --post-data="accept_license_agreement=accepted&submit=Download+software" -O /jlink/JLink_Linux.deb https://www.segger.com/downloads/jlink/JLink_Linux_V860_x86_64.deb
 

@@ -1,21 +1,77 @@
 # Doxygen configuration for the rgbx animation-extension API.
 #
-#   doxygen fw/extensions/Doxyfile        (run from anywhere; paths below are
-#                                          relative to this file's directory)
+# Build it with:
 #
-# Output lands in fw/build/doxygen/html (fw/build is gitignored). Covers the
-# public extension API surface (include/rgbx) with fw/extensions/README.md as
-# the main page.
+#   fw/extensions/build-docs.sh
+#
+# Do not invoke `doxygen Doxyfile` directly: the relative paths below resolve
+# against the CURRENT WORKING DIRECTORY rather than this file's location,
+# fw/build must already exist, and the Doxygen version has to match the pin
+# (the HTML header template is version-specific). build-docs.sh handles all
+# three, and is the same script sdk-ci.yml's `docs` gate and pages.yml's deploy
+# run — see doxygen/VENDORED.md for the version contract.
+#
+# Output lands in fw/build/doxygen/html (fw/build is gitignored); pages.yml
+# copies that tree to site/api and publishes it at
+# https://rgb-sunglasses.autom8ed.com/api.
 
 PROJECT_NAME           = "RGB Sunglasses Animation Extension API"
 PROJECT_BRIEF          = "rgbx ABI + C++ wrapper for sandboxed .llext animations"
+# Set from `git describe --tags --match 'fw-v*' --always` by the caller, so the
+# published docs state which firmware release they correspond to. Falls back to
+# an empty string (header just omits it) when built without the variable.
+PROJECT_NUMBER         = $(RGBX_DOC_VERSION)
 OUTPUT_DIRECTORY       = ../build/doxygen
 
-INPUT                  = ../include/rgbx README.md
-USE_MDFILE_AS_MAINPAGE = README.md
+# The public extension API surface, plus the guides an extension author
+# actually needs: a start-to-finish walkthrough (getting-started.md), the
+# reference-level detail (README.md), and how to publish (extensions/README.md).
+#
+# The bar for adding a page here is "an extension developer needs this to build
+# or ship an extension" — NOT "this is about extensions". Deliberately absent:
+# fw/docs/standalone-extension-repos.md (why the SDK/registry are shaped the
+# way they are — repo design history), and fw/sim/README.md + fw/sim/PARITY.md
+# (how to build and run the in-repo simulator — extension authors use the
+# hosted one at /sim, or the template's build.sh). Those stay in the repo for
+# maintainers; publishing them just buried the API.
+#
+# Files are listed individually rather than by globbing a directory, so a new
+# .md added next to these isn't silently published.
+INPUT                  = ../include/rgbx \
+                         README.md \
+                         getting-started.md \
+                         ../../extensions/README.md
+
+# Keep the pattern list explicit. INPUT names a DIRECTORY (../include/rgbx), so
+# without this Doxygen falls back to its own default patterns — *.c, *.py, *.dox
+# and a couple of dozen more. Combined with WARN_IF_UNDOCUMENTED +
+# WARN_AS_ERROR below, dropping a generator script or a .dox note into that
+# directory would then fail the docs gate and, on main, abort the Pages deploy
+# for the whole site.
 FILE_PATTERNS          = *.h *.md
 
-EXTRACT_ALL            = YES
+# Three inputs are named README.md (fw/extensions, extensions, fw/sim). Doxygen
+# accepts this setting as EITHER a bare basename or a path, and a bare
+# "README.md" matches all three by name — every one gets an implicit \mainpage
+# and the build dies with "found more than one \mainpage comment block".
+#
+# The leading "./" is load-bearing: it makes the basename comparison fail, so
+# only the absolute-path comparison can match, which selects exactly this file.
+# The value must also resolve on disk relative to the CWD (fw/extensions), so a
+# repo-relative "fw/extensions/README.md" is rejected outright as nonexistent.
+# FULL_PATH_NAMES keeps the three distinguishable elsewhere in the output.
+USE_MDFILE_AS_MAINPAGE = ./README.md
+FULL_PATH_NAMES        = YES
+STRIP_FROM_PATH        = ../..
+
+# EXTRACT_ALL is deliberately NO. With it YES, Doxygen force-disables
+# WARN_IF_UNDOCUMENTED, so a newly-added function with no comment at all would
+# pass the gate silently (WARN_NO_PARAMDOC only fires on PARTIALLY documented
+# parameter lists — verified). With it NO, an undocumented entity is instead
+# omitted from the output, and WARN_IF_UNDOCUMENTED + WARN_AS_ERROR below turn
+# that omission into a build failure. This is a public API: nothing in it
+# should be undocumented, so "must be documented" is the correct default.
+EXTRACT_ALL            = NO
 EXTRACT_STATIC         = YES
 OPTIMIZE_OUTPUT_FOR_C  = YES
 JAVADOC_AUTOBRIEF      = YES
@@ -26,8 +82,33 @@ ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = NO
 PREDEFINED             = __cplusplus
 
+# Warnings are the gate (sdk-ci.yml). WARN_NO_PARAMDOC is what makes a missing
+# @param an error rather than a silently thinner page — don't relax these to
+# make a build pass; fix the comment instead.
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_NO_PARAMDOC       = YES
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
+
 GENERATE_HTML          = YES
 GENERATE_LATEX         = NO
 HAVE_DOT               = NO
-QUIET                  = YES
-WARN_IF_UNDOCUMENTED   = NO
+
+# Theme: doxygen-awesome-css, vendored under doxygen/ (see doxygen/VENDORED.md).
+# HTML_COLORSTYLE must be LIGHT on Doxygen >= 1.9.5 — the theme layers its own
+# light/dark palettes on top and the toggle (loaded from header.html) switches
+# between them, following the OS preference by default.
+HTML_COLORSTYLE        = LIGHT
+HTML_HEADER            = doxygen/header.html
+HTML_EXTRA_STYLESHEET  = doxygen/doxygen-awesome.css \
+                         doxygen/doxygen-awesome-sidebar-only.css \
+                         doxygen/doxygen-awesome-sidebar-only-darkmode-toggle.css
+HTML_EXTRA_FILES       = doxygen/doxygen-awesome-darkmode-toggle.js
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+# MUST equal the theme's --side-nav-fixed-width (335px, set in
+# doxygen-awesome-sidebar-only.css) — upstream states the two have to match, and
+# Doxygen's own default is 250, which leaves the JS resizer disagreeing with the
+# CSS about how wide the sidebar is.
+TREEVIEW_WIDTH         = 335

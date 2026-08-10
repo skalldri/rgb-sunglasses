@@ -17,9 +17,16 @@ on:
       - 'fw/sim/scripts/**'
       - 'fw/sim/build-extensions.sh'
       - 'fw/extensions/**'
+      # Published as part of the API docs (see the `docs` job) — editing it can
+      # break the docs build on its own.
+      - 'extensions/README.md'
       - '.github/actions/arm-gnu-toolchain/**'
       - '.github/actions/wasi-sdk-scoped/**'
       - '.github/actions/package-rgbx-sdk/**'
+      - '.github/actions/doxygen/**'
+      # The deploy step in pages.yml runs this same docs build; without
+      # it here, editing that step merges with no docs job having run.
+      - '.github/workflows/pages.yml'
       - '.github/workflows/sdk-ci.yml'
   push:
     branches: [main]
@@ -30,9 +37,14 @@ on:
       - 'fw/sim/scripts/**'
       - 'fw/sim/build-extensions.sh'
       - 'fw/extensions/**'
+      - 'extensions/README.md'
       - '.github/actions/arm-gnu-toolchain/**'
       - '.github/actions/wasi-sdk-scoped/**'
       - '.github/actions/package-rgbx-sdk/**'
+      - '.github/actions/doxygen/**'
+      # The deploy step in pages.yml runs this same docs build; without
+      # it here, editing that step merges with no docs job having run.
+      - '.github/workflows/pages.yml'
       - '.github/workflows/sdk-ci.yml'
 
 jobs:
@@ -94,3 +106,28 @@ jobs:
           fw/sim/build-extensions.sh hello cpptest
           node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/hello.wasm" fw/sim/out/wasm/hello.wasm
           node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/cpptest.wasm" fw/sim/out/wasm/cpptest.wasm
+
+  # Warnings-are-errors gate for the extension API docs published at
+  # https://rgb-sunglasses.autom8ed.com/api. The SAME build runs in pages.yml
+  # with the SAME pinned Doxygen action, so a doc regression is caught here at
+  # PR time instead of going live. The Doxyfile sets WARN_AS_ERROR,
+  # WARN_IF_UNDOCUMENTED and WARN_NO_PARAMDOC — an undocumented public entity
+  # or a half-documented parameter list fails this job. Fix the comment; don't
+  # relax the Doxyfile.
+  docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PROJECT_NUMBER comes from `git describe` against the fw-v* tags,
+          # which a shallow clone doesn't have.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/doxygen
+
+      # Same script developers run locally and pages.yml deploys with, so the
+      # gate cannot diverge from either.
+      - name: Build extension API docs (warnings are errors)
+        run: fw/extensions/build-docs.sh

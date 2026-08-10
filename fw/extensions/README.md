@@ -1,5 +1,10 @@
 # Animation Extensions
 
+> **New here? Start with [Getting started: your first extension](getting-started.md)** —
+> a start-to-finish walkthrough that builds a working C or C++ extension and
+> covers parameters, sensor inputs, drawing, and installing it. This page is
+> the reference-level detail behind it.
+
 Loadable animation extensions (`.llext` files) run **fully sandboxed**: the
 firmware executes extension code exclusively on a dedicated user-mode thread
 confined to a private MPU memory domain (GitHub issue #85). A buggy extension
@@ -27,18 +32,22 @@ id `0x40 + slot`.
 
 ## The ABI
 
-`include/rgbx/rgbx_api.h` (flat C, ABI v1) is the whole contract. An extension
+[`rgbx_api.h`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/include/rgbx/rgbx_api.h)
+(flat C, ABI v1) is the whole contract. An extension
 exports five symbols — a `rgbx_manifest` (name, framebuffer dims, parameter
 table), a writable `rgbx_inputs` block the host fills before each tick, a
 `rgbx_framebuffer` it renders into, and `rgbx_init`/`rgbx_tick` functions —
 and calls at most the firmware's exported support surface: the string/memory
 functions + `printk`/`vprintk`, plus single-precision libm (`sinf`, `cosf`,
 `atan2f`, `sqrtf`, …), the 64-bit integer-division helpers, and `memmove`
-(`src/extensions/extension_exports.c`, issue #295 — the authoritative list is
-`fw/sdk/arm/allowed-symbols.txt`, and the build gates enforce it). Anything
+([`extension_exports.c`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/src/extensions/extension_exports.c),
+issue #295 — the authoritative list is
+[`allowed-symbols.txt`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/sdk/arm/allowed-symbols.txt),
+and the build gates enforce it). Anything
 else — notably all double-precision math — fails symbol resolution at load.
-See `hello/hello.c` for a complete raw-C extension exercising the full
-surface.
+See the template's
+[`src/main.c`](https://github.com/skalldri/rgbx-extension-template/blob/main/src/main.c)
+for a complete raw-C extension exercising the full surface.
 
 ### Optional exports
 
@@ -53,11 +62,12 @@ extension, same as the required ones.
 | ------ | ------------------- | ------- |
 | `rgbx_good_moment` (`uint8_t`) | every frame is a good moment | Set during `rgbx_tick()`: nonzero means the frame just rendered ended at a natural switch boundary (end of a scroll/clip/cycle), so the firmware's shuffle mode (issue #121) can switch animations without visual jarring. |
 
-Raw-C extensions define + `EXPORT_SYMBOL` it themselves (see `hello/hello.c`,
-which signals on its scan-head wrap). C++ wrapper extensions get it for free:
-`RGBX_ANIMATION()` always emits the symbol, driven by the `rgbx::Animation::goodMoment()`
-virtual (default `true` — override it to signal real boundaries; `cpptest.cpp`
-doesn't and needs no changes).
+Raw-C extensions define + `EXPORT_SYMBOL` it themselves — see
+[Getting started](getting-started.md) for a worked example, or the template's
+[`src/main.c`](https://github.com/skalldri/rgbx-extension-template/blob/main/src/main.c).
+C++ wrapper extensions get it for free: `RGBX_ANIMATION()` always emits the
+symbol, driven by the `rgbx::Animation::goodMoment()` virtual (default `true` —
+override it to signal real boundaries).
 
 ### Parameters
 
@@ -91,24 +101,64 @@ sources read as zeros):
 
 ### C++ wrapper
 
-C++ authors can use `include/rgbx/rgbx_animation.h` instead: subclass
+C++ authors can use
+[`rgbx_animation.h`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/include/rgbx/rgbx_animation.h)
+instead: subclass
 `rgbx::Animation`, then instantiate with `RGBX_ANIMATION(Class, "Name", W, H,
 RGBX_PARAM(...))`. It adds typed accessors (`paramU32/paramColor/paramBool/
 paramString`, `bandEnergy/isBeat/displayBucket`, `buttonWasPressed`, accel/
 gyro getters). Nothing C++ crosses the host boundary — the macro emits the
-same five C symbols. See `cpptest/cpptest.cpp` (the in-repo integration-test fixture; the production Plasma lives in the registry-shipped https://github.com/skalldri/rgbx-plasma).
+same five C symbols. [Getting started](getting-started.md) builds one
+step by step; the template's
+[`cpp-waves`](https://github.com/skalldri/rgbx-extension-template/tree/main/examples/cpp-waves)
+example and the registry-shipped
+[rgbx-plasma](https://github.com/skalldri/rgbx-plasma) are further reading.
 
 ### API docs
 
-Doxygen covers the whole `include/rgbx/` surface:
+Every type, macro and function in `include/rgbx/` is documented in the
+generated reference at <https://rgb-sunglasses.autom8ed.com/api>. To build it
+locally:
 
 ```bash
-doxygen fw/extensions/Doxyfile     # output: fw/build/doxygen/html
+fw/extensions/build-docs.sh          # output: fw/build/doxygen/html
 ```
+
 
 ## Building
 
-In-repo extensions (each `fw/extensions/<name>/` with a single `.c` or `.cpp`):
+**Start here: fork the
+[rgbx-extension-template](https://github.com/skalldri/rgbx-extension-template).**
+It builds one translation unit to both a device `.llext` and a simulator
+`.wasm` with a single
+[`./build.sh`](https://github.com/skalldri/rgbx-extension-template/blob/main/build.sh),
+needs no firmware checkout and no Zephyr
+toolchain, and applies the same build gates CI does. It uses the `rgbx-sdk`
+tarball attached to firmware releases **fw-v3.0.0 and later** (earlier releases
+carry no SDK asset — a template pin on one fails at the download step). To
+publish what you build, see
+[Community extension registry](../../extensions/README.md); the worked example
+is [rgbx-demo-wave](https://github.com/skalldri/rgbx-demo-wave).
+
+Do **not** build against the `llext-edk.tar.xz` CI artifact that
+[`build.yaml`](https://github.com/skalldri/rgb-sunglasses/blob/main/.github/workflows/build.yaml)
+still uploads. It is deprecated as a third-party path and carries none of the
+SDK's build gates, so the two failures it lets through only surface on-device,
+with errors that look unrelated to the build you did:
+
+- a C++ translation unit built without the `ld -r` step is rejected by the
+  loader with `Region 0 ELF file range ... overlaps with 1`;
+- a call to any symbol outside the exported surface (double-precision `sin()`,
+  `sinhf()`, `strtol()`, …) compiles fine and then fails llext symbol
+  resolution at load.
+
+If you were building against the EDK, switch to the template/SDK flow above —
+it applies both gates at build time.
+
+### In-repo extensions (contributors only)
+
+Extensions living in this repo — each `fw/extensions/<name>/` with a single
+`.c` or `.cpp` — build with the EDK instead of the SDK:
 
 ```bash
 fw/extensions/build.sh            # outputs fw/build/extensions/<name>.llext
@@ -121,62 +171,55 @@ partial-links (`ld -r`) the object. The `ld -r` step matters for C++: COMDAT
 group sections otherwise interleave with `.data`/`.bss` in file offsets and
 trip the llext loader's region-overlap check.
 
-**Third-party / standalone development does not use this script or the EDK.**
-Fork the [rgbx-extension-template](https://github.com/skalldri/rgbx-extension-template)
-repo instead: it builds the same single translation unit to both a device
-`.llext` and a simulator `.wasm` using the `rgbx-sdk` tarball attached to
-firmware releases **fw-v3.0.0 and later** (earlier releases carry no SDK
-asset — a template pin on one fails at the download step). The submission
-flow lives in the root-level `extensions/README.md` (next to
-`extensions/registry.json`), the design in
-`fw/docs/standalone-extension-repos.md`; the worked example is
-[rgbx-demo-wave](https://github.com/skalldri/rgbx-demo-wave).
-
-The `llext-edk.tar.xz` CI artifact that build.yaml still uploads is
-**deprecated as a third-party build path**: it carries none of the SDK's
-build gates, so a C++ TU built without the `ld -r` step is rejected
-on-device (`Region 0 ELF file range ... overlaps with 1`) and a call to any
-symbol outside the exported surface (double-precision `sin()`, `sinhf()`,
-`strtol()`, …) compiles but fails llext symbol resolution at load. If you
-were building against the EDK, switch to the template/SDK flow above.
-
 ## Simulating without hardware
 
-The WASM simulator (`fw/sim/` — full docs in `fw/sim/README.md`) runs an
-extension's actual source with the firmware's tick semantics (nominal 11 ms
-ticks, 25 Hz IMU / 31.25 Hz audio cadence, color-mode resolution, brightness
-truncation, dead-pixel mask, fault handling) and the **real** audio DSP
-compiled to WebAssembly:
+The WASM simulator runs an extension's actual source with the firmware's tick
+semantics (nominal 11 ms ticks, 25 Hz IMU / 31.25 Hz audio cadence, color-mode
+resolution, brightness truncation, dead-pixel mask, fault handling) and the
+**real** audio DSP compiled to WebAssembly. It needs no board — build a `.wasm`
+and drag it onto <https://rgb-sunglasses.autom8ed.com/sim/>, or run it from a
+checkout of this repo:
 
 ```bash
 fw/sim/rgbx-sim run <name> --scenario metronome-120 --json   # headless, seconds
 fw/sim/rgbx-sim serve                                        # browser UI, live mic/IMU
 ```
 
-It needs no proto0 build, no board, and no locks — use it as the iteration
-loop, then do the ARM build below before calling anything done (the sim links
-libc/libm statically, so code that fails llext symbol resolution on-device —
-anything outside the exported surface, e.g. double-precision `sin()` — still
-runs in the sim; `fw/sim/PARITY.md` has the full divergence list).
+Use it as the iteration loop — but **a green simulator run does not mean the
+extension loads on the device.** The sim links libc/libm statically, so a call
+outside the firmware's exported surface (double-precision `sin()`, `strtol()`,
+…) runs fine there and then fails llext symbol resolution on-device. Always do
+a device build before calling an extension done. (In-repo:
+[`fw/sim/README.md`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/sim/README.md)
+and
+[`fw/sim/PARITY.md`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/sim/PARITY.md)
+document the simulator and the full divergence list.)
 
 ## Installing on the device
 
-You don't have to build the in-repo extensions yourself: prebuilt `.llext` files
-are attached to every firmware (`fw-vX.Y.Z`) GitHub release, alongside the
-firmware zips they were built with — download the ones matching your installed
-firmware. (An extension is only accepted by firmware with the same
-`RGBX_ABI_VERSION` and display dimensions, so always take firmware + extensions
-from the same release.) CI also uploads them as an `extensions-proto0` workflow
-artifact on every firmware build.
+Copy the `.llext` into `/NAND:/ext/` on the board's USB mass-storage disk, then
+reboot so the firmware re-mounts the filesystem and rescans:
 
 ```bash
 # Mount the board's USB mass-storage disk (see fw/CLAUDE.md "USB Flash Disk"),
 # then:
-cp fw/build/extensions/cpptest.llext /mnt/sunglasses-fs/ext/
+cp <your-extension>.llext /mnt/sunglasses-fs/ext/
 sync && umount /mnt/sunglasses-fs
 # Reboot the board (kernel reboot warm) so the firmware re-mounts FAT and
 # re-discovers extensions.
 ```
+
+An extension is only accepted by firmware with the same `RGBX_ABI_VERSION` and
+display dimensions, so build against the SDK from the release you are running.
+
+You usually don't have to do any of this by hand: extensions in the
+[community registry](../../extensions/README.md) are rebuilt from their pinned
+revision on every `fw-v*` release, attached to it as `.llext` assets, and
+installed onto the device by the companion app automatically. **The in-repo
+extensions are not published that way** — `hello` and `cpptest` are dev/debug
+tools that CI builds as a check and no release ships (see the comment in
+[`release.yaml`](https://github.com/skalldri/rgb-sunglasses/blob/main/.github/workflows/release.yaml)),
+so the manual copy above is the route for anything you build yourself.
 
 ## Debug shell
 
@@ -195,8 +238,10 @@ higher under load, by design (issue #276). Read cpu when judging an extension.
 ### Bound your phase accumulators (issue #304)
 
 This section is the **single source of truth** for the argument-range cliff; other
-places (`extension_exports.c`, `/add-extension`, the rgbx-extension-template README)
-point here rather than restating the numbers.
+places ([`extension_exports.c`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/src/extensions/extension_exports.c),
+`/add-extension`, the
+[rgbx-extension-template](https://github.com/skalldri/rgbx-extension-template)
+README) point here rather than restating the numbers.
 
 **The exported trig — `sinf`, `cosf` and `tanf` alike — is cheap only while
 `|x| <= 201.06`** (`2^7*(pi/2)`). All three route through picolibc's
@@ -219,8 +264,10 @@ If your rates share no common period, reduce each phase instead — but note
 **`fmodf` keeps the dividend's sign**, so `fmodf(phase, kTwoPi)` yields
 `(-2*pi, 0]` for a phase that can go negative (a direction toggle, an IMU-driven
 angle). That is fine for feeding `sinf`/`cosf` directly, which accept negative
-arguments — `tilt_animation.cpp:127` relies on exactly that. It is **not** fine if
-you then index a table with the result: copy `wrapPos()` (`tilt_animation.cpp:89`),
+arguments — [`tilt_animation.cpp:127`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/src/animations/tilt_animation.cpp#L127)
+relies on exactly that. It is **not** fine if
+you then index a table with the result: copy `wrapPos()`
+([`tilt_animation.cpp:89`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/src/animations/tilt_animation.cpp#L89)),
 which adds the period back when the result is negative. Getting this wrong converts
 a negative float to a huge `size_t`, reads outside the sandbox's MPU region, and
 faults the extension.
@@ -228,13 +275,16 @@ faults the extension.
 **Detecting it.** Two signals, cheapest first:
 
 - **Watch the console for `Render overran the tick interval N time(s) ...`**
-  (`pattern_controller.cpp`, rate-limited to one line per 5 s). This is the direct
+  ([`pattern_controller.cpp`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/src/pattern_controller.cpp),
+  rate-limited to one line per 5 s). This is the direct
   symptom and it costs nothing to notice — during #304 it was printing continuously
   while `ext stats` still looked unremarkable.
 - **`ext stats`, read after minutes rather than seconds.** `min`/`avg`/`max`
   accumulate from activation and are **reset on every activation** — not just the
   `ext select` shell command, but any app/BLE animation switch, a shuffle rotation,
-  or the boot-time restore (`extension_host.cpp:111`). So a reading taken shortly
+  or the boot-time restore
+  ([`extension_host.cpp`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/src/extensions/extension_host.cpp)).
+  So a reading taken shortly
   after *anything* re-activated the extension only shows the fast phase, and a single
   late reading averages the fast and slow phases together. Sample repeatedly across
   one uninterrupted activation and look for a trend.
