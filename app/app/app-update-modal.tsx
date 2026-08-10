@@ -178,7 +178,7 @@ export default function AppUpdateModal() {
                 <Card style={styles.card}>
                     <ThemedText>
                         In-app updates aren&apos;t available on this platform. Install the latest
-                        version of RGB Sunglasses from the App Store.
+                        version of RGB Glasses from the App Store.
                     </ThemedText>
                 </Card>
                 <Link href="../" style={styles.link}>

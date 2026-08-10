@@ -1,5 +1,5 @@
 /**
- * Design tokens for the RGB Sunglasses app.
+ * Design tokens for the RGB Glasses app.
  *
  * `Colors` holds the semantic palette for light & dark modes; `useThemeColor` /
  * `useThemeColors` (app/hooks/use-theme-color.ts) read from it based on the OS color scheme.

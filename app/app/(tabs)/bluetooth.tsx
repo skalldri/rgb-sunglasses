@@ -180,6 +180,13 @@ export default function BluetoothScreen() {
                 }
 
                 if (device) {
+                    // "RGB Sunglasses" here is the FIRMWARE's advertised name
+                    // (CONFIG_BT_DEVICE_NAME), not the app's product name — the app was
+                    // renamed to "RGB Glasses" and this deliberately did not follow.
+                    // Changing this string without changing the firmware in the same
+                    // release makes every device undiscoverable. Same for the
+                    // already-connected check below and the fallback label in
+                    // hooks/ble-manager.ts.
                     if (device.localName?.includes("RGB Sunglasses")) {
                         // Refresh freshness on every advertisement (ref, not state - no
                         // re-render); the list only changes when a device is newly added.
@@ -374,7 +381,7 @@ export default function BluetoothScreen() {
 
     return (
         <Screen scroll>
-            <Hero title="RGB Sunglasses" subtitle="Connect over Bluetooth" emoji="🕶️" />
+            <Hero title="RGB Glasses" subtitle="Connect over Bluetooth" emoji="🕶️" />
 
             {APP_SELF_UPDATE_SUPPORTED && appUpdate && (
                 <Link href="/app-update-modal" asChild>

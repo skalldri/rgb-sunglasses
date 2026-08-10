@@ -183,6 +183,51 @@ async function cmdRun(argv: string[]): Promise<void> {
   if (startTimeMs < 0) {
     fail(`--start-time-ms must be >= 0, got ${startTimeMs}`);
   }
+  // Upper bound: every warm-up tick is an awaited worker round-trip and nothing is
+  // printed until the warm-up finishes, so a fat-fingered extra zero (or ms/us
+  // confusion) is indistinguishable from the hung extension --backstop-ms exists to
+  // surface. An hour of sim time is far past any plausible accumulator defect.
+  const kMaxStartTimeMs = 60 * 60 * 1000;
+  if (startTimeMs > kMaxStartTimeMs) {
+    fail(
+      `--start-time-ms must be <= ${kMaxStartTimeMs} (1 h of sim time), got ${startTimeMs}. ` +
+        `That is ${Math.round(startTimeMs / dtMs).toLocaleString()} warm-up ticks, which would ` +
+        `run for a long time printing nothing — check for an extra digit or us/ms confusion.`,
+    );
+  }
+  // Warm-up consumes stimulus, it does not replay it: pumpTimeline() and host.tick()
+  // advance the PROVIDERS too, and several of them are finite. Warming past their end
+  // leaves the recorded window with none of the stimulus the scenario exists to apply
+  // — a wav goes silent (zero-fill), a ramp/keyframe IMU freezes at its final sample,
+  // a sweep holds its end tone, and every timeline press/set has already fired. The
+  // extension is then scored against a blank input and fails an expectation it should
+  // have passed. Refusing is deliberate: a false failure costs more than the feature
+  // saves, and silently looping a finite source would change what the scenario means.
+  const finiteSources: string[] = [];
+  if (scenario.timeline !== undefined && scenario.timeline.length > 0) {
+    finiteSources.push(
+      `a timeline (${scenario.timeline.length} event(s) — all fire during the warm-up and are never observed)`,
+    );
+  }
+  if (
+    scenario.audio !== undefined &&
+    (scenario.audio.type === "wav" ||
+      scenario.audio.type === "features" ||
+      scenario.audio.type === "sweep")
+  ) {
+    finiteSources.push(`a finite audio source (type "${scenario.audio.type}")`);
+  }
+  if (scenario.imu !== undefined && (scenario.imu.type === "ramp" || scenario.imu.type === "keyframes")) {
+    finiteSources.push(`a finite IMU source (type "${scenario.imu.type}")`);
+  }
+  if (startTimeMs > 0 && finiteSources.length > 0) {
+    fail(
+      `--start-time-ms is not supported for scenario "${scenario.name}": it has ` +
+        `${finiteSources.join(" and ")}. Warm-up would consume the stimulus before ` +
+        `recording starts. Use it with a steady-state scenario (silence / metronome / ` +
+        `noise audio, static / sine IMU, no timeline).`,
+    );
+  }
   const warmupTicks = Math.round(startTimeMs / dtMs);
   const seed = num(flags, "seed", scenario.seed ?? 0);
 

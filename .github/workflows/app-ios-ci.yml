@@ -62,8 +62,11 @@ jobs:
       - name: Generate iOS native project
         run: npx expo prebuild --platform ios --clean
 
-      # The scheme/workspace names derive from the Expo project name
-      # ("RGB Sunglasses" -> "RGBSunglasses"). CODE_SIGNING_ALLOWED=NO keeps the
+      # The scheme/workspace names derive from `expo.name` in app.json via
+      # @expo/config-plugins' sanitizedName() ("RGB Glasses" -> "RGBGlasses"), so
+      # renaming that key renames the workspace — every -workspace/-scheme/-app-path
+      # below has to move with it, here and in app-release.yml.
+      # CODE_SIGNING_ALLOWED=NO keeps the
       # simulator build unsigned, so it needs no Apple account or signing secrets.
       #
       # `-destination 'generic/platform=iOS Simulator'` resolves against the exact
@@ -76,8 +79,8 @@ jobs:
       - name: Build for iOS Simulator (unsigned)
         run: |
           xcodebuild \
-            -workspace ios/RGBSunglasses.xcworkspace \
-            -scheme RGBSunglasses \
+            -workspace ios/RGBGlasses.xcworkspace \
+            -scheme RGBGlasses \
             -configuration Debug \
             -sdk iphonesimulator \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
@@ -93,7 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           BUNDLE_ID=com.autom8ed.rgbsunglassesapp.dev
-          APP_PATH=ios/build/Build/Products/Debug-iphonesimulator/RGBSunglasses.app
+          APP_PATH=ios/build/Build/Products/Debug-iphonesimulator/RGBGlasses.app
           DEVICE_ID=$(xcrun simctl list devices available | grep -E "iPhone" | grep -oE "[0-9A-Fa-f-]{36}" | head -1)
           if [ -z "$DEVICE_ID" ]; then
             echo "::error::No iOS Simulator device available on the runner — install an iOS runtime in Xcode (Settings -> Components) or via 'xcodebuild -downloadPlatform iOS'."
@@ -114,6 +117,6 @@ jobs:
         with:
           name: rgb-sunglasses-ios-sim-${{ github.sha }}
           path: |
-            app/ios/build/Build/Products/Debug-iphonesimulator/RGBSunglasses.app
+            app/ios/build/Build/Products/Debug-iphonesimulator/RGBGlasses.app
             app/ios-smoke.png
           retention-days: 7
