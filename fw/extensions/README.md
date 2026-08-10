@@ -124,14 +124,27 @@ locally:
 fw/extensions/build-docs.sh          # output: fw/build/doxygen/html
 ```
 
-**Linking to a page from outside this repo?** Doxygen names a Markdown page's
-output file after its source path ([`getting-started.md`](getting-started.md)
-becomes `md_fw_2extensions_2getting-started.html`), so a direct link breaks
-silently if the file ever moves. Short aliases are published for the pages worth
-linking — use <https://rgb-sunglasses.autom8ed.com/api/getting-started.html>.
-They are generated and checked by
-[`build-docs.sh`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/extensions/build-docs.sh);
-add one there if you need another.
+**Linking to a page from outside this repo?** By default Doxygen names a
+Markdown page's output file after its source path, so the URL silently 404s if
+the file is ever moved. Give the page an explicit label on its first heading and
+Doxygen uses that instead:
+
+```markdown
+# Getting started: your first extension {#getting-started}
+```
+
+That page is published at
+<https://rgb-sunglasses.autom8ed.com/api/getting-started.html> and stays there
+wherever the source lives. Do the same for any page you expect to be linked from
+outside. The label must be on the **first** heading with nothing above it — any
+content before it, even an HTML comment, makes Doxygen fall back to the
+path-derived name.
+
+Note this only covers Markdown pages. The generated pages for headers and C++
+classes ([`rgbx_api.h`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/include/rgbx/rgbx_api.h),
+`rgbx::Animation`, …) are named from those identifiers, so their URLs change if
+the header or class is renamed — nothing here guards that, and an external link
+to one would break silently.
 
 
 ## Building
