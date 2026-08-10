@@ -35,6 +35,19 @@ export interface RunOptions {
   scenarioDir: string; // for resolving relative file references
   seed: number;
   ticks: number;
+  /** Ticks to run BEFORE recording starts, so a scenario can be replayed from a
+   *  non-zero animation time. Cost that grows with a free-running accumulator only
+   *  shows up minutes in, which is otherwise unreachable outside a hardware session.
+   *  Recorded tick indices are numbered from 0 at the START of the recorded window,
+   *  so two runs with different warm-ups stay directly comparable. That applies to
+   *  EVERY tick index in the report, `result.fault.tick` included — a fault during
+   *  the warm-up therefore reports a negative tick, meaning "before the window".
+   *  Callers must reject a non-zero value for scenarios carrying finite stimulus
+   *  (a timeline, or a wav/features/sweep audio or ramp/keyframes IMU source):
+   *  warm-up CONSUMES those rather than replaying them, so the recorded window
+   *  would see none of the input the scenario exists to apply. `cli.ts` enforces
+   *  this; `golden.ts` pins it to 0. */
+  warmupTicks: number;
   dtMs: number;
   budgetMs: number;
   backstopMs: number;
@@ -221,9 +234,10 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
       }
     }
 
-    for (let t = 0; t < opts.ticks; t++) {
-      // Timeline events due at or before the CURRENT sim time fire before
-      // the tick that first covers them.
+    // Timeline events due at or before the CURRENT sim time fire before the tick
+    // that first covers them. Shared by the warm-up and recording loops so a
+    // warmed-up run sees exactly the same event ordering as a cold one.
+    const pumpTimeline = (): void => {
       while (timelineAt < timeline.length && timeline[timelineAt].atMs <= host.simTimeMs) {
         const ev = timeline[timelineAt++];
         if (ev.set !== undefined) {
@@ -238,14 +252,40 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
           host.pressButton(BUTTON_INDEX[ev.press]);
         }
       }
+    };
+
+    // Every tick index that leaves this function is relative to the RECORDED
+    // window, so one report never mixes two origins. host.tickIndex counts warm-up
+    // ticks too, and fault.tick is stamped from it (core/host.ts) — left absolute, a
+    // fault on the 5th recorded tick of a 5455-tick warm-up reports "tick 5459"
+    // while frames.samples[].tick, firstNonBlackTick and the [tick N] log prefixes
+    // all stop at opts.ticks - 1, so the fault cannot be located in the run it is
+    // reported against. Warm-up faults go negative, which is the honest answer:
+    // it happened before the window (-1 keeps its existing "load/init" meaning).
+    const toRecordedTick = (absolute: number): number =>
+      absolute < 0 ? absolute : absolute - opts.warmupTicks;
+
+    // Warm-up ticks advance the extension's internal state but are NOT recorded:
+    // no frames, no timing samples, no checks. A fault here is still a fault and
+    // stops the run.
+    for (let t = 0; t < opts.warmupTicks && fault === null; t++) {
+      pumpTimeline();
+      const warm = await host.tick();
+      if (warm.status === "fault") {
+        fault = { ...warm.fault, tick: toRecordedTick(warm.fault.tick) };
+      }
+    }
+
+    for (let t = 0; fault === null && t < opts.ticks; t++) {
+      pumpTimeline();
 
       const out = await host.tick();
       if (out.status === "fault") {
-        fault = out.fault;
+        fault = { ...out.fault, tick: toRecordedTick(out.fault.tick) };
         break;
       }
       stats.record(
-        host.tickIndex - 1,
+        host.tickIndex - 1 - opts.warmupTicks,
         out.framebuffer,
         out.wallMs,
         out.beatMask,
@@ -306,7 +346,14 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
     });
   }
 
-  if (fault === null || expectedFault !== null) {
+  // `stats.ticks > 0` is not redundant with the fault check. A fault during the
+  // WARM-UP stops the run before a single frame is recorded, and the condition above
+  // stays true whenever the scenario expected a fault — so without this, a crash
+  // scenario that also sets nonBlackBeforeMs/visibleAfterBrightness exits 3
+  // "expectation failed" (firstNonBlackTick=-1, visibleAfterBrightnessTicks=0)
+  // despite getting exactly the fault it asked for. These checks describe the
+  // RECORDED window; with no recorded window there is nothing for them to describe.
+  if ((fault === null || expectedFault !== null) && stats.ticks > 0) {
     if (expect.nonBlackBeforeMs !== undefined) {
       const tickBound = Math.ceil(expect.nonBlackBeforeMs / opts.dtMs);
       const pass = stats.firstNonBlackTick >= 0 && stats.firstNonBlackTick <= tickBound;

@@ -47,6 +47,9 @@ export function handleRestoredState(bleRestoredState: BleRestoredState | null): 
     const device = peripherals[0];
     // || not ??: a restored peripheral can carry an EMPTY-string name, which
     // should fall through to the default just like null would.
+    // The fallback is the FIRMWARE's advertised name, not the app's product name
+    // ("RGB Glasses") — it stands in for what the device would have called itself,
+    // so it should read the same as every other entry in the device list.
     const peripheral: RestoredPeripheral = {
         mac: device.id,
         name: device.localName || device.name || 'RGB Sunglasses',

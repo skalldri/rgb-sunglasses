@@ -40,7 +40,7 @@ async function displayConnectionNotification(body: string): Promise<void> {
     });
     await notifee.displayNotification({
         id: NOTIFICATION_ID,
-        title: 'RGB Sunglasses',
+        title: 'RGB Glasses',
         body,
         android: {
             channelId: CHANNEL_ID,

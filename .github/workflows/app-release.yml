@@ -402,11 +402,11 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild \
-            -workspace ios/RGBSunglasses.xcworkspace \
-            -scheme RGBSunglasses \
+            -workspace ios/RGBGlasses.xcworkspace \
+            -scheme RGBGlasses \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/RGBSunglasses.xcarchive" \
+            -archivePath "$RUNNER_TEMP/RGBGlasses.xcarchive" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/asc_api_key.p8" \
@@ -428,7 +428,7 @@ jobs:
       - name: Export .ipa
         run: |
           xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/RGBSunglasses.xcarchive" \
+            -archivePath "$RUNNER_TEMP/RGBGlasses.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
             -exportPath ios-export \
             -authenticationKeyPath "$RUNNER_TEMP/asc_api_key.p8" \
@@ -452,7 +452,7 @@ jobs:
         run: |
           plutil -replace destination -string upload "$RUNNER_TEMP/exportOptions.plist"
           xcodebuild -exportArchive \
-            -archivePath "$RUNNER_TEMP/RGBSunglasses.xcarchive" \
+            -archivePath "$RUNNER_TEMP/RGBGlasses.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
             -authenticationKeyPath "$RUNNER_TEMP/asc_api_key.p8" \
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
@@ -465,7 +465,7 @@ jobs:
         run: |
           rm -f "$RUNNER_TEMP/asc_api_key.p8" "$RUNNER_TEMP/exportOptions.plist"
           rm -f "$RUNNER_TEMP/appstore.mobileprovision" "$RUNNER_TEMP/profile.plist"
-          rm -rf "$RUNNER_TEMP/RGBSunglasses.xcarchive" "$RUNNER_TEMP/DerivedData"
+          rm -rf "$RUNNER_TEMP/RGBGlasses.xcarchive" "$RUNNER_TEMP/DerivedData"
           rm -rf ios-export
           # Remove the throwaway signing keychain and restore the search list
           # to its exact pre-job state (not a hardcoded login.keychain-db

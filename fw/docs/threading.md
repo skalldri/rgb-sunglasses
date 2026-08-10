@@ -281,7 +281,7 @@ could not have caught any of the four causes above.
 ## Measuring
 
 `CONFIG_THREAD_RUNTIME_STATS`, `CONFIG_THREAD_MONITOR`, `CONFIG_THREAD_NAME` and
-`CONFIG_KERNEL_SHELL` are all enabled, so `kernel threads` on the serial shell reports every
+`CONFIG_KERNEL_SHELL` are all enabled, so `kernel thread list` on the serial shell reports every
 thread's priority, state, stack high-water mark and cumulative runtime. That is the first
 tool to reach for when a priority change needs to be justified or verified — capture it
 before and after.

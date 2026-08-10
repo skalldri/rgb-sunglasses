@@ -32,8 +32,8 @@ function withDebugBuildSettingsIos(config) {
       // resolving to something sensible - it resolves to "", which would blank the
       // Release app's home-screen label).
       xcConfig.buildSettings.APP_DISPLAY_NAME = isDebug
-        ? '"RGB Sunglasses (Dev)"'
-        : '"RGB Sunglasses"';
+        ? '"RGB Glasses (Dev)"'
+        : '"RGB Glasses"';
       xcConfig.buildSettings.ASSETCATALOG_COMPILER_APPICON_NAME = isDebug
         ? DEV_ICON_NAME
         : PROD_ICON_NAME;

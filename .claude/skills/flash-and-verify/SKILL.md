@@ -52,7 +52,7 @@ It self-gates on the `board` lock (refuses without it), auto-detects the J-Link 
 **`mcp__serial__*` tools only — never raw Bash on `/dev/ttyACM*`** (races the MCP reader thread; see `fw/CLAUDE.md` "Serial Console"). Wait for the `uart:~$` prompt before commanding. A backlog of old `[00:00:00.xxx]` boot logs on port-open is not a fresh reboot — check `kernel uptime`.
 
 - **Animations**: use the plugin tools `mcp__serial__rgb_sunglasses_set_animation` / `get_animation` / `clear_indicator` (and `glim_list`/`glim_select`/`glim_set_loop_mode`), not hand-rolled `anim` writes. `set_animation` clears the BT indicator first and verifies via `anim get` — a raw `anim set` leaves an active advertising/connecting overlay masking the animation you're trying to see.
-- **Read-only diagnostics** (all safe): `bt_conn_info` (actual negotiated LE connection parameters), `power bq status` (battery/VBUS voltage, current, charge status), `ext stats` (extension tick timing), `kernel threads`, `mcuboot_version`.
+- **Read-only diagnostics** (all safe): `bt_conn_info` (actual negotiated LE connection parameters), `power bq status` (battery/VBUS voltage, current, charge status), `ext stats` (extension tick timing), `kernel thread list`, `mcuboot_version`.
 - **Cross-check app-visible behavior against the shell as source of truth.** A BLE write that "looked right" in the app UI can be an optimistic update masking a failed write/notify — confirm the value via the shell (`anim get`, `glim get_selected`, ...) before calling it verified (house norm; see app/CLAUDE.md "Verifying a write/notify round-trip").
 
 ## 6. MCUmgr OTA path (no J-Link needed; app images only)
