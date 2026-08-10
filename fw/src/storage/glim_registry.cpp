@@ -16,15 +16,6 @@ std::array<char[kMaxNameLen], kMaxFiles> sNames = {};
 size_t sCount = 0;
 
 constexpr const char *kGlimExtension = ".glim";
-
-bool hasGlimExtension(const char *fileName) {
-    size_t nameLen = strlen(fileName);
-    size_t extLen = strlen(kGlimExtension);
-    if (nameLen < extLen) {
-        return false;
-    }
-    return strcmp(fileName + (nameLen - extLen), kGlimExtension) == 0;
-}
 }  // namespace
 
 void init() {
@@ -36,19 +27,22 @@ void init() {
         return;
     }
 
-    // Stops at kMaxFiles: the table is fixed-size, and silently overrunning it
-    // would be worse than ignoring the tail of an over-full directory.
-    rc = fs_util::for_each_file(kDirectory, [](const char *name) {
-        if (hasGlimExtension(name)) {
-            strncpy(sNames[sCount], name, kMaxNameLen - 1);
-            sNames[sCount][kMaxNameLen - 1] = '\0';
-            sCount++;
-        }
-        return sCount < kMaxFiles;
-    });
-    if (rc < 0) {
-        LOG_ERR("Failed to walk %s: %d", kDirectory, rc);
-        return;
+    const fs_util::CollectResult found = fs_util::collect_names(kDirectory, kGlimExtension, sNames);
+    sCount = found.count;
+
+    // Report the count on the error path too, not just the happy one. Partial
+    // success and total failure look identical from "Failed to walk ...: -5" alone,
+    // and the realistic report is "most of my animations disappeared" — an operator
+    // reading the boot log should be able to tell "3 of 12 registered before the
+    // volume errored" without reproducing the walk.
+    if (found.rc < 0) {
+        LOG_ERR("Failed to walk %s: %d — serving the %zu file(s) found before the error",
+                kDirectory, found.rc, sCount);
+    }
+    if (found.skipped > 0) {
+        LOG_WRN("%s holds %zu more .glim file(s) than the %zu-entry table; keeping the "
+                "alphabetically first %zu — the rest will not appear in `glim list`",
+                kDirectory, found.skipped, kMaxFiles, sCount);
     }
 
     LOG_INF("Discovered %zu file(s) in %s", sCount, kDirectory);

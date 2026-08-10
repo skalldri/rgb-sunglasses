@@ -33,3 +33,9 @@ site/sim/
 # them here (untracked) lets one tuning effort span sessions without putting
 # audio in git history.
 fw/testdata/beat-corpus/
+
+# Twister output — build trees, ELF/object binaries and per-suite logs, regenerated
+# by every `twister -T fw/tests` run. Written to the repo root when twister is invoked
+# from there (the documented way), so it is not covered by fw/build ignores.
+twister-out/
+twister-out.*/

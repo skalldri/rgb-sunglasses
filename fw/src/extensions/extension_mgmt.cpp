@@ -28,6 +28,7 @@
 #include <extensions/extension_path.h>
 #include <extensions/extension_registry.h>
 #include <pattern_controller.h>
+#include <storage/fs_util.h>
 
 #include <zephyr/fs/fs.h>
 #include <zephyr/kernel.h>
@@ -204,45 +205,39 @@ int list_handler(struct smp_streamer *ctxt) {
     size_t encoded = 0;    // entries emitted into this page
     bool hasMore = false;  // an entry beyond this page exists
 
-    /* Phase 1: disk truth. */
-    struct fs_dir_t dirp;
-    fs_dir_t_init(&dirp);
-    int rc = fs_opendir(&dirp, dir);
-    if (rc == 0) {
-        while (true) {
-            /* The ONE dirent on this stack (see the file-top comment). */
-            struct fs_dirent entry;
-            rc = fs_readdir(&dirp, &entry);
-            if (rc != 0 || entry.name[0] == '\0') {
-                break;
+    /* Phase 1: disk truth. Uses the shared walker like the two registries do, so
+     * there is exactly one fs_opendir/fs_readdir/fs_closedir sequence in the tree
+     * and the LIST wire surface cannot drift from the registry that backs it.
+     *
+     * The old loop skipped FS_DIR_ENTRY_DIR where the helper requires
+     * FS_DIR_ENTRY_FILE. Those are the same test: fs_dir_entry_type has exactly
+     * two enumerators (zephyr/fs/fs.h), so "not a directory" and "is a file" cannot
+     * disagree — no behaviour change here. */
+    int rc = fs_util::for_each_file(dir, [&](const char *name) {
+        if (index >= off) {
+            if (encoded >= kListPageMax) {
+                hasMore = true;
+                return false; /* page full — the early stop this helper exists for */
             }
-            if (entry.type == FS_DIR_ENTRY_DIR) {
-                continue;
+            /* A file matching a RETIRED slot is a re-upload over a
+             * deleted name: the meaningful state is "fresh file, takes
+             * effect after restart", not "removed" — reporting the ghost
+             * slot here made a just-installed extension look deleted. */
+            int slot = extension_host::findSlotByFileName(name);
+            if (slot >= 0 && extension_host::isRetired(static_cast<size_t>(slot))) {
+                slot = -1;
             }
-            if (index >= off) {
-                if (encoded >= kListPageMax) {
-                    hasMore = true;
-                    break;
-                }
-                /* A file matching a RETIRED slot is a re-upload over a
-                 * deleted name: the meaningful state is "fresh file, takes
-                 * effect after restart", not "removed" — reporting the ghost
-                 * slot here made a just-installed extension look deleted. */
-                int slot = extension_host::findSlotByFileName(entry.name);
-                if (slot >= 0 && extension_host::isRetired(static_cast<size_t>(slot))) {
-                    slot = -1;
-                }
-                ok = encode_entry(zse, entry.name, /*onDisk=*/true, slot);
-                if (!ok) {
-                    break;
-                }
-                encoded++;
+            ok = encode_entry(zse, name, /*onDisk=*/true, slot);
+            if (!ok) {
+                return false;
             }
-            index++;
+            encoded++;
         }
-        fs_closedir(&dirp);
-    } else {
-        LOG_WRN("LIST: fs_opendir(%s) failed: %d", dir, rc);
+        index++;
+        return true;
+    });
+    if (rc < 0) {
+        LOG_WRN("LIST: walk of %s failed: %d", dir, rc);
     }
 
     /* Phase 2: ghosts — loaded at boot, no longer on disk. */
