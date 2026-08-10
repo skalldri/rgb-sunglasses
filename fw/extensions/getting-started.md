@@ -1,4 +1,11 @@
-# Getting started: your first extension
+# Getting started: your first extension {#getting-started}
+
+<!-- The {#getting-started} label on the heading above is load-bearing: it makes
+     Doxygen publish this page at /api/getting-started.html rather than a filename
+     derived from this file's path, and external links (the rgbx-extension-template
+     README) depend on that. GitHub renders the braces literally — that is the cost
+     of a stable public URL. It must stay on the FIRST heading, with nothing above
+     it: any content before the heading makes Doxygen ignore the label. -->
 
 This guide walks through building a complete rgbx animation extension from
 nothing, in either C or C++. The animation we build — a bar that sweeps across

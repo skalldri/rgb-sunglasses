@@ -69,7 +69,31 @@ fi
 export RGBX_DOC_VERSION
 
 mkdir -p "$REPO_ROOT/fw/build"
+
 cd "$REPO_ROOT/fw/extensions"
+
+# Derive the output tree from the Doxyfile rather than repeating it here. The
+# rm -rf below is destructive and the two must agree: if OUTPUT_DIRECTORY (or
+# HTML_OUTPUT) is ever changed and this copy isn't, the clean silently stops
+# pruning the tree Doxygen actually writes.
+doxy_setting() {
+    sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" Doxyfile | tail -1
+}
+OUT_DIR="$(doxy_setting OUTPUT_DIRECTORY)"
+HTML_SUBDIR="$(doxy_setting HTML_OUTPUT)"
+: "${HTML_SUBDIR:=html}"   # Doxygen's default when the setting is absent
+if [ -z "$OUT_DIR" ]; then
+    echo "error: could not read OUTPUT_DIRECTORY from $PWD/Doxyfile" >&2
+    exit 1
+fi
+
+# Doxygen never removes files it no longer generates, so a page whose source was
+# renamed or dropped lingers in the output — and pages.yml copies the whole tree
+# to site/api, which would publish the orphan next to its replacement. Start clean.
+rm -rf "$OUT_DIR"
+
 "$DOXYGEN" Doxyfile
 
-echo "docs written to $REPO_ROOT/fw/build/doxygen/html (version: $RGBX_DOC_VERSION)"
+HTML_DIR="$(cd "$OUT_DIR/$HTML_SUBDIR" && pwd)"
+
+echo "docs written to $HTML_DIR (version: $RGBX_DOC_VERSION)"
