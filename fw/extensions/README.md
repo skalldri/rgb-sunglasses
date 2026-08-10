@@ -124,6 +124,15 @@ locally:
 fw/extensions/build-docs.sh          # output: fw/build/doxygen/html
 ```
 
+**Linking to a page from outside this repo?** Doxygen names a Markdown page's
+output file after its source path ([`getting-started.md`](getting-started.md)
+becomes `md_fw_2extensions_2getting-started.html`), so a direct link breaks
+silently if the file ever moves. Short aliases are published for the pages worth
+linking — use <https://rgb-sunglasses.autom8ed.com/api/getting-started.html>.
+They are generated and checked by
+[`build-docs.sh`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/extensions/build-docs.sh);
+add one there if you need another.
+
 
 ## Building
 
