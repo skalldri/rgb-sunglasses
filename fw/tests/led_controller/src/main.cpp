@@ -386,3 +386,48 @@ ZTEST(led_controller, test_segment_buckets_follow_the_worst_segment) {
     zassert_equal(sum.worstSegmentOtherUs, 50u, "summary must surface other-thread");
     zassert_equal(sum.worstSegmentIdleUs, 9500u, "summary must surface idle");
 }
+
+/* verdictText() is what a reader actually sees, and the two off-CPU strings are the whole
+ * point of the split — a test that only checks the enum would pass with both wired to the
+ * same message, or to each other's. */
+ZTEST(led_controller, test_verdict_text_names_the_two_off_cpu_cases_distinctly) {
+    const char* blocked =
+        led_stats_core::verdictText(led_stats_core::SegmentVerdict::OffCpuIdle);
+    const char* starved =
+        led_stats_core::verdictText(led_stats_core::SegmentVerdict::OffCpuContended);
+
+    zassert_not_null(blocked);
+    zassert_not_null(starved);
+    zassert_true(strlen(blocked) > 0, "BLOCKED must produce a message");
+    zassert_true(strlen(starved) > 0, "STARVED must produce a message");
+    zassert_true(strcmp(blocked, starved) != 0,
+                 "the two off-CPU verdicts must not print the same text");
+    zassert_not_null(strstr(blocked, "BLOCKED"), "blocked text: %s", blocked);
+    zassert_not_null(strstr(starved, "STARVED"), "starved text: %s", starved);
+}
+
+/* The tie case: equal other/idle must not read as starvation. Contention is the claim
+ * that costs a reader the most time to chase, so it should require strict evidence. */
+ZTEST(led_controller, test_verdict_tie_prefers_blocked_over_starved) {
+    zassert_equal(led_stats_core::classifySegment(10400, 100, /*other=*/2000, /*idle=*/2000),
+                  led_stats_core::SegmentVerdict::OffCpuIdle,
+                  "an even split must not be reported as starvation");
+}
+
+/* Exactly at the ratio boundary the thread counts as having run. */
+ZTEST(led_controller, test_verdict_ratio_boundary_is_on_cpu) {
+    // wall / 4 == cpu exactly.
+    zassert_equal(led_stats_core::classifySegment(4000, 1000, 0, 3000),
+                  led_stats_core::SegmentVerdict::OnCpu);
+    // One microsecond of CPU less tips it over.
+    zassert_equal(led_stats_core::classifySegment(4000, 999, 0, 3000),
+                  led_stats_core::SegmentVerdict::OffCpuIdle);
+}
+
+/* Exactly at the resolution floor the verdict is allowed to speak. */
+ZTEST(led_controller, test_verdict_floor_boundary) {
+    zassert_equal(led_stats_core::classifySegment(led_stats_core::kVerdictMinWallUs - 1, 0, 0, 400),
+                  led_stats_core::SegmentVerdict::Unknown);
+    zassert_equal(led_stats_core::classifySegment(led_stats_core::kVerdictMinWallUs, 0, 0, 400),
+                  led_stats_core::SegmentVerdict::OffCpuIdle);
+}

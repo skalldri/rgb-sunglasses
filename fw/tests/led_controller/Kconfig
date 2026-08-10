@@ -16,3 +16,15 @@ config APP_LED_DISPLAY_THREAD_STACK_SIZE
 config APP_PATTERN_CONTROLLER_THREAD_PRIORITY
 	int "Pattern controller (render) thread priority"
 	default 4
+
+# Gates the per-segment CPU attribution in led_controller.cpp. Declared here (with the
+# same default as fw/Kconfig) so the suite compiles the REAL k_thread_runtime_stats
+# paths rather than the compiled-out stubs — otherwise display_cpu_cycles()/cpu_split()
+# are never built here and the config guards below them are never checked.
+config APP_LED_SEGMENT_CPU_ATTRIBUTION
+	bool "Per-segment CPU attribution for the display thread"
+	default y
+	select THREAD_RUNTIME_STATS
+	select SCHED_THREAD_USAGE
+	select SCHED_THREAD_USAGE_ALL
+	select SCHED_THREAD_USAGE_AUTO_ENABLE
