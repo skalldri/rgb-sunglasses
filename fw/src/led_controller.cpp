@@ -80,6 +80,32 @@ static inline uint32_t display_cpu_us(void) {
     return k_cyc_to_us_near32((uint32_t)st.execution_cycles);
 }
 
+// Where the wall time went, when it did not go to this thread. For CPU stats Zephyr
+// defines execution_cycles = non-idle + idle, and total_cycles = non-idle only
+// (kernel/thread.h). So across any window:
+//
+//   thread time  = d(total_cycles)                 - some other thread ran
+//   idle time    = d(execution_cycles - total)     - the CPU had nothing to run
+//   ISR time     = d(wall) - d(execution_cycles)   - time in no thread at all
+//
+// Those three plus this thread's own CPU account for the whole window, which turns
+// "something stalled us" into a number per suspect. The distinction matters: ISR time
+// means an interrupt handler is hogging the core, while IDLE time would mean nobody
+// was running and this thread simply was not woken - a timer/wakeup bug, not
+// contention. They need completely different fixes.
+struct CpuSplit {
+    uint32_t threadUs;  // non-idle thread time (all threads, this one included)
+    uint32_t idleUs;
+};
+static inline CpuSplit cpu_split(void) {
+    k_thread_runtime_stats_t st;
+    if (k_thread_runtime_stats_cpu_get(0, &st) != 0) {
+        return CpuSplit{0, 0};
+    }
+    return CpuSplit{k_cyc_to_us_near32((uint32_t)st.total_cycles),
+                    k_cyc_to_us_near32((uint32_t)(st.execution_cycles - st.total_cycles))};
+}
+
 // Device Tree Node ID's for the LED strips
 #define LED_STRIP_0_NODE_ID DT_ALIAS(led_strip_0)
 #define LED_STRIP_1_NODE_ID DT_ALIAS(led_strip_1)
@@ -496,6 +522,9 @@ void led_display_thread_func(void *a, void *b, void *c) {
     uint32_t windowWorstSegUs = 0;
     const char *windowWorstSegLabel = "none";
     uint32_t windowWorstSegCpuUs = 0;
+    uint32_t windowWorstOtherUs = 0;
+    uint32_t windowWorstIdleUs = 0;
+    uint32_t windowWorstIsrUs = 0;
 
     while (true) {
         // Update LED strips with current framebuffer contents
@@ -520,18 +549,28 @@ void led_display_thread_func(void *a, void *b, void *c) {
         uint32_t worstSegUs = 0;
         const char *worstSegLabel = "none";
         uint32_t worstSegCpuUs = 0;
+        uint32_t worstSegOtherUs = 0;  // other threads
+        uint32_t worstSegIdleUs = 0;   // CPU had nothing to run
+        uint32_t worstSegIsrUs = 0;    // interrupt context
         // Seeded AFTER the preamble reads below, not from wakeUs — otherwise the first
         // segment silently includes k_uptime_ticks(), the cycle read, and the virtual
         // getDisplayRateMs() call, all billed to a label that says "claim".
         uint32_t segStartUs = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
         uint32_t segStartCpuUs = display_cpu_us();
+        CpuSplit segStartSplit = cpu_split();
         auto markSegment = [&](const char *label) {
             uint32_t now = k_cyc_to_us_near32(static_cast<uint32_t>(k_cycle_get_32()));
             uint32_t nowCpu = display_cpu_us();
+            CpuSplit nowSplit = cpu_split();
             uint32_t seg = now - segStartUs;
             uint32_t segCpu = nowCpu - segStartCpuUs;
+            uint32_t segThread = nowSplit.threadUs - segStartSplit.threadUs;
+            uint32_t segIdle = nowSplit.idleUs - segStartSplit.idleUs;
+            // Whatever is left belongs to no thread at all: interrupt context.
+            uint32_t segIsr = (seg > segThread + segIdle) ? seg - segThread - segIdle : 0;
             segStartUs = now;
             segStartCpuUs = nowCpu;
+            segStartSplit = nowSplit;
             // k_cycle_get_32() wraps every ~36.4 h at 32768 Hz, and k_cyc_to_us_near32()
             // truncates AFTER 64-bit math — so the derived microsecond timeline is NOT
             // linear mod 2^32 and one frame per wrap yields a garbage delta (~2.07e9 us).
@@ -545,6 +584,9 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 worstSegUs = seg;
                 worstSegLabel = label;
                 worstSegCpuUs = segCpu;
+                worstSegOtherUs = (segThread > segCpu) ? segThread - segCpu : 0;
+                worstSegIdleUs = segIdle;
+                worstSegIsrUs = segIsr;
             }
         };
 
@@ -624,6 +666,9 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 windowWorstSegUs = worstSegUs;
                 windowWorstSegLabel = worstSegLabel;
                 windowWorstSegCpuUs = worstSegCpuUs;
+                windowWorstOtherUs = worstSegOtherUs;
+                windowWorstIdleUs = worstSegIdleUs;
+                windowWorstIsrUs = worstSegIsrUs;
             }
             // Rate-limited so a sustained overrun can't bury every other log line.
             const int64_t nowMs = k_uptime_get();
@@ -645,19 +690,24 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 if (segmentExplainsFrame) {
                     LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
                             "(worst frame work %u us vs %u us budget; longest segment '%s' "
-                            "%u us wall / %u us cpu%s) — cannot keep framerate",
+                            "%u us wall = %u us self + %u us other-thread + %u us idle + "
+                            "%u us ISR)%s — cannot keep framerate",
                             overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
                             targetUs, windowWorstSegLabel, windowWorstSegUs,
-                            windowWorstSegCpuUs,
-                            // The verdict, not just the numbers: a segment that burned
-                            // almost no CPU was not slow, it was not scheduled.
-                            (windowWorstSegUs > 4 * (windowWorstSegCpuUs + 1))
-                                ? " — PREEMPTED, not slow"
+                            windowWorstSegCpuUs, windowWorstOtherUs, windowWorstIdleUs,
+                            windowWorstIsrUs,
+                            // Name the dominant consumer outright. ISR and idle need
+                            // opposite fixes: ISR means a handler is hogging the core,
+                            // idle means nobody ran and we simply were not woken.
+                            (windowWorstIsrUs > windowWorstSegUs / 2)   ? " <- ISR CONTEXT"
+                            : (windowWorstIdleUs > windowWorstSegUs / 2) ? " <- IDLE (not woken)"
+                            : (windowWorstOtherUs > windowWorstSegUs / 2)
+                                ? " <- ANOTHER THREAD"
                                 : "");
                 } else {
                     LOG_WRN("Display overran the frame interval %u time(s) in the last %lld ms "
                             "(worst frame work %u us vs %u us budget; NO segment accounts for "
-                            "it — longest was '%s' %u us wall / %u us cpu, so look outside "
+                            "it — longest was '%s' %u us wall / %u us self, so look outside "
                             "the LED path) — cannot keep framerate",
                             overrunsSinceLog, nowMs - lastOverrunLogMs, windowWorstFrameUs,
                             targetUs, windowWorstSegLabel, windowWorstSegUs,
@@ -669,6 +719,9 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 windowWorstSegUs = 0;
                 windowWorstSegLabel = "none";
                 windowWorstSegCpuUs = 0;
+                windowWorstOtherUs = 0;
+                windowWorstIdleUs = 0;
+                windowWorstIsrUs = 0;
             }
             // Yield unconditionally even when we blew the budget. Previously this branch
             // looped with no sleep at all, which is survivable only because this thread is
