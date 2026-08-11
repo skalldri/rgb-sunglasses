@@ -7,9 +7,24 @@ void PulseAnimation::setDependencies(const PulseAnimationDependencies &deps) {
 
 void PulseAnimation::init() {
     currentCycleTimeMs = 0;
-    // Starts dark: in beat-sync mode the panel should light on the first beat, not
-    // flash once at activation.
     beatEnvelope_ = 0.0f;
+    // Forces the entry re-arm in tick() on the first beat-sync tick of this
+    // activation, which is what actually makes the panel start dark — zeroing the
+    // envelope here is not sufficient on its own (see armBeatSync).
+    beatSyncWasActive_ = false;
+}
+
+void PulseAnimation::armBeatSync() {
+    beatEnvelope_ = 0.0f;
+    // Discard whatever is sitting in this consumer's latch. It is set unconditionally
+    // for every consumer on each drained beat frame, and nothing drains ours while
+    // Pulse is inactive or not in beat-sync mode — so without this, playing Beat with
+    // music and then switching to Pulse (or just toggling Beat Sync on) makes the very
+    // first consumeBeat() return a stale beat and flash the panel at full brightness in
+    // silence. That flash is the exact thing starting from zero is meant to avoid.
+    if (beatSource_ != nullptr) {
+        beatSource_->consumeBeat();
+    }
 }
 
 void PulseAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
@@ -26,10 +41,25 @@ void PulseAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickM
     currentCycleTimeMs %= periodMs;
 
     // Beat sync wins over breathing; see the mutual-exclusion note in the header.
-    const bool beatSync = deps_->beatSyncEnabled.get() && beatSource_ != nullptr;
+    // Deliberately NOT folded together with the null-source check below: with both
+    // flags somehow set on an audio-less build, folding them would fall through to
+    // breathing, contradicting both "beat sync wins" and the constant-full-brightness
+    // fallback documented on setBeatSource().
+    const bool beatSync = deps_->beatSyncEnabled.get();
+
+    if (beatSync != beatSyncWasActive_) {
+        beatSyncWasActive_ = beatSync;
+        if (beatSync) {
+            armBeatSync();
+        }
+    }
 
     float brightness;
-    if (beatSync) {
+    if (beatSync && beatSource_ == nullptr) {
+        // No beat feed bound (audio-less build): hold lit rather than sit dark, so a
+        // toggle whose input does not exist cannot look like a hardware fault.
+        brightness = 1.0f;
+    } else if (beatSync) {
         if (beatSource_->consumeBeat()) {
             beatEnvelope_ = 1.0f;
         } else {

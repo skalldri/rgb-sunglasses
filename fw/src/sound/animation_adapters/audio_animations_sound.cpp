@@ -83,11 +83,19 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
 
 SoundAnimationAudioSource sSoundSource;
 
-/* Beat feed for the ColorModeSource resolvers (issue #259). Its own update()
- * call is harmless when the active animation already drained the queue this
- * tick — the latch above makes drain order irrelevant. Sharing one latch is
- * safe for the same reason sSoundSource itself is shared: only one animation
- * ticks at a time. */
+/* Beat feed for the ColorModeSource resolvers (issue #259) and for Pulse's
+ * beat-sync envelope (issue #148). Its own update() call is harmless when the
+ * active animation already drained the queue this tick — the latch above makes
+ * drain order irrelevant.
+ *
+ * "Only one animation ticks at a time" used to be the argument for a SINGLE
+ * shared latch. That argument is wrong and this file no longer relies on it:
+ * consumeBeat() is destructive, and one animation can hold several independent
+ * consumers in the same tick (Pulse in beat-sync mode with a RandomOnBeat
+ * colour), so whichever ran first would eat the beat. Hence the per-consumer
+ * latch — do not collapse pendingBeat_[] back to one flag. Note the per-consumer
+ * split is still not enough for N resolvers sharing kBeatConsumerColorMode; see
+ * issue #344. */
 template <BeatConsumer Consumer>
 class SoundBeatSource : public AnimationBeatSource {
    public:

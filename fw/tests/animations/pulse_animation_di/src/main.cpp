@@ -258,6 +258,9 @@ ZTEST(pulse_animation_di_tests, test_beat_sync_ramps_down_over_half_a_period) {
 
     CapturingTestRenderer renderer;
 
+    // First tick performs the beat-sync entry re-arm (which discards any stale latch),
+    // so the beat under test has to be fired after it.
+    animation->tick(renderer, 10);
     beats.fire();
     animation->tick(renderer, 10);
 
@@ -338,10 +341,112 @@ ZTEST(pulse_animation_di_tests, test_beat_sync_zero_period_does_not_crash) {
     animation->init();
 
     CapturingTestRenderer renderer;
+    animation->tick(renderer, 1);  // entry re-arm
     beats.fire();
     animation->tick(renderer, 1);
 
     reset_capture();
     animation->tick(renderer, 1);
     zassert_equal(sPixelColor.red, 0, "Expected a 1ms decay to be fully spent after 1ms");
+}
+
+/* Fixture for the cases below: owns the four sources so a new dependency field costs
+ * one edit here rather than one per test (the two added for #148 cost five). */
+namespace {
+struct PulseFixture {
+    MutableUint32Source color{0xFFFFFF};
+    MutableUint32Source periodMs{1000};
+    MutableBoolSource breathing{false};
+    MutableBoolSource beatSync{false};
+    TestBeatSource beats;
+    PulseAnimationDependencies deps{color, periodMs, breathing, beatSync};
+
+    PulseAnimation *start(bool withBeatSource = true) {
+        PulseAnimation *animation = PulseAnimation::getInstance();
+        animation->setDependencies(deps);
+        animation->setBeatSource(withBeatSource ? &beats : nullptr);
+        animation->init();
+        return animation;
+    }
+};
+}  // namespace
+
+/* A beat latched while Pulse was inactive (or not in beat-sync mode) must not light the
+ * panel on entry: nothing drains this consumer's slot while it is unused, so the latch
+ * survives and the first consumeBeat() would otherwise flash full brightness in silence. */
+ZTEST(pulse_animation_di_tests, test_stale_beat_does_not_flash_on_activation) {
+    PulseFixture f;
+    f.beatSync.set(true);
+
+    // Beat arrives before this activation — e.g. while the Beat animation was running.
+    f.beats.fire();
+
+    PulseAnimation *animation = f.start();
+    CapturingTestRenderer renderer;
+    reset_capture();
+    animation->tick(renderer, 10);
+
+    zassert_equal(sPixelColor.red, 0, "Expected a pre-activation beat to be discarded");
+
+    // A beat delivered after activation still works.
+    f.beats.fire();
+    reset_capture();
+    animation->tick(renderer, 10);
+    zassert_equal(sPixelColor.red, 255, "Expected a post-activation beat to light the panel");
+}
+
+/* Toggling Beat Sync is a BLE write, not an animation switch, so init() never runs.
+ * Without an entry re-arm the envelope stays frozen at its last value and re-enabling
+ * beat sync in a silent room lights the panel and fades it over half a period. */
+ZTEST(pulse_animation_di_tests, test_beat_sync_re_enable_starts_dark) {
+    PulseFixture f;
+    f.beatSync.set(true);
+
+    PulseAnimation *animation = f.start();
+    CapturingTestRenderer renderer;
+
+    animation->tick(renderer, 10);  // entry re-arm
+
+    // Drive the envelope high, then leave beat sync without letting it decay.
+    f.beats.fire();
+    reset_capture();
+    animation->tick(renderer, 10);
+    zassert_equal(sPixelColor.red, 255, "Expected the envelope high before the toggle");
+
+    f.beatSync.set(false);
+    f.breathing.set(true);
+    animation->tick(renderer, 10);
+
+    // Back to beat sync, silent room: must start dark, not resume the frozen value.
+    f.breathing.set(false);
+    f.beatSync.set(true);
+    reset_capture();
+    animation->tick(renderer, 10);
+    zassert_equal(sPixelColor.red, 0, "Expected re-enabling Beat Sync to start dark");
+}
+
+/* Beat sync wins over breathing even with no beat source bound — the audio-less
+ * fallback is constant full brightness, not a fall-through to breathing. Pins the
+ * two promises in pulse_animation.h against being folded back together. */
+ZTEST(pulse_animation_di_tests, test_both_flags_without_beat_source_holds_full_brightness) {
+    PulseFixture f;
+    f.color.set(0x112233);
+    f.breathing.set(true);
+    f.beatSync.set(true);
+
+    PulseAnimation *animation = f.start(/* withBeatSource = */ false);
+    CapturingTestRenderer renderer;
+
+    // Half a period in, breathing would be at its peak and a beat envelope at zero;
+    // full brightness distinguishes the fallback from both.
+    reset_capture();
+    animation->tick(renderer, 500);
+    zassert_equal(sPixelColor.red, 0x11, "Expected the no-beat-source fallback to hold lit");
+    zassert_equal(sPixelColor.green, 0x22, "Expected the no-beat-source fallback to hold lit");
+    zassert_equal(sPixelColor.blue, 0x33, "Expected the no-beat-source fallback to hold lit");
+
+    // And it stays there rather than tracking the breathing phase.
+    reset_capture();
+    animation->tick(renderer, 250);
+    zassert_equal(sPixelColor.red, 0x11, "Expected brightness not to follow the breathing phase");
 }

@@ -1,8 +1,8 @@
 #pragma once
 
 #include <animations/animation.h>
+#include <animations/animation_beat_source.h>
 #include <animations/animation_parameter_source.h>
-#include <animations/color_mode_source.h>
 
 class PulseAnimationDependencies {
    public:
@@ -53,6 +53,9 @@ class PulseAnimation : public BaseAnimationTemplate<PulseAnimation, Animation::P
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
    private:
+    /** @brief Re-arm beat sync: zero the envelope and discard any stale latched beat. */
+    void armBeatSync();
+
     const PulseAnimationDependencies *deps_ = nullptr;
     AnimationBeatSource *beatSource_ = nullptr;
 
@@ -61,6 +64,13 @@ class PulseAnimation : public BaseAnimationTemplate<PulseAnimation, Animation::P
 
     // Beat-sync envelope in [0, 1]: set to 1 on a beat, decays between them.
     float beatEnvelope_ = 0.0f;
+
+    // Tracks beat-sync entry so the envelope can be re-armed. init() alone is not
+    // enough: it runs only on an animation switch, while the toggle is a BLE write
+    // that leaves the active animation untouched. Without this, flipping Beat Sync
+    // off freezes the envelope mid-decay and flipping it back on resumes from that
+    // frozen value in a silent room.
+    bool beatSyncWasActive_ = false;
 };
 
 void pulse_animation_bind_default_dependencies();

@@ -10,6 +10,16 @@
 #include <cstring>
 
 /**
+ * @brief Default no-op write hook for @ref BtGattPersistentCharacteristic.
+ *
+ * Declared ahead of the class's own doc block on purpose: inserting it between that
+ * block and the class would rebind the documentation to this helper and leave the
+ * mixin undocumented.
+ */
+template <typename T>
+inline void bt_gatt_no_write_hook(const T &) {}
+
+/**
  * @brief BT-settable characteristic that persists its value via the Settings subsystem.
  *
  * CRTP wrapper over BtGattAutoCharacteristicExt, modeled directly on
@@ -35,12 +45,14 @@
  * against null and GCC rejects that under -Werror=address.)
  * Runs on the BT RX thread. Assigning to another characteristic from here is safe and does
  * not recurse: operator= bypasses onWrite by design (see BtGattWriteHook in
- * bt_service_cpp.h). It does not notify or persist the sibling, so a hook that changes one
- * must call the sibling's own mark_dirty() and request a save.
+ * bt_service_cpp.h). It DOES notify, though — BtGattCharacteristicCommon::operator= calls
+ * notify() whenever storage_ changes — and that is load-bearing, not incidental: it is how
+ * a device-side change to the sibling reaches the app. A hook that maintains a
+ * cross-characteristic invariant therefore needs the sibling declared Notify=true, or the
+ * app is left showing a value the device no longer holds. Do not add an explicit notify on
+ * top; that double-notifies from inside the write handler. Persistence is NOT automatic:
+ * call the sibling's own mark_dirty() and request a save.
  */
-template <typename T>
-inline void bt_gatt_no_write_hook(const T &) {}
-
 template <StringLiteral Key, StringLiteral Description, bool Notify, typename T, T Default,
           void (*OnRemoteWrite)(const T &) = &bt_gatt_no_write_hook<T>>
 class BtGattPersistentCharacteristic
