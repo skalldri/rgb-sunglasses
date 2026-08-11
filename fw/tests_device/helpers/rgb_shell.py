@@ -135,6 +135,14 @@ class RgbShell:
 
         With check=True (default), also runs `retval` and fails the test if
         the command's return value was non-zero.
+
+        IDEMPOTENT COMMANDS ONLY: an echo-smear timeout re-sends the command
+        (see _exec_with_retry), so a command that already executed can run
+        twice. Everything in the smoke/integration tiers is safe (reads,
+        absolute-value sets). A destructive one-shot (`crash panic`,
+        `factory_reset now`, `fatfs corrupt confirm`) must NOT go through
+        this path blindly — send it raw via dut.write() like reboot() does,
+        or add a no-retry variant when the destructive tier lands.
         """
         self.dut.write(b"\x03")
         time.sleep(0.05)

@@ -200,7 +200,6 @@ case "$SCENARIO" in app.device.dfu|app.device.soak) cmd+=(--enable-slow) ;; esac
 # Marker/keyword filters ride through to the pytest child. Twister appends
 # these AFTER the YAML's own pytest_args, and pytest's last -m/-k wins.
 cmd+=(--pytest-args=-m --pytest-args="$MARKERS")
-[ -n "$KEXPR" ] && cmd+=(--pytest-args=-k --pytest-args="$KEXPR")
 [ "$LIST_ONLY" -eq 1 ] && cmd+=(--pytest-args=--collect-only --pytest-args=-q)
 cmd+=(${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
 
