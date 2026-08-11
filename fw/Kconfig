@@ -711,6 +711,30 @@ config APP_COREDUMP_WORKQ_STACK_SIZE
 	  from its own workqueue; FATFS calls are stack-hungry (fatfs reformat
 	  was measured at ~5 KB), so the 2 KB system workqueue is not used.
 
+config APP_COREDUMP_MAX_FILES
+	int "Maximum core_NNNN.bin files kept on /NAND:/coredump"
+	default 8
+	range 1 64
+	depends on APP_COREDUMP_MANAGER
+	help
+	  Bounds how many drained dumps may accumulate. At the cap the drain refuses
+	  and the NEW dump is dropped, so the OLDEST files are the ones kept.
+
+	  That direction is the point. Extension-sandbox faults are demoted to a thread
+	  abort and never reboot the board, so one uptime can produce an unbounded
+	  stream of dumps. In that stream the first dump explains the fault and the rest
+	  are consequences of it, so a "keep newest N" ring would evict exactly the file
+	  worth having.
+
+	  What the cap protects is /NAND: itself: once the FAT partition fills,
+	  extension installs and GLIM writes fail with -ENOSPC, and the drain's own
+	  fs_write fails too — the overflow destroys the diagnostics that would explain
+	  it. At 64 KB per dump (the capture partition size) the default bounds the
+	  worst case at ~512 KB of a ~6.9 MB volume.
+
+	  Collect and clear with fw/scripts/coredump-fetch.sh --delete;
+	  `coredump_mgr status` reports the current count and free space.
+
 config APP_COREDUMP_REMINDER_PERIOD_S
 	int "Seconds between coredump partition polls (also the dump-loss window)"
 	default 60

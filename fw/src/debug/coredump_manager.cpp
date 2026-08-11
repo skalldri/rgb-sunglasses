@@ -104,7 +104,7 @@ void check_work_handler(struct k_work* work) {
      * hit here. fs_stat() logs nothing on success, and Zephyr's fs_stat()
      * explicitly treats -ENOENT as "a valid stat response" and does not log it
      * either (see subsys/fs/fs.c). The alternatives are not silent: fs_opendir()
-     * on a missing /NAND:/coredump (what any_dump_files() below does) logs an
+     * on a missing /NAND:/coredump (what the status command's scan does) logs an
      * <err> "directory open error (-2)", and an unconditional fs_mkdir() logs
      * "failed to create directory (-17)" once the directory is there. So this
      * stat-then-mkdir stays completely quiet whether the directory already
@@ -112,7 +112,7 @@ void check_work_handler(struct k_work* work) {
      * and only surfaces a log on a genuine, unexpected mkdir failure.
      *
      * DO NOT DELETE THIS AS DEAD CODE. It originally existed to stop
-     * any_dump_files() logging a spurious "-2" every period, and that caller is
+     * the directory scan logging a spurious "-2" every period, and that caller is
      * gone — but it still has a job: drain_to_dir() only mkdirs when a dump
      * actually exists, so on a board that has never crashed this block is the
      * ONLY thing that creates /NAND:/coredump. Without it, `coredump_mgr status` and
@@ -127,9 +127,42 @@ void check_work_handler(struct k_work* work) {
         }
     }
 
-    int rc = coredump_manager_core::drain_to_dir(kRealOps, kDumpDir);
-    if (rc < 0 && rc != -ENOENT) {
-        LOG_WRN("coredump drain failed (%d) — will retry", rc);
+    int rc = coredump_manager_core::drain_to_dir(kRealOps, kDumpDir,
+                                                 CONFIG_APP_COREDUMP_MAX_FILES);
+    /* Warned once per AT-CAP EPISODE, not once per boot. Repeating every period would be
+     * the spam the removed "awaiting collection" reminder was deleted for — but latching
+     * for the whole boot is wrong too, because this state is explicitly recoverable:
+     * collect the files, slots free, the drain resumes. Since sandbox faults never reboot
+     * the board, one uptime can run through several fill/collect cycles, and an operator
+     * who just cleared the directory would otherwise get silence the next time it filled.
+     * So the latch clears on any successful drain. */
+    static bool warned_at_cap;
+    if (rc == -ENOSPC) {
+        if (!warned_at_cap) {
+            warned_at_cap = true;
+            /* Report the COUNT, not the cap. They differ exactly when it matters — a
+             * directory holding more than the cap (e.g. after lowering
+             * CONFIG_APP_COREDUMP_MAX_FILES on a board that already had more) would
+             * otherwise tell the operator to free one file when they need to free many. */
+            int count = 0;
+            int maxIndex = -1;
+            if (coredump_manager_core::scan_dumps(kDumpDir, &count, &maxIndex) == 0) {
+                LOG_WRN("%s holds %d dump(s) of %d (cap) — NEW dumps are being dropped",
+                        kDumpDir, count, CONFIG_APP_COREDUMP_MAX_FILES);
+            } else {
+                LOG_WRN("%s is at the %d-dump cap — NEW dumps are being dropped", kDumpDir,
+                        CONFIG_APP_COREDUMP_MAX_FILES);
+            }
+            LOG_WRN("the oldest are kept (a crash loop's first dump is the useful one); "
+                    "collect with coredump-fetch.sh --delete");
+        }
+    } else {
+        if (rc == 0) {
+            warned_at_cap = false; /* slots freed and a drain succeeded — re-arm */
+        }
+        if (rc < 0 && rc != -ENOENT) {
+            LOG_WRN("coredump drain failed (%d) — will retry", rc);
+        }
     }
 
     /* No "dumps awaiting collection" reminder. It re-logged every period for as
@@ -148,7 +181,7 @@ void check_work_handler(struct k_work* work) {
      * that uncollected dumps exist. If a board panics and reboots unattended, the
      * one-shot drain LOG_INF is emitted before anyone attaches a terminal, and a
      * later attach sees a clean log. `coredump_mgr status` (below) is the on-demand
-     * replacement, and is the caller for any_dump_files(). */
+     * replacement for the removed periodic reminder. */
 
     k_work_reschedule_for_queue(&coredump_workq, k_work_delayable_from_work(work),
                                 K_SECONDS(CONFIG_APP_COREDUMP_REMINDER_PERIOD_S));
@@ -175,17 +208,58 @@ static_assert(CONFIG_APP_COREDUMP_MANAGER_INIT_PRIORITY > CONFIG_APPLICATION_INI
 SYS_INIT(coredump_manager_init, APPLICATION, CONFIG_APP_COREDUMP_MANAGER_INIT_PRIORITY);
 
 /* `coredump_mgr status` — the on-demand replacement for the removed periodic reminder,
- * and the production caller for any_dump_files() (without it that helper would be
- * exported and tested but exercised by nothing that ships).
+ * for the removed periodic reminder.
  *
  * Deliberately NOT gated on CONFIG_APP_CRASH_TEST_COMMANDS: that symbol guards
  * commands that deliberately crash the firmware, whereas this is read-only and is
  * exactly what you want available on a board that has already crashed. */
+/* Prints the dump count against the cap, and how much room is left on the volume they
+ * share with extensions and GLIM assets. Both are on demand rather than logged, so the
+ * approach-to-full condition is visible without costing a periodic log line. */
+static void print_capacity(const struct shell *sh, int count, int scanRc) {
+    if (scanRc == 0) {
+        shell_print(sh, "files: %d of %d (cap)%s", count, CONFIG_APP_COREDUMP_MAX_FILES,
+                    (count >= CONFIG_APP_COREDUMP_MAX_FILES)
+                        ? "  <- AT CAP: new dumps are being dropped"
+                        : "");
+    } else if (scanRc != -ENOENT) {
+        /* Say so rather than printing nothing. The same errno is simultaneously making
+         * drain_to_dir() abort every pass, so this command — the one an operator runs to
+         * investigate dropped dumps — would otherwise hide the cause behind output that
+         * merely looks terse. */
+        shell_warn(sh, "could not scan %s: %d — dumps are NOT being drained", kDumpDir,
+                   scanRc);
+    }
+
+    struct fs_statvfs st;
+    if (fs_statvfs("/NAND:", &st) == 0) {
+        /* f_frsize can be 0 on some backends; SKIP the line rather than print a bogus
+         * "0 KB", which reads as a full volume and would send someone deleting extension
+         * or GLIM assets that were never the problem. */
+        if (st.f_frsize != 0) {
+            shell_print(sh, "/NAND: free: %lu KB",
+                        (unsigned long)((st.f_bfree * st.f_frsize) / 1024));
+        }
+    }
+}
+
 int cmd_coredump_status(const struct shell *sh, size_t, char **) {
-    if (coredump_manager_core::any_dump_files(kDumpDir)) {
+    /* One sweep answers both "are there any" and "how many" — and unlike the old
+     * any_dump_files() boolean it can also say "the scan failed", which is the state
+     * worth surfacing here. */
+    int count = 0;
+    int maxIndex = -1;
+    const int scanRc = coredump_manager_core::scan_dumps(kDumpDir, &count, &maxIndex);
+
+    if (scanRc == 0 && count > 0) {
         shell_print(sh, "crash dump(s) awaiting collection in %s", kDumpDir);
+        print_capacity(sh, count, scanRc);
         shell_print(sh, "collect with: fw/scripts/coredump-fetch.sh [--delete]");
         shell_print(sh, "list with:    fs ls %s", kDumpDir);
+        return 0;
+    }
+    if (scanRc < 0 && scanRc != -ENOENT) {
+        print_capacity(sh, count, scanRc);
         return 0;
     }
     /* Distinguish "nothing to collect" from "the drain has not created the
