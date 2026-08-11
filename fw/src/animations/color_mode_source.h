@@ -1,5 +1,6 @@
 #pragma once
 
+#include <animations/animation_beat_source.h>
 #include <animations/animation_parameter_source.h>
 
 #include <atomic>
@@ -25,20 +26,6 @@ enum class ColorMode : uint8_t {
     RandomOnBeat = 0x02,
     RandomOnActivate = 0x03,
     RandomTimerFade = 0x04,
-};
-
-/**
- * @brief Edge/latch-based beat feed for RandomOnBeat.
- *
- * consumeBeat() returns true iff at least one beat was detected since the previous
- * call. The production implementation latches at audio-queue drain time (see
- * src/sound/animation_adapters/audio_animations_sound.cpp), so it is immune to who
- * drains the queue first in a tick (the Beat animation's own update() vs. this).
- */
-class AnimationBeatSource {
-   public:
-    virtual ~AnimationBeatSource() = default;
-    virtual bool consumeBeat() = 0;
 };
 
 /**

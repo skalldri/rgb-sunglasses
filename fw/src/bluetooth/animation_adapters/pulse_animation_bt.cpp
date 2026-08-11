@@ -11,6 +11,12 @@
 constexpr bt_uuid_128 kPulseConfigServiceUuid =
     BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Pulse));
 
+// Breathing and beat sync are mutually exclusive (issue #148): turning one on turns the
+// other off. Declared here so the characteristics below can name them; defined after both,
+// since each hook has to reach its sibling.
+static void pulse_breathing_written(const bool &enabled);
+static void pulse_beat_sync_written(const bool &enabled);
+
 BtGattPrimaryService<kPulseConfigServiceUuid> pulsePrimaryService;
 BtGattPersistentCharacteristic<"pulse/color", "Color", false, BtGattColor, BtGattColor{0xFFFFFFFF}>
     pulseColor;
@@ -28,9 +34,45 @@ BtGattReadOnlyCharacteristic<kAnimationNameCharacteristicUuid, "Animation Name",
 // positions don't shift either way — but bonded phones cache handles per table).
 ShuffleIncludeCharacteristic<"pulse/shuffle"> pulseShuffleInclude;
 
+// Notify is ON for both, unlike every other app-written tunable here. Writing one clears
+// the other device-side, and the app has no way to predict that from its own write alone;
+// the animation-detail screen scope-subscribes to exactly these (it skips Is Active and
+// Shuffle Include) so the losing switch flips in the UI as it flips on the device, and the
+// two slots are only registered while that one screen is focused — well inside Android's
+// ~15-slot budget (see fw/src/core_config.cpp).
+BtGattPersistentCharacteristic<"pulse/breathing", "Breathing", true, bool, true,
+                               &pulse_breathing_written>
+    pulseBreathing;
+BtGattPersistentCharacteristic<"pulse/beat_sync", "Beat Sync", true, bool, false,
+                               &pulse_beat_sync_written>
+    pulseBeatSync;
+
 BtGattServer pulseConfigServer(pulsePrimaryService, pulseColor, pulsePeriodMs, pulseIsActive,
-                                pulseAnimationName, pulseShuffleInclude);
+                                pulseAnimationName, pulseShuffleInclude, pulseBreathing,
+                                pulseBeatSync);
 BT_GATT_SERVER_REGISTER(pulseConfigServerStatic, pulseConfigServer);
+
+// Only ever clears the sibling, never sets it, so the two hooks cannot ping-pong even
+// before accounting for operator= bypassing onWrite: a clear passes `false` and returns
+// immediately. Turning a toggle OFF leaves the other alone — both off is the valid
+// "solid color / flashlight" state this issue asked for.
+static void pulse_breathing_written(const bool &enabled) {
+    if (!enabled || !pulseBeatSync.value()) {
+        return;
+    }
+    pulseBeatSync = false;
+    pulseBeatSync.mark_dirty();
+    persistent_value_store::request_save();
+}
+
+static void pulse_beat_sync_written(const bool &enabled) {
+    if (!enabled || !pulseBreathing.value()) {
+        return;
+    }
+    pulseBreathing = false;
+    pulseBreathing.mark_dirty();
+    persistent_value_store::request_save();
+}
 
 namespace {
 class PulseColorSource : public AnimationUint32ParameterSource {
@@ -43,12 +85,25 @@ class PulsePeriodMsSource : public AnimationUint32ParameterSource {
     uint32_t get() const override { return pulsePeriodMs; }
 };
 
+class PulseBreathingSource : public AnimationBoolParameterSource {
+   public:
+    bool get() const override { return pulseBreathing.value(); }
+};
+
+class PulseBeatSyncSource : public AnimationBoolParameterSource {
+   public:
+    bool get() const override { return pulseBeatSync.value(); }
+};
+
 PulseColorSource sDefaultColorSource;
 // Resolves the color value's mode byte (issue #259) so the animation always sees
 // an effective 0x00RRGGBB through the same interface.
 ColorModeSource sPulseColorMode(sDefaultColorSource, sys_rand32_get, k_uptime_get);
 PulsePeriodMsSource sDefaultPeriodMsSource;
-PulseAnimationDependencies sDefaultDeps(sPulseColorMode, sDefaultPeriodMsSource);
+PulseBreathingSource sDefaultBreathingSource;
+PulseBeatSyncSource sDefaultBeatSyncSource;
+PulseAnimationDependencies sDefaultDeps(sPulseColorMode, sDefaultPeriodMsSource,
+                                        sDefaultBreathingSource, sDefaultBeatSyncSource);
 }  // namespace
 
 using PulseAnimationIsActive = AnimationIsActiveBinding<Animation::Pulse>;

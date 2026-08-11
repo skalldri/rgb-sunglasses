@@ -7,6 +7,24 @@ void PulseAnimation::setDependencies(const PulseAnimationDependencies &deps) {
 
 void PulseAnimation::init() {
     currentCycleTimeMs = 0;
+    beatEnvelope_ = 0.0f;
+    // Forces the entry re-arm in tick() on the first beat-sync tick of this
+    // activation, which is what actually makes the panel start dark — zeroing the
+    // envelope here is not sufficient on its own (see armBeatSync).
+    beatSyncWasActive_ = false;
+}
+
+void PulseAnimation::armBeatSync() {
+    beatEnvelope_ = 0.0f;
+    // Discard whatever is sitting in this consumer's latch. It is set unconditionally
+    // for every consumer on each drained beat frame, and nothing drains ours while
+    // Pulse is inactive or not in beat-sync mode — so without this, playing Beat with
+    // music and then switching to Pulse (or just toggling Beat Sync on) makes the very
+    // first consumeBeat() return a stale beat and flash the panel at full brightness in
+    // silence. That flash is the exact thing starting from zero is meant to avoid.
+    if (beatSource_ != nullptr) {
+        beatSource_->consumeBeat();
+    }
 }
 
 void PulseAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
@@ -22,10 +40,49 @@ void PulseAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickM
     currentCycleTimeMs += timeSinceLastTickMs;
     currentCycleTimeMs %= periodMs;
 
-    // Triangle-wave breathing envelope: ramps 0 -> 1 across the first half of
-    // the period, then back 1 -> 0 across the second half.
-    float phase = (float)currentCycleTimeMs / (float)periodMs;
-    float brightness = (phase < 0.5f) ? (phase * 2.0f) : (2.0f - (phase * 2.0f));
+    // Beat sync wins over breathing; see the mutual-exclusion note in the header.
+    // Deliberately NOT folded together with the null-source check below: with both
+    // flags somehow set on an audio-less build, folding them would fall through to
+    // breathing, contradicting both "beat sync wins" and the constant-full-brightness
+    // fallback documented on setBeatSource().
+    const bool beatSync = deps_->beatSyncEnabled.get();
+
+    if (beatSync != beatSyncWasActive_) {
+        beatSyncWasActive_ = beatSync;
+        if (beatSync) {
+            armBeatSync();
+        }
+    }
+
+    float brightness;
+    if (beatSync && beatSource_ == nullptr) {
+        // No beat feed bound (audio-less build): hold lit rather than sit dark, so a
+        // toggle whose input does not exist cannot look like a hardware fault.
+        brightness = 1.0f;
+    } else if (beatSync) {
+        if (beatSource_->consumeBeat()) {
+            beatEnvelope_ = 1.0f;
+        } else {
+            // Ramp down over half a period, so one beat draws the same falling edge
+            // the breathing envelope draws and period_ms keeps one meaning for the
+            // user across both modes.
+            uint32_t decayMs = periodMs / 2;
+            if (decayMs == 0) {
+                decayMs = 1;
+            }
+            float step = (float)timeSinceLastTickMs / (float)decayMs;
+            beatEnvelope_ = (beatEnvelope_ > step) ? (beatEnvelope_ - step) : 0.0f;
+        }
+        brightness = beatEnvelope_;
+    } else if (deps_->breathingEnabled.get()) {
+        // Triangle-wave breathing envelope: ramps 0 -> 1 across the first half of
+        // the period, then back 1 -> 0 across the second half.
+        float phase = (float)currentCycleTimeMs / (float)periodMs;
+        brightness = (phase < 0.5f) ? (phase * 2.0f) : (2.0f - (phase * 2.0f));
+    } else {
+        // Flashlight: constant full brightness.
+        brightness = 1.0f;
+    }
 
     uint32_t color = deps_->color.get();
     float red = (float)((color >> 16) & 0xFF) * brightness;

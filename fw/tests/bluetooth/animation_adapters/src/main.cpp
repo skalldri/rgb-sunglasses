@@ -403,6 +403,57 @@ ZTEST(animation_adapters, test_pulse_color_mode_round_trip) {
     exercise_tick(PulseAnimation::getInstance());
 }
 
+/* Issue #148: Breathing and Beat Sync are mutually exclusive, enforced device-side in
+ * the adapter's write hooks — so this drives the real ATT write handlers rather than a
+ * stand-in, since the hooks ARE the contract. Both must also be notifiable: the app has
+ * no way to predict from its own write that the sibling changed, and the animation-detail
+ * screen scope-subscribes to a service's notifiable characteristics to catch it. */
+ZTEST(animation_adapters, test_pulse_breathing_beat_sync_mutually_exclusive) {
+    constexpr bt_uuid_128 kSvcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Pulse));
+    const bt_gatt_service_static *svc = find_service(kSvcUuid);
+    zassert_not_null(svc);
+
+    /* Appended after shuffle include (index 4), in BtGattServer provider order. */
+    const bt_gatt_attr *breathing = nth_char_value(svc, 5);
+    const bt_gatt_attr *beatSync = nth_char_value(svc, 6);
+    zassert_not_null(breathing);
+    zassert_not_null(beatSync);
+
+    zassert_true(chrc_has_write(svc, breathing), "Breathing must be app-writable");
+    zassert_true(chrc_has_write(svc, beatSync), "Beat Sync must be app-writable");
+    zassert_true(chrc_has_notify(svc, breathing),
+                 "Breathing must notify so a beat-sync write can clear it visibly");
+    zassert_true(chrc_has_notify(svc, beatSync),
+                 "Beat Sync must notify so a breathing write can clear it visibly");
+
+    /* Defaults reproduce the pre-#148 behavior: breathing on, beat sync off. */
+    zassert_equal(read_u8(breathing), 1, "Breathing should default on");
+    zassert_equal(read_u8(beatSync), 0, "Beat Sync should default off");
+
+    const uint8_t on = 1;
+    const uint8_t off = 0;
+
+    /* Each toggle turning ON clears the other. */
+    zassert_equal(do_write(beatSync, &on, sizeof(on)), sizeof(on));
+    zassert_equal(read_u8(beatSync), 1, "Beat Sync should be on after writing it on");
+    zassert_equal(read_u8(breathing), 0, "Enabling Beat Sync should clear Breathing");
+
+    zassert_equal(do_write(breathing, &on, sizeof(on)), sizeof(on));
+    zassert_equal(read_u8(breathing), 1, "Breathing should be on after writing it on");
+    zassert_equal(read_u8(beatSync), 0, "Enabling Breathing should clear Beat Sync");
+
+    /* Turning one OFF leaves the other alone — both-off is the valid solid-color
+     * "flashlight" state, not something to be corrected back. */
+    zassert_equal(do_write(breathing, &off, sizeof(off)), sizeof(off));
+    zassert_equal(read_u8(breathing), 0, "Breathing should be off after writing it off");
+    zassert_equal(read_u8(beatSync), 0, "Turning Breathing off must not enable Beat Sync");
+
+    /* And the animation renders through the adapter's real bool sources in that state. */
+    pulse_animation_bind_default_dependencies();
+    AnimationIsActiveBinding<Animation::Pulse>::setLocalActiveState(true);
+    exercise_tick(PulseAnimation::getInstance());
+}
+
 ZTEST(animation_adapters, test_rainbow) {
     constexpr bt_uuid_128 kSvcUuid = BT_ANIMATION_SERVICE_UUID(static_cast<uint16_t>(Animation::Rainbow));
     const uint32_t defaults[] = {100, 5};

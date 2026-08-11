@@ -7,3 +7,9 @@ class AnimationUint32ParameterSource {
     virtual ~AnimationUint32ParameterSource() = default;
     virtual uint32_t get() const = 0;
 };
+
+class AnimationBoolParameterSource {
+   public:
+    virtual ~AnimationBoolParameterSource() = default;
+    virtual bool get() const = 0;
+};

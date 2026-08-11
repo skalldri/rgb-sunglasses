@@ -410,6 +410,12 @@ int animation_registry_register_defaults() {
     }
 
     pulse_animation_bind_default_dependencies();
+#if defined(CONFIG_AUDIO)
+    // Feeds the beat-sync brightness envelope (issue #148). Never bound on audio-less
+    // builds, where the toggle degrades to constant full brightness rather than a dark
+    // panel — see PulseAnimation::setBeatSource.
+    pulse_animation_bind_default_sound_dependencies();
+#endif
 #endif
 
 #if defined(CONFIG_APP_EXTENSION_HOST) && defined(CONFIG_IMU)
