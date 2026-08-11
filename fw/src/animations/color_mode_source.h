@@ -40,6 +40,20 @@ enum class ColorMode : uint8_t {
 uint32_t anim_color_from_hue(uint16_t hue1536);
 
 /**
+ * @brief Distinct SpectrumSweep starting phase for the @p index -th of @p count
+ * concurrent resolvers, spread evenly around the hue wheel.
+ *
+ * Deterministic rather than random: two sweeps must differ, but they must also be
+ * reproducible across activations, and a random offset would reintroduce the
+ * activation-time hue jump that skipping the re-roll exists to prevent.
+ *
+ * @param index Resolver index.
+ * @param count Total resolvers to spread across (0 is treated as 1).
+ * @return Starting phase in the accumulator's Q16 units.
+ */
+uint32_t anim_sweep_phase_offset(uint16_t index, uint16_t count);
+
+/**
  * @brief Resolves a raw mode-carrying Color characteristic value into the effective
  * per-tick 0x00RRGGBB color.
  *
@@ -60,8 +74,22 @@ class ColorModeSource : public AnimationUint32ParameterSource {
     using RandomFn = uint32_t (*)();   // production: sys_rand32_get
     using UptimeFn = int64_t (*)();    // production: k_uptime_get
 
-    ColorModeSource(const AnimationUint32ParameterSource &raw, RandomFn rng, UptimeFn now)
-        : raw_(raw), rng_(rng), now_(now) {}
+    /**
+     * @param raw Underlying mode-carrying characteristic value.
+     * @param rng Random source (production: sys_rand32_get).
+     * @param now Uptime source (production: k_uptime_get).
+     * @param sweepPhaseOffsetQ16 Starting phase for SpectrumSweep, in the same Q16 units
+     *        as the internal accumulator. Defaults to 0, which is every built-in
+     *        animation: they have one COLOR characteristic each, so there is nothing to
+     *        separate from. Callers that build SEVERAL resolvers which can sweep at once
+     *        must give each a distinct offset (see @ref anim_sweep_phase_offset and
+     *        issue #344) — otherwise identically-configured sweeps stay bit-identical
+     *        forever, since reset zeroes the phase and deliberately skips the random
+     *        re-roll for this mode.
+     */
+    ColorModeSource(const AnimationUint32ParameterSource &raw, RandomFn rng, UptimeFn now,
+                    uint32_t sweepPhaseOffsetQ16 = 0)
+        : raw_(raw), rng_(rng), now_(now), sweepPhaseOffsetQ16_(sweepPhaseOffsetQ16) {}
 
     uint32_t get() const override;
 
@@ -84,6 +112,10 @@ class ColorModeSource : public AnimationUint32ParameterSource {
     RandomFn rng_;
     UptimeFn now_;
     AnimationBeatSource *beatSource_ = nullptr;
+    uint32_t sweepPhaseOffsetQ16_ = 0;
+    // mutable: advanced from the const get(); each resolver owns its own cursor so
+    // several can observe the same beat (issue #344).
+    mutable AnimationBeatCursor beatCursor_;
     static AnimationBeatSource *sDefaultBeatSource_;  // constant-init (see .cpp)
 
     // mutable: consumed (exchange) inside the const get(); see threading note.

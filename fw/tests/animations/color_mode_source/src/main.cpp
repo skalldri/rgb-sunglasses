@@ -42,12 +42,9 @@ int64_t fake_now() {
 }
 
 struct FakeBeatSource : public AnimationBeatSource {
-    bool pending = false;
-    bool consumeBeat() override {
-        const bool b = pending;
-        pending = false;
-        return b;
-    }
+    uint32_t count = 0;
+    uint32_t beatCount() override { return count; }
+    void fire() { count++; }
 };
 
 // The hue a reset rolls starting from internal hue state 0 with rng value r:
@@ -244,7 +241,7 @@ ZTEST(color_mode_source, test_random_on_beat_rolls_only_on_beat) {
     zassert_equal(src.get(), anim_color_from_hue(firstHue));  // never black pre-beat
     zassert_equal(src.get(), anim_color_from_hue(firstHue));
 
-    beats.pending = true;
+    beats.fire();
     const uint16_t secondHue = roll_from(firstHue, 900);
     zassert_equal(src.get(), anim_color_from_hue(secondHue));
 
@@ -435,4 +432,114 @@ ZTEST(color_mode_source, test_activation_reset_consumed_once) {
     const uint16_t secondHue = roll_from(firstHue, 700);
     zassert_equal(src.get(), anim_color_from_hue(secondHue));
     zassert_equal(src.get(), anim_color_from_hue(secondHue));  // no second roll
+}
+
+// ---------------------------------------------------------------------------
+// Issue #344: several resolvers live at once
+// ---------------------------------------------------------------------------
+
+/* Bug 1: a shared beat feed must reach EVERY resolver.
+ *
+ * The old consume-once latch made this fail: whichever resolver resolved first cleared
+ * the flag, so the second never saw the beat and its hue stayed frozen for the whole
+ * session. An extension with two RandomOnBeat colours is the reachable case. */
+ZTEST(color_mode_source, test_two_resolvers_both_observe_the_same_beat) {
+    rng_script({10, 20, 30, 40});
+    FakeBeatSource beats;
+
+    FakeRawSource rawA;
+    FakeRawSource rawB;
+    rawA.value = mode_value(0x02, 0);  // RandomOnBeat
+    rawB.value = mode_value(0x02, 0);
+    ColorModeSource a(rawA, scripted_rng, fake_now);
+    ColorModeSource b(rawB, scripted_rng, fake_now);
+    a.setBeatSource(&beats);
+    b.setBeatSource(&beats);
+
+    // Settle both past their activation reset (which resyncs each cursor).
+    const uint32_t a0 = a.get();
+    const uint32_t b0 = b.get();
+
+    beats.fire();
+
+    // Resolution order only matters if the feed is destructive — which was the bug.
+    const uint32_t a1 = a.get();
+    const uint32_t b1 = b.get();
+
+    zassert_not_equal(a1, a0, "First resolver should re-roll on the beat");
+    zassert_not_equal(b1, b0, "Second resolver must see the same beat, not a consumed one");
+
+    // With no further beats, neither moves again.
+    zassert_equal(a.get(), a1, "No beat -> no re-roll");
+    zassert_equal(b.get(), b1, "No beat -> no re-roll");
+}
+
+/* Beats counted while a resolver was idle must not fire on its activation. */
+ZTEST(color_mode_source, test_beats_before_activation_are_not_reported) {
+    rng_script({10, 20, 30});
+    FakeBeatSource beats;
+    beats.fire();
+    beats.fire();
+
+    FakeRawSource raw;
+    raw.value = mode_value(0x02, 0);  // RandomOnBeat
+    ColorModeSource s(raw, scripted_rng, fake_now);
+    s.setBeatSource(&beats);
+
+    const uint32_t first = s.get();
+    zassert_equal(s.get(), first, "Pre-activation beats must not re-roll after the reset");
+
+    beats.fire();
+    zassert_not_equal(s.get(), first, "A beat after activation still re-rolls");
+}
+
+/* Bug 2: two SpectrumSweeps given distinct phase offsets must not be identical.
+ *
+ * Reset zeroes the phase and deliberately skips the random re-roll for this mode, so
+ * without an offset both resolvers integrate the same clock into the same value forever
+ * — and an animation interpolating between two equal endpoints renders a flat field,
+ * which reads as the extension having hung. */
+ZTEST(color_mode_source, test_offset_spectrum_sweeps_differ) {
+    FakeRawSource rawA;
+    FakeRawSource rawB;
+    rawA.value = mode_value(0x01, 255);  // SpectrumSweep, fastest
+    rawB.value = mode_value(0x01, 255);
+    ColorModeSource a(rawA, scripted_rng, fake_now, anim_sweep_phase_offset(1, 16));
+    ColorModeSource b(rawB, scripted_rng, fake_now, anim_sweep_phase_offset(3, 16));
+
+    // Same clock, same speed byte: any difference is the phase offset alone.
+    zassert_not_equal(a.get(), b.get(), "Two sweeps at distinct offsets must differ");
+
+    // Still distinct once the sweep has advanced (they share a rate, so the gap holds).
+    sNowMs += 500;
+    zassert_not_equal(a.get(), b.get(), "Offsets must persist as the sweep advances");
+}
+
+/* Offset 0 is the default, so every built-in animation — one COLOR characteristic
+ * each — is bit-for-bit unchanged by the constructor argument above. */
+ZTEST(color_mode_source, test_default_sweep_offset_is_zero) {
+    FakeRawSource rawA;
+    FakeRawSource rawB;
+    rawA.value = mode_value(0x01, 128);
+    rawB.value = mode_value(0x01, 128);
+    ColorModeSource explicitZero(rawA, scripted_rng, fake_now, anim_sweep_phase_offset(0, 16));
+    ColorModeSource defaulted(rawB, scripted_rng, fake_now);
+
+    zassert_equal(explicitZero.get(), defaulted.get(),
+                  "Index 0 must equal the default, so built-ins are unchanged");
+
+    sNowMs += 750;
+    zassert_equal(explicitZero.get(), defaulted.get(), "and stay equal as the sweep advances");
+}
+
+/* The spread is evenly distributed and wraps to the full hue span, so callers can rely
+ * on distinct indices producing distinct offsets. */
+ZTEST(color_mode_source, test_sweep_phase_offset_spread) {
+    zassert_equal(anim_sweep_phase_offset(0, 16), 0u, "Index 0 anchors at zero");
+    zassert_true(anim_sweep_phase_offset(1, 16) < anim_sweep_phase_offset(2, 16),
+                 "Offsets increase with index");
+    zassert_equal(anim_sweep_phase_offset(8, 16), anim_sweep_phase_offset(1, 2),
+                  "Halfway is halfway regardless of the divisor");
+    zassert_equal(anim_sweep_phase_offset(1, 0), anim_sweep_phase_offset(1, 1),
+                  "A zero count is treated as one rather than dividing by zero");
 }

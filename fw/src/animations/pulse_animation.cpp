@@ -16,14 +16,14 @@ void PulseAnimation::init() {
 
 void PulseAnimation::armBeatSync() {
     beatEnvelope_ = 0.0f;
-    // Discard whatever is sitting in this consumer's latch. It is set unconditionally
-    // for every consumer on each drained beat frame, and nothing drains ours while
-    // Pulse is inactive or not in beat-sync mode — so without this, playing Beat with
-    // music and then switching to Pulse (or just toggling Beat Sync on) makes the very
-    // first consumeBeat() return a stale beat and flash the panel at full brightness in
-    // silence. That flash is the exact thing starting from zero is meant to avoid.
+    // Resynchronise the cursor to the source's current count, so beats detected while
+    // Pulse was inactive or not in beat-sync mode are not reported on entry. Without
+    // this, playing Beat with music and then switching to Pulse (or just toggling Beat
+    // Sync on) makes the first consumeBeat() report those stale beats and flash the
+    // panel at full brightness in silence — the exact thing starting from zero is meant
+    // to avoid. Zeroing the envelope alone does not achieve it.
     if (beatSource_ != nullptr) {
-        beatSource_->consumeBeat();
+        beatCursor_.resync(*beatSource_);
     }
 }
 
@@ -60,7 +60,7 @@ void PulseAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickM
         // toggle whose input does not exist cannot look like a hardware fault.
         brightness = 1.0f;
     } else if (beatSync) {
-        if (beatSource_->consumeBeat()) {
+        if (beatCursor_.consumeBeat(*beatSource_)) {
             beatEnvelope_ = 1.0f;
         } else {
             // Ramp down over half a period, so one beat draws the same falling edge

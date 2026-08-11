@@ -215,8 +215,14 @@ class ActiveSlotParamSource : public AnimationUint32ParameterSource {
 };
 
 struct ParamColorResolver {
+    /* Each slot gets a distinct SpectrumSweep starting phase (issue #344). Without it,
+     * an extension with two COLOR params both set to SpectrumSweep produced two
+     * bit-identical colours every tick — and an animation interpolating between two
+     * equal endpoints renders a flat field, which reads as the extension having hung. */
     explicit ParamColorResolver(size_t index)
-        : raw(index), mode(raw, sys_rand32_get, k_uptime_get) {}
+        : raw(index),
+          mode(raw, sys_rand32_get, k_uptime_get,
+               anim_sweep_phase_offset(static_cast<uint16_t>(index), RGBX_MAX_PARAMS)) {}
     ActiveSlotParamSource raw;
     ColorModeSource mode;  // references `raw` — member order matters
 };

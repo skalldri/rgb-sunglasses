@@ -53,11 +53,14 @@ class PulseAnimation : public BaseAnimationTemplate<PulseAnimation, Animation::P
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
    private:
-    /** @brief Re-arm beat sync: zero the envelope and discard any stale latched beat. */
+    /** @brief Re-arm beat sync: zero the envelope and resync the cursor past stale beats. */
     void armBeatSync();
 
     const PulseAnimationDependencies *deps_ = nullptr;
     AnimationBeatSource *beatSource_ = nullptr;
+    // Own cursor over the shared source, so Pulse observes every beat regardless of
+    // how many colour resolvers also read it in the same tick (issue #344).
+    AnimationBeatCursor beatCursor_;
 
     // Position within the current breathing cycle, in ms; wraps at period_ms.
     size_t currentCycleTimeMs = 0;

@@ -27,20 +27,16 @@ class MutableBoolSource : public AnimationBoolParameterSource {
     bool value_;
 };
 
-// Fires a beat on demand. Mirrors the production latch: consumeBeat() reports at most
-// one beat per call and clears itself.
+// Fires a beat on demand. Mirrors the production source: a monotonic count that every
+// consumer's own cursor reads independently.
 class TestBeatSource : public AnimationBeatSource {
    public:
-    bool consumeBeat() override {
-        const bool beat = pending_;
-        pending_ = false;
-        return beat;
-    }
+    uint32_t beatCount() override { return count_; }
 
-    void fire() { pending_ = true; }
+    void fire() { count_++; }
 
    private:
-    bool pending_ = false;
+    uint32_t count_ = 0;
 };
 
 struct PixelColor {
