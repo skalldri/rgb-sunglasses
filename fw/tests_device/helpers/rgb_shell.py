@@ -173,6 +173,46 @@ class RgbShell:
                 return int(token)
         raise AssertionError(f"could not parse `retval` output: {lines!r}")
 
+    def exec_oneway(self, cmd: str) -> None:
+        """Fire a command that will NOT come back to a usable prompt.
+
+        For one-shot/destructive commands (`crash panic`, `factory_reset
+        now|soft`) where exec()'s echo-wait would hang and its retry would
+        double-fire. Raw write, no echo match, no retval — the caller owns
+        re-acquiring the shell (wait_reboot()).
+        """
+        logger.info("one-way command: %s", cmd)
+        self.dut.write(b"\x03")
+        time.sleep(0.1)
+        self.dut.clear_buffer()
+        self.dut.write((cmd + "\n").encode())
+
+    def wait_reboot(self, timeout: float = 120.0) -> None:
+        """Re-acquire the shell after a reboot this host did not command
+        (crash recovery, factory_reset's own reboot).
+
+        Waits for PROOF of a fresh boot — uptime below 20 s — not merely a
+        prompt. `factory_reset soft` spends seconds erasing NVS before its
+        reboot, and a prompt-only wait matched the STILL-ALIVE pre-reboot
+        shell, letting assertions run against a board that hadn't reset yet
+        (hardware-observed: `ext list` was then read mid-rescan on the real
+        boot and came back partial).
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                self.dut.write(b"\x03")
+                time.sleep(0.2)
+                self.dut.clear_buffer()
+                if self.uptime_ms() < 20_000:
+                    break  # fresh boot confirmed
+            except Exception:
+                pass  # board down / mid-boot — keep waiting
+            time.sleep(1.0)
+        else:
+            raise TimeoutError(f"no fresh boot observed within {timeout}s")
+        self.wait_boot_settled()
+
     def reboot(self, cold: bool = False, timeout: float = 90.0) -> list[str]:
         """Reboot the board and wait for the shell to come back.
 

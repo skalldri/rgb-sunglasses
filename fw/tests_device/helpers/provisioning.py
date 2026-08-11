@@ -9,6 +9,8 @@ The destructive tier's reprovision teardown lands with that tier (PR 2).
 
 from __future__ import annotations
 
+import os
+
 # .glim files provision-device.sh generates into /NAND:/glim.
 EXPECTED_GLIM = {"nyan_cat.glim", "bad_apple.glim", "4096.glim"}
 
@@ -16,6 +18,35 @@ EXPECTED_GLIM = {"nyan_cat.glim", "bad_apple.glim", "4096.glim"}
 # identified by manifest displayName (what `ext list` prints), NOT filename.
 # Hello is the fault-injection workhorse (Crash/Hang params).
 EXPECTED_EXT = {"Hello Extension"}
+
+
+def reprovision(rgb, build_dir: str) -> None:
+    """Re-provision the board's NAND after a destructive test, then verify.
+
+    Runs fw/scripts/provision-device.sh (regenerates the GLIM assets —
+    downloads source videos, ~2-3 min — builds extensions, copies both over
+    USB mass storage), reboots so the firmware re-mounts FAT and rescans,
+    and re-checks the baseline. The script self-gates on the `board` hw-lock
+    when CLAUDECODE is set, which the suite's runner contract already
+    requires, and needs a configured sysbuild dir for the llext EDK.
+    """
+    import subprocess
+
+    repo_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+    script = os.path.join(repo_root, "fw", "scripts", "provision-device.sh")
+    result = subprocess.run(
+        [script, "--build-dir", build_dir],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert result.returncode == 0, (
+        f"provision-device.sh failed ({result.returncode}):\n"
+        f"{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+    )
+    rgb.reboot()  # firmware must re-mount FAT to see the new files
+    problems = check_baseline(rgb.glim_list(), rgb.ext_list())
+    assert not problems, f"board still unprovisioned after reprovision: {problems}"
 
 
 def check_baseline(glim_names: list[str], ext_slots: list[dict]) -> list[str]:
