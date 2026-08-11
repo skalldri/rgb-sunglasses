@@ -955,22 +955,9 @@ config APP_CHARGER_STATUS_THREAD_STACK_SIZE
 	int "Charger status thread stack size (bytes)"
 	default 2048
 	help
-	  Kernel-only stack (K_KERNEL_THREAD_DEFINE).
-
-	  Was 1024, which this symbol's own help text already flagged as nearly
-	  full at 912 B (89%). It has since grown: `kernel thread stacks` on proto0
-	  measured 900 B, 968 B and 976 B across boots on 2026-08-10 — 95% used,
-	  48 B of headroom, and the highest reading was on the boot that did the
-	  most work. That is not a margin, it is a coin flip.
-
-	  This thread polls the BQ25792 through the TPS25750 I2Cm bridge, so its
-	  call path runs the whole bridged-transaction stack (CMD1/DATA1 4CC
-	  sequences under task_mutex) plus logging. Overflow here is a hard fault
-	  in a cosmetic status-LED path, which is a bad trade for 1 KB of RAM.
-
-	  Re-check `kernel thread stacks` after adding anything to this thread's
-	  call path — including anything added inside the tps25750/bq25792 drivers,
-	  which is where the growth came from rather than power.cpp itself.
+	  Kernel-only stack (K_KERNEL_THREAD_DEFINE). Sized from measured
+	  high-water marks — see fw/docs/threading.md, which owns the readings and
+	  the reason this thread grows without power.cpp being touched.
 
 config APP_PERSIST_WORKQ_PRIORITY
 	int "Priority for the persistent-value-store workqueue"

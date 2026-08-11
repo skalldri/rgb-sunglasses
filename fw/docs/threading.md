@@ -112,7 +112,7 @@ the on-device capture is what settles it.)
 | `status_led_thread` | `CONFIG_APP_STATUS_LED_THREAD_STACK_SIZE` | 2048 |
 | `audio_dsp_thread` | `CONFIG_APP_AUDIO_DSP_THREAD_STACK_SIZE` | 2048 |
 | `imu_thread` | `CONFIG_IMU_THREAD_STACK_SIZE` | 1024 |
-| `charger_status_thread` | `CONFIG_APP_CHARGER_STATUS_THREAD_STACK_SIZE` | 1024 |
+| `charger_status_thread` | `CONFIG_APP_CHARGER_STATUS_THREAD_STACK_SIZE` | 2048 |
 | extension sandbox | `CONFIG_APP_EXT_HOST_STACK_SIZE` | 2048 |
 | persistent-value-store wq | `CONFIG_APP_PERSIST_WORKQ_STACK_SIZE` | 2048 |
 | `mcumgr smp` workqueue | `CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_STACK_SIZE` | **4096 on proto0** (Zephyr default 2048) |
@@ -142,10 +142,37 @@ Verify stack sizing against the real high-water marks (`kernel thread list` on t
 shell), not against guesses — the 2048 B figures for `bt_thread` and `audio_dsp_thread`
 came from measured marks of 724 B and 692 B respectively during issue #75.
 
-**`charger_status_thread` is the one to watch: 912 B of 1024 B (89%) in the proto0
-capture.** Everything else measured at or below 45%. Its call path goes through the
-TPS25750 I2Cm bridge into the BQ25792, so anything added there eats directly into that
-112 B of remaining headroom.
+**`charger_status_thread` is the one to watch.** Its call path goes through the TPS25750
+I2Cm bridge into the BQ25792, so it carries the whole bridged-transaction stack (CMD1/DATA1
+4CC sequences under `task_mutex`) plus logging.
+
+That matters more than the usual "watch this thread" note, because **the growth does not
+come from `power.cpp`** — it comes from the shared driver helpers. Anyone adding to
+`tps25750.c` or `bq25792.c` charges this stack without any reason to open this file, which
+is how the figure below drifted for months with no one editing the thread.
+
+Measured high-water (`kernel thread stacks`, proto0):
+
+| When | Reading | Occupancy |
+|---|---|---|
+| original sizing | 912 B / 1024 B | 89% |
+| 2026-08-10, three boots at 1024 B | 900 / 968 / **976** B | up to **95%** — 48 B spare |
+| 2026-08-11, after the bump to 2048 B | 900 B / 2048 B | 44% |
+
+The 976 B reading came from the boot that did the most work (a forced filesystem format),
+so treat it as the floor of the worst case rather than the ceiling. Against 2048 B even
+that leaves ~52% free.
+
+**`tps25750_wq` is exposed to the same driver-side growth and has NOT been re-sized.**
+Measured 288 B / 1024 B (28%) on 2026-08-11 — but that capture only covers steady-state
+polling. Its deepest item is `tps25750_recovery_work` → `tps25750_get_patch` →
+`tps25750_download_patch` → `download_patch_locked`, which frames a `tps25750_data1_t` on
+top of the full 4CC sequence and runs only on a PTCH wedge. That path is currently
+unmeasurable on proto0: `power pd go2p`, the sanctioned way to force it, is cleanly
+REJECTED there (PatchConfigSource=6, see the root `CLAUDE.md` note). An overflow there
+hard-faults the board *during* the recovery meant to heal the PD bridge, so it wants a
+reading before anyone trims it — on hardware where GO2P is accepted, or via a fault
+injected some other way.
 
 ## Invariants
 
