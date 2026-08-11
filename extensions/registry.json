@@ -4,8 +4,8 @@
     {
       "name": "plasma",
       "repo": "https://github.com/skalldri/rgbx-plasma",
-      "rev": "5ce6dc7df26c93469ee1d96edf7a0a53cbb819a6",
-      "description": "Classic three-wave interference plasma with tunable color, speed, and an invert toggle - formerly the in-repo C++ extension, now sinf-based",
+      "rev": "f147e990661d544daecbaa5ea67da718ac4e4281",
+      "description": "Classic three-wave interference plasma with tunable foreground and background colors, speed, and an invert toggle - formerly the in-repo C++ extension, now sinf-based",
       "author": "skalldri",
       "license": "MIT"
     },
