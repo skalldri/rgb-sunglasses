@@ -38,7 +38,7 @@
  *    it reads the captured value regardless of whether the log line survived.
  *
  * 3. Zephyr's own CONFIG_HWINFO_SHELL is deliberately NOT enabled. It ships a second copy
- *    of this decode table and a `hwinfo reset_cause` command that would read 0 once this
+ *    of this decode table and a `hwinfo reset_cause show` command that would read 0 once this
  *    module has cleared the register — a command guaranteed to mislead. `hwinfo devid`
  *    was the only reason to want it, so that is provided as a subcommand here instead,
  *    keeping exactly one implementation in the image.
@@ -184,9 +184,39 @@ static int cmd_reset_devid(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+/* Equivalent of Zephyr's `hwinfo reset_cause supported`, kept because it answers a
+ * question this SoC makes easy to get wrong: hwinfo_nrf.c can report only PIN, WATCHDOG,
+ * SOFTWARE, CPU_LOCKUP, LOW_POWER_WAKE and DEBUG. A brownout is NOT in that set, so it
+ * surfaces as "none reported" — and a reader who does not know that will read the absence
+ * of "brownout" as evidence against a brownout. Asking the driver at runtime beats a
+ * comment, because it stays right if the SDK's mapping changes under us. */
+static int cmd_reset_supported(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	uint32_t supported = 0;
+	int rc = hwinfo_get_supported_reset_cause(&supported);
+
+	if (rc < 0) {
+		shell_error(sh, "hwinfo_get_supported_reset_cause failed: %d", rc);
+		return rc;
+	}
+
+	char names[RESET_REASON_DESC_LEN];
+	(void)reset_reason_describe(0, supported, names, sizeof(names));
+	shell_print(sh, "this SoC can report: %s (mask 0x%08x)",
+		    (names[0] != '\0') ? names : "(nothing)", supported);
+	shell_print(sh, "anything else — a brownout on nRF5340, for instance — arrives as");
+	shell_print(sh, "\"none reported\", indistinguishable from a clean power-on.");
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	sub_reset_cause,
 	SHELL_CMD(devid, NULL, "Print the SoC's unique device ID", cmd_reset_devid),
+	SHELL_CMD(supported, NULL, "Which reset causes this SoC can actually report",
+		  cmd_reset_supported),
 	SHELL_SUBCMD_SET_END);
 
 /* Registered as a command with subcommands so `reset_cause` alone still answers the
