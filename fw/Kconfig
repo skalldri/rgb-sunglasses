@@ -953,13 +953,11 @@ config APP_CHARGER_STATUS_THREAD_PRIORITY
 
 config APP_CHARGER_STATUS_THREAD_STACK_SIZE
 	int "Charger status thread stack size (bytes)"
-	default 1024
+	default 2048
 	help
-	  Kernel-only stack (K_KERNEL_THREAD_DEFINE).
-
-	  Measured on proto0 hardware at 912 B of 1024 B used (89%), so there is
-	  very little headroom left here — re-check `kernel thread list` after
-	  adding anything to this thread's call path.
+	  Kernel-only stack (K_KERNEL_THREAD_DEFINE). Sized from measured
+	  high-water marks — see fw/docs/threading.md, which owns the readings and
+	  the reason this thread grows without power.cpp being touched.
 
 config APP_PERSIST_WORKQ_PRIORITY
 	int "Priority for the persistent-value-store workqueue"

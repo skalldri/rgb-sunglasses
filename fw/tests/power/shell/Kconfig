@@ -5,10 +5,19 @@ rsource "../../../drivers/Kconfig"
 # power.cpp consumes these app symbols for charger_status_thread. They're defined in
 # fw/Kconfig, which standalone Twister apps don't see — redeclared here with the same
 # names and defaults. (Same pattern as fw/tests/imu/pipeline/Kconfig.)
+#
+# KEEP THESE IN SYNC WITH fw/Kconfig. Nothing enforces it, and both had already
+# drifted: the priority read 7 against fw/Kconfig's 8 (so this suite was exercising
+# the thread at the wrong rank relative to pattern_controller), and the stack read
+# 1024 after fw/Kconfig moved to 2048. A stale stack here is the worse of the two —
+# this suite is the ONLY automated coverage of charger_status_thread, so it would
+# have kept testing the size the firmware had just declared unsafe, and a deepening
+# emulated BQ25792/TPS25750 path would overflow on native_sim with a crash that
+# cannot be reproduced on hardware.
 config APP_CHARGER_STATUS_THREAD_PRIORITY
 	int "Charger status thread priority"
-	default 7
+	default 8
 
 config APP_CHARGER_STATUS_THREAD_STACK_SIZE
 	int "Charger status thread stack size (bytes)"
-	default 1024
+	default 2048
