@@ -2,190 +2,197 @@
  * Reset-cause reporting (issue #192, unblocks #191).
  *
  * The nRF5340 latches why it last reset in RESETREAS, and nothing was reading it — so an
- * unexplained reboot (issue #191's wedged-GATT churn) left no evidence at all about
- * whether it was a watchdog, a brownout, a software reboot or a CPU lockup. Those have
- * completely different causes, and guessing between them costs far more than the ~300 B
- * this file adds.
+ * unexplained reboot left no evidence about whether it was a watchdog, a software reboot
+ * or a CPU lockup. Those have completely different causes.
  *
- * TWO THINGS HERE ARE DELIBERATE AND EASY TO GET WRONG.
+ * The decode itself lives in reset_reason_core.c (covered by fw/tests/debug/reset_reason);
+ * this file is the Zephyr glue.
  *
- * 1. The cause is CAPTURED early but LOGGED at APPLICATION level.
+ * THREE THINGS HERE ARE DELIBERATE AND EASY TO GET WRONG.
  *
- *    Logging is deferred (CONFIG_LOG_MODE_DEFERRED): a message emitted before the USB
- *    CDC backend exists is buffered, and if the buffer fills before a backend drains it
- *    the oldest messages are DROPPED. That is not hypothetical here — a proto0 boot log
- *    captured 2026-08-10 opens with "--- 64 messages dropped ---" followed by
- *    "--- 10 messages dropped ---", losing everything the storage layer logged during
- *    SYS_INIT. A reset cause printed at PRE_KERNEL would be inside that window and would
- *    be exactly the message you most wanted to survive.
+ * 1. The cause is CAPTURED early, REPORTED at APPLICATION, and only CLEARED AFTERWARDS.
  *
- *    So the read happens early (PRE_KERNEL_2, before anything can clear the register)
- *    and the print happens at APPLICATION, by which point the log buffer is draining.
+ *    The ordering matters more than it looks. RESETREAS is sticky: bits accumulate across
+ *    resets until cleared, so leaving it alone means every later boot reports the union of
+ *    everything that ever happened to the part. That is why the clear exists.
  *
- * 2. The register is CLEARED once read.
+ *    But the captured value lives only in RAM, so clearing it EARLY throws away the
+ *    evidence for any boot that dies before the report runs — a fault in bluetooth_init
+ *    (SYS_INIT APPLICATION prio 1), in factory_reset_boot_check (prio 0), or a main-stack
+ *    overflow during the corrupt-volume f_mkfs that CONFIG_MAIN_STACK_SIZE is sized
+ *    against. Each loop iteration would re-clear, so someone attaching a debugger to a
+ *    wedged board hours later reads 0x00000000. The sticky bits would have held the
+ *    original cause if this module had done nothing at all, so an early clear is a
+ *    REGRESSION against not having the module, in exactly the boot-loop scenario #191 is
+ *    about.
  *
- *    RESETREAS is sticky: bits accumulate across resets until explicitly cleared. Left
- *    alone it reports the union of everything that has ever happened to the part, so the
- *    watchdog bit from a fault three weeks ago still reads as set today and every boot
- *    looks like a watchdog boot. Clearing makes each boot report only its own cause.
+ *    Deferring the clear to just after the report keeps both properties: a boot that
+ *    reaches APPLICATION reports its own cause and starts the next boot clean, and a boot
+ *    that dies before then leaves RESETREAS untouched for the next reader.
  *
- *    Consequence worth knowing: `hwinfo reset_cause` from the Zephyr shell will read 0,
- *    because this ran first. Use `reset_cause` (below), which prints the captured value.
+ * 2. Logging is deferred (CONFIG_LOG_MODE_DEFERRED) and the USB CDC backend only exists
+ *    several seconds into boot, by which point CONFIG_LOG_BUFFER_SIZE has long overflowed
+ *    — a proto0 boot log opens with "--- 57 messages dropped ---". So the APPLICATION-level
+ *    report is NOT a reliable delivery mechanism; it is a convenience for anyone watching a
+ *    live console. The `reset_cause` shell command is the surface that actually works, and
+ *    it reads the captured value regardless of whether the log line survived.
+ *
+ * 3. Zephyr's own CONFIG_HWINFO_SHELL is deliberately NOT enabled. It ships a second copy
+ *    of this decode table and a `hwinfo reset_cause` command that would read 0 once this
+ *    module has cleared the register — a command guaranteed to mislead. `hwinfo devid`
+ *    was the only reason to want it, so that is provided as a subcommand here instead,
+ *    keeping exactly one implementation in the image.
  */
+
+#include "reset_reason_core.h"
 
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/shell/shell.h>
 
+#if defined(CONFIG_SHELL)
+#include <zephyr/shell/shell.h>
+#endif
+
+#include <errno.h>
 #include <stdint.h>
 
 LOG_MODULE_REGISTER(reset_reason, CONFIG_LOG_DEFAULT_LEVEL);
+
+/* One size for every description buffer in this module. */
+#define RESET_REASON_DESC_LEN 128
 
 /* Captured before anything else can clear RESETREAS; read by the APPLICATION-level
  * report and by the shell command. */
 static uint32_t s_reset_cause;
 static int s_capture_rc;
 
-struct cause_name {
-	uint32_t bit;
-	const char *name;
-};
-
-/* Ordered most-diagnostic-first: on a part that sets several bits at once, the first
- * match is the one worth putting in front of a reader. */
-static const struct cause_name kCauseNames[] = {
-	{RESET_WATCHDOG, "watchdog"},
-	{RESET_CPU_LOCKUP, "CPU lockup"},
-	{RESET_BROWNOUT, "brownout"},
-	{RESET_SECURITY, "security violation"},
-	{RESET_PARITY, "parity error"},
-	{RESET_POR, "power-on"},
-	{RESET_PIN, "pin reset"},
-	{RESET_SOFTWARE, "software"},
-	{RESET_DEBUG, "debugger"},
-	{RESET_LOW_POWER_WAKE, "low-power wake"},
-	{RESET_TEMPERATURE, "temperature"},
-	{RESET_HARDWARE, "hardware"},
-	{RESET_USER, "user"},
-	{RESET_CLOCK, "clock"},
-	{RESET_PLL, "PLL"},
-};
-
-/* Writes "watchdog, software" (etc.) into `out`. Returns the number of causes named, so
- * the caller can distinguish "no bits set" from "bits set that we have no name for" —
- * the latter is a real possibility on a SoC whose driver reports vendor-specific bits. */
-static size_t format_causes(uint32_t cause, char *out, size_t cap)
-{
-	size_t named = 0;
-	size_t used = 0;
-
-	if (cap == 0) {
-		return 0;
-	}
-	out[0] = '\0';
-
-	for (size_t i = 0; i < ARRAY_SIZE(kCauseNames); i++) {
-		if ((cause & kCauseNames[i].bit) == 0) {
-			continue;
-		}
-		const char *sep = (named == 0) ? "" : ", ";
-		int written = snprintk(out + used, cap - used, "%s%s", sep, kCauseNames[i].name);
-		/* Truncation is not worth failing over — the raw bitmask is always logged
-		 * alongside, so a clipped list is still fully recoverable. */
-		if (written < 0 || (size_t)written >= cap - used) {
-			break;
-		}
-		used += (size_t)written;
-		named++;
-	}
-
-	return named;
-}
-
-/* PRE_KERNEL_2 rather than PRE_KERNEL_1: hwinfo needs its driver initialised, and
- * nothing between the two levels resets the SoC or touches RESETREAS. */
+/* PRE_KERNEL_2 rather than PRE_KERNEL_1: hwinfo needs its driver initialised, and nothing
+ * between the two levels resets the SoC or touches RESETREAS. Reads only — see note 1. */
 static int reset_reason_capture(void)
 {
 	s_capture_rc = hwinfo_get_reset_cause(&s_reset_cause);
-	if (s_capture_rc == 0) {
-		/* See the file header: sticky bits make every later boot lie. */
-		(void)hwinfo_clear_reset_cause();
-	}
 	return 0;
 }
 
 SYS_INIT(reset_reason_capture, PRE_KERNEL_2, 0);
 
-static void report(void)
-{
-	char names[128];
-
-	if (s_capture_rc == -ENOSYS) {
-		LOG_WRN("reset cause unavailable: no hwinfo driver support");
-		return;
-	}
-	if (s_capture_rc < 0) {
-		LOG_WRN("reset cause unavailable: hwinfo error %d", s_capture_rc);
-		return;
-	}
-	if (s_reset_cause == 0) {
-		/* Genuinely happens: a warm reset that the SoC does not attribute, or a part
-		 * whose bits were already cleared by a bootloader stage. Say so plainly
-		 * rather than printing an empty cause list. */
-		LOG_INF("reset cause: none reported (RESETREAS 0x%08x)", s_reset_cause);
-		return;
-	}
-
-	const uint32_t raw = s_reset_cause;
-	if (format_causes(raw, names, sizeof(names)) == 0) {
-		LOG_WRN("reset cause: unrecognised bits (RESETREAS 0x%08x)", raw);
-		return;
-	}
-
-	/* Warn rather than inform for the causes that mean something went wrong — those are
-	 * the ones that should stand out in a scrollback when chasing #191. */
-	if ((raw & (RESET_WATCHDOG | RESET_CPU_LOCKUP | RESET_BROWNOUT | RESET_SECURITY |
-		    RESET_PARITY)) != 0) {
-		LOG_WRN("reset cause: %s (RESETREAS 0x%08x)", names, raw);
-	} else {
-		LOG_INF("reset cause: %s (RESETREAS 0x%08x)", names, raw);
-	}
-}
-
-/* APPLICATION so the message lands after the log backend exists — see the file header. */
 static int reset_reason_report(void)
 {
-	report();
+	char names[RESET_REASON_DESC_LEN];
+	const enum ResetReasonKind kind =
+		reset_reason_describe(s_capture_rc, s_reset_cause, names, sizeof(names));
+
+	switch (kind) {
+	case RESET_REASON_UNAVAILABLE:
+		LOG_WRN("reset cause unavailable: hwinfo error %d", s_capture_rc);
+		break;
+	case RESET_REASON_NONE:
+		/* WRN, not INF, and the caveat is not padding. On the nRF5340 the hwinfo
+		 * driver cannot report a brownout at all (no NRFX_RESET_REASON_HAS_VBUS), so
+		 * a brownout lands HERE, indistinguishable from a clean power-on. That is the
+		 * failure a battery-powered board browning out under LED current would show,
+		 * and reading "none reported" as "not a brownout" would send the reader
+		 * somewhere else entirely. */
+		LOG_WRN("reset cause: none reported (RESETREAS 0x%08x) — on nRF5340 this is a "
+			"power-on OR a brownout; the hwinfo driver cannot tell them apart",
+			s_reset_cause);
+		break;
+	case RESET_REASON_UNRECOGNISED:
+		LOG_WRN("reset cause: unrecognised bits (RESETREAS 0x%08x)", s_reset_cause);
+		break;
+	case RESET_REASON_NAMED:
+	default:
+		if (reset_reason_is_fault(s_reset_cause)) {
+			LOG_WRN("reset cause: %s (RESETREAS 0x%08x)", names, s_reset_cause);
+		} else {
+			LOG_INF("reset cause: %s (RESETREAS 0x%08x)", names, s_reset_cause);
+		}
+		break;
+	}
+
+	/* Only now — see note 1. Report the failure rather than discarding it: if the clear
+	 * does not take, RESETREAS keeps accumulating and every later boot (and the shell
+	 * command) reports the union of everything that ever happened. A stale watchdog bit
+	 * on a clean boot is worse than no module at all, because the wrong answer carries
+	 * the same authority as a right one. */
+	if (s_capture_rc == 0) {
+		int clear_rc = hwinfo_clear_reset_cause();
+		if (clear_rc < 0) {
+			LOG_WRN("could not clear RESETREAS (%d) — later boots will report stale, "
+				"accumulated causes",
+				clear_rc);
+		}
+	}
 	return 0;
 }
 
 SYS_INIT(reset_reason_report, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+
+#if defined(CONFIG_SHELL)
 
 static int cmd_reset_cause(const struct shell *sh, size_t argc, char **argv)
 {
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
 
-	char names[128];
+	char names[RESET_REASON_DESC_LEN];
+	const enum ResetReasonKind kind =
+		reset_reason_describe(s_capture_rc, s_reset_cause, names, sizeof(names));
 
-	if (s_capture_rc < 0) {
+	if (kind == RESET_REASON_UNAVAILABLE) {
 		shell_print(sh, "reset cause unavailable (hwinfo error %d)", s_capture_rc);
 		return 0;
 	}
+
 	shell_print(sh, "RESETREAS at boot: 0x%08x", s_reset_cause);
-	if (s_reset_cause == 0) {
+	switch (kind) {
+	case RESET_REASON_NONE:
 		shell_print(sh, "cause: none reported");
-	} else if (format_causes(s_reset_cause, names, sizeof(names)) == 0) {
+		shell_print(sh, "  (on nRF5340 a brownout also lands here — the hwinfo driver");
+		shell_print(sh, "   cannot distinguish it from a power-on)");
+		break;
+	case RESET_REASON_UNRECOGNISED:
 		shell_print(sh, "cause: unrecognised bits");
-	} else {
+		break;
+	case RESET_REASON_NAMED:
+	default:
 		shell_print(sh, "cause: %s", names);
+		break;
 	}
-	/* Pre-empt the obvious next confusion. */
-	shell_print(sh, "(`hwinfo reset_cause` reads 0 — this module clears the register at boot)");
 	return 0;
 }
 
-SHELL_CMD_REGISTER(reset_cause, NULL, "Why the SoC last reset (captured at boot)",
+static int cmd_reset_devid(const struct shell *sh, size_t argc, char **argv)
+{
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
+
+	uint8_t id[16];
+	ssize_t len = hwinfo_get_device_id(id, sizeof(id));
+
+	if (len < 0) {
+		shell_error(sh, "hwinfo_get_device_id failed: %d", (int)len);
+		return (int)len;
+	}
+	shell_fprintf(sh, SHELL_NORMAL, "device id: ");
+	for (ssize_t i = 0; i < len; i++) {
+		shell_fprintf(sh, SHELL_NORMAL, "%02x", id[i]);
+	}
+	shell_fprintf(sh, SHELL_NORMAL, "\n");
+	return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(
+	sub_reset_cause,
+	SHELL_CMD(devid, NULL, "Print the SoC's unique device ID", cmd_reset_devid),
+	SHELL_SUBCMD_SET_END);
+
+/* Registered as a command with subcommands so `reset_cause` alone still answers the
+ * question it names, while `reset_cause devid` covers the one thing CONFIG_HWINFO_SHELL
+ * was wanted for (see note 3). */
+SHELL_CMD_REGISTER(reset_cause, &sub_reset_cause, "Why the SoC last reset (captured at boot)",
 		   cmd_reset_cause);
+
+#endif /* CONFIG_SHELL */

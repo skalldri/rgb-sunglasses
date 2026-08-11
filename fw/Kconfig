@@ -730,6 +730,27 @@ config APP_COREDUMP_REMINDER_PERIOD_S
 
 	  Use `coredump_mgr status` to check for uncollected dumps on demand.
 
+config APP_RESET_REASON
+	bool "Report why the SoC last reset (RESETREAS via hwinfo)"
+	default y
+	depends on HWINFO
+	help
+	  Captures RESETREAS at boot, reports it, then clears it so each boot reports
+	  only its own cause instead of the accumulated union of every reset the part
+	  has ever seen. Adds a `reset_cause` shell command, which is the surface that
+	  actually works — the boot log line lands inside the early-boot
+	  "N messages dropped" window on this board.
+
+	  Gated separately from HWINFO itself: HWINFO is on because bluetooth.cpp needs
+	  hwinfo_get_device_id() for the BLE name suffix and USB serial number, so tying
+	  this module to it would mean a constrained variant could not drop this without
+	  also losing the device ID. The reverse coupling is worse — turning HWINFO off
+	  would silently stop RESETREAS being cleared, changing what the register means
+	  for anything that later reads it.
+
+	  See src/debug/reset_reason.c; decode logic in reset_reason_core.c is covered
+	  by the debug.reset_reason native_sim suite.
+
 config APP_CRASH_TEST_COMMANDS
 	bool "Shell commands that deliberately crash the firmware"
 	depends on SHELL

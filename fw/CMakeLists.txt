@@ -148,7 +148,10 @@ target_sources_ifdef(CONFIG_APP_COREDUMP_MANAGER app PRIVATE
 )
 target_sources_ifdef(CONFIG_APP_CRASH_TEST_COMMANDS app PRIVATE src/debug/crash_shell.cpp)
 # Reads RESETREAS at boot so an unexplained reboot self-identifies (issue #192).
-target_sources_ifdef(CONFIG_HWINFO app PRIVATE src/debug/reset_reason.c)
+target_sources_ifdef(CONFIG_APP_RESET_REASON app PRIVATE
+    src/debug/reset_reason.c
+    src/debug/reset_reason_core.c
+)
 
 target_include_directories(
   app 
