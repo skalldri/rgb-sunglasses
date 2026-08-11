@@ -77,16 +77,41 @@ export class StaticImuProvider implements ImuProvider {
 /** Shared band-0 beat latch for RandomOnBeat color modes — mirrors the
  * firmware's SoundAnimationAudioSource latch: set when an audio frame with
  * a band-0 beat arrives, cleared by the first consumer. */
-export class BeatLatch {
-  private latched = false;
+/**
+ * Free-running beat count, mirroring the firmware's AnimationBeatSource (issue #344).
+ *
+ * Deliberately NOT a consume-once latch. A latch is destructive, so whichever consumer
+ * read it first in a tick ate the beat and the rest saw none — and one extension really
+ * can hold several consumers at once (two COLOR params both on RandomOnBeat). Each
+ * consumer keeps its own BeatCursor instead, so all of them observe every beat.
+ */
+export class BeatCounter {
+  private count = 0;
   onAudioFrame(features: AudioFeatures): void {
     if (features.beat[0] !== 0) {
-      this.latched = true;
+      this.count++;
     }
   }
+  beatCount(): number {
+    return this.count;
+  }
+}
+
+/** One consumer's view of a shared BeatCounter — the firmware's AnimationBeatCursor. */
+export class BeatCursor {
+  private lastSeen = 0;
+  constructor(private readonly source: BeatCounter) {}
+
+  /** True iff at least one beat was counted since this cursor last looked. */
   consume(): boolean {
-    const value = this.latched;
-    this.latched = false;
-    return value;
+    const now = this.source.beatCount();
+    const beat = now !== this.lastSeen;
+    this.lastSeen = now;
+    return beat;
+  }
+
+  /** Discard beats counted while this consumer was idle, without reporting them. */
+  resync(): void {
+    this.lastSeen = this.source.beatCount();
   }
 }

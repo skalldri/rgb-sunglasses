@@ -82,6 +82,19 @@ void assert_fully_vivid(uint32_t color, const char *what, uint32_t at) {
                   b, peak);
 }
 
+// Two hues 768 units (180 degrees) apart on anim_color_from_hue()'s wheel are exact
+// complements: each channel of one is 255 minus the corresponding channel of the other.
+void assert_complementary(uint32_t a, uint32_t b, const char *when) {
+    for (int shift = 16; shift >= 0; shift -= 8) {
+        const uint32_t ca = (a >> shift) & 0xFFu;
+        const uint32_t cb = (b >> shift) & 0xFFu;
+        zassert_equal(ca + cb, 255u,
+                      "%s: channel at shift %d is %u and %u, summing to %u rather than 255 "
+                      "- the two sweeps are not half a wheel apart",
+                      when, shift, ca, cb, ca + cb);
+    }
+}
+
 void suite_before(void *) {
     rng_script({});
     sNowMs = 0;
@@ -499,20 +512,29 @@ ZTEST(color_mode_source, test_beats_before_activation_are_not_reported) {
  * without an offset both resolvers integrate the same clock into the same value forever
  * — and an animation interpolating between two equal endpoints renders a flat field,
  * which reads as the extension having hung. */
-ZTEST(color_mode_source, test_offset_spectrum_sweeps_differ) {
+ZTEST(color_mode_source, test_offset_spectrum_sweeps_are_complementary) {
     FakeRawSource rawA;
     FakeRawSource rawB;
     rawA.value = mode_value(0x01, 255);  // SpectrumSweep, fastest
     rawB.value = mode_value(0x01, 255);
-    ColorModeSource a(rawA, scripted_rng, fake_now, anim_sweep_phase_offset(1, 16));
-    ColorModeSource b(rawB, scripted_rng, fake_now, anim_sweep_phase_offset(3, 16));
+    // Ordinals 0 and 1 of two COLOR params — exactly plasma's layout once keyed on the
+    // COLOR ordinal rather than the raw param index.
+    ColorModeSource a(rawA, scripted_rng, fake_now, anim_sweep_phase_offset(0, 2));
+    ColorModeSource b(rawB, scripted_rng, fake_now, anim_sweep_phase_offset(1, 2));
 
-    // Same clock, same speed byte: any difference is the phase offset alone.
-    zassert_not_equal(a.get(), b.get(), "Two sweeps at distinct offsets must differ");
+    // Asserting the SYMPTOM #344 is about (visibly distinct colours), not merely that
+    // the offsets differ: zassert_not_equal would pass for a 1-unit hue gap as readily
+    // as for 768, so any future narrowing of the spread would sail through it.
+    //
+    // Two hues half a wheel apart are exact complements on this 6-sector full-saturation
+    // wheel: every sector's ramp is mirrored by the sector 768 units away, so the two
+    // colours sum to 255 in every channel (red 255,0,0 vs cyan 0,255,255).
+    assert_complementary(a.get(), b.get(), "at rest");
 
-    // Still distinct once the sweep has advanced (they share a rate, so the gap holds).
+    // And the 180-degree relationship survives the sweep advancing, since both
+    // integrate the same clock at the same rate.
     sNowMs += 500;
-    zassert_not_equal(a.get(), b.get(), "Offsets must persist as the sweep advances");
+    assert_complementary(a.get(), b.get(), "after advancing");
 }
 
 /* Offset 0 is the default, so every built-in animation — one COLOR characteristic
@@ -540,6 +562,17 @@ ZTEST(color_mode_source, test_sweep_phase_offset_spread) {
                  "Offsets increase with index");
     zassert_equal(anim_sweep_phase_offset(8, 16), anim_sweep_phase_offset(1, 2),
                   "Halfway is halfway regardless of the divisor");
-    zassert_equal(anim_sweep_phase_offset(1, 0), anim_sweep_phase_offset(1, 1),
+
+    // A single resolver anchors at zero: there is nothing to separate from, and this is
+    // what keeps already-published single-colour extensions unchanged.
+    zassert_equal(anim_sweep_phase_offset(0, 1), 0u, "Sole resolver anchors at zero");
+
+    // index >= count must WRAP, not run off the end. index == count would return exactly
+    // one full span, which the accumulator's own modulo reduces to phase 0 — silently
+    // recreating the identical-sweeps bug this helper exists to prevent.
+    zassert_equal(anim_sweep_phase_offset(1, 1), 0u, "index == count wraps to zero");
+    zassert_equal(anim_sweep_phase_offset(17, 16), anim_sweep_phase_offset(1, 16),
+                  "index past count wraps rather than exceeding a full span");
+    zassert_equal(anim_sweep_phase_offset(1, 0), 0u,
                   "A zero count is treated as one rather than dividing by zero");
 }

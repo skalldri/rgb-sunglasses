@@ -85,7 +85,9 @@ class ColorModeSource : public AnimationUint32ParameterSource {
      *        must give each a distinct offset (see @ref anim_sweep_phase_offset and
      *        issue #344) — otherwise identically-configured sweeps stay bit-identical
      *        forever, since reset zeroes the phase and deliberately skips the random
-     *        re-roll for this mode.
+     *        re-roll for this mode. Callers whose resolver set is fixed at construction
+     *        pass it here; callers that only learn the layout later use
+     *        @ref setSweepPhaseOffset.
      */
     ColorModeSource(const AnimationUint32ParameterSource &raw, RandomFn rng, UptimeFn now,
                     uint32_t sweepPhaseOffsetQ16 = 0)
@@ -95,6 +97,18 @@ class ColorModeSource : public AnimationUint32ParameterSource {
 
     /** @brief Arm a state reset (new random color, restarted phase) for the next get(). */
     void notifyActivated() { resetPending_.store(true, std::memory_order_relaxed); }
+
+    /**
+     * @brief Set the SpectrumSweep starting phase after construction.
+     *
+     * For resolver pools built once but re-keyed per activation: the extension host owns
+     * one resolver per param SLOT, but the spread has to be computed over the COLOR
+     * params of whichever manifest is active, which is only known at activation time.
+     * Takes effect on the next armed reset.
+     *
+     * @param offsetQ16 Starting phase in the accumulator's Q16 units.
+     */
+    void setSweepPhaseOffset(uint32_t offsetQ16) { sweepPhaseOffsetQ16_ = offsetQ16; }
 
     /** @brief Per-instance beat source override (tests). nullptr = use the default. */
     void setBeatSource(AnimationBeatSource *src) { beatSource_ = src; }
@@ -111,6 +125,11 @@ class ColorModeSource : public AnimationUint32ParameterSource {
     const AnimationUint32ParameterSource &raw_;
     RandomFn rng_;
     UptimeFn now_;
+    /** @brief Instance override else the shared default; may be null. Stated once so a
+     * future change to the fallback rule cannot be applied to one call site and missed
+     * on the other. */
+    AnimationBeatSource *beats() const { return beatSource_ ? beatSource_ : sDefaultBeatSource_; }
+
     AnimationBeatSource *beatSource_ = nullptr;
     uint32_t sweepPhaseOffsetQ16_ = 0;
     // mutable: advanced from the const get(); each resolver owns its own cursor so
