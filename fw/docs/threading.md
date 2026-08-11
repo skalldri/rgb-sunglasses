@@ -138,6 +138,32 @@ skips the 1 KB `CONFIG_USERSPACE` privileged-stack reservation. Those stacks can
 a `K_USER` thread. The two exceptions are `imu_thread` and the extension sandbox, both of
 which *are* user-mode threads and so use `K_THREAD_STACK_DEFINE`.
 
+### Automatic creep detection: `stack_watch`
+
+`CONFIG_APP_STACK_WATCH` (default y) runs Zephyr's thread analyzer every
+`CONFIG_APP_STACK_WATCH_INTERVAL_S` (300 s) and warns the first time a thread crosses
+`CONFIG_APP_STACK_WATCH_PERCENT` (80%), then again on each further 5-point rise. It is
+**silent on a healthy system** — deliberately, since an unconditional periodic dump would
+be the steady-state log spam this project forbids.
+
+It exists because `charger_status_thread` drifted 89% → 95% over months with no detector
+but somebody remembering to run `kernel thread stacks`, and was found by accident.
+
+Things worth knowing before trusting it:
+
+| | |
+|---|---|
+| `stack_watch` | Lists every thread currently at or above the threshold, on demand. Use this rather than the log — a warning emitted during boot can be lost, because the USB CDC backend attaches seconds in, after the log buffer has overflowed. |
+| `stack_watch rearm` | **Run this after resizing a stack.** The warning is latched per thread at its worst percentage; without re-arming you will see nothing further and may conclude the detector confirmed your fix when it is merely quiet. |
+| ISR stack | **Not covered.** `thread_analyzer_run()` prints the ISR line unconditionally, so `CONFIG_THREAD_ANALYZER_ISR_STACK_USAGE` is off to avoid periodic spam. `z_interrupt_stacks` is visible only on demand via `kernel thread stacks`. |
+| Sandbox churn | The walk uses `k_thread_foreach_unlocked`, and `ext_sandbox` is a static `k_thread` that is aborted and re-created on extension load/unload. A walk landing inside that is a documented hazard; mitigated only by the long interval. |
+
+The watcher runs on its own preemptible workqueue at
+`CONFIG_APP_STACK_WATCH_PRIORITY` (14), **not** the system workqueue: the scan walks the
+untouched part of every stack word by word, so its cost scales with unused space (~100 KB
+here), and the system workqueue is cooperative — it would block `bt_gatt_store_ccc()` and
+the delayed settings work for that whole time with nothing able to preempt it.
+
 Verify stack sizing against the real high-water marks (`kernel thread list` on the serial
 shell), not against guesses — the 2048 B figures for `bt_thread` and `audio_dsp_thread`
 came from measured marks of 724 B and 692 B respectively during issue #75.
