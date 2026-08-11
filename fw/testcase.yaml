@@ -1,0 +1,68 @@
+# On-device (HIL) integration test scenarios — issue #333.
+#
+# These build THE REAL production sysbuild image (MCUboot + app + netcore) from
+# this directory and run pytest suites from fw/tests_device/ against the flashed
+# board's Zephyr shell. They only run under `twister --device-testing` with a
+# hardware map whose DUT declares the `rgbsg_proto0` fixture — a plain
+# `twister -T fw/tests -p native_sim` run (CI) never scans this file, and even a
+# scan of fw/ skips these on any platform but the real board. Entry point:
+# fw/scripts/run-device-tests.sh (see fw/tests_device/README.md).
+#
+# NOTE: `--west-flash` is load-bearing — a sysbuild device test is silently
+# SKIPPED (not failed) without it. run-device-tests.sh always passes it.
+common:
+  sysbuild: true
+  platform_allow:
+    - rgb_sunglasses_proto0/nrf5340/cpuapp
+  tags: device
+  harness: pytest
+  # Keep the image production-shaped. The only divergences, all justified:
+  # - VT100 colors AND cursor commands off: pytest-twister-harness reads the
+  #   console raw with no ANSI stripping (twister's own console harness does
+  #   strip), and the prompt-redraw cursor sequences (ESC[8D ESC[J) garble
+  #   every captured line (hardware-observed on the first suite run).
+  # - crash-test commands on: the destructive tier drives `crash panic|mpu` and
+  #   `fatfs corrupt confirm` (adds commands only, no behavior change).
+  extra_configs:
+    - CONFIG_SHELL_VT100_COLORS=n
+    - CONFIG_SHELL_VT100_COMMANDS=n
+    - CONFIG_APP_CRASH_TEST_COMMANDS=y
+tests:
+  # smoke + integration + (explicitly selected) destructive markers all run in
+  # this one scenario so a full run builds and flashes exactly once. Tier
+  # selection is a pytest -m expression appended by run-device-tests.sh.
+  app.device.hil:
+    timeout: 900
+    harness_config:
+      fixture: rgbsg_proto0
+      pytest_dut_scope: session
+      pytest_root:
+        - tests_device
+      pytest_args:
+        - "-m"
+        - "smoke or integration"
+  # MCUmgr firmware-update loop. Forward-only: proto0 is MCUboot
+  # OVERWRITE_ONLY (no revert path) — see fw/tests_device/README.md.
+  app.device.dfu:
+    timeout: 1200
+    slow: true
+    harness_config:
+      fixture: rgbsg_proto0
+      pytest_dut_scope: session
+      pytest_root:
+        - tests_device
+      pytest_args:
+        - "-m"
+        - "dfu"
+  # Long-running soak assertions (frame pacing, extension CPU drift).
+  app.device.soak:
+    timeout: 7200
+    slow: true
+    harness_config:
+      fixture: rgbsg_proto0
+      pytest_dut_scope: session
+      pytest_root:
+        - tests_device
+      pytest_args:
+        - "-m"
+        - "soak"

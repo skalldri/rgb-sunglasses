@@ -316,7 +316,9 @@ This is the project's **single** routing table — other docs link here, never c
 | Add or change a GATT service/characteristic (+ app UI) | /add-gatt-characteristic |
 | Write or modify a loadable `.llext` extension (in-repo) | /add-extension |
 | Standalone extension repo / rgbx-sdk / community registry | `fw/docs/standalone-extension-repos.md` + `extensions/README.md` (SDK code: `fw/sdk/`) |
-| Add or fix a firmware test | /add-fw-test |
+| Add or fix a firmware test (native_sim/Twister) | /add-fw-test |
+| Run or extend the on-device (HIL) test suite | `fw/tests_device/README.md` (runner: `fw/scripts/run-device-tests.sh`; architecture: `fw/docs/on-device-testing.md`) |
+| App+device E2E test run (AI-driven, phone + board) | `fw/docs/e2e-test-plan.md` |
 | Debug a firmware symptom | /debug-fw |
 | Debug a device↔app BLE symptom | /debug-ble |
 | Validate app changes without a phone | /validate-app |

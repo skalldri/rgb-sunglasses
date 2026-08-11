@@ -283,6 +283,17 @@ SYS_INIT(mcuboot_info_init, APPLICATION, MCUBOOT_INFO_INIT_PRIORITY);
 
 To enforce init ordering, use a plain KConfig value and then add `static_assert()`s as needed to guarantee ordering.
 
+### On-device (HIL) test suite
+
+`fw/tests_device/` runs pytest suites against the real production sysbuild
+image on a flashed proto0, via `twister --device-testing` + the
+pytest-twister-harness `shell`/`dut` fixtures. Entry point:
+`fw/scripts/run-device-tests.sh` (agents: hold the `board` lock first, same
+as flashing). Architecture + CI north-star: `fw/docs/on-device-testing.md`;
+tier semantics and house rules: `fw/tests_device/README.md`. It complements —
+never replaces — the native_sim suites below; anything testable on native_sim
+belongs there.
+
 ### Test structure
 
 Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suite has its own `CMakeLists.txt`, `prj.conf`, and `testcase.yaml`:
@@ -662,6 +673,7 @@ fw/scripts/jlink-flash.sh -- --skip-rebuild # extra args forwarded to `west flas
 `jlink-flash.sh` auto-detects the attached J-Link's serial number and runs `west flash -d <build-dir> --dev-id <serial>` — no need to hardcode or look up `--dev-id` yourself. `/check-hardware` also prints the serial directly under the J-Link section (`Serial: ...`) if you need it for some other tool.
 
 - This triggers a `west build` rebuild-check first (fast no-op if nothing changed), then flashes via the **`nrfutil` runner** (not raw `JLinkExe`) — it programs both `merged_CPUNET.hex` (netcore) and `merged.hex` (appcore), each with erase → program → verify → reset.
+- **A STAGED MCUmgr OTA SILENTLY REVERTS ANY J-LINK FLASH ON THE NEXT BOOT** (observed 2026-08-11, PR #341 debugging): a J-Link flash writes slot 0, but a pending `image test` image sitting in slot 1 makes MCUboot overwrite slot 0 with it on the very next boot — the flash "succeeds", verifies, resets, and ~40 s later (the slot-copy time) the board is running the OTHER image, with zero errors anywhere. The shared board can carry a staged OTA from another agent's session. After any J-Link flash, verify what's actually running (`mcumgr image list`: active slot hash, and no `pending` flags — the on-device test suite's `no_staged_ota` fixture in `fw/tests_device/conftest.py` automates this check for HIL runs). If a pending image is present, `mcumgr image confirm`/erase it (or coordinate with whoever staged it) before trusting any flash.
 - Typical total time: ~30-45s, plus ~15s for USB re-enumeration afterward. Re-run `/check-hardware` to confirm both ttyACM ports are back before issuing further serial/mcumgr commands.
 - This is the only way to reflash the bootloader (MCUboot/b0n); MCUmgr can only update the application images.
 - **The default build dir is resolved relative to the script's own location, not the caller's cwd or the main checkout** (`REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"`), so `fw/scripts/jlink-flash.sh` with no arguments correctly uses *this* worktree's `fw/build` when run from a worktree — no need to pass the build dir explicitly.

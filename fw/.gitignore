@@ -1,5 +1,7 @@
 build*/
 twister-out*/
+# on-device (HIL) suite output — run-device-tests.sh default --outdir
+twister-device-out*/
 # CI firmware size-report artifacts (fw_size_report.py / build.yaml)
 build.log
 size.json
