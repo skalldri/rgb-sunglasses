@@ -730,6 +730,48 @@ config APP_COREDUMP_REMINDER_PERIOD_S
 
 	  Use `coredump_mgr status` to check for uncollected dumps on demand.
 
+config APP_STACK_WATCH
+	bool "Warn when a thread stack crosses an occupancy threshold"
+	default y
+	depends on !ARCH_POSIX
+	select THREAD_ANALYZER
+	help
+	  Periodically runs Zephyr's thread analyzer and warns the FIRST time a
+	  thread's stack high-water mark crosses APP_STACK_WATCH_PERCENT. Silent
+	  otherwise.
+
+	  Deliberately NOT CONFIG_THREAD_ANALYZER_AUTO, which dumps every thread
+	  every interval unconditionally — that would be a permanent steady-state
+	  log, which this project treats as spam that buries real events. The
+	  measurement here is entirely the SDK's; only the stay-quiet policy is ours.
+
+	  This exists because charger_status_thread drifted from a documented 89%
+	  to 95% (48 B spare) over months with no detector but a human remembering
+	  to run `kernel thread stacks`, and was found by accident. The growth came
+	  from shared TPS25750/BQ25792 driver helpers, so nobody editing the cause
+	  had any reason to look at the thread.
+
+config APP_STACK_WATCH_PERCENT
+	int "Stack occupancy that triggers the warning (%)"
+	default 80
+	range 50 99
+	depends on APP_STACK_WATCH
+	help
+	  80% leaves roughly a fifth of the stack as margin at the moment of the
+	  warning, which is enough lead time to act before an overflow. Raising it
+	  toward 95% reproduces the situation this was written to catch: by then
+	  charger_status_thread had 48 bytes left.
+
+config APP_STACK_WATCH_INTERVAL_S
+	int "Seconds between stack checks"
+	default 300
+	range 10 3600
+	depends on APP_STACK_WATCH
+	help
+	  Infrequent on purpose. Stack usage is a high-water mark, so a crossing is
+	  permanent once it happens and there is nothing to miss by checking rarely;
+	  the interval only sets how quickly a soak surfaces it.
+
 config APP_CRASH_TEST_COMMANDS
 	bool "Shell commands that deliberately crash the firmware"
 	depends on SHELL
