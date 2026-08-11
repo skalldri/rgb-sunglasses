@@ -1,0 +1,13 @@
+source "Kconfig.zephyr"
+
+# storage.cpp gates storage_fat_corrupt_boot_sector() on this symbol, which is defined in
+# fw/Kconfig — invisible to a standalone Twister app, so it is redeclared here.
+#
+# Unlike the int mirrors elsewhere in fw/tests, this one cannot drift into a wrong VALUE:
+# the suite exists to test the gated function, so `y` is the only setting that builds
+# anything. If the gate symbol is ever renamed, this fails loudly at configure time
+# ("attempt to assign the value 'y' to the undefined symbol ..."), which is how it was
+# found in the first place.
+config APP_CRASH_TEST_COMMANDS
+	bool "Shell commands that deliberately crash the firmware"
+	default y

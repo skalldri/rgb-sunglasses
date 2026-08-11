@@ -20,6 +20,23 @@ int storage_fat_mkfs_unmounted(void);
 int storage_fat_wipe_for_reset(void);
 #endif
 
+#if defined(CONFIG_APP_CRASH_TEST_COMMANDS)
+/* TEST AID: make the FAT volume unmountable, so the NEXT boot exercises the
+ * CONFIG_FS_FATFS_MOUNT_MKFS auto-format path — which runs on the MAIN thread inside
+ * SYS_INIT(mount_fat, APPLICATION) and is otherwise unreachable. See the shell command
+ * in storage.cpp for the full rationale and the caller's responsibilities.
+ *
+ * The volume must already be UNMOUNTED (the caller owns that; a live mount writes its
+ * cached FAT back over the erase). Flushes the flashdisk driver's page cache, erases the
+ * first flash sector, then READS BACK offset 510 to confirm the 0xAA55 boot signature is
+ * really gone — a partial erase that leaves the signature intact would otherwise report
+ * success while the next boot mounts normally and never auto-formats.
+ *
+ * Returns 0 when the volume is confirmed unmountable, -EIO if the signature survived,
+ * or a negative errno from the flash layer. */
+int storage_fat_corrupt_boot_sector(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

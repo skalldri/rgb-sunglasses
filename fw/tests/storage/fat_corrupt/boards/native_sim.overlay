@@ -1,0 +1,23 @@
+/*
+ * A fat_storage partition plus the zephyr,flash-disk node that binds it to the "NAND"
+ * disk, so FIXED_PARTITION_ID(fat_storage) and disk_access_ioctl("NAND", ...) resolve
+ * the same way they do on proto0 (where the partition comes from pm_static YAML and the
+ * disk node lives in the board DTS).
+ */
+/ {
+	msc_disk0 {
+		compatible = "zephyr,flash-disk";
+		partition = <&fat_storage>;
+		disk-name = "NAND";
+		cache-size = <4096>;
+		sector-size = <512>;
+	};
+};
+
+&flash0 {
+	partitions {
+		fat_storage: partition@108000 {
+			reg = <0x108000 0x20000>;
+		};
+	};
+};
