@@ -52,18 +52,34 @@ int parse_dump_index(const char* name) {
 
 }  // namespace
 
-int max_dump_index(const char* dir, int* out_max) {
+int scan_dumps(const char* dir, int* out_count, int* out_max) {
+    int count = 0;
     int maxIndex = -1;
-    int rc = fs_util::for_each_file(dir, [&maxIndex](const char* name) {
+
+    int rc = fs_util::for_each_file(dir, [&count, &maxIndex](const char* name) {
         int index = parse_dump_index(name);
-        if (index > maxIndex) {
-            maxIndex = index;
+        if (index >= 0) {
+            count++;
+            if (index > maxIndex) {
+                maxIndex = index;
+            }
         }
-        return true;  // always walk the whole directory: we want the max
+        return true;  // walk the whole directory: we want both the total and the max
     });
+
+    if (rc == -ENOENT) {
+        /* Directory not created yet — a legitimate "nothing drained so far", not a
+         * failure. Report it so callers can tell it apart from a scan that broke, but
+         * hand back usable values. */
+        *out_count = 0;
+        *out_max = -1;
+        return -ENOENT;
+    }
     if (rc < 0) {
         return rc;
     }
+
+    *out_count = count;
     *out_max = maxIndex;
     return 0;
 }
@@ -76,32 +92,6 @@ int format_dump_path(char* out, size_t cap, const char* dir, unsigned int index)
     return 0;
 }
 
-bool any_dump_files(const char* dir) {
-    bool found = false;
-    (void)fs_util::for_each_file(dir, [&found](const char* name) {
-        if (parse_dump_index(name) >= 0) {
-            found = true;
-        }
-        return !found;  // one match answers the question — stop walking
-    });
-    return found;
-}
-
-int count_dump_files(const char* dir, int* out_count) {
-    int count = 0;
-    int rc = fs_util::for_each_file(dir, [&count](const char* name) {
-        if (parse_dump_index(name) >= 0) {
-            count++;
-        }
-        return true;  // walk the whole directory: we want the total
-    });
-    if (rc < 0) {
-        return rc;
-    }
-    *out_count = count;
-    return 0;
-}
-
 int drain_to_dir(const PartitionOps& ops, const char* dir, int maxFiles) {
     int rc = ops.has_dump();
     if (rc < 0) {
@@ -109,6 +99,31 @@ int drain_to_dir(const PartitionOps& ops, const char* dir, int maxFiles) {
     }
     if (rc != 1) {
         return -ENOENT;
+    }
+
+    /* ONE directory sweep, and it happens BEFORE the verify/mkdir prologue below.
+     *
+     * Ordering matters at the cap. An at-cap board returns from here every pass, and if
+     * that return came after the prologue it would re-checksum the whole capture
+     * partition every time AND re-run fs_mkdir() — whose -EEXIST the filesystem layer
+     * logs as "failed to create directory (-17)" unconditionally (zephyr/subsys/fs/fs.c).
+     * That is an fs-subsystem log line, so no latch in this module can suppress it: the
+     * console of an already-crashing board would fill with it once a minute. Before the
+     * cap existed this was unreachable, because a successful drain invalidates and the
+     * next pass short-circuits at has_dump().
+     *
+     * A missing directory is fine here (count 0, max -1) — the mkdir below creates it.
+     * Any other scan failure is fatal to this pass and must NOT be reported as -ENOENT,
+     * which the caller treats as the benign "no dump stored" case; -EIO makes a broken
+     * scan visible instead of silently discarding every future dump. */
+    int count = 0;
+    int maxIndex = -1;
+    rc = scan_dumps(dir, &count, &maxIndex);
+    if (rc < 0 && rc != -ENOENT) {
+        return -EIO;
+    }
+    if (maxFiles > 0 && count >= maxFiles) {
+        return -ENOSPC;
     }
 
     rc = ops.verify();
@@ -136,36 +151,9 @@ int drain_to_dir(const PartitionOps& ops, const char* dir, int maxFiles) {
         return rc;
     }
 
-    /* Retention cap. Checked BEFORE the file is created, and the stored dump is
-     * deliberately left alone: at the cap we keep the OLDEST dumps and drop the new
-     * one. See the header for why that direction — in a crash loop the first dump
-     * explains the fault and the rest are consequences.
-     *
-     * Note what this does and does not save. The NCS flash backend erases the whole
-     * capture partition at the start of every capture, so the refused dump is destroyed
-     * by the next fault anyway; leaving it stored only preserves the chance of rescuing
-     * it if someone collects the files before then. What the cap really protects is
-     * /NAND: — once that fills, extension installs, GLIM writes and this drain's own
-     * fs_write all fail with -ENOSPC. */
-    if (maxFiles > 0) {
-        int count = 0;
-        rc = count_dump_files(dir, &count);
-        if (rc < 0) {
-            return rc;
-        }
-        if (count >= maxFiles) {
-            return -ENOSPC;
-        }
-    }
-
-    /* Pick the next free index. If the directory can't be scanned, bail rather
-     * than fall back to index 0 — that would overwrite an existing, uncollected
-     * dump. The stored dump stays valid so the next pass retries. */
-    int maxIndex = -1;
-    rc = max_dump_index(dir, &maxIndex);
-    if (rc < 0) {
-        return rc;
-    }
+    /* maxIndex came from the scan above; a failed scan already returned. Falling back
+     * to index 0 on an unreadable directory would overwrite an existing, uncollected
+     * dump, which is why that case bails rather than guesses. */
     char path[64];
     int nextIndex = maxIndex + 1;
     rc = format_dump_path(path, sizeof(path), dir, static_cast<unsigned int>(nextIndex));
