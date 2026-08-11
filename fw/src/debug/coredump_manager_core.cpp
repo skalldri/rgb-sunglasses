@@ -87,7 +87,22 @@ bool any_dump_files(const char* dir) {
     return found;
 }
 
-int drain_to_dir(const PartitionOps& ops, const char* dir) {
+int count_dump_files(const char* dir, int* out_count) {
+    int count = 0;
+    int rc = fs_util::for_each_file(dir, [&count](const char* name) {
+        if (parse_dump_index(name) >= 0) {
+            count++;
+        }
+        return true;  // walk the whole directory: we want the total
+    });
+    if (rc < 0) {
+        return rc;
+    }
+    *out_count = count;
+    return 0;
+}
+
+int drain_to_dir(const PartitionOps& ops, const char* dir, int maxFiles) {
     int rc = ops.has_dump();
     if (rc < 0) {
         return rc;
@@ -119,6 +134,28 @@ int drain_to_dir(const PartitionOps& ops, const char* dir) {
     rc = fs_mkdir(dir);
     if (rc < 0 && rc != -EEXIST) {
         return rc;
+    }
+
+    /* Retention cap. Checked BEFORE the file is created, and the stored dump is
+     * deliberately left alone: at the cap we keep the OLDEST dumps and drop the new
+     * one. See the header for why that direction — in a crash loop the first dump
+     * explains the fault and the rest are consequences.
+     *
+     * Note what this does and does not save. The NCS flash backend erases the whole
+     * capture partition at the start of every capture, so the refused dump is destroyed
+     * by the next fault anyway; leaving it stored only preserves the chance of rescuing
+     * it if someone collects the files before then. What the cap really protects is
+     * /NAND: — once that fills, extension installs, GLIM writes and this drain's own
+     * fs_write all fail with -ENOSPC. */
+    if (maxFiles > 0) {
+        int count = 0;
+        rc = count_dump_files(dir, &count);
+        if (rc < 0) {
+            return rc;
+        }
+        if (count >= maxFiles) {
+            return -ENOSPC;
+        }
     }
 
     /* Pick the next free index. If the directory can't be scanned, bail rather

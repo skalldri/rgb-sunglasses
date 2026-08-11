@@ -127,8 +127,23 @@ void check_work_handler(struct k_work* work) {
         }
     }
 
-    int rc = coredump_manager_core::drain_to_dir(kRealOps, kDumpDir);
-    if (rc < 0 && rc != -ENOENT) {
+    int rc = coredump_manager_core::drain_to_dir(kRealOps, kDumpDir,
+                                                 CONFIG_APP_COREDUMP_MAX_FILES);
+    if (rc == -ENOSPC) {
+        /* At the retention cap. Warned ONCE per boot, not once per period: this state
+         * persists until someone collects the files, so an unconditional warning here
+         * would be a permanent every-60s log line — the exact spam the removed
+         * "awaiting collection" reminder was deleted for. `coredump_mgr status` is the
+         * on-demand answer. */
+        static bool warned;
+        if (!warned) {
+            warned = true;
+            LOG_WRN("%s holds %d dump(s) — at the cap, so NEW dumps are being dropped",
+                    kDumpDir, CONFIG_APP_COREDUMP_MAX_FILES);
+            LOG_WRN("the oldest are kept (a crash loop's first dump is the useful one); "
+                    "collect with coredump-fetch.sh --delete");
+        }
+    } else if (rc < 0 && rc != -ENOENT) {
         LOG_WRN("coredump drain failed (%d) — will retry", rc);
     }
 
@@ -181,9 +196,32 @@ SYS_INIT(coredump_manager_init, APPLICATION, CONFIG_APP_COREDUMP_MANAGER_INIT_PR
  * Deliberately NOT gated on CONFIG_APP_CRASH_TEST_COMMANDS: that symbol guards
  * commands that deliberately crash the firmware, whereas this is read-only and is
  * exactly what you want available on a board that has already crashed. */
+/* Prints the dump count against the cap, and how much room is left on the volume they
+ * share with extensions and GLIM assets. Both are on demand rather than logged, so the
+ * approach-to-full condition is visible without costing a periodic log line. */
+static void print_capacity(const struct shell *sh) {
+    int count = 0;
+    int rc = coredump_manager_core::count_dump_files(kDumpDir, &count);
+    if (rc == 0) {
+        shell_print(sh, "files: %d of %d (cap)%s", count, CONFIG_APP_COREDUMP_MAX_FILES,
+                    (count >= CONFIG_APP_COREDUMP_MAX_FILES)
+                        ? "  <- AT CAP: new dumps are being dropped"
+                        : "");
+    }
+
+    struct fs_statvfs st;
+    if (fs_statvfs("/NAND:", &st) == 0) {
+        /* f_bsize can be 0 on some backends; guard rather than print a bogus 0 KB. */
+        const unsigned long freeKb =
+            (st.f_frsize != 0) ? (unsigned long)((st.f_bfree * st.f_frsize) / 1024) : 0;
+        shell_print(sh, "/NAND: free: %lu KB", freeKb);
+    }
+}
+
 int cmd_coredump_status(const struct shell *sh, size_t, char **) {
     if (coredump_manager_core::any_dump_files(kDumpDir)) {
         shell_print(sh, "crash dump(s) awaiting collection in %s", kDumpDir);
+        print_capacity(sh);
         shell_print(sh, "collect with: fw/scripts/coredump-fetch.sh [--delete]");
         shell_print(sh, "list with:    fs ls %s", kDumpDir);
         return 0;

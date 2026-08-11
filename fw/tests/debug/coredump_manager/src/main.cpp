@@ -11,6 +11,7 @@ extern "C" {
 }
 
 using coredump_manager_core::any_dump_files;
+using coredump_manager_core::count_dump_files;
 using coredump_manager_core::drain_to_dir;
 using coredump_manager_core::format_dump_path;
 using coredump_manager_core::max_dump_index;
@@ -287,3 +288,103 @@ ZTEST(coredump_manager_core, test_drain_implausibly_small_discards) {
 }
 
 }  // namespace
+
+/* ---- retention cap (issue #317) ---- */
+
+ZTEST(coredump_manager_core, test_count_dump_files) {
+    fs_mkdir(kDumpDir);
+    int count = -1;
+    zassert_ok(count_dump_files(kDumpDir, &count));
+    zassert_equal(count, 0, "empty directory should count 0");
+
+    createEmptyFile("/NAND:/coredump/core_0000.bin");
+    createEmptyFile("/NAND:/coredump/core_0007.bin");
+    // Same non-matching names max_dump_index() ignores must not be counted either,
+    // or the cap would trip early on unrelated files someone dropped in the directory.
+    createEmptyFile("/NAND:/coredump/core_12.txt");
+    createEmptyFile("/NAND:/coredump/notes.md");
+
+    zassert_ok(count_dump_files(kDumpDir, &count));
+    zassert_equal(count, 2, "only core_NNNN.bin files count, got %d", count);
+}
+
+/* A scan failure must not read as "empty" — that would let the cap be bypassed on
+ * exactly the corrupt volume where it matters most. Same contract max_dump_index() has. */
+ZTEST(coredump_manager_core, test_count_dump_files_missing_dir_errors) {
+    int count = 1234;
+    zassert_equal(count_dump_files("/NAND:/nonexistent", &count), -ENOENT);
+    zassert_equal(count, 1234, "out_count must be left alone on a scan failure");
+}
+
+/* Below the cap, nothing changes. */
+ZTEST(coredump_manager_core, test_drain_allowed_below_cap) {
+    fs_mkdir(kDumpDir);
+    createEmptyFile("/NAND:/coredump/core_0000.bin");
+    fake_store_dump(100);
+
+    zassert_ok(drain_to_dir(kFakeOps, kDumpDir, 2), "1 file against a cap of 2 must drain");
+    assertFileMatchesDump("/NAND:/coredump/core_0001.bin", 100);
+}
+
+/* AT the cap the drain refuses, and — the part that matters — it leaves the stored dump
+ * alone and writes no file. The OLDEST dumps survive. */
+ZTEST(coredump_manager_core, test_drain_refuses_at_cap_and_keeps_oldest) {
+    fs_mkdir(kDumpDir);
+    createEmptyFile("/NAND:/coredump/core_0000.bin");
+    createEmptyFile("/NAND:/coredump/core_0001.bin");
+    fake_store_dump(100);
+
+    zassert_equal(drain_to_dir(kFakeOps, kDumpDir, 2), -ENOSPC);
+
+    // The new dump must NOT have been written...
+    struct fs_dirent entry;
+    zassert_equal(fs_stat("/NAND:/coredump/core_0002.bin", &entry), -ENOENT,
+                  "a refused drain must not create a file");
+    // ...and the stored dump must be left intact, so collecting the files and retrying
+    // can still rescue it.
+    zassert_equal(sFake.invalidateCalls, 0, "a refused drain must not invalidate the dump");
+
+    // The pre-existing (oldest) files are untouched.
+    zassert_ok(fs_stat("/NAND:/coredump/core_0000.bin", &entry));
+    zassert_ok(fs_stat("/NAND:/coredump/core_0001.bin", &entry));
+}
+
+/* Past the cap (files collected out of order, or the cap lowered between builds) must
+ * refuse too — the check is >=, not ==. */
+ZTEST(coredump_manager_core, test_drain_refuses_above_cap) {
+    fs_mkdir(kDumpDir);
+    createEmptyFile("/NAND:/coredump/core_0000.bin");
+    createEmptyFile("/NAND:/coredump/core_0001.bin");
+    createEmptyFile("/NAND:/coredump/core_0002.bin");
+    fake_store_dump(100);
+
+    zassert_equal(drain_to_dir(kFakeOps, kDumpDir, 2), -ENOSPC);
+}
+
+/* Freeing a slot re-opens the drain, which is what makes coredump-fetch.sh --delete the
+ * documented recovery rather than a reflash. */
+ZTEST(coredump_manager_core, test_drain_resumes_after_files_are_collected) {
+    fs_mkdir(kDumpDir);
+    createEmptyFile("/NAND:/coredump/core_0000.bin");
+    createEmptyFile("/NAND:/coredump/core_0001.bin");
+    fake_store_dump(100);
+    zassert_equal(drain_to_dir(kFakeOps, kDumpDir, 2), -ENOSPC);
+
+    zassert_ok(fs_unlink("/NAND:/coredump/core_0000.bin"));
+    zassert_ok(drain_to_dir(kFakeOps, kDumpDir, 2), "a freed slot must re-open the drain");
+    assertFileMatchesDump("/NAND:/coredump/core_0002.bin", 100);
+}
+
+/* maxFiles == 0 keeps the pre-#317 unbounded behaviour, which every other test in this
+ * suite relies on by omitting the argument. */
+ZTEST(coredump_manager_core, test_cap_of_zero_is_unbounded) {
+    fs_mkdir(kDumpDir);
+    for (int i = 0; i < 5; i++) {
+        char path[64];
+        snprintf(path, sizeof(path), "/NAND:/coredump/core_%04d.bin", i);
+        createEmptyFile(path);
+    }
+    fake_store_dump(100);
+    zassert_ok(drain_to_dir(kFakeOps, kDumpDir, 0), "cap 0 must mean unbounded");
+    assertFileMatchesDump("/NAND:/coredump/core_0005.bin", 100);
+}

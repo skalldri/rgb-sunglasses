@@ -41,6 +41,12 @@ int format_dump_path(char* out, size_t cap, const char* dir, unsigned int index)
 /* True if `dir` contains at least one "core_*.bin" file. */
 bool any_dump_files(const char* dir);
 
+/* Counts "core_NNNN.bin" files in `dir`. On success returns 0 and sets *out_count.
+ * Returns a negative errno if the directory can't be scanned, leaving *out_count
+ * unchanged — callers must not treat a scan failure as "empty", for the same reason
+ * max_dump_index() gives. A missing directory reports -ENOENT. */
+int count_dump_files(const char* dir, int* out_count);
+
 /* Drain a stored dump into a new sequentially-named file under `dir`
  * (created if missing), then invalidate the stored dump.
  *
@@ -49,7 +55,18 @@ bool any_dump_files(const char* dir);
  * ("ZE"), or a negative errno from the failing filesystem/partition call. On
  * any failure after file creation the partial file is deleted; the stored
  * dump is only invalidated after the file has been written and synced, so a
- * failed drain retries in full on the next pass. */
-int drain_to_dir(const PartitionOps& ops, const char* dir);
+ * failed drain retries in full on the next pass.
+ *
+ * `maxFiles` caps how many dumps may accumulate in `dir` (0 = unbounded, the old
+ * behaviour). At or above the cap this returns -ENOSPC and does NOT touch the stored
+ * dump — so the OLDEST dumps are the ones kept.
+ *
+ * That direction is deliberate and is the whole point of the cap. A crash loop
+ * produces a first dump that explains the fault and a stream of later ones that are
+ * consequences of it, so a "keep newest N" ring would evict precisely the dump worth
+ * having. Refusing also keeps /NAND: usable: once the partition fills, extension
+ * installs and GLIM writes fail with -ENOSPC, and drain_to_dir()'s own fs_write fails
+ * too — the overflow would otherwise destroy the diagnostics that explain it. */
+int drain_to_dir(const PartitionOps& ops, const char* dir, int maxFiles = 0);
 
 }  // namespace coredump_manager_core
