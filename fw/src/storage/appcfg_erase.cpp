@@ -1,5 +1,7 @@
 #include <storage/appcfg_erase.h>
+#include <zephyr/kernel.h>
 #include <zephyr/storage/flash_map.h>
+#include <zephyr/sys/reboot.h>
 
 #if defined(CONFIG_SHELL)
 #include <zephyr/shell/shell.h>
@@ -30,7 +32,17 @@ static int cmd_appcfg_erase(const struct shell *sh, size_t argc, char **argv) {
         return rc;
     }
 
-    shell_print(sh, "Done. Reboot to apply.");
+    /* Reboot rather than telling the user to. Leaving the board running here would leave
+     * the NVS mounted with a CONFIG_NVS_LOOKUP_CACHE full of addresses into flash that was
+     * just erased, and any settings activity before the user got around to rebooting — a
+     * BLE config write, a BT bond or CCC store — would consult it. The factory-reset path
+     * (factory_reset.cpp) already erases-then-reboots for the same reason; this command
+     * was the one caller that did not, which made the cache's safety argument only nearly
+     * true. The message already said a reboot was required, so this removes a step rather
+     * than changing what the command means. */
+    shell_print(sh, "Done — rebooting to apply.");
+    k_sleep(K_MSEC(100)); /* let the shell flush before the reset */
+    sys_reboot(SYS_REBOOT_COLD);
     return 0;
 }
 
