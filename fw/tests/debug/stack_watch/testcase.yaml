@@ -1,0 +1,7 @@
+tests:
+  debug.stack_watch:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: debug threads

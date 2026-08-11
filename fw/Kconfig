@@ -768,9 +768,28 @@ config APP_STACK_WATCH_INTERVAL_S
 	range 10 3600
 	depends on APP_STACK_WATCH
 	help
-	  Infrequent on purpose. Stack usage is a high-water mark, so a crossing is
-	  permanent once it happens and there is nothing to miss by checking rarely;
-	  the interval only sets how quickly a soak surfaces it.
+	  Infrequent on purpose. The scan walks the UNTOUCHED part of every stack word
+	  by word looking for the fill pattern, so its cost scales with unused space —
+	  roughly 100 KB across this firmware's threads. 300 s keeps the duty cycle
+	  negligible.
+
+config APP_STACK_WATCH_PRIORITY
+	int "Priority of the stack-watch workqueue"
+	default 14
+	depends on APP_STACK_WATCH
+	help
+	  Preemptible and lowest, deliberately. The scan is milliseconds, and running it
+	  on the cooperative system workqueue would block bt_gatt_store_ccc() and the
+	  delayed settings work for that whole time with nothing able to preempt it.
+	  See fw/docs/threading.md.
+
+config APP_STACK_WATCH_STACK_SIZE
+	int "Stack size for the stack-watch workqueue (bytes)"
+	default 1024
+	depends on APP_STACK_WATCH
+	help
+	  The work itself is shallow — the analyzer callback copies a name and three
+	  integers. Watch this with `stack_watch` like any other thread.
 
 config APP_CRASH_TEST_COMMANDS
 	bool "Shell commands that deliberately crash the firmware"
