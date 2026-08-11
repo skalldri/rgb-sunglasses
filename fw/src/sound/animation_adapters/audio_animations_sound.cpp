@@ -11,11 +11,25 @@
 #include <animations/fft_bars_animation.h>
 #endif
 
+#if defined(CONFIG_ANIMATION_PULSE)
+#include <animations/pulse_animation.h>
+#endif
+
 namespace {
 /* Band 0 (bass) drives random-on-beat color changes. The G byte of the color
  * value is reserved and could select the band in a follow-up without a wire
  * format change (issue #259). */
 constexpr size_t kColorBeatBand = 0;
+
+/* One latch per independent beat consumer. consumeBeat() is destructive, so a single
+ * shared latch would let whichever consumer ran first in a tick eat the beat and the
+ * other see none — and both can be live at once (Pulse in beat-sync mode with its color
+ * set to RandomOnBeat drives its envelope and its color resolver off the same frame). */
+enum BeatConsumer {
+    kBeatConsumerColorMode = 0,
+    kBeatConsumerPulse,
+    kBeatConsumerCount,
+};
 
 /* Single shared instance: only one audio animation is active at a time,
  * so a single drain-and-cache source serves both without double-reads. */
@@ -23,24 +37,26 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
    public:
     /* Drain the message queue and cache the most recent frame.
      * Called once per animation tick so the animation sees a consistent snapshot.
-     * Beats for the RandomOnBeat color mode are LATCHED here, at drain time (once
+     * Beats for the edge-triggered consumers are LATCHED here, at drain time (once
      * per drained frame), not read from cache_.beat[] — so it doesn't matter which
-     * of the potentially-two update() calls in a tick (the Beat animation's own,
-     * or SoundColorBeatSource's below) drains a beat-carrying frame, and a beat
+     * of the potentially-several update() calls in a tick (the Beat animation's own,
+     * or either beat source below) drains a beat-carrying frame, and a beat
      * flag persisting in cache_ across ticks can't cause repeated re-rolls. */
     void update() override {
         audio_analysis_result tmp;
         while (k_msgq_get(&audio_result_q, &tmp, K_NO_WAIT) == 0) {
             cache_ = tmp;
             if (tmp.beat[kColorBeatBand]) {
-                pendingColorBeat_ = true;
+                for (bool &pending : pendingBeat_) {
+                    pending = true;
+                }
             }
         }
     }
 
-    bool consumePendingColorBeat() {
-        const bool beat = pendingColorBeat_;
-        pendingColorBeat_ = false;
+    bool consumePendingBeat(BeatConsumer consumer) {
+        const bool beat = pendingBeat_[consumer];
+        pendingBeat_[consumer] = false;
         return beat;
     }
 
@@ -62,7 +78,7 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
 
    private:
     audio_analysis_result cache_ = {};
-    bool pendingColorBeat_ = false;
+    bool pendingBeat_[kBeatConsumerCount] = {};
 };
 
 SoundAnimationAudioSource sSoundSource;
@@ -72,20 +88,30 @@ SoundAnimationAudioSource sSoundSource;
  * tick — the latch above makes drain order irrelevant. Sharing one latch is
  * safe for the same reason sSoundSource itself is shared: only one animation
  * ticks at a time. */
-class SoundColorBeatSource : public AnimationBeatSource {
+template <BeatConsumer Consumer>
+class SoundBeatSource : public AnimationBeatSource {
    public:
     bool consumeBeat() override {
         sSoundSource.update();
-        return sSoundSource.consumePendingColorBeat();
+        return sSoundSource.consumePendingBeat(Consumer);
     }
 };
 
-SoundColorBeatSource sColorBeatSource;
+SoundBeatSource<kBeatConsumerColorMode> sColorBeatSource;
+#if defined(CONFIG_ANIMATION_PULSE)
+SoundBeatSource<kBeatConsumerPulse> sPulseBeatSource;
+#endif
 }  // namespace
 
 void color_mode_bind_default_beat_source() {
     ColorModeSource::setDefaultBeatSource(&sColorBeatSource);
 }
+
+#if defined(CONFIG_ANIMATION_PULSE)
+void pulse_animation_bind_default_sound_dependencies() {
+    PulseAnimation::getInstance()->setBeatSource(&sPulseBeatSource);
+}
+#endif
 
 #if defined(CONFIG_ANIMATION_BEAT)
 void beat_animation_bind_default_sound_dependencies() {

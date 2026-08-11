@@ -23,16 +23,35 @@
  * operations or convert to uint32 — same persisted byte layout, different CPF format) -
  * BtGattDropdownList<N> characteristics (e.g. glim selection/loop mode) already have bespoke
  * write semantics and persist by hand instead of through this mixin.
+ *
+ * @tparam OnRemoteWrite Optional side effect to run after a remote write has been stored
+ * and marked dirty — for cross-characteristic invariants that would otherwise force a
+ * bespoke CRTP copy of all the persistence boilerplate below (this class is CRTP-closed:
+ * its Self is itself, so a subclass's own onWrite would never be dispatched — same
+ * constraint ShuffleIncludeCharacteristic documents). Defaults to the empty
+ * @ref bt_gatt_no_write_hook, which the compiler inlines away, so every existing
+ * declaration costs exactly what it did before. (A `nullptr` default with a guarded call
+ * would be the obvious spelling, but the guard compares a known-good function address
+ * against null and GCC rejects that under -Werror=address.)
+ * Runs on the BT RX thread. Assigning to another characteristic from here is safe and does
+ * not recurse: operator= bypasses onWrite by design (see BtGattWriteHook in
+ * bt_service_cpp.h). It does not notify or persist the sibling, so a hook that changes one
+ * must call the sibling's own mark_dirty() and request a save.
  */
-template <StringLiteral Key, StringLiteral Description, bool Notify, typename T, T Default>
+template <typename T>
+inline void bt_gatt_no_write_hook(const T &) {}
+
+template <StringLiteral Key, StringLiteral Description, bool Notify, typename T, T Default,
+          void (*OnRemoteWrite)(const T &) = &bt_gatt_no_write_hook<T>>
 class BtGattPersistentCharacteristic
     : public BtGattAutoCharacteristicExt<
-          BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>, Description, Notify,
+          BtGattPersistentCharacteristic<Key, Description, Notify, T, Default, OnRemoteWrite>,
+          Description, Notify,
           false /* ReadOnly: persisted values are always read/write */, T, Default> {
    public:
     using Base = BtGattAutoCharacteristicExt<
-        BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>, Description, Notify,
-        false, T, Default>;
+        BtGattPersistentCharacteristic<Key, Description, Notify, T, Default, OnRemoteWrite>,
+        Description, Notify, false, T, Default>;
     using Base::operator=;
 
     BtGattPersistentCharacteristic() {
@@ -48,11 +67,12 @@ class BtGattPersistentCharacteristic
 
     // Invoked by a remote BLE write (never by the operator= restore in doLoad, which
     // bypasses onWrite entirely - see BtGattWriteHook in bt_service_cpp.h).
-    void onWrite(const T &) {
+    void onWrite(const T &value) {
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
             persistent_value_registry_mark_dirty(Key.value);
             persistent_value_store::request_save();
         }
+        OnRemoteWrite(value);
     }
 
     // Marks this characteristic dirty for the next batch save. Call before request_save()
