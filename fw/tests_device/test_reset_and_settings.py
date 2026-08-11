@@ -101,24 +101,32 @@ def test_settings_roundtrip(rgb: RgbShell):
 
     orig_speed = read_speed(slot)
     new_speed = 77 if orig_speed != 77 else 78
-    orig_glim_idx = 0  # restored at the end; selection is persisted by name
+    # Capture the ACTUAL current selection so the teardown restores what the
+    # operator left, not a hardcoded index (PR #341 review: restoring a value
+    # the test never read silently drifts shared-board state and burns an NVS
+    # write on the wrong name). Selection identity is the NAME; indices are
+    # per-boot.
+    orig_glim_name = rgb.glim_selected()
+    candidates = [n for n in glim_before if n != orig_glim_name]
+    assert candidates, f"no glim file other than the selected one: {glim_before}"
+    target_glim = candidates[0]
 
     try:
-        rgb.exec("glim select 1")
+        rgb.glim_select_name(target_glim)
         rgb.exec(f"ext param {slot} 0 {new_speed}")
         # Persistence is debounced; give the store one flush window.
         time.sleep(3.0)
 
-        boot_log = rgb.reboot()
-        assert not any("-ENOMEM" in line for line in boot_log), (
-            f"persistent-value registry overflow in boot log (#114/#118): "
-            f"{[line for line in boot_log if 'ENOMEM' in line]}"
-        )
+        rgb.reboot()
+        # NOTE deliberately NOT asserting on boot-log contents here: the CDC
+        # console enumerates ~8 s into boot, so a registry -ENOMEM (#114/#118)
+        # can never reach the host capture — a green assertion on it would be
+        # fake coverage. Pinning that regression needs an on-device
+        # registry-count readout (tracked in #334's destructive-tier issue).
 
-        glim_after = rgb.exec("glim get_selected")
-        assert any(glim_before[1] in line for line in glim_after), (
-            f"glim selection did not survive reboot: expected "
-            f"{glim_before[1]!r}, got {glim_after}"
+        assert rgb.glim_selected() == target_glim, (
+            f"glim selection did not survive reboot: expected {target_glim!r}, "
+            f"got {rgb.glim_selected()!r}"
         )
         # Slots can renumber across boots; the extension's NAME is its
         # identity (that's the #303 lesson) — re-resolve before reading.
@@ -126,7 +134,9 @@ def test_settings_roundtrip(rgb: RgbShell):
             "extension param blob did not survive reboot"
         )
     finally:
-        # Restore defaults so the suite leaves the board as it found it.
+        # Restore what was actually there so the suite leaves the board as it
+        # found it (by name — indices may have shifted across the reboot).
         rgb.exec(f"ext param {_find_ext(rgb, HELLO)['slot']} 0 {orig_speed}")
-        rgb.exec(f"glim select {orig_glim_idx}")
+        if orig_glim_name is not None:
+            rgb.glim_select_name(orig_glim_name)
         time.sleep(3.0)  # let the restore flush before any later reboot

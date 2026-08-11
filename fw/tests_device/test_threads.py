@@ -49,7 +49,12 @@ EXPECTED_PRIORITIES = {
 # charger_status hit 95% before #326.
 STACK_PCT_CEILINGS = {
     "main": 50,             # ≤7700 B of 16384 even after a boot-time f_mkfs (#325/#105)
-    "shell_uart": 80,       # 6656 B sized for `fatfs reformat` (5060 B measured)
+    # 6656 B sized for `fatfs reformat` (5060 B measured). CAVEAT: the test
+    # image compiles out the VT100 command set (see fw/testcase.yaml), so the
+    # shell under test is slightly SMALLER than the one that ships — this
+    # ceiling under-measures production shell_uart by that delta. The 80%
+    # ceiling keeps margin for it; recorded in fw/docs/on-device-testing.md.
+    "shell_uart": 80,
     "charger_status_thread": 60,  # 2048 B post-#326; carries the bridged BQ transaction
 }
 GENERIC_PCT_CEILING = 85

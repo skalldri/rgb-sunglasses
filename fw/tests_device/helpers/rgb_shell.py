@@ -31,10 +31,13 @@ logger = logging.getLogger(__name__)
 PROMPT_RE = r"uart:~\$"
 
 # "0x20001234 thread_name (real size 2048):  unused 1234  usage 814 / 2048 (39 %)"
+# The percentage is printed with %2u ("( 7 %)" below 10%) — the \s* after the
+# open paren is load-bearing; without it every thread under 10% was silently
+# dropped from the dict (PR #341 review).
 _STACKS_RE = re.compile(
     r"^0x[0-9a-fA-F]+\s+(?P<name>\S+(?: \d+)?)\s*"
     r"\(real size\s+(?P<size>\d+)\):\s+unused\s+\d+\s+"
-    r"usage\s+(?P<used>\d+)\s+/\s+\d+\s+\((?P<pct>\d+)\s*%\)"
+    r"usage\s+(?P<used>\d+)\s+/\s+\d+\s+\(\s*(?P<pct>\d+)\s*%\)"
 )
 # "kernel thread list": " 0x20001234 thread_name" header then
 # "  options: 0x0, priority: 14 timeout: 0"
@@ -173,9 +176,13 @@ class RgbShell:
     def reboot(self, cold: bool = False, timeout: float = 90.0) -> list[str]:
         """Reboot the board and wait for the shell to come back.
 
-        Returns whatever console output was captured while waiting — a
-        best-effort boot backlog (the USB CDC console only starts streaming
-        once it re-enumerates, so the earliest boot lines may be missing).
+        Returns whatever console output happened to be captured while
+        waiting — DIAGNOSTICS ONLY, never assert on it. It is structurally
+        incomplete twice over: the USB CDC console only enumerates ~8 s into
+        boot (everything earlier — settings_load, registry population — is
+        gone before the host can listen), and any readlines window that ends
+        without a prompt raises and contributes nothing to the capture
+        (PR #341 review: an assertion on this return value could never fail).
         """
         cmd = "kernel reboot cold" if cold else "kernel reboot warm"
         logger.info("rebooting board: %s", cmd)
@@ -276,6 +283,20 @@ class RgbShell:
             if m:
                 names.append(m.group(1))
         return names
+
+    def glim_selected(self) -> str | None:
+        """The currently selected .glim NAME, or None ("(none)")."""
+        for line in self.exec("glim get_selected"):
+            m = re.match(r"^\d+:\s+(\S+)", line.strip())
+            if m:
+                return m.group(1)
+        return None
+
+    def glim_select_name(self, name: str) -> None:
+        """Select a .glim by NAME (indices are per-boot; names are identity)."""
+        names = self.glim_list()
+        assert name in names, f"{name!r} not in glim list: {names}"
+        self.exec(f"glim select {names.index(name)}")
 
     def ext_list(self) -> list[dict]:
         """[{slot, id, name, file, params, active, faulted, retired}]"""

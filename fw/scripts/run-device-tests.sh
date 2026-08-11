@@ -8,7 +8,7 @@
 #   fw/scripts/run-device-tests.sh --tier smoke          # just the 1-minute smoke pass
 #   fw/scripts/run-device-tests.sh --tier destructive    # wipes + reprovisions the board
 #   fw/scripts/run-device-tests.sh --tier dfu            # MCUmgr FW update loop (slow)
-#   fw/scripts/run-device-tests.sh --standalone -k ibat  # fast inner loop, reuses fw/build
+#   fw/scripts/run-device-tests.sh --standalone -k ibat  # fast inner loop (last twister build)
 #   fw/scripts/run-device-tests.sh --build-only          # no hardware needed
 #
 # See fw/tests_device/README.md for tier semantics and fw/docs/on-device-testing.md
@@ -26,7 +26,7 @@ KEXPR=""
 BUILD_ONLY=0
 TEST_ONLY=0
 STANDALONE=0
-STANDALONE_BUILD_DIR="$REPO_ROOT/fw/build"
+STANDALONE_BUILD_DIR=""
 LIST_ONLY=0
 EXTRA_ARGS=()
 
@@ -43,9 +43,13 @@ Flags:
   --build-only        build the twister test image(s), no hardware touched
   --test-only         re-run against existing twister artifacts (no rebuild)
   --standalone        bypass twister: run pytest directly against an existing
-                      build dir (default fw/build) on the already-attached
-                      board. Flashes once per session, then iterates fast.
-  --build-dir DIR     build dir for --standalone (default fw/build)
+                      build on the attached board. Defaults to the last
+                      twister device build (fw/build's image has VT100 on,
+                      which the harness cannot parse). Flashes once per
+                      session, then iterates fast. Not combinable with
+                      --build-only (standalone always flashes + runs).
+  --build-dir DIR     build dir for --standalone (must have the fw/testcase.yaml
+                      extra_configs; checked against its .config)
   --outdir DIR        twister output dir (default fw/twister-device-out)
   --map FILE          use an existing hardware-map YAML instead of generating
   --list              list selected tests without running them
@@ -80,7 +84,7 @@ fi
 # ---- tier -> pytest marker expression ------------------------------------------
 
 if [ "${#TIERS[@]}" -eq 0 ]; then
-    MARKERS="smoke or integration"
+    parts=(smoke integration)
 else
     parts=()
     for t in "${TIERS[@]}"; do
@@ -90,9 +94,20 @@ else
             *) echo "[!] Unknown tier: $t" >&2; exit 2 ;;
         esac
     done
-    MARKERS=$(printf '%s or ' "${parts[@]}")
-    MARKERS="${MARKERS% or }"
 fi
+
+# Refuse a tier that would collect zero tests BEFORE spending 10+ minutes of
+# build + flash on a locked board: an empty marker set makes pytest exit 5
+# after the flash, which reads as a firmware regression (PR #341 review).
+for t in "${parts[@]}"; do
+    if ! grep -rqE "mark\.${t}\b" "$REPO_ROOT/fw/tests_device"/test_*.py; then
+        echo "[!] Tier '${t}' has no tests yet (no @pytest.mark.${t} under fw/tests_device/)." >&2
+        exit 2
+    fi
+done
+
+MARKERS=$(printf '%s or ' "${parts[@]}")
+MARKERS="${MARKERS% or }"
 
 # dfu/soak have their own twister scenarios (own timeout/slow gates); everything
 # else runs inside app.device.hil. Mixing them in one invocation would need two
@@ -126,10 +141,48 @@ if [ -n "$KEXPR" ] && [ "$STANDALONE" -eq 0 ]; then
     exit 2
 fi
 
+# --build-only is a twister-path concept. The standalone path ALWAYS flashes
+# and runs — combining them previously bypassed the hw-lock gate while still
+# driving the shared board (PR #341 review).
+if [ "$STANDALONE" -eq 1 ] && [ "$BUILD_ONLY" -eq 1 ]; then
+    echo "[!] --build-only has no meaning with --standalone (standalone always flashes + runs)." >&2
+    exit 2
+fi
+
 # ---- standalone fast path -------------------------------------------------------
 
 if [ "$STANDALONE" -eq 1 ]; then
-    [ -d "$STANDALONE_BUILD_DIR" ] || { echo "[!] Build dir not found: $STANDALONE_BUILD_DIR (run /build-proto0 first)" >&2; exit 1; }
+    # Default to the LAST TWISTER DEVICE BUILD, not fw/build: the day-to-day
+    # build has VT100 on and no crash-test commands — the one image the
+    # harness cannot parse (PR #341 review). Run the twister path once (or
+    # --build-only) to produce it, then iterate standalone against it.
+    TWISTER_BUILD="$OUTDIR/rgb_sunglasses_proto0_nrf5340_cpuapp/zephyr/app.device.hil"
+    if [ -z "$STANDALONE_BUILD_DIR" ]; then
+        if [ -d "$TWISTER_BUILD" ]; then
+            STANDALONE_BUILD_DIR="$TWISTER_BUILD"
+        else
+            echo "[!] No twister device build at $TWISTER_BUILD." >&2
+            echo "    Run '$0 --build-only' first (or pass --build-dir for a suitably-configured build)." >&2
+            exit 1
+        fi
+    fi
+    [ -d "$STANDALONE_BUILD_DIR" ] || { echo "[!] Build dir not found: $STANDALONE_BUILD_DIR" >&2; exit 1; }
+
+    # Fail fast on an image the harness is known unable to drive: the VT100
+    # prompt-redraw escapes garble every captured line (see fw/testcase.yaml).
+    APP_CONFIG="$STANDALONE_BUILD_DIR/fw/zephyr/.config"
+    if [ ! -f "$APP_CONFIG" ]; then
+        echo "[!] $APP_CONFIG missing — not a sysbuild app build dir." >&2
+        exit 1
+    fi
+    if grep -q '^CONFIG_SHELL_VT100_COMMANDS=y' "$APP_CONFIG"; then
+        echo "[!] $STANDALONE_BUILD_DIR was built with CONFIG_SHELL_VT100_COMMANDS=y —" >&2
+        echo "    the pytest harness cannot parse that console. Use the twister device" >&2
+        echo "    build (default when you omit --build-dir) or rebuild with the" >&2
+        echo "    fw/testcase.yaml extra_configs." >&2
+        exit 1
+    fi
+
     "$REPO_ROOT/fw/scripts/fix-usb-dev-nodes.sh" || true
     SN=$(jlink_find_serial) || exit 1
     ZEPHYR_BASE="${ZEPHYR_BASE:-/root/ncs/v3.1.1/zephyr}"
@@ -154,8 +207,12 @@ fi
 
 if [ "$BUILD_ONLY" -eq 0 ]; then
     "$REPO_ROOT/fw/scripts/fix-usb-dev-nodes.sh" || true
+    # Probe the J-Link even when --map supplies the serial: a stale saved map
+    # would otherwise only fail AFTER the multi-minute build, deep inside the
+    # nrfutil runner with an opaque error (PR #341 review). The probe is the
+    # immediate, actionable version of that failure.
+    SN=$(jlink_find_serial) || exit 1
     if [ -z "$MAP_FILE" ]; then
-        SN=$(jlink_find_serial) || exit 1
         # NOT inside $OUTDIR: twister renames a pre-existing outdir to
         # <outdir>.N at startup, which would take the map with it.
         MAP_FILE=$(mktemp /tmp/rgbsg-hw-map.XXXXXX.yml)

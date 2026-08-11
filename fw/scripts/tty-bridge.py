@@ -91,6 +91,26 @@ def resolve_shell_tty() -> str | None:
     return None
 
 
+def write_all(fd: int, data: bytes) -> None:
+    """Write fully, tolerating short writes and EAGAIN.
+
+    The harness spawns this bridge with stdin/stdout/stderr all on ONE open
+    file description (the PTY master), and main() sets O_NONBLOCK on fd 0 —
+    which, living on the description, makes fd 1 non-blocking too. During
+    the boot log flood a bare os.write(1, ...) can short-write (silently
+    truncating device output) or raise BlockingIOError (killing the bridge
+    and every remaining test). Loop + select-on-writable covers both
+    (PR #341 review).
+    """
+    view = memoryview(data)
+    while view:
+        try:
+            n = os.write(fd, view)
+            view = view[n:]
+        except BlockingIOError:
+            select.select([], [fd], [], 1.0)
+
+
 def open_raw(node: str) -> int:
     fd = os.open(node, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     attrs = termios.tcgetattr(fd)
@@ -129,7 +149,7 @@ def main() -> int:
             log("connected to %s" % node)
             if pending:
                 try:
-                    os.write(dev_fd, pending)
+                    write_all(dev_fd, pending)
                 except OSError:
                     pass
                 pending = b""
@@ -152,7 +172,7 @@ def main() -> int:
                 return 0
             if data:
                 try:
-                    os.write(dev_fd, data)
+                    write_all(dev_fd, data)
                 except OSError:
                     # Device just vanished; keep the bytes for the reconnect.
                     pending += data
@@ -175,7 +195,7 @@ def main() -> int:
                 os.close(dev_fd)
                 dev_fd = -1
                 continue
-            os.write(1, data)  # unbuffered; stdout IS the device stream
+            write_all(1, data)  # unbuffered; stdout IS the device stream
 
 
 if __name__ == "__main__":

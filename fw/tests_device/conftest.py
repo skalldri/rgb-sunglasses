@@ -115,6 +115,40 @@ def _gate_on_device_state(request: pytest.FixtureRequest, device_state: dict):
         )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def no_staged_ota(rgb: RgbShell):
+    """Fail fast if a staged MCUmgr OTA is armed on the board.
+
+    A pending image in slot 1 (`image test` was run, no confirm yet) is
+    applied by MCUboot on the NEXT boot — silently overwriting whatever a
+    J-Link flash just programmed into slot 0. Hardware-observed on PR #341:
+    another session's staged OTA reverted the freshly-flashed test image,
+    and every test errored with 'prompt not found' against the wrong
+    firmware. Checking costs ~1 s; debugging it cost an hour.
+    """
+    from twister_harness.helpers.mcumgr import MCUmgr
+
+    if not MCUmgr.is_available():
+        logger.warning("mcumgr CLI not on PATH — cannot check for a staged OTA")
+        return
+    port = ports.find_smp_port()
+    if port is None:
+        logger.warning("SMP port not found — cannot check for a staged OTA")
+        return
+    pending = [
+        img
+        for img in MCUmgr.create_for_serial(port).get_image_list()
+        if "pending" in (img.flags or "")
+    ]
+    if pending:
+        pytest.fail(
+            f"board has a STAGED OTA (pending image: {pending}) — MCUboot will "
+            "overwrite the flashed test image on the next boot. Confirm or "
+            "erase the staged image (mcumgr image confirm/erase) and re-run.",
+            pytrace=False,
+        )
+
+
 @pytest.fixture(scope="session")
 def smp_port() -> str:
     """The board's MCUmgr/SMP CDC port (function 1, NOT the shell port)."""

@@ -76,9 +76,13 @@ def test_glim_list_responds(rgb: RgbShell):
 
 
 def test_anim_get_plausible(rgb: RgbShell):
+    # "unknown" is accepted deliberately: cmd_anim_get switches over the
+    # built-in Animation enum only, so an ACTIVE EXTENSION (ids 0x40+) always
+    # prints "unknown" — correct firmware behavior, not a failure (PR #341
+    # review). Extension displayNames are never printed by `anim get`; if
+    # cmd_anim_get ever learns to resolve extension ids, drop "unknown" here.
     name = rgb.anim_get()
-    ext_names = {s["name"] for s in rgb.ext_list()}
-    assert name in KNOWN_ANIMATIONS | ext_names, f"`anim get` returned {name!r}"
+    assert name in KNOWN_ANIMATIONS | {"unknown"}, f"`anim get` returned {name!r}"
 
 
 def test_coredump_manager_clean(rgb: RgbShell):

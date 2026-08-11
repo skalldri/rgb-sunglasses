@@ -15,8 +15,10 @@ fw/scripts/run-device-tests.sh
 # Just the 1-minute read-only sanity pass:
 fw/scripts/run-device-tests.sh --tier smoke
 
-# Fast inner loop while writing a test: reuse the day-to-day fw/build image
-# (flashes it once per session, then just runs pytest):
+# Fast inner loop while writing a test: reuses the LAST TWISTER DEVICE BUILD
+# (flashes it once per session, then just runs pytest). Not fw/build — that
+# image has VT100 on, which the harness cannot parse; the script fails fast
+# if pointed at one:
 fw/scripts/run-device-tests.sh --standalone -k test_ibat
 
 # Build the twister image without touching hardware (works lock-free):

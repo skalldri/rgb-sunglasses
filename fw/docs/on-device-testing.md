@@ -45,12 +45,21 @@ Key mechanics, each load-bearing:
   VID 2fe3/PID 0001/interface 00, mknod'ing missing nodes) and buffers writes
   across the gap. Bridge diagnostics go to `$RGBSG_BRIDGE_LOG` only — its
   stdout/stderr ARE the device stream.
-- **Test-image divergence from production is exactly two configs**
-  (fw/testcase.yaml `extra_configs`): `CONFIG_SHELL_VT100_COLORS=n` (the
-  pytest harness reads the console raw, no ANSI stripping) and
-  `CONFIG_APP_CRASH_TEST_COMMANDS=y` (adds `crash panic|mpu` + `fatfs corrupt`
-  for the destructive tier; adds commands only). Identical `extra_configs`
-  across all scenarios keeps one build reusable for every tier.
+- **Test-image divergence from production is exactly three configs**
+  (fw/testcase.yaml `extra_configs`): `CONFIG_SHELL_VT100_COLORS=n` and
+  `CONFIG_SHELL_VT100_COMMANDS=n` (the pytest harness reads the console raw,
+  no ANSI stripping — the prompt-redraw cursor escapes garble every captured
+  line), and `CONFIG_APP_CRASH_TEST_COMMANDS=y` (adds `crash panic|mpu` +
+  `fatfs corrupt` for the destructive tier). Identical `extra_configs` across
+  all scenarios keeps one build reusable for every tier.
+  **Known cost of the VT100 divergence**: the shell under test is slightly
+  smaller than the shell that ships (the VT100 command set is compiled out),
+  so shell-thread measurements — notably `test_stack_occupancy`'s
+  `shell_uart` ceiling — under-measure production by that delta. The ceiling
+  keeps margin for it, but a production-only `shell_uart` overflow right at
+  the boundary is a residual blind spot; if the ceiling is ever tightened,
+  re-derive the delta first. `CONFIG_APP_CRASH_TEST_COMMANDS` also adds shell
+  commands (slightly different command tree than production).
 - **MCUmgr port override**: pytest-twister-harness's stock `mcumgr` fixture
   targets the SHELL serial path; this board's SMP server is a separate CDC
   function (interface 02). `fw/tests_device/conftest.py` overrides the
