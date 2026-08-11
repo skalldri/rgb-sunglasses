@@ -24,6 +24,7 @@ import re
 import time
 
 from twister_harness import DeviceAdapter, Shell
+from twister_harness.exceptions import TwisterHarnessTimeoutException
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,64 @@ class RgbShell:
             time.sleep(0.5)
         raise TimeoutError(f"shell did not become responsive: {last_exc}")
 
+    def wait_for_quiet(self, window: float = 1.0, max_wait: float = 30.0) -> None:
+        """Wait until the console has been silent for `window` seconds.
+
+        Boot floods the console (llext relocation logs, USB bring-up) for
+        several seconds after the prompt first appears; a command's echo can
+        get smeared across those log lines and never match (hardware-observed
+        on the first suite run). Fixtures call this once before starting.
+        """
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            try:
+                self.dut.readline(timeout=window, print_output=False)
+                # A line arrived — console still noisy; keep waiting.
+            except TwisterHarnessTimeoutException:
+                return  # a full quiet window elapsed
+        logger.warning("console never went quiet for %.1fs; proceeding", window)
+
+    def wait_boot_settled(self, timeout: float = 45.0) -> None:
+        """Wait until application boot init has fully completed.
+
+        `pattern_controller_thread`'s boot sequence ends with the switch to
+        the default animation, strictly AFTER extension discovery and
+        registration (see pattern_controller.cpp) — so `anim get` != "none"
+        is an exact "boot is done" barrier. Without it, a test that runs
+        right after the prompt appears sees an empty `ext list` and
+        `anim get` == none (hardware-observed).
+        """
+        self.wait_for_quiet(window=1.0, max_wait=20.0)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if self.anim_get() != "none":
+                    return
+            except Exception:
+                pass
+            time.sleep(1.0)
+        logger.warning("boot settle: `anim get` still 'none' after %.0fs", timeout)
+
+    def _exec_with_retry(self, cmd: str, timeout: float | None) -> list[str]:
+        """One shell exchange, retried on echo-smear timeouts.
+
+        An async log line can interleave with the command's echo so the
+        harness never matches it (the same failure mode the serial-MCP
+        plugin's _run_command retries around). Flush + resend converges on
+        the second try in practice.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                return self.shell.exec_command(cmd, timeout=timeout or 10.0)
+            except TwisterHarnessTimeoutException as exc:
+                last_exc = exc
+                logger.warning("exchange %r timed out (attempt %d); flush + retry", cmd, attempt + 1)
+                self.dut.write(b"\x03")
+                time.sleep(0.2)
+                self.dut.clear_buffer()
+        raise AssertionError(f"exchange {cmd!r} failed after 3 attempts: {last_exc}")
+
     def exec(self, cmd: str, timeout: float | None = None, check: bool = True) -> list[str]:
         """Run a command; return its filtered output lines.
 
@@ -80,8 +139,7 @@ class RgbShell:
         self.dut.write(b"\x03")
         time.sleep(0.05)
         self.dut.clear_buffer()
-        lines = self.shell.exec_command(cmd, timeout=timeout)
-        out = self.shell.get_filtered_output(lines)
+        out = self.shell.get_filtered_output(self._exec_with_retry(cmd, timeout))
         if check:
             rv = self.last_retval()
             if rv != 0:
@@ -91,7 +149,13 @@ class RgbShell:
         return out
 
     def last_retval(self) -> int:
-        lines = self.shell.get_filtered_output(self.shell.exec_command("retval"))
+        # Known blind spot: `retval` itself returns 0 and replaces the stored
+        # value (shell_cmds.c cmd_get_retval), so if a `retval` exchange
+        # executes but its echo smears and we retry, the retry reads 0. The
+        # window is a double rarity (echo-smear on retval AND a failing
+        # command); tests assert parsed values, not just exit codes, so a
+        # masked non-zero can't silently pass a test on its own.
+        lines = self.shell.get_filtered_output(self._exec_with_retry("retval", None))
         for line in lines:
             token = line.strip()
             if _INT_RE.match(token):
@@ -125,6 +189,7 @@ class RgbShell:
                 except Exception:
                     pass
         self.sync(timeout=max(5.0, deadline - time.time()))
+        self.wait_boot_settled()
         return captured
 
     # ---- parsers ---------------------------------------------------------

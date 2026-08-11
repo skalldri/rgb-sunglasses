@@ -37,7 +37,9 @@ Flags:
   --tier T            smoke|integration|destructive|dfu|soak|all (repeatable).
                       Default: smoke + integration. "all" = every tier except
                       dfu and soak, which must always be requested explicitly.
-  -k EXPR             pytest -k expression (further filters within the tiers)
+  -k EXPR             pytest -k expression — --standalone only (under twister
+                      the instance gets runtime-filtered and NOTHING runs;
+                      hardware-observed). Use --tier/markers with twister.
   --build-only        build the twister test image(s), no hardware touched
   --test-only         re-run against existing twister artifacts (no rebuild)
   --standalone        bypass twister: run pytest directly against an existing
@@ -116,6 +118,14 @@ if [ "$BUILD_ONLY" -eq 0 ] && [ -n "${CLAUDECODE:-}" ] && [ -z "${RGBSG_NO_LOCK:
     fi
 fi
 
+# -k is only honored by the standalone pytest path; under twister the
+# instance ends up runtime-filtered and the run reports success having
+# executed zero tests — refuse rather than green-wash.
+if [ -n "$KEXPR" ] && [ "$STANDALONE" -eq 0 ]; then
+    echo "[!] -k requires --standalone (a twister run with -k executes nothing)." >&2
+    exit 2
+fi
+
 # ---- standalone fast path -------------------------------------------------------
 
 if [ "$STANDALONE" -eq 1 ]; then
@@ -146,8 +156,9 @@ if [ "$BUILD_ONLY" -eq 0 ]; then
     "$REPO_ROOT/fw/scripts/fix-usb-dev-nodes.sh" || true
     if [ -z "$MAP_FILE" ]; then
         SN=$(jlink_find_serial) || exit 1
-        MAP_FILE="$OUTDIR/hw-map.yml"
-        mkdir -p "$OUTDIR"
+        # NOT inside $OUTDIR: twister renames a pre-existing outdir to
+        # <outdir>.N at startup, which would take the map with it.
+        MAP_FILE=$(mktemp /tmp/rgbsg-hw-map.XXXXXX.yml)
         cat > "$MAP_FILE" <<EOF
 - connected: true
   id: "$SN"

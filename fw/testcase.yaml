@@ -16,13 +16,16 @@ common:
     - rgb_sunglasses_proto0/nrf5340/cpuapp
   tags: device
   harness: pytest
-  # Keep the image production-shaped. The only two divergences, both justified:
-  # - VT100 colors off: pytest-twister-harness reads the console raw and does
-  #   not strip ANSI escapes (twister's own console harness does).
+  # Keep the image production-shaped. The only divergences, all justified:
+  # - VT100 colors AND cursor commands off: pytest-twister-harness reads the
+  #   console raw with no ANSI stripping (twister's own console harness does
+  #   strip), and the prompt-redraw cursor sequences (ESC[8D ESC[J) garble
+  #   every captured line (hardware-observed on the first suite run).
   # - crash-test commands on: the destructive tier drives `crash panic|mpu` and
   #   `fatfs corrupt confirm` (adds commands only, no behavior change).
   extra_configs:
     - CONFIG_SHELL_VT100_COLORS=n
+    - CONFIG_SHELL_VT100_COMMANDS=n
     - CONFIG_APP_CRASH_TEST_COMMANDS=y
 tests:
   # smoke + integration + (explicitly selected) destructive markers all run in

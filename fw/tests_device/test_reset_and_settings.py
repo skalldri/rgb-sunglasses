@@ -48,16 +48,22 @@ def test_reset_cause_software_no_accumulation(rgb: RgbShell):
 
 
 def test_anim_not_persisted(rgb: RgbShell):
+    # NOTE: inert appcfg/core/last_active_* keys written by OLD firmware may
+    # legitimately be resident (deliberately never deleted — the delete would
+    # itself be an NVS write; see pattern_controller.cpp). The contract is
+    # that a switch creates no NEW key — hence before/after comparison, not
+    # key-name matching (hardware-observed: asserting on the name failed on a
+    # board upgraded from pre-#311 firmware).
+    keys_before = set(rgb.settings_keys())
+
     rgb.exec("anim set rainbow")
     assert rgb.anim_get() == "rainbow"
 
-    # The switch itself must not schedule a settings write (issue #311 removed
-    # it; the debounce is well under this). No key naming the active animation
-    # may exist — earlier firmware's inert leftovers were named
-    # appcfg/core/last_active_*.
+    # The switch must not schedule a settings write (issue #311 removed it;
+    # the store's debounce is well under 3 s).
     time.sleep(3.0)
-    anim_keys = [k for k in rgb.settings_keys() if "last_active" in k.lower()]
-    assert not anim_keys, f"active-animation key(s) present in settings: {anim_keys}"
+    new_keys = set(rgb.settings_keys()) - keys_before
+    assert not new_keys, f"animation switch created settings key(s): {new_keys}"
 
     rgb.reboot()
     assert rgb.anim_get() == DEFAULT_ANIMATION, (
@@ -66,14 +72,23 @@ def test_anim_not_persisted(rgb: RgbShell):
     )
 
 
+HELLO = "Hello Extension"  # ext list reports manifest displayNames, not filenames
+
+
+def _find_ext(rgb: RgbShell, name: str) -> dict:
+    slots = rgb.ext_list()
+    matches = [s for s in slots if s["name"] == name]
+    assert matches, f"extension {name!r} not loaded: {[s['name'] for s in slots]}"
+    return matches[0]
+
+
 @pytest.mark.requires_provisioned
-@pytest.mark.requires_ext("hello")
+@pytest.mark.requires_ext(HELLO)
 def test_settings_roundtrip(rgb: RgbShell):
     glim_before = rgb.glim_list()
     assert len(glim_before) >= 2, f"need ≥2 glim files: {glim_before}"
 
-    hello = next(s for s in rgb.ext_list() if s["name"] == "hello")
-    slot = hello["slot"]
+    slot = _find_ext(rgb, HELLO)["slot"]
 
     # hello param 0 is Speed (UINT32, default 50) — see fw/extensions/hello.
     # NEVER write params 2/3 here: those are the Crash/Hang fault injectors.
@@ -107,13 +122,11 @@ def test_settings_roundtrip(rgb: RgbShell):
         )
         # Slots can renumber across boots; the extension's NAME is its
         # identity (that's the #303 lesson) — re-resolve before reading.
-        hello_after = next(s for s in rgb.ext_list() if s["name"] == "hello")
-        assert read_speed(hello_after["slot"]) == new_speed, (
+        assert read_speed(_find_ext(rgb, HELLO)["slot"]) == new_speed, (
             "extension param blob did not survive reboot"
         )
     finally:
         # Restore defaults so the suite leaves the board as it found it.
-        hello_now = next(s for s in rgb.ext_list() if s["name"] == "hello")
-        rgb.exec(f"ext param {hello_now['slot']} 0 {orig_speed}")
+        rgb.exec(f"ext param {_find_ext(rgb, HELLO)['slot']} 0 {orig_speed}")
         rgb.exec(f"glim select {orig_glim_idx}")
         time.sleep(3.0)  # let the restore flush before any later reboot

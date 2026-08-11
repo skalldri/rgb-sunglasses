@@ -33,6 +33,11 @@ def rgb(dut: DeviceAdapter, shell: Shell) -> RgbShell:
     """The suite's shell handle: quirk-hardened exec with retval checking."""
     r = RgbShell(dut, shell)
     r.sync()
+    # Boot floods the console for seconds after the prompt appears (llext
+    # relocation logs, USB bring-up), and extension discovery finishes even
+    # later — wait for the full boot-settled barrier before fixtures start
+    # probing, or echoes smear and `ext list` reads empty.
+    r.wait_boot_settled()
     return r
 
 

@@ -12,9 +12,10 @@ from __future__ import annotations
 # .glim files provision-device.sh generates into /NAND:/glim.
 EXPECTED_GLIM = {"nyan_cat.glim", "bad_apple.glim", "4096.glim"}
 
-# In-repo extensions (fw/extensions/*/) built + copied into /NAND:/ext.
-# 'hello' is the fault-injection workhorse (Crash/Hang params).
-EXPECTED_EXT = {"hello"}
+# In-repo extensions (fw/extensions/*/) built + copied into /NAND:/ext,
+# identified by manifest displayName (what `ext list` prints), NOT filename.
+# Hello is the fault-injection workhorse (Crash/Hang params).
+EXPECTED_EXT = {"Hello Extension"}
 
 
 def check_baseline(glim_names: list[str], ext_slots: list[dict]) -> list[str]:
