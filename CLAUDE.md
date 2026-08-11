@@ -246,6 +246,43 @@ When installing any new CLI tool or dependency, **always add it to the environme
 - Linux devcontainer: `.devcontainer/Dockerfile` or `postCreateCommand` in `.devcontainer/devcontainer.json`
 - macOS host (Mac Mini): `scripts/macos-setup.sh` (firmware + agent tooling) or `app/scripts/macos-setup.sh` (iOS app toolchain) — both idempotent, safe to re-run
 
+## Don't rebuild what already exists
+
+**Reimplementing something that already exists in the Zephyr/NCS tree requires an
+extremely strong reason. Reimplementing something that already exists in THIS repo must
+always be flagged to the user for review before you build it.**
+
+The SDK is the first place to look, not the fallback. Before writing a driver, a shell
+command, a decoder, a state machine or a utility, check whether Zephyr already ships one —
+`zephyr/drivers/`, `zephyr/subsys/`, and the `*_shell.c` files in particular. A stock
+implementation is maintained upstream, is already documented, already has more surface
+than you will write, and does not cost review time.
+
+"An extremely strong reason" means the stock version cannot do the job, and you can say
+concretely why. It does NOT mean:
+
+- the stock version is slightly awkward to call;
+- you would like different output formatting;
+- **a design decision you made yourself broke it.** This is the trap. Real incident
+  (2026-08-11, PR #325): a custom `reset_cause` module was written with its own copy of
+  Zephyr's `RESET_*` name table, justified on the grounds that
+  `CONFIG_HWINFO_SHELL`'s `hwinfo reset_cause show` "would read 0 and therefore lie". It
+  would only read 0 because that same new module cleared `RESETREAS` at boot. The
+  justification was a consequence of the thing being justified. Removing the clear made
+  the built-in work correctly and the custom module unnecessary.
+
+  When the argument for building something is "the existing one does not work here",
+  check whether YOUR change is what stopped it working.
+
+Two habits that catch this early:
+
+- When you find yourself writing a warning comment explaining why a stock feature is
+  disabled or misleading, treat that as a signal to re-examine the design rather than to
+  write the comment. Needing several such comments is close to proof.
+- Compare the right two options. Measuring "stock feature added ON TOP of my version"
+  answers nothing; the comparison that decides it is "my version" versus "stock version
+  alone".
+
 ## Session startup
 
 **Your first output in every new conversation must be the environment status summary table — before any task work, even when the user opens with a specific request.** A `SessionStart` hook (configured in `.claude/settings.json`) already runs `check-hardware` and `check-software` automatically and injects their output into context as "Environment status (auto-checked at session start)", so you normally do **not** need to re-run the skills — just read that injected block and surface it. Only run `/check-hardware` / `/check-software` yourself if that injected block is missing.
