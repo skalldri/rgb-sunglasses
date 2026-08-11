@@ -1,7 +1,0 @@
-tests:
-  debug.reset_reason:
-    platform_allow:
-      - native_sim
-    integration_platforms:
-      - native_sim
-    tags: debug hwinfo
