@@ -45,10 +45,13 @@ def test_adv_gated_on_ext_load(rgb: RgbShell, device_state: dict):
         pytest.skip("a central is connected; advertising gate not observable")
     expected_ext = {s["name"] for s in device_state["ext"]}
 
-    rgb.reboot()
+    # settle=False is load-bearing: reboot()'s default settle barrier only
+    # returns AFTER extension registration completes, which would make this
+    # test structurally unable to observe the #225 race (review finding on
+    # this very test). Returning at the prompt lets the poll genuinely race
+    # boot init. Bound: 30 s from prompt, per the #208 gate ceiling.
+    rgb.reboot(settle=False)
     boot_t0 = time.monotonic()
-    # wait_boot_settled() already ran inside reboot(); advertising may
-    # lag it slightly. Bound: 30 s from prompt, per the #208 gate ceiling.
     while True:
         advertising = any(
             "Advertising: yes" in line for line in rgb.exec("bt_state")
@@ -66,6 +69,7 @@ def test_adv_gated_on_ext_load(rgb: RgbShell, device_state: dict):
         f"advertising observed with an incomplete extension registry "
         f"(#225): loaded {sorted(loaded)}, expected {sorted(expected_ext)}"
     )
+    rgb.wait_boot_settled()  # leave the boot fully settled for later tests
 
 
 @pytest.mark.requires_ext(HELLO)

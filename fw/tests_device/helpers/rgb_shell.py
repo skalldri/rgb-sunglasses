@@ -141,11 +141,12 @@ class RgbShell:
 
         IDEMPOTENT COMMANDS ONLY: an echo-smear timeout re-sends the command
         (see _exec_with_retry), so a command that already executed can run
-        twice. Everything in the smoke/integration tiers is safe (reads,
-        absolute-value sets). A destructive one-shot (`crash panic`,
-        `factory_reset now`, `fatfs corrupt confirm`) must NOT go through
-        this path blindly — send it raw via dut.write() like reboot() does,
-        or add a no-retry variant when the destructive tier lands.
+        twice. Reads, absolute-value sets, and re-runnable commands (`fatfs
+        corrupt confirm` is deliberately safe to repeat) are fine. A command
+        that reboots the device out from under the exchange (`crash panic`,
+        `factory_reset now|soft`) must use exec_oneway() + wait_reboot()
+        instead; a non-idempotent one-shot (e.g. a delete) should pass
+        check=False and verify its effect separately.
         """
         self.dut.write(b"\x03")
         time.sleep(0.05)
@@ -200,12 +201,24 @@ class RgbShell:
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
+            # Cheap raw probe, NOT exec(): the retrying exec+retval path can
+            # eat ~30 s per failed attempt, leaving too few tries within the
+            # window on a slow re-enumeration (PR review finding).
             try:
                 self.dut.write(b"\x03")
                 time.sleep(0.2)
                 self.dut.clear_buffer()
-                if self.uptime_ms() < 20_000:
-                    break  # fresh boot confirmed
+                self.dut.write(b"kernel uptime\n")
+                lines = self.dut.readlines_until(
+                    regex=r"Uptime:\s*\d+\s*ms", timeout=3.0, print_output=False
+                )
+                for line in lines:
+                    m = re.search(r"Uptime:\s*(\d+)\s*ms", line)
+                    if m and int(m.group(1)) < 20_000:
+                        deadline = 0  # fresh boot confirmed
+                        break
+                if deadline == 0:
+                    break
             except Exception:
                 pass  # board down / mid-boot — keep waiting
             time.sleep(1.0)
@@ -213,7 +226,7 @@ class RgbShell:
             raise TimeoutError(f"no fresh boot observed within {timeout}s")
         self.wait_boot_settled()
 
-    def reboot(self, cold: bool = False, timeout: float = 90.0) -> list[str]:
+    def reboot(self, cold: bool = False, timeout: float = 90.0, settle: bool = True) -> list[str]:
         """Reboot the board and wait for the shell to come back.
 
         Returns whatever console output happened to be captured while
@@ -244,7 +257,11 @@ class RgbShell:
                 except Exception:
                     pass
         self.sync(timeout=max(5.0, deadline - time.time()))
-        self.wait_boot_settled()
+        # settle=False returns at the prompt, BEFORE boot init completes —
+        # for tests that must race the boot itself (the #225 advertising
+        # gate). Everything else wants the settled barrier.
+        if settle:
+            self.wait_boot_settled()
         return captured
 
     # ---- parsers ---------------------------------------------------------

@@ -33,10 +33,12 @@ def test_watchdog_stays_disabled(rgb: RgbShell):
     )
     before = rgb.policy()
 
-    # Longer than the 20/40 s timers the #141 bug could leave armed. If a
-    # watchdog were secretly running, expiry resets ICHG to the 2000 mA POR
-    # value and bumps the policy's wd_redisables recovery counter.
-    time.sleep(35.0)
+    # Strictly longer than BOTH the 20 s AND 40 s timers a #141-style
+    # mis-decode could leave armed (kWatchdog in power.cpp: the field's
+    # realistic wrong values; 80/160 s are impractical to cover in an
+    # integration test). If a watchdog were secretly running, expiry resets
+    # ICHG to the 2000 mA POR value and bumps wd_redisables.
+    time.sleep(50.0)
 
     after = rgb.policy()
     assert after["wd_redisables"] == before["wd_redisables"], (

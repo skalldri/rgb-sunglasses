@@ -100,7 +100,10 @@ def test_coredump_crash_loop(rgb: RgbShell):
     assert "awaiting collection" in status, status
 
     # Cleanup: collect (discard) the dump so later runs start clean.
-    rgb.exec(f"fs rm /NAND:/coredump/{drained_file}")
+    # check=False: a delete is not retry-idempotent (an echo-smear resend
+    # after a successful unlink would fail on the missing file) — the status
+    # line below is the real verification.
+    rgb.exec(f"fs rm /NAND:/coredump/{drained_file}", check=False)
     status = " ".join(rgb.exec("coredump_mgr status"))
     assert "no dumps" in status, f"cleanup failed: {status}"
 

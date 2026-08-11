@@ -41,7 +41,11 @@ Flags:
                       the instance gets runtime-filtered and NOTHING runs;
                       hardware-observed). Use --tier/markers with twister.
   --build-only        build the twister test image(s), no hardware touched
-  --test-only         re-run against existing twister artifacts (no rebuild)
+  --test-only         re-run against existing twister artifacts (no rebuild).
+                      ONLY valid with the SAME --tier selection as the run
+                      that produced them — twister reuses that run's test
+                      plan, and a different tier executes zero tests while
+                      reporting success (hardware-observed).
   --standalone        bypass twister: run pytest directly against an existing
                       build on the attached board. Defaults to the last
                       twister device build (fw/build's image has VT100 on,
@@ -251,7 +255,21 @@ else
     # without it (zephyr twisterlib/runner.py).
     cmd+=(--device-testing --hardware-map "$MAP_FILE" --west-flash --device-flash-timeout 180)
 fi
-[ "$TEST_ONLY" -eq 1 ] && cmd+=(--test-only)
+# --test-only reuses the previous run's twister test plan, so it silently
+# executes ZERO tests if the tier selection changed — refuse the mismatch
+# instead of documenting it away (this trap was hit twice in one day).
+MARKER_STAMP="$OUTDIR.last-markers"
+if [ "$TEST_ONLY" -eq 1 ]; then
+    if [ ! -f "$MARKER_STAMP" ] || [ "$(cat "$MARKER_STAMP")" != "$MARKERS" ]; then
+        echo "[!] --test-only requires the same --tier selection as the previous run" >&2
+        echo "    (previous: '$(cat "$MARKER_STAMP" 2>/dev/null || echo unknown)', requested: '$MARKERS')." >&2
+        echo "    Drop --test-only to rebuild, or repeat the previous tier selection." >&2
+        exit 2
+    fi
+    cmd+=(--test-only)
+else
+    printf '%s' "$MARKERS" > "$MARKER_STAMP"
+fi
 case "$SCENARIO" in app.device.dfu|app.device.soak) cmd+=(--enable-slow) ;; esac
 
 # Marker/keyword filters ride through to the pytest child. Twister appends
