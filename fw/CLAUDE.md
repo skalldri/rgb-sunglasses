@@ -283,6 +283,17 @@ SYS_INIT(mcuboot_info_init, APPLICATION, MCUBOOT_INFO_INIT_PRIORITY);
 
 To enforce init ordering, use a plain KConfig value and then add `static_assert()`s as needed to guarantee ordering.
 
+### On-device (HIL) test suite
+
+`fw/tests_device/` runs pytest suites against the real production sysbuild
+image on a flashed proto0, via `twister --device-testing` + the
+pytest-twister-harness `shell`/`dut` fixtures. Entry point:
+`fw/scripts/run-device-tests.sh` (agents: hold the `board` lock first, same
+as flashing). Architecture + CI north-star: `fw/docs/on-device-testing.md`;
+tier semantics and house rules: `fw/tests_device/README.md`. It complements —
+never replaces — the native_sim suites below; anything testable on native_sim
+belongs there.
+
 ### Test structure
 
 Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suite has its own `CMakeLists.txt`, `prj.conf`, and `testcase.yaml`:
