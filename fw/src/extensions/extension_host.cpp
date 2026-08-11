@@ -460,44 +460,64 @@ void reset_params_to_defaults(Slot &slot) {
  * rewritten by re-discovery and the record has to outlive that.
  */
 struct FaultRecord {
-    bool valid;
+    /* `count` doubles as the valid flag: it is incremented on every latch and zeroed only
+     * by the same FaultRecord{} clear, so count != 0 is the identical predicate with one
+     * fewer invariant to keep in sync. */
+    uint32_t count;
     char name[kMaxNameLen];
     const char *what;
     int64_t uptimeMs;
-    uint32_t cpuUs;   /* 0 for load/init failures — no tick was measured */
-    uint32_t wallUs;  /* 0 for load/init failures */
-    uint32_t count;   /* faults on this slot since the last clear */
+    uint32_t cpuUs;
+    uint32_t wallUs;
+    bool haveMeasurements;
+    /* True only for a wall-backstop verdict. The cpu-vs-wall ratio is ONLY meaningful
+     * there — see the note in cmd_ext_faults(). */
+    bool wallBackstop;
     bool paramsReset;
 };
 
 FaultRecord sFaults[kMaxExtensions];
+
+/* Latches one fault. The display name is COPIED rather than read from sSlots[] at print
+ * time, and the reason is the discovery paths: a boot-time registration failure unwinds
+ * its slot (sSlotCount--) before returning, so by the time anyone runs `ext faults` there
+ * is no slot left to name it from. (It is NOT because slot metadata is rewritten at
+ * runtime — scan_slot() runs once from init(), and a deleted extension is only marked
+ * retired. An earlier version of this comment claimed otherwise.) */
+void latch_fault(size_t slotIndex, const char *name, const char *what, bool resetParams,
+                 bool haveMeasurements, uint32_t cpuUs, uint32_t wallUs, bool wallBackstop) {
+    if (slotIndex >= kMaxExtensions) {
+        return;
+    }
+    FaultRecord &rec = sFaults[slotIndex];
+    const uint32_t previous = rec.count;
+    rec.count = previous + 1;
+    strncpy(rec.name, (name != nullptr) ? name : "?", sizeof(rec.name) - 1);
+    rec.name[sizeof(rec.name) - 1] = '\0';
+    rec.what = what;
+    rec.uptimeMs = k_uptime_get();
+    rec.cpuUs = cpuUs;
+    rec.wallUs = wallUs;
+    rec.haveMeasurements = haveMeasurements;
+    rec.wallBackstop = wallBackstop;
+    rec.paramsReset = resetParams;
+}
 
 /* @param resetParams true only for faults that occur AFTER params were delivered
  * to the extension (tick-time crashes) — a persisted value could be the cause, so
  * reset it. false for load/init-time failures, which the params can't have caused
  * (they're only copied into the extension's inputs at tick time). */
 void sandbox_fault(Slot &slot, const char *what, bool resetParams, uint32_t cpuUs = 0,
-                  uint32_t wallUs = 0) {
+                  uint32_t wallUs = 0, bool haveMeasurements = false,
+                  bool wallBackstop = false) {
     LOG_ERR("extension '%s': %s — aborting sandbox (`ext select` to retry)",
             slot.meta.displayName, what);
 
     /* Latch BEFORE anything else touches the slot: unload_resident() and the param reset
      * below both mutate state a reader would want, and a second fault during recovery
      * must not lose the first record. */
-    const size_t slotIndex = static_cast<size_t>(&slot - sSlots);
-    if (slotIndex < kMaxExtensions) {
-        FaultRecord &rec = sFaults[slotIndex];
-        const uint32_t previous = rec.valid ? rec.count : 0;
-        rec.valid = true;
-        strncpy(rec.name, slot.meta.displayName, sizeof(rec.name) - 1);
-        rec.name[sizeof(rec.name) - 1] = '\0';
-        rec.what = what;
-        rec.uptimeMs = k_uptime_get();
-        rec.cpuUs = cpuUs;
-        rec.wallUs = wallUs;
-        rec.count = previous + 1;
-        rec.paramsReset = resetParams;
-    }
+    latch_fault(static_cast<size_t>(&slot - sSlots), slot.meta.displayName, what, resetParams,
+                haveMeasurements, cpuUs, wallUs, wallBackstop);
 
     slot.faulted = true;
     unload_resident();
@@ -832,7 +852,20 @@ bool scan_slot(size_t fileIndex, size_t slotIndex) {
 /* @param deadline Shared wall-clock deadline owned by the calling tick(), so
  * this load's rgbx_init handshake and the tick that follows it draw on ONE
  * backstop between them rather than one each. */
-bool runtime_load(size_t slotIndex, k_timepoint_t deadline) {
+/* `failWhat` receives a specific reason on failure (a string literal with static storage
+ * duration), and the cpu/wall pair when the failure was measured — an rgbx_init() that
+ * trips the wall backstop has real numbers, and they are the entire diagnosis for a hung
+ * init. Without this the record said "no tick was measured" for exactly the case where
+ * one was. */
+struct LoadFailure {
+    const char *what = "activation load failed";
+    uint32_t cpuUs = 0;
+    uint32_t wallUs = 0;
+    bool haveMeasurements = false;
+    bool wallBackstop = false;
+};
+
+bool runtime_load(size_t slotIndex, k_timepoint_t deadline, LoadFailure *fail = nullptr) {
     Slot &slot = sSlots[slotIndex];
 
     char path[64];
@@ -934,6 +967,13 @@ bool runtime_load(size_t slotIndex, k_timepoint_t deadline) {
     if (initVerdict != TickVerdict::Completed) {
         LOG_ERR("%s: rgbx_init() %s (cpu %u us, wall %u us)", path, verdict_describe(initVerdict),
                 k_cyc_to_us_near32(initCpuCyc), k_cyc_to_us_near32(initWallCyc));
+        if (fail != nullptr) {
+            fail->what = verdict_describe(initVerdict);
+            fail->cpuUs = k_cyc_to_us_near32(initCpuCyc);
+            fail->wallUs = k_cyc_to_us_near32(initWallCyc);
+            fail->haveMeasurements = true;
+            fail->wallBackstop = initVerdict == TickVerdict::WallBackstopExceeded;
+        }
         unload_resident();
         return false;
     }
@@ -954,6 +994,13 @@ void init() {
 
     for (size_t i = 0; i < extension_registry::count() && sSlotCount < kMaxExtensions; i++) {
         if (!scan_slot(i, sSlotCount)) {
+            /* Discovery failures latch too. Without this, an extension that never loaded
+             * at boot leaves `ext faults` saying "no faults recorded" — and since a clean
+             * report is meant to be positive evidence, that is worse than silence. The
+             * slot is unwound here, so the identity comes from the registry file name. */
+            latch_fault(sSlotCount, extension_registry::name(i), "discovery failed (see boot log)",
+                        /*resetParams=*/false, /*haveMeasurements=*/false, 0, 0,
+                        /*wallBackstop=*/false);
             continue;
         }
         /* Count the slot first (the register functions validate against
@@ -964,6 +1011,9 @@ void init() {
         int ret = extension_bt_register(slot);
         if (ret != 0) {
             LOG_ERR("slot %zu: BLE service registration failed: %d", slot, ret);
+            latch_fault(slot, sSlots[slot].meta.displayName, "BLE service registration failed",
+                        /*resetParams=*/false, /*haveMeasurements=*/false, 0, 0,
+                        /*wallBackstop=*/false);
             sSlots[slot].loaded = false;
             sSlotCount--;
             continue;
@@ -971,6 +1021,9 @@ void init() {
         ret = extension_animation_proxy_register(slot);
         if (ret != 0) {
             LOG_ERR("slot %zu: animation registry registration failed: %d", slot, ret);
+            latch_fault(slot, sSlots[slot].meta.displayName, "animation registry registration failed",
+                        /*resetParams=*/false, /*haveMeasurements=*/false, 0, 0,
+                        /*wallBackstop=*/false);
             extension_bt_unregister(slot);
             sSlots[slot].loaded = false;
             sSlotCount--;
@@ -984,6 +1037,9 @@ void init() {
         ret = extension_bt_bind_is_active(slot);
         if (ret != 0) {
             LOG_ERR("slot %zu: is-active binding failed: %d", slot, ret);
+            latch_fault(slot, sSlots[slot].meta.displayName, "is-active binding failed",
+                        /*resetParams=*/false, /*haveMeasurements=*/false, 0, 0,
+                        /*wallBackstop=*/false);
             extension_bt_unregister(slot);
             sSlots[slot].loaded = false;
             sSlotCount--;
@@ -1323,8 +1379,10 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
 
     if (sPendingLoadSlot == static_cast<int>(slot)) {
         sPendingLoadSlot = -1;
-        if (!runtime_load(slot, deadline)) {
-            sandbox_fault(s, "activation load failed", /*resetParams=*/false);
+        LoadFailure fail;
+        if (!runtime_load(slot, deadline, &fail)) {
+            sandbox_fault(s, fail.what, /*resetParams=*/false, fail.cpuUs, fail.wallUs,
+                          fail.haveMeasurements, fail.wallBackstop);
             return false;
         }
     }
@@ -1399,7 +1457,9 @@ bool tick(size_t slot, uint32_t dtMs, AnimationRenderer &renderer) {
          * any of them leaves the slot unable to self-recover across `ext
          * select` or a reboot. See the NOTE in extension_tick_budget.h. */
         sandbox_fault(s, verdict_describe(verdict), /*resetParams=*/true,
-                      k_cyc_to_us_near32(tickCpuCyc), k_cyc_to_us_near32(tickWallCyc));
+                      k_cyc_to_us_near32(tickCpuCyc), k_cyc_to_us_near32(tickWallCyc),
+                      /*haveMeasurements=*/true,
+                      /*wallBackstop=*/verdict == TickVerdict::WallBackstopExceeded);
         return false;
     }
     s.tickWall.record(tickWallCyc);
@@ -1560,10 +1620,18 @@ int cmd_ext_shuffle(const struct shell *sh, size_t argc, char **argv) {
  * faulted: the case this exists for is a TRANSIENT fault that cleared on the next
  * `ext select`, which `ext list` shows as perfectly healthy. */
 int cmd_ext_faults(const struct shell *sh, size_t, char **) {
+    /* Same lock every other reader/writer of slot state takes. Without it the damaging
+     * interleaving is the one an operator is most likely to produce: `ext faults clear`
+     * typed at the moment a tick faults, where the clear's store lands after
+     * sandbox_fault()'s and the evidence is destroyed by the act of preparing to capture
+     * it. The read path has a milder version — printing a name mid-strncpy against the
+     * previous fault's measurements, blending two records into one. */
+    HostLockGuard lock;
+
     size_t shown = 0;
     for (size_t i = 0; i < kMaxExtensions; i++) {
         const FaultRecord &rec = sFaults[i];
-        if (!rec.valid) {
+        if (rec.count == 0) {
             continue;
         }
         shown++;
@@ -1573,25 +1641,36 @@ int cmd_ext_faults(const struct shell *sh, size_t, char **) {
         shell_print(sh, "      at %lld ms uptime (%lld ms ago), %u time(s) since clear",
                     rec.uptimeMs, ageMs, rec.count);
 
-        if (rec.cpuUs != 0 || rec.wallUs != 0) {
-            /* The pair is the diagnosis, not decoration. cpu near zero against a large
-             * wall means the sandbox was BLOCKED or starved by something else on the
-             * system — not a runaway extension — which is the difference between
-             * chasing the extension and chasing the scheduler (issue #276). */
+        if (rec.haveMeasurements) {
             shell_print(sh, "      cpu %u us / wall %u us  (budget %u us / backstop %u us)",
                         rec.cpuUs, rec.wallUs,
                         (unsigned)CONFIG_APP_EXT_TICK_CPU_BUDGET_MS * 1000U,
                         (unsigned)CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS * 1000U);
-            if (rec.wallUs > 4 * (rec.cpuUs + 1)) {
-                shell_print(sh, "      ^ wall >> cpu: blocked or starved, NOT a runaway "
+            /* Gated on the wall-backstop verdict, NOT on the ratio. The sandbox thread is
+             * the lowest-priority application thread, so on a loaded board a genuine
+             * spin-loop burns its CPU budget across several times that in wall time and
+             * trivially satisfies wall >> cpu — printing "blocked or starved, NOT a
+             * runaway extension" directly underneath "tick exceeded its CPU budget
+             * (runaway extension)". Two contradictory diagnoses for one fault, with the
+             * more specific-sounding one wrong, is exactly the #276 misdiagnosis this
+             * tool was built to prevent. */
+            if (rec.wallBackstop) {
+                shell_print(sh, "      ^ never completed: blocked or starved, NOT a runaway "
                                 "extension");
             }
         } else {
-            shell_print(sh, "      load/init-time failure — no tick was measured");
+            shell_print(sh, "      no tick measured (load/init or discovery-time failure)");
         }
         shell_print(sh, "      params reset to manifest defaults: %s",
                     rec.paramsReset ? "yes" : "no");
-        shell_print(sh, "      currently: %s", sSlots[i].faulted ? "FAULTED" : "recovered");
+
+        /* A retired slot reads neither FAULTED nor recovered: its file was deleted at
+         * runtime, activation is refused, and `ext select <slot>` — which this command's
+         * own clear message suggests — cannot help until a restart rescans. */
+        const char *state = sSlots[i].retired  ? "RETIRED (file deleted; restart to rescan)"
+                            : sSlots[i].faulted ? "FAULTED"
+                                                : "recovered";
+        shell_print(sh, "      currently: %s", state);
     }
 
     if (shown == 0) {
@@ -1606,6 +1685,7 @@ int cmd_ext_faults(const struct shell *sh, size_t, char **) {
  * needs `ext select <slot>` to retry. Conflating the two would let an operator think they
  * had recovered an extension by clearing a log. */
 int cmd_ext_faults_clear(const struct shell *sh, size_t, char **) {
+    HostLockGuard lock;
     for (size_t i = 0; i < kMaxExtensions; i++) {
         sFaults[i] = FaultRecord{};
     }
@@ -1614,15 +1694,19 @@ int cmd_ext_faults_clear(const struct shell *sh, size_t, char **) {
     return 0;
 }
 
-SHELL_STATIC_SUBCMD_SET_CREATE(sub_ext_faults,
-                               SHELL_CMD(clear, NULL, "Clear the latched fault records",
-                                         cmd_ext_faults_clear),
-                               SHELL_SUBCMD_SET_END);
+SHELL_STATIC_SUBCMD_SET_CREATE(
+    sub_ext_faults,
+    SHELL_CMD_ARG(clear, NULL, "Clear the latched fault records", cmd_ext_faults_clear, 1, 0),
+    SHELL_SUBCMD_SET_END);
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
     sub_ext, SHELL_CMD(list, NULL, "List loaded animation extensions", cmd_ext_list),
-    SHELL_CMD(faults, &sub_ext_faults, "Latched extension fault details (see also: clear)",
-              cmd_ext_faults),
+    /* SHELL_CMD_ARG, not SHELL_CMD: with mandatory == 0 Zephyr's execute() falls back to
+     * the deepest handler and skips the argc check, so `ext faults clr` would print the
+     * report and exit 0 — an operator would believe they had cleared a baseline, then
+     * misattribute the stale record to the bug they just reproduced. */
+    SHELL_CMD_ARG(faults, &sub_ext_faults,
+                  "Latched extension fault details (see also: clear)", cmd_ext_faults, 1, 0),
     SHELL_CMD(stats, NULL, "Per-extension tick timing: cpu vs wall (min/avg/max us)",
               cmd_ext_stats),
     SHELL_CMD_ARG(param, NULL, "Get/set a param: ext param <slot> <index> [<value>]",
