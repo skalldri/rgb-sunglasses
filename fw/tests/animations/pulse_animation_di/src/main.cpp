@@ -320,3 +320,28 @@ ZTEST(pulse_animation_di_tests, test_beat_sync_without_a_beat_source_stays_lit) 
     zassert_equal(sPixelColor.green, 0x22, "Expected beat sync without audio to fall back to solid");
     zassert_equal(sPixelColor.blue, 0x33, "Expected beat sync without audio to fall back to solid");
 }
+
+ZTEST(pulse_animation_di_tests, test_beat_sync_zero_period_does_not_crash) {
+    MutableUint32Source color(0xFFFFFF);
+    // period_ms 1 makes the half-period decay round to zero; the animation clamps it
+    // to 1ms rather than dividing by zero (the beat-mode twin of
+    // test_zero_period_does_not_crash).
+    MutableUint32Source periodMs(1);
+    MutableBoolSource breathing(false);
+    MutableBoolSource beatSync(true);
+    PulseAnimationDependencies deps(color, periodMs, breathing, beatSync);
+    TestBeatSource beats;
+
+    PulseAnimation *animation = PulseAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->setBeatSource(&beats);
+    animation->init();
+
+    CapturingTestRenderer renderer;
+    beats.fire();
+    animation->tick(renderer, 1);
+
+    reset_capture();
+    animation->tick(renderer, 1);
+    zassert_equal(sPixelColor.red, 0, "Expected a 1ms decay to be fully spent after 1ms");
+}
