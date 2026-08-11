@@ -1,0 +1,8 @@
+tests:
+  storage.fat_corrupt:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: storage fat
+    filter: dt_label_with_parent_compat_enabled("fat_storage", "fixed-partitions")
