@@ -160,12 +160,15 @@ if [ "$STANDALONE" -eq 1 ]; then
     # build has VT100 on and no crash-test commands — the one image the
     # harness cannot parse (PR #341 review). Run the twister path once (or
     # --build-only) to produce it, then iterate standalone against it.
-    TWISTER_BUILD="$OUTDIR/rgb_sunglasses_proto0_nrf5340_cpuapp/zephyr/app.device.hil"
+    # All three scenarios build the identical image (same extra_configs) —
+    # accept whichever the last twister run produced.
     if [ -z "$STANDALONE_BUILD_DIR" ]; then
-        if [ -d "$TWISTER_BUILD" ]; then
-            STANDALONE_BUILD_DIR="$TWISTER_BUILD"
-        else
-            echo "[!] No twister device build at $TWISTER_BUILD." >&2
+        for scen in app.device.hil app.device.dfu app.device.soak; do
+            d="$OUTDIR/rgb_sunglasses_proto0_nrf5340_cpuapp/zephyr/$scen"
+            [ -d "$d" ] && { STANDALONE_BUILD_DIR="$d"; break; }
+        done
+        if [ -z "$STANDALONE_BUILD_DIR" ]; then
+            echo "[!] No twister device build under $OUTDIR." >&2
             echo "    Run '$0 --build-only' first (or pass --build-dir for a suitably-configured build)." >&2
             exit 1
         fi

@@ -433,6 +433,62 @@ class RgbShell:
                 stats[current][f"{kind}_max"] = int(m.group(4))
         return stats
 
+    def led_stats(self) -> dict:
+        """`led_stats` → {frames, target_us, interval_min/avg/max_us,
+        late_frames, work_max_us, worst_wall/self/other/idle_us,
+        worst_label, overruns}. (Format: led_controller.cpp cmd_led_stats.)
+        """
+        out = self.exec("led_stats")
+        stats: dict = {}
+        for line in out:
+            s = line.strip()
+            for key, pat in (
+                ("frames", r"^frames:\s+(\d+)"),
+                ("target_us", r"^target:\s+(\d+)\s+us/frame"),
+                ("late_frames", r"^late \(>\d+x\):\s+(\d+)\s+frame"),
+                ("work_max_us", r"^work max:\s+(\d+)\s+us"),
+                ("overruns", r"^overruns:\s+(\d+)"),
+            ):
+                m = re.match(pat, s)
+                if m:
+                    stats[key] = int(m.group(1))
+            m = re.match(r"^interval:\s+min (\d+) us\s+avg (\d+) us\s+max (\d+) us", s)
+            if m:
+                stats["interval_min_us"] = int(m.group(1))
+                stats["interval_avg_us"] = int(m.group(2))
+                stats["interval_max_us"] = int(m.group(3))
+            m = re.match(
+                r"^worst segment:\s+(\d+) us wall = (\d+) us self \+ (\d+) us "
+                r"other-thread \+ (\d+) us idle\s+in '(.*?)'",
+                s,
+            )
+            if m:
+                stats["worst_wall_us"] = int(m.group(1))
+                stats["worst_self_us"] = int(m.group(2))
+                stats["worst_other_us"] = int(m.group(3))
+                stats["worst_idle_us"] = int(m.group(4))
+                stats["worst_label"] = m.group(5)
+        return stats
+
+    def shuffle_status(self) -> dict:
+        """`anim shuffle status` → {enabled, min_s, max_s, grace_s, max_grace_s}."""
+        out = self.exec("anim shuffle status")
+        for line in out:
+            m = re.search(
+                r"shuffle:\s+(on|off), min:\s+(\d+) s, max:\s+(\d+) s, "
+                r"grace:\s+(\d+) s \(max (\d+) s\)",
+                line,
+            )
+            if m:
+                return {
+                    "enabled": m.group(1) == "on",
+                    "min_s": int(m.group(2)),
+                    "max_s": int(m.group(3)),
+                    "grace_s": int(m.group(4)),
+                    "max_grace_s": int(m.group(5)),
+                }
+        raise AssertionError(f"could not parse `anim shuffle status`: {out}")
+
     def ext_faults(self) -> list[dict]:
         """`ext faults` → [{slot, name, what, count, params_reset, state}].
 
