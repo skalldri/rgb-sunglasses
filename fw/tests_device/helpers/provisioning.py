@@ -54,7 +54,12 @@ def nand_mount():
         yield mnt
     finally:
         subprocess.run(["sync"], timeout=60)
-        subprocess.run(["umount", mnt], timeout=60)
+        # check=True is load-bearing: a swallowed umount failure leaves the
+        # volume mounted rw with dirty blocks while the firmware remounts
+        # FAT — the double-writer corruption this docstring warns about —
+        # and the unconditional rmdir then raised EBUSY from the finally,
+        # REPLACING the body's real exception (PR #348 review).
+        subprocess.run(["umount", mnt], check=True, timeout=60)
         os.rmdir(mnt)
 
 
@@ -63,20 +68,36 @@ def plant_corrupt_extension(name: str = "zz_bad.llext", source: str = "hello.lle
     an untrusted file that must be rejected, not deref'd, at boot).
 
     Takes a REAL installed extension from the board itself (no build-path
-    coupling), keeps the ELF header intact so it isn't rejected trivially at
-    the magic check, and scrambles the middle third — section tables and
-    manifest content become garbage pointers. Caller must reboot afterwards.
+    coupling) and corrupts it STRUCTURALLY: the ELF magic stays intact (so
+    rejection isn't the trivial magic check) but e_shoff — the section
+    header table offset — is pointed far past EOF. Every loader walk of the
+    section table is then an out-of-bounds access it must refuse. This is
+    deterministic, unlike scrambling a byte range, whose effect depended on
+    the section-size ratio of whatever hello.llext was built (PR #348
+    review: a mostly-.text scramble could load cleanly and false-alarm the
+    test). Caller must reboot afterwards (FAT-coherence contract).
     """
     with nand_mount() as mnt:
         src = os.path.join(mnt, "ext", source)
         with open(src, "rb") as f:
             data = bytearray(f.read())
         assert len(data) > 512, f"{source} implausibly small ({len(data)} B)"
-        third = len(data) // 3
-        for i in range(third, 2 * third):
-            data[i] ^= 0xFF
+        assert data[:4] == b"\x7fELF" and data[4] == 1, "expected ELF32"
+        # ELF32: e_shoff is a 4-byte LE word at offset 0x20.
+        data[0x20:0x24] = (0xFFFFFF00).to_bytes(4, "little")
         with open(os.path.join(mnt, "ext", name), "wb") as f:
             f.write(bytes(data))
+
+
+def hard_reset(jlink_serial: str) -> None:
+    """Reset the target over the J-Link's SWD connection — works even when
+    the firmware is halted and the shell is gone. Never touches flash
+    (fw/CLAUDE.md, 'Recovering a wedged shell UART without reflashing')."""
+    subprocess.run(
+        ["nrfutil", "device", "reset",
+         "--serial-number", str(jlink_serial), "--reset-kind", "RESET_PIN"],
+        check=True, timeout=60,
+    )
 
 
 def reprovision(rgb, build_dir: str) -> None:

@@ -113,7 +113,7 @@ class RgbShell:
             time.sleep(1.0)
         logger.warning("boot settle: `anim get` still 'none' after %.0fs", timeout)
 
-    def _exec_with_retry(self, cmd: str, timeout: float | None) -> list[str]:
+    def _exec_with_retry(self, cmd: str, timeout: float | None, attempts: int = 3) -> list[str]:
         """One shell exchange, retried on echo-smear timeouts.
 
         An async log line can interleave with the command's echo so the
@@ -122,7 +122,7 @@ class RgbShell:
         the second try in practice.
         """
         last_exc: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(attempts):
             try:
                 return self.shell.exec_command(cmd, timeout=timeout or 10.0)
             except TwisterHarnessTimeoutException as exc:
@@ -131,9 +131,15 @@ class RgbShell:
                 self.dut.write(b"\x03")
                 time.sleep(0.2)
                 self.dut.clear_buffer()
-        raise AssertionError(f"exchange {cmd!r} failed after 3 attempts: {last_exc}")
+        raise AssertionError(f"exchange {cmd!r} failed after {attempts} attempt(s): {last_exc}")
 
-    def exec(self, cmd: str, timeout: float | None = None, check: bool = True) -> list[str]:
+    def exec(
+        self,
+        cmd: str,
+        timeout: float | None = None,
+        check: bool = True,
+        attempts: int = 3,
+    ) -> list[str]:
         """Run a command; return its filtered output lines.
 
         With check=True (default), also runs `retval` and fails the test if
@@ -151,7 +157,11 @@ class RgbShell:
         self.dut.write(b"\x03")
         time.sleep(0.05)
         self.dut.clear_buffer()
-        out = self.shell.get_filtered_output(self._exec_with_retry(cmd, timeout))
+        # attempts=1 makes the send single-shot for commands whose EFFECT is
+        # not idempotent even though re-running them is syntactically fine
+        # (e.g. re-arming a fault injector after the fault already cleared
+        # it): an echo smear then fails the exchange instead of double-firing.
+        out = self.shell.get_filtered_output(self._exec_with_retry(cmd, timeout, attempts))
         if check:
             rv = self.last_retval()
             if rv != 0:

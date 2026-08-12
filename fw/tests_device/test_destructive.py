@@ -30,6 +30,7 @@ Regressions pinned:
 
 from __future__ import annotations
 
+import os
 import re
 import time
 
@@ -122,14 +123,23 @@ HELLO = "Hello Extension"
 
 def _hello_slot(rgb: RgbShell) -> int:
     slots = [s for s in rgb.ext_list() if s["name"] == HELLO]
-    if not slots:
-        pytest.skip(f"{HELLO} not installed")
+    # FAIL, not skip: hello is part of the provisioning BASELINE (a fixable
+    # setup error), not a rig difference — a skip here would green a run
+    # with zero coverage of this tier's subject (README rule; PR #348
+    # review).
+    assert slots, f"{HELLO} not installed — run fw/scripts/provision-device.sh"
     return slots[0]["slot"]
 
 
 def test_ext_fault_latch_and_recovery(rgb: RgbShell):
-    """The full #308 flow, using hello's Hang injector (wall-backstop fault —
-    host-detected, so no coredump side effects, unlike Crash).
+    """The full #308 flow, using hello's Hang injector.
+
+    NOTE which budget this exercises: hello's P_HANG is `while (1) {}` — a
+    pure CPU SPIN, so the fault that fires is the 50 ms CPU budget
+    (CONFIG_APP_EXT_TICK_CPU_BUDGET_MS), NOT the 500 ms wall backstop (that
+    one is for extensions that BLOCK; it currently has no on-device
+    coverage — hello would need a sleeping param; PR #348 review). Either
+    verdict is host-detected, so no coredump side effects, unlike Crash.
 
     Pins: fault latched with measurements + params-reset flag; the record
     SURVIVES `ext select` recovery (that is the whole point of #308 — the
@@ -142,8 +152,11 @@ def test_ext_fault_latch_and_recovery(rgb: RgbShell):
 
     rgb.exec(f"ext select {slot}")
     # Hang is param 3 (see fw/extensions/hello/hello.c). Params reach the
-    # extension at tick time; the 500 ms wall backstop then fires.
-    rgb.exec(f"ext param {slot} 3 1")
+    # extension at tick time; the CPU budget then fires within ~1 tick.
+    # attempts=1: the arm is EFFECT-non-idempotent — the fault it provokes
+    # resets Hang to 0, so an echo-smear resend would re-arm the recovered
+    # slot and fail the recovery assertions against healthy firmware.
+    rgb.exec(f"ext param {slot} 3 1", attempts=1)
     try:
         deadline = time.monotonic() + 15.0
         while time.monotonic() < deadline:
@@ -160,12 +173,26 @@ def test_ext_fault_latch_and_recovery(rgb: RgbShell):
         assert rec["state"] == "FAULTED", rec
         assert rec["count"] == 1, rec
 
-        # Recovery: ext select clears the slot's fault; the RECORD stays.
+        # Recovery: ext select clears the slot's fault flag SYNCHRONOUSLY,
+        # but the reload happens lazily on the pattern-controller thread's
+        # next tick — so the property that proves real recovery is the tick
+        # counter INCREASING, not the flag (a regression that un-flags but
+        # never re-ticks would pass a flag check; PR #348 review). Poll to
+        # convergence per the README rule, no fixed sleep.
         rgb.exec(f"ext select {slot}")
-        time.sleep(2.0)
-        assert not any(
-            s["faulted"] for s in rgb.ext_list() if s["name"] == HELLO
-        ), "ext select did not clear the fault"
+        base_ticks = rgb.ext_stats().get(HELLO, {}).get("ticks", 0)
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            current = [s for s in rgb.ext_list() if s["name"] == HELLO][0]
+            ticks = rgb.ext_stats().get(HELLO, {}).get("ticks", 0)
+            if not current["faulted"] and ticks > base_ticks:
+                break
+            time.sleep(1.0)
+        else:
+            pytest.fail(
+                f"recovery did not converge: faulted={current['faulted']}, "
+                f"ticks {base_ticks} -> {ticks} (never increased)"
+            )
         rec = [r for r in rgb.ext_faults() if r["name"] == HELLO][0]
         assert rec["state"] == "recovered", (
             f"record must survive recovery with updated state (#308): {rec}"
@@ -176,17 +203,29 @@ def test_ext_fault_latch_and_recovery(rgb: RgbShell):
             f"Hang param not reset to default after the fault: {out}"
         )
     finally:
+        # All check=False: a cleanup hiccup on a just-faulted, noisy console
+        # must never REPLACE the assertion failure carrying the evidence
+        # (PR #348 review).
         rgb.exec(f"ext param {slot} 3 0", check=False)  # belt-and-suspenders
-        rgb.exec("anim set zigzag")
-        rgb.exec("ext faults clear")
+        rgb.exec("anim set zigzag", check=False)
+        rgb.exec("ext faults clear", check=False)
     assert rgb.ext_faults() == [], "records survived `ext faults clear`"
 
 
-def test_bad_manifest_boot_survival(rgb: RgbShell, device_state: dict):
+def test_bad_manifest_boot_survival(rgb: RgbShell, dut, device_state: dict):
     """#89: a corrupted .llext on NAND must be REJECTED at discovery — never
     kernel-mode-deref'd (the original bug halted the whole firmware). The
     board must boot, load every healthy extension, refuse the bad file, and
-    latch a discovery-failure record for it."""
+    latch a discovery-failure record for it (extension_host.cpp init()
+    latches rejected files by REGISTRY FILE NAME — hence the zz_bad match).
+
+    Cleanup is HOST-SIDE by construction: the regression this test detects
+    is 'the board halts at boot', in which state no shell command can
+    delete the file and every subsequent boot re-halts — the shared board
+    would stay wedged until a human intervened (PR #348 review). The same
+    USB MSC path that planted the file removes it, and a J-Link pin reset
+    recovers the board without needing the firmware's cooperation.
+    """
     expected_ext = {s["name"] for s in device_state["ext"]}
     provisioning.plant_corrupt_extension(name="zz_bad.llext", source="hello.llext")
     try:
@@ -205,9 +244,23 @@ def test_bad_manifest_boot_survival(rgb: RgbShell, device_state: dict):
             f"no discovery-failure record latched for the bad file: "
             f"{rgb.ext_faults()}"
         )
-    finally:
-        rgb.exec("fs rm /NAND:/ext/zz_bad.llext", check=False)
         rgb.exec("ext faults clear", check=False)
+    finally:
+        # Remove the file WITHOUT the board's help (it may be halted —
+        # that's the failure mode under test). MSC enumerates even when the
+        # app halted after USB init; if the whole USB stack died, this
+        # raises and the reprovision teardown is the next line of defense.
+        with provisioning.nand_mount() as mnt:
+            bad = os.path.join(mnt, "ext", "zz_bad.llext")
+            if os.path.exists(bad):
+                os.unlink(bad)
+        # FAT-coherence + rescan; fall back to a J-Link pin reset if the
+        # shell is gone.
+        try:
+            rgb.reboot()
+        except Exception:
+            provisioning.hard_reset(str(dut.device_config.id))
+            rgb.wait_reboot()
 
 
 def test_factory_reset_soft_keeps_files(rgb: RgbShell):
