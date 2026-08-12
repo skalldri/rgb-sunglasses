@@ -96,8 +96,12 @@ def test_coredump_crash_loop(rgb: RgbShell):
         time.sleep(2.0)
     else:
         pytest.fail(f"flash partition not invalidated after drain: {post_drain}")
+    # "crash dump(s) awaiting collection", NOT just "awaiting collection" —
+    # the negative message ("no dumps awaiting collection in ...") contains
+    # that substring too, which made this assertion unfailable (PR #346
+    # review).
     status = " ".join(rgb.exec("coredump_mgr status"))
-    assert "awaiting collection" in status, status
+    assert "crash dump" in status and "no dumps" not in status, status
 
     # Cleanup: collect (discard) the dump so later runs start clean.
     # check=False: a delete is not retry-idempotent (an echo-smear resend

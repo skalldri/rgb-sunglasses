@@ -258,17 +258,20 @@ fi
 # --test-only reuses the previous run's twister test plan, so it silently
 # executes ZERO tests if the tier selection changed — refuse the mismatch
 # instead of documenting it away (this trap was hit twice in one day).
+# The stamp records OUTCOME, not intent: it is written only after twister
+# exits successfully (below), so an interrupted/failed run can never
+# launder a stale plan through the guard (PR #346 review).
 MARKER_STAMP="$OUTDIR.last-markers"
 if [ "$TEST_ONLY" -eq 1 ]; then
     if [ ! -f "$MARKER_STAMP" ] || [ "$(cat "$MARKER_STAMP")" != "$MARKERS" ]; then
-        echo "[!] --test-only requires the same --tier selection as the previous run" >&2
+        echo "[!] --test-only requires the same --tier selection as the previous SUCCESSFUL run" >&2
         echo "    (previous: '$(cat "$MARKER_STAMP" 2>/dev/null || echo unknown)', requested: '$MARKERS')." >&2
         echo "    Drop --test-only to rebuild, or repeat the previous tier selection." >&2
         exit 2
     fi
     cmd+=(--test-only)
 else
-    printf '%s' "$MARKERS" > "$MARKER_STAMP"
+    rm -f "$MARKER_STAMP"  # a rebuild invalidates whatever plan existed
 fi
 case "$SCENARIO" in app.device.dfu|app.device.soak) cmd+=(--enable-slow) ;; esac
 
@@ -280,4 +283,10 @@ cmd+=(${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
 
 echo "[*] ${cmd[*]}"
 cd "$REPO_ROOT"
-exec "${cmd[@]}"
+rc=0
+"${cmd[@]}" || rc=$?
+# Stamp the tier selection only on success — see the guard above.
+if [ "$rc" -eq 0 ] && [ "$TEST_ONLY" -eq 0 ]; then
+    printf '%s' "$MARKERS" > "$MARKER_STAMP"
+fi
+exit "$rc"

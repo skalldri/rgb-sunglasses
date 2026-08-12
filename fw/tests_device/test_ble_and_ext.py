@@ -48,28 +48,33 @@ def test_adv_gated_on_ext_load(rgb: RgbShell, device_state: dict):
     # settle=False is load-bearing: reboot()'s default settle barrier only
     # returns AFTER extension registration completes, which would make this
     # test structurally unable to observe the #225 race (review finding on
-    # this very test). Returning at the prompt lets the poll genuinely race
-    # boot init. Bound: 30 s from prompt, per the #208 gate ceiling.
-    rgb.reboot(settle=False)
-    boot_t0 = time.monotonic()
-    while True:
-        advertising = any(
-            "Advertising: yes" in line for line in rgb.exec("bt_state")
-        )
-        if advertising:
-            break
-        assert time.monotonic() - boot_t0 < 30.0, (
-            "advertising did not start within 30 s of boot — the #208 gate "
-            "is stuck (or never released on an error path)"
-        )
-        time.sleep(1.0)
+    # this very test). Polling uses probe(), not exec(): exec's echo-smear
+    # retry backoff against the boot flood could eat the whole measurement
+    # window. The 30 s bound is DEVICE uptime, so it means what it says —
+    # host-side clocks start ~10 s of enumeration late (both PR #346
+    # review findings).
+    try:
+        rgb.reboot(settle=False)
+        while True:
+            m = rgb.probe("bt_state", r"Advertising:\s*(yes|no)")
+            if m and m.group(1) == "yes":
+                break
+            up = rgb.probe_uptime_ms()
+            assert up is None or up < 30_000, (
+                f"advertising not started at {up} ms device uptime — the "
+                f"#208 gate is stuck (or never released on an error path)"
+            )
+            time.sleep(1.0)
 
-    loaded = {s["name"] for s in rgb.ext_list()}
-    assert loaded == expected_ext, (
-        f"advertising observed with an incomplete extension registry "
-        f"(#225): loaded {sorted(loaded)}, expected {sorted(expected_ext)}"
-    )
-    rgb.wait_boot_settled()  # leave the boot fully settled for later tests
+        loaded = {s["name"] for s in rgb.ext_list()}
+        assert loaded == expected_ext, (
+            f"advertising observed with an incomplete extension registry "
+            f"(#225): loaded {sorted(loaded)}, expected {sorted(expected_ext)}"
+        )
+    finally:
+        # Later tests assume a settled board — guarantee it even on failure,
+        # or one real failure cascades into unrelated-looking ones.
+        rgb.wait_boot_settled()
 
 
 @pytest.mark.requires_ext(HELLO)
@@ -150,7 +155,16 @@ def test_no_steady_state_log_spam(rgb: RgbShell):
                 lines.append(rgb.dut.readline(timeout=2.0, print_output=False))
             except Exception:
                 pass  # quiet — that's the point
-        noise = [ln for ln in lines if ln.strip() and "uart:~$" not in ln]
+        # STRIP the redrawn prompt from each line rather than dropping lines
+        # that contain it: the shell redraws "uart:~$ " after every async
+        # log line, so spam arrives as "uart:~$ <log>" — a contains-filter
+        # discarded virtually everything and made this check inert (PR #346
+        # review).
+        noise = [
+            stripped
+            for ln in lines
+            if (stripped := ln.replace("uart:~$", "").strip())
+        ]
         assert len(noise) < 10, (
             f"{len(noise)} console lines in 60 s of steady-state rendering — "
             f"per-tick log spam (PR #110 rule). First few: {noise[:5]}"

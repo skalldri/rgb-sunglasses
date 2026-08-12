@@ -174,6 +174,34 @@ class RgbShell:
                 return int(token)
         raise AssertionError(f"could not parse `retval` output: {lines!r}")
 
+    def probe(self, cmd: str, pattern: str, timeout: float = 3.0) -> re.Match | None:
+        """One cheap raw exchange: write cmd, return the first pattern match.
+
+        No retries, no retval, no prompt discipline — for windows where the
+        full exec() path is either too slow (its retry backoff can burn 30 s
+        against the boot flood) or semantically wrong (probing whether the
+        board is even alive). Returns None on any failure.
+        """
+        try:
+            self.dut.write(b"\x03")
+            time.sleep(0.1)
+            self.dut.clear_buffer()
+            self.dut.write((cmd + "\n").encode())
+            lines = self.dut.readlines_until(
+                regex=pattern, timeout=timeout, print_output=False
+            )
+        except Exception:
+            return None
+        for line in reversed(lines):
+            m = re.search(pattern, line)
+            if m:
+                return m
+        return None
+
+    def probe_uptime_ms(self) -> int | None:
+        m = self.probe("kernel uptime", r"Uptime:\s*(\d+)\s*ms")
+        return int(m.group(1)) if m else None
+
     def exec_oneway(self, cmd: str) -> None:
         """Fire a command that will NOT come back to a usable prompt.
 
@@ -181,8 +209,15 @@ class RgbShell:
         now|soft`) where exec()'s echo-wait would hang and its retry would
         double-fire. Raw write, no echo match, no retval — the caller owns
         re-acquiring the shell (wait_reboot()).
+
+        Snapshots the CURRENT uptime first so wait_reboot() can demand a
+        reading strictly LOWER than it — an absolute "uptime < 20 s"
+        threshold matched the pre-reboot shell whenever the prior boot was
+        itself young (PR #346 review: reachable in the destructive tier,
+        where factory_reset fires ~15-20 s into a fresh boot).
         """
-        logger.info("one-way command: %s", cmd)
+        self._oneway_ref_uptime = self.probe_uptime_ms()
+        logger.info("one-way command: %s (ref uptime %s ms)", cmd, self._oneway_ref_uptime)
         self.dut.write(b"\x03")
         time.sleep(0.1)
         self.dut.clear_buffer()
@@ -192,38 +227,27 @@ class RgbShell:
         """Re-acquire the shell after a reboot this host did not command
         (crash recovery, factory_reset's own reboot).
 
-        Waits for PROOF of a fresh boot — uptime below 20 s — not merely a
-        prompt. `factory_reset soft` spends seconds erasing NVS before its
-        reboot, and a prompt-only wait matched the STILL-ALIVE pre-reboot
-        shell, letting assertions run against a board that hadn't reset yet
-        (hardware-observed: `ext list` was then read mid-rescan on the real
-        boot and came back partial).
+        Waits for PROOF of a fresh boot, not merely a prompt: `factory_reset
+        soft` spends seconds erasing NVS before its reboot, and a prompt-only
+        wait matched the STILL-ALIVE pre-reboot shell (hardware-observed:
+        `ext list` was then read mid-rescan on the real boot and came back
+        partial). Proof = an uptime reading strictly LOWER than the one
+        exec_oneway() snapshotted before firing (falling back to a <20 s
+        absolute bound when no snapshot exists) — the absolute bound alone
+        matched a pre-reboot shell whose boot was itself young.
         """
+        ref = getattr(self, "_oneway_ref_uptime", None)
+        self._oneway_ref_uptime = None
         deadline = time.time() + timeout
+        fresh = False
         while time.time() < deadline:
-            # Cheap raw probe, NOT exec(): the retrying exec+retval path can
-            # eat ~30 s per failed attempt, leaving too few tries within the
-            # window on a slow re-enumeration (PR review finding).
-            try:
-                self.dut.write(b"\x03")
-                time.sleep(0.2)
-                self.dut.clear_buffer()
-                self.dut.write(b"kernel uptime\n")
-                lines = self.dut.readlines_until(
-                    regex=r"Uptime:\s*\d+\s*ms", timeout=3.0, print_output=False
-                )
-                for line in lines:
-                    m = re.search(r"Uptime:\s*(\d+)\s*ms", line)
-                    if m and int(m.group(1)) < 20_000:
-                        deadline = 0  # fresh boot confirmed
-                        break
-                if deadline == 0:
-                    break
-            except Exception:
-                pass  # board down / mid-boot — keep waiting
+            up = self.probe_uptime_ms()  # cheap raw probe, never exec()
+            if up is not None and (up < ref if ref is not None else up < 20_000):
+                fresh = True
+                break
             time.sleep(1.0)
-        else:
-            raise TimeoutError(f"no fresh boot observed within {timeout}s")
+        if not fresh:
+            raise TimeoutError(f"no fresh boot observed within {timeout}s (ref={ref})")
         self.wait_boot_settled()
 
     def reboot(self, cold: bool = False, timeout: float = 90.0, settle: bool = True) -> list[str]:
