@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "dance",
+  "description": "120 BPM click track with the head bobbing in time — accel-X sine about the crown axis. The case that distinguishes 'moving to music' from either signal alone.",
+  "durationMs": 8000,
+  "seed": 0,
+  "audio": { "type": "metronome", "bpm": 120 },
+  "imu": { "type": "sine", "channel": "accel", "axis": 0, "amplitude": 4, "hz": 2.0 },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

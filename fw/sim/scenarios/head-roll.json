@@ -1,0 +1,10 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "head-roll",
+  "description": "Accel-Y ramp -6 -> +6 m/s^2 with the crown loaded (a lateral head tilt, ear toward each shoulder). Roll about Z is the axis a tilt actually moves — head-tilt ramps accel-X, which is crown-up-to-inverted, not a lean.",
+  "durationMs": 8000,
+  "seed": 0,
+  "audio": { "type": "silence" },
+  "imu": { "type": "ramp", "fromAccel": [8, -6, 0], "toAccel": [8, 6, 0] },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}
