@@ -615,8 +615,19 @@ static int cmd_power_bq_limits(const struct shell *shell, size_t argc, char **ar
 
     shell_print(shell, "ICHG=%u mA  IINDPM=%u mA  VINDPM=%u mV  ICO_ILIM=%u mA", limits.ichg_ma,
                 limits.iindpm_ma, limits.vindpm_mv, limits.ico_ilim_ma);
-    shell_print(shell, "WATCHDOG=%s  VAC_OVP=%s  AUTO_INDET_EN=%u", kWatchdog[limits.watchdog & 0x7],
-                kVacOvp[limits.vac_ovp & 0x3], limits.auto_indet_en);
+    // AUTO_INDET_EN is a diagnostic read via its own getter (not folded into
+    // bq25792_get_limits, which gates safety-relevant reconciliation). A failed
+    // read is non-fatal here — print it as unknown rather than aborting the
+    // whole limits dump.
+    uint8_t auto_indet = 0;
+    int ai_ret = bq25792_get_auto_indet_en(bq, &auto_indet);
+    if (ai_ret == 0) {
+        shell_print(shell, "WATCHDOG=%s  VAC_OVP=%s  AUTO_INDET_EN=%u",
+                    kWatchdog[limits.watchdog & 0x7], kVacOvp[limits.vac_ovp & 0x3], auto_indet);
+    } else {
+        shell_print(shell, "WATCHDOG=%s  VAC_OVP=%s  AUTO_INDET_EN=? (read failed: %d)",
+                    kWatchdog[limits.watchdog & 0x7], kVacOvp[limits.vac_ovp & 0x3], ai_ret);
+    }
     shell_print(shell, "IINDPM_STAT=%u VINDPM_STAT=%u WD_STAT=%u POORSRC=%u PG=%u VBUS_PRESENT=%u",
                 st.iindpm_active ? 1 : 0, st.vindpm_active ? 1 : 0, st.wd_expired ? 1 : 0,
                 st.poor_source ? 1 : 0, st.power_good ? 1 : 0, st.vbus_present ? 1 : 0);

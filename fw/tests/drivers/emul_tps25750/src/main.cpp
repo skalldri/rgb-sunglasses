@@ -146,10 +146,6 @@ ZTEST(emul_tps25750, test_set_input_limits_and_readback) {
     zassert_equal(limits.vindpm_mv, 3600);
     zassert_equal(limits.watchdog, 0x5); /* 40s */
     zassert_equal(limits.vac_ovp, 0x0);  /* 26V per field-table POR */
-    /* REG11 AUTO_INDET_EN reads back through the real driver; POR is 1
-     * (the emulator boots REG11=0x40). The device-side #169 assertion wants
-     * this readable to confirm charger_policy cleared it to 0 at boot. */
-    zassert_equal(limits.auto_indet_en, 1);
 
     zassert_ok(bq25792_set_input_current_limit_ma(bq_dev, 1500));
     zassert_ok(bq25792_set_input_voltage_limit_mv(bq_dev, 4600));
@@ -194,6 +190,34 @@ ZTEST(emul_tps25750, test_watchdog_disable_and_ico_enable) {
     zassert_ok(bq25792_ico_enable(bq_dev, false));
     zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x0F, &reg0f, 1));
     zassert_equal(reg0f & BIT(4), 0);
+}
+
+/* REG11 AUTO_INDET_EN readback (bq25792_get_auto_indet_en) — the diagnostic
+ * getter behind 'power bq limits' AUTO_INDET_EN, used by the on-device #169
+ * regression assertion. Exercise BOTH decode states: POR 1, and the 0 the
+ * HIL test actually depends on (charger_policy clears it at boot). */
+ZTEST(emul_tps25750, test_auto_indet_readback) {
+    emul_tps25750_bq_por_defaults(tps_emul);
+
+    uint8_t ai = 0xFF;
+    zassert_ok(bq25792_get_auto_indet_en(bq_dev, &ai));
+    zassert_equal(ai, 1, "POR AUTO_INDET_EN should read 1 (REG11=0x40)");
+
+    /* Set the field low (bit 6 of REG11) and confirm the getter decodes 0 —
+     * the state the #169 fix produces and the HIL test asserts. */
+    uint8_t reg11 = 0;
+    zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x11, &reg11, 1));
+    reg11 &= (uint8_t)~BIT(6);
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x11, &reg11, 1));
+
+    ai = 0xFF;
+    zassert_ok(bq25792_get_auto_indet_en(bq_dev, &ai));
+    zassert_equal(ai, 0, "AUTO_INDET_EN should read 0 after clearing REG11 bit 6");
+
+    /* And the sanctioned setter drives it back — the real charger_policy path. */
+    zassert_ok(bq25792_auto_indet_enable(bq_dev, false));
+    zassert_ok(bq25792_get_auto_indet_en(bq_dev, &ai));
+    zassert_equal(ai, 0);
 }
 
 /* A bridged-write failure surfaces from the setter instead of silently

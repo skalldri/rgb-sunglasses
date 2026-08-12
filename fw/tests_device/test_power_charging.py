@@ -74,24 +74,39 @@ def test_no_battery_charge_gating(rgb: RgbShell):
     )
 
 
-@pytest.mark.requires_charging
-def test_charging_actually_charges(rgb: RgbShell):
-    """#169: BC1.2 on floating D+/D- pins blocked charging.
-
-    Two halves, both now shell-assertable (AUTO_INDET_EN readout added by
-    #335). Note VBUS_STAT==8 was observed on a HEALTHY charging board
-    (2026-08-11), so the catalogue's VBUS_STAT!=8 expectation is wrong; do
-    not add it.
+def test_auto_indet_disabled(rgb: RgbShell):
+    """#169 (the fix itself, config-INDEPENDENT): charger_policy_boot_init
+    clears BQ25792 AUTO_INDET_EN unconditionally at boot — before any battery
+    or VBUS read — because the D+/D- pins are NC and BC1.2 must not probe
+    them. So this holds on EVERY board in EVERY power configuration, which is
+    exactly why it is NOT `requires_charging`: a batteryless CI rig (where
+    the charging test below skips) is precisely where a reintroduced #169
+    would otherwise ship green.
     """
     kv = rgb.parse_kv(rgb.exec("power bq limits"))
-    # The #169 fix itself: charger_policy clears AUTO_INDET_EN at boot so
-    # BC1.2 never probes the NC pins. If this regresses to 1, the floating
-    # pins can latch "not qualified adaptor" and charging stops.
+    # Presence check first: pre-#335 firmware has no such field, and
+    # parse_kv omits absent keys — distinguish "the fix regressed" from
+    # "you're testing a stale image" (HIL runs don't always reflash).
+    assert "AUTO_INDET_EN" in kv, (
+        "`power bq limits` has no AUTO_INDET_EN field — firmware predates "
+        f"#335; reflash before trusting this test. Parsed: {kv}"
+    )
     assert kv["AUTO_INDET_EN"] == 0, (
         f"AUTO_INDET_EN={kv['AUTO_INDET_EN']} — the #169 boot-time clear "
-        f"regressed; BC1.2 will probe the NC D+/D- pins: {kv}"
+        f"regressed; BC1.2 will probe the NC D+/D- pins and can latch 'not "
+        f"qualified adaptor', blocking all charging: {kv}"
     )
-    # And the observable consequence: charging actually proceeds.
+
+
+@pytest.mark.requires_charging
+def test_charging_actually_charges(rgb: RgbShell):
+    """#169 observable consequence: with battery + VBUS + enable, charging
+    actually proceeds. (The fix itself is covered config-independently by
+    test_auto_indet_disabled above.) Note VBUS_STAT==8 was observed on a
+    HEALTHY charging board (2026-08-11), so the catalogue's VBUS_STAT!=8
+    expectation is wrong; do not add it.
+    """
+    kv = rgb.parse_kv(rgb.exec("power bq limits"))
     # CHG_STAT 0 = not charging; 1-6 = charging phases; 7 = termination done.
     assert kv["CHG_STAT"] != 0, (
         f"CHG_STAT=0 (not charging) despite battery+VBUS+enable: {kv}"
