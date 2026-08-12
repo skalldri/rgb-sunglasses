@@ -160,19 +160,21 @@ if [ "$STANDALONE" -eq 1 ]; then
     # build has VT100 on and no crash-test commands — the one image the
     # harness cannot parse (PR #341 review). Run the twister path once (or
     # --build-only) to produce it, then iterate standalone against it.
-    # All three scenarios build the identical image (same extra_configs) —
-    # accept whichever the last twister run produced.
+    # Derive the build dir from the REQUESTED tier's scenario — a
+    # first-match search across scenario dirs could silently flash a stale
+    # image from a different scenario (twister keeps prior dirs untouched
+    # under --test-only/--no-clean), reporting pass/fail for firmware that
+    # isn't under test (PR #349 review).
     if [ -z "$STANDALONE_BUILD_DIR" ]; then
-        for scen in app.device.hil app.device.dfu app.device.soak; do
-            d="$OUTDIR/rgb_sunglasses_proto0_nrf5340_cpuapp/zephyr/$scen"
-            [ -d "$d" ] && { STANDALONE_BUILD_DIR="$d"; break; }
-        done
-        if [ -z "$STANDALONE_BUILD_DIR" ]; then
-            echo "[!] No twister device build under $OUTDIR." >&2
-            echo "    Run '$0 --build-only' first (or pass --build-dir for a suitably-configured build)." >&2
+        STANDALONE_BUILD_DIR="$OUTDIR/rgb_sunglasses_proto0_nrf5340_cpuapp/zephyr/$SCENARIO"
+        if [ ! -d "$STANDALONE_BUILD_DIR" ]; then
+            echo "[!] No twister device build for scenario $SCENARIO at:" >&2
+            echo "    $STANDALONE_BUILD_DIR" >&2
+            echo "    Run '$0 --build-only' (plus the matching --tier) first, or pass --build-dir." >&2
             exit 1
         fi
     fi
+    echo "[*] standalone image: $STANDALONE_BUILD_DIR"
     [ -d "$STANDALONE_BUILD_DIR" ] || { echo "[!] Build dir not found: $STANDALONE_BUILD_DIR" >&2; exit 1; }
 
     # Fail fast on an image the harness is known unable to drive: the VT100

@@ -2,24 +2,32 @@
 load. Every test here runs minutes, not seconds — `--tier soak`, never in the
 default set (twister scenario app.device.soak, slow: true).
 
+Preconditions (hard failures, not skips — fixable setup): shuffle must be
+OFF (persisted; a shuffle switch mid-soak silently vacates the measurement)
+and the board provisioned. Every test restores the glim selection AND loop
+mode it touches (both persist to NVS).
+
 Regressions pinned:
-- #267/#271/#312  Frame pacing: the display thread must hold its 33.3 ms
-        budget over minutes of real rendering — overruns, multi-second
-        segment stalls, and PDM buffer-allocation failures all appeared
-        only under sustained load.
+- #267/#271/#312  Frame pacing: the display thread must hold its frame
+        budget over minutes of REAL rendering — overruns, multi-second
+        segment stalls, and buffer-allocation failures appeared only under
+        sustained load. Playback is proven, not assumed: the decoder's
+        format banner is captured at selection and the frame count is
+        checked against the device's own configured rate.
 - #304/#307  Extension phase-accumulator drift: an unbounded accumulator
         fed to sinf() grows the fdlibm reduction cost without bound. Stats
-        reset on activation, and the collapse took >300 s to manifest — a
+        reset on activation and the collapse took >300 s to manifest — a
         short test structurally cannot see it.
 - #257  Shuffle must not hard-cut a long clip mid-play: with bad_apple in
         LoopOne, the switch-away has to wait for the clip's good-moment
         (its end), not fire at max+grace.
 - #234  GLIM format 4 (Lz4PerFrameRgb24): a full playthrough of 4096.glim
-        with zero decode/seek errors.
+        with zero decoder errors.
 """
 
 from __future__ import annotations
 
+import contextlib
 import re
 import time
 
@@ -29,23 +37,85 @@ from helpers.rgb_shell import RgbShell
 
 pytestmark = pytest.mark.soak
 
-# Names as printed by `ext list` (manifest displayNames). Plasma is the
-# animation whose accumulator regressed in #307; it is a standalone-repo
-# extension so not part of the provisioning baseline — hello (also sinf-
-# based) is the fallback.
 PLASMA = "Plasma"
 HELLO = "Hello Extension"
 
-# 4096.glim: 24 fps LZ4 clip, one pass ≈ 102 s (issue #96/#234).
-GLIM_LZ4 = "4096.glim"
+GLIM_LZ4 = "4096.glim"       # 24 fps LZ4 clip, one pass ≈ 102 s (#96/#234)
 GLIM_LZ4_PASS_S = 115
-# bad_apple.glim: 5258 frames @ 24 fps ≈ 215.6 s (issue #257).
-GLIM_LONG = "bad_apple.glim"
+GLIM_LONG = "bad_apple.glim"  # 5258 frames @ 24 fps ≈ 215.6 s (#257)
+
+LOOP_MODES = ("loop_one", "play_all", "stop_after_one")
+
+
+def _require_shuffle_off(rgb: RgbShell) -> None:
+    """Hard fail (fixable setup): a persisted-on shuffle switches animations
+    mid-soak, silently vacating whatever this tier is measuring (PR #349
+    review — the dwell clock and the ext soak both depended on it)."""
+    st = rgb.shuffle_status()
+    assert not st["enabled"], (
+        "shuffle is enabled (persisted) — turn it off (`anim shuffle off`) "
+        "before running the soak tier; it invalidates every measurement here"
+    )
+
+
+def _glim_loop_mode(rgb: RgbShell) -> str | None:
+    """Current persisted loop mode, or None if never persisted (default).
+
+    The stored value is the dropdown string with the SELECTED token first;
+    `settings read string` prints it raw, so the first known token wins.
+    """
+    out = rgb.exec("settings read string appcfg/glim_player/loop_mode", check=False)
+    for line in out:
+        for tok in LOOP_MODES:
+            if line.strip().startswith(tok):
+                return tok
+    return None
+
+
+@contextlib.contextmanager
+def _glim_playback(rgb: RgbShell, clip: str):
+    """Select `clip` in loop_one with PROOF the decoder opened it, restoring
+    selection AND loop mode afterwards (both persist to NVS — a soak run
+    must not permanently reconfigure a shared board; PR #349 review).
+
+    The decoder banner is only emitted when the SELECTION CHANGES, so a
+    different clip is selected first when needed, and the banner is captured
+    from the select exchange itself via probe() — it fires before any
+    post-hoc console window could open (PR #349 review).
+    """
+    orig_glim = rgb.glim_selected()
+    orig_mode = _glim_loop_mode(rgb)
+
+    rgb.exec("anim set glim_player")
+    rgb.exec("glim set_loop_mode loop_one")
+    names = rgb.glim_list()
+    assert clip in names, f"{clip} not provisioned: {names}"
+    if rgb.glim_selected() == clip:
+        # Force a selection CHANGE so the open banner is emitted.
+        other = next(n for n in names if n != clip)
+        rgb.exec(f"glim select {names.index(other)}")
+    m = rgb.probe(
+        f"glim select {names.index(clip)}",
+        r"GLIM opened:\s+\d+x\d+,\s+\d+ frames @ \d+ fps, format (\d+)",
+        timeout=5.0,
+    )
+    assert m, f"no decoder open banner selecting {clip} — playback unproven"
+    try:
+        yield int(m.group(1))  # the clip's format id, for format assertions
+    finally:
+        rgb.exec("anim set zigzag", check=False)
+        if orig_mode is not None:
+            rgb.exec(f"glim set_loop_mode {orig_mode}", check=False)
+        else:
+            rgb.exec("glim set_loop_mode loop_one", check=False)  # firmware default
+        if orig_glim:
+            with contextlib.suppress(Exception):
+                rgb.glim_select_name(orig_glim)
 
 
 def _collect_console(rgb: RgbShell, seconds: float) -> list[str]:
-    """Drain console lines for a window, prompt-stripped (same rationale as
-    the steady-state spam test: the redraw prefixes every async log line)."""
+    """Drain console lines for a window, prompt-stripped (the shell redraw
+    prefixes every async log line)."""
     rgb.dut.clear_buffer()
     lines: list[str] = []
     deadline = time.monotonic() + seconds
@@ -61,10 +131,10 @@ def _collect_console(rgb: RgbShell, seconds: float) -> list[str]:
 
 
 def test_frame_pacing_soak(rgb: RgbShell):
-    """#267/#271/#312: 5 minutes of real rendering load (GLIM playback —
-    FAT reads + decode + render), then the led_stats budget gates."""
-    rgb.exec("anim set glim_player")
-    try:
+    """#267/#271/#312: 5 minutes under PROVEN rendering load (LZ4 decode +
+    FAT reads + render), then the led_stats budget gates."""
+    _require_shuffle_off(rgb)
+    with _glim_playback(rgb, GLIM_LZ4):
         rgb.exec("led_stats reset")
         console = _collect_console(rgb, 300.0)
 
@@ -72,25 +142,29 @@ def test_frame_pacing_soak(rgb: RgbShell):
         assert not errors, f"error lines during the soak: {errors[:5]}"
 
         s = rgb.led_stats()
-        # ~9000 frames at 33.3 ms; require 90% to prove rendering actually ran.
-        assert s["frames"] > 8100, f"only {s['frames']} frames in 300 s: {s}"
+        # The frame period is a persisted, app-writable setting — derive the
+        # expected count from the device's own target instead of assuming
+        # 33.3 ms (PR #349 review).
+        expected = 300e6 / s["target_us"]
+        assert s["frames"] > expected * 0.9, (
+            f"only {s['frames']} frames in 300 s (expected ~{expected:.0f} "
+            f"at {s['target_us']} µs/frame): {s}"
+        )
         assert s["overruns"] == 0, f"frame overruns during soak (#267): {s}"
         assert s["work_max_us"] < s["target_us"], (
             f"work max {s['work_max_us']} µs exceeds the {s['target_us']} µs "
             f"frame budget (#267): {s}"
         )
-        # #312's stalls were 0.6-1.5 s; the catalogue ceiling is 100 ms.
         assert s["worst_wall_us"] < 100_000, (
             f"segment stall {s['worst_wall_us']} µs in '{s['worst_label']}' (#312): {s}"
         )
-    finally:
-        rgb.exec("anim set zigzag", check=False)
 
 
 def test_ext_cpu_soak(rgb: RgbShell):
     """#304/#307: >300 s of continuous extension ticking; CPU max must stay
-    flat. The #307 collapse (3.4 ms → 25 ms cpu max, render rate 90→28 Hz)
-    is invisible before ~200 s because sinf's argument has to grow first."""
+    flat. The #307 collapse (3.4 ms → 25 ms cpu max) is invisible before
+    ~200 s because sinf's argument has to grow first."""
+    _require_shuffle_off(rgb)
     names = {s["name"] for s in rgb.ext_list()}
     target = PLASMA if PLASMA in names else HELLO
     if target not in names:
@@ -103,12 +177,17 @@ def test_ext_cpu_soak(rgb: RgbShell):
         while time.monotonic() < deadline:
             time.sleep(30.0)
             cur = [s for s in rgb.ext_list() if s["name"] == target][0]
-            assert not cur["faulted"], (
-                f"{target} faulted mid-soak: {rgb.ext_faults()}"
+            assert not cur["faulted"], f"{target} faulted mid-soak: {rgb.ext_faults()}"
+            # Deactivation (e.g. anything switching animations) silently
+            # stops the accumulator growing — the soak would then measure
+            # nothing while its cumulative floors still pass (PR #349
+            # review).
+            assert cur["active"], (
+                f"{target} deactivated mid-soak — nothing is accumulating; "
+                f"the #304/#307 gate would be vacuous"
             )
         stats = rgb.ext_stats()[target]
         assert stats["ticks"] > 5000, f"implausibly few ticks after 320 s: {stats}"
-        # Healthy plasma: 3.4/3.6/4.1 ms; the #307 regression hit 25 ms max.
         assert stats["cpu_max"] < 5000, (
             f"{target} cpu max {stats['cpu_max']} µs after {stats['ticks']} "
             f"ticks — phase-accumulator drift (#304/#307): {stats}"
@@ -122,80 +201,65 @@ def test_shuffle_waits_for_long_clip(rgb: RgbShell):
     the clip's good-moment (~215 s in) — the broken behavior hard-cut at
     max+grace, and the naive fix converged on the midpoint (60-150 s band).
     """
+    _require_shuffle_off(rgb)  # also: the dwell clock must start at OUR shuffle-on
     st = rgb.shuffle_status()
-    # The wanted-switch point is min..max after activation, then grace-bound
-    # waiting for a good moment. If the device's persisted max+grace already
-    # reaches past the clip-end region, a mid-clip cut and a legitimate
-    # timed switch are indistinguishable — the test cannot discriminate.
-    if st["max_s"] + st["grace_s"] > 170:
+    # min > max is legitimate (two GATT characteristics written one at a
+    # time; rearm() swaps at pick time) — the effective upper bound is
+    # max(min, max) (PR #349 review).
+    effective_max = max(st["min_s"], st["max_s"])
+    if effective_max + st["grace_s"] > 170:
         pytest.skip(
-            f"persisted shuffle timing (max {st['max_s']} s + grace "
-            f"{st['grace_s']} s) overlaps the clip-end window; cannot "
+            f"persisted shuffle timing (effective max {effective_max} s + "
+            f"grace {st['grace_s']} s) overlaps the clip-end window; cannot "
             f"discriminate a #257 regression on this configuration"
         )
 
-    orig_glim = rgb.glim_selected()
-    rgb.exec("anim set glim_player")
-    rgb.glim_select_name(GLIM_LONG)
-    rgb.exec("glim set_loop_mode loop_one")
-    try:
+    with _glim_playback(rgb, GLIM_LONG):
         t0 = time.monotonic()
         rgb.exec("anim shuffle on")
-        dwell = None
-        while time.monotonic() - t0 < 300.0:
-            if rgb.anim_get() != "glim_player":
-                dwell = time.monotonic() - t0
-                break
-            time.sleep(5.0)
-        assert dwell is not None, (
-            "shuffle never switched away within 300 s — stuck waiting for a "
-            "good moment that never signals?"
-        )
-        assert dwell > 170.0, (
-            f"shuffle cut bad_apple {dwell:.0f} s in — mid-clip hard cut "
-            f"(#257): the good-moment wait is gone"
-        )
-        assert dwell < 270.0, (
-            f"switch at {dwell:.0f} s — well past the ~215 s clip end; "
-            f"good-moment signaling from the glim player looks broken"
-        )
-    finally:
-        rgb.exec("anim shuffle off", check=False)
-        rgb.exec("anim set zigzag", check=False)
-        if orig_glim:
-            rgb.glim_select_name(orig_glim)
+        try:
+            dwell = None
+            while time.monotonic() - t0 < 300.0:
+                if rgb.anim_get() != "glim_player":
+                    dwell = time.monotonic() - t0
+                    break
+                time.sleep(5.0)
+            assert dwell is not None, (
+                "shuffle never switched away within 300 s — stuck waiting "
+                "for a good moment that never signals?"
+            )
+            assert dwell > 170.0, (
+                f"shuffle cut bad_apple {dwell:.0f} s in — mid-clip hard cut "
+                f"(#257): the good-moment wait is gone"
+            )
+            assert dwell < 270.0, (
+                f"switch at {dwell:.0f} s — well past the ~215 s clip end; "
+                f"good-moment signaling from the glim player looks broken"
+            )
+        finally:
+            # The precondition proved shuffle was OFF before we enabled it,
+            # so off IS the captured original state.
+            rgb.exec("anim shuffle off", check=False)
 
 
 def test_glim_lz4_full_pass(rgb: RgbShell):
     """#234: one complete playthrough of the LZ4 (format 4) asset with zero
-    decode/seek errors — the regression rendered RGB bytes as a 1-bit
-    bitmap because format 4 fell into the mono branch."""
-    orig_glim = rgb.glim_selected()
-    rgb.exec("anim set glim_player")
-    rgb.glim_select_name(GLIM_LZ4)
-    rgb.exec("glim set_loop_mode loop_one")
-    try:
+    decoder errors — the regression rendered RGB bytes as a 1-bit bitmap
+    because format 4 fell into the mono branch."""
+    _require_shuffle_off(rgb)
+    with _glim_playback(rgb, GLIM_LZ4) as fmt:
+        assert fmt == 4, f"{GLIM_LZ4} opened as format {fmt}, expected LZ4 (4)"
         console = _collect_console(rgb, GLIM_LZ4_PASS_S)
-        # Only ERROR-level lines and genuine failure words count — the
-        # decoder's own INFO banner ("glim_decoder: GLIM opened: ... format
-        # 4") matches a naive 'decode' substring and false-alarmed the first
-        # hardware run. That banner is positive evidence, asserted below.
+        # Scoped to the decoder's own module: an unscoped fail/error match
+        # fired on unrelated subsystems (BT reconnects, charger warnings)
+        # during a 2-minute window (PR #349 review).
         bad = [
             ln
             for ln in console
-            if "<err>" in ln
-            or re.search(r"fail|error|invalid|corrupt", ln, re.I)
+            if "glim_decoder" in ln
+            and ("<err>" in ln or re.search(r"fail|error|invalid|corrupt", ln, re.I))
         ]
         assert not bad, f"decoder complaints during the LZ4 pass: {bad[:5]}"
-        opened = [ln for ln in console if "GLIM opened" in ln and "format 4" in ln]
-        assert opened, (
-            f"never saw the format-4 open banner — did the LZ4 path engage? "
-            f"({GLIM_LZ4} selected, {len(console)} console lines)"
-        )
         assert rgb.anim_get() == "glim_player", (
             "playback did not survive the full pass"
         )
-    finally:
-        rgb.exec("anim set zigzag", check=False)
-        if orig_glim:
-            rgb.glim_select_name(orig_glim)
