@@ -521,6 +521,17 @@ int bq25792_get_limits(const struct device* dev, struct bq25792_limits* limits) 
         limits->watchdog = (uint8_t)reg.get<BQ25792_CHARGER_CONTROL_1_WATCHDOG>(0, false);
         limits->vac_ovp = (uint8_t)reg.get<BQ25792_CHARGER_CONTROL_1_VAC_OVP>(0, false);
     }
+    {
+        // REG11 AUTO_INDET_EN (bit 6): expected 0 on this design (D+/D- NC,
+        // #169 — charger_policy clears it at boot and after any watchdog/RST).
+        // Read-only readback so the #169 regression is shell-assertable.
+        BQ25792_CHARGER_CONTROL_2 reg(cfg);
+        if ((ret = reg.read())) {
+            return ret;
+        }
+        limits->auto_indet_en =
+            (uint8_t)reg.get<BQ25792_CHARGER_CONTROL_2_AUTO_INDET_EN>(0, false);
+    }
 
     return 0;
 }

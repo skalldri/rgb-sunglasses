@@ -146,6 +146,10 @@ ZTEST(emul_tps25750, test_set_input_limits_and_readback) {
     zassert_equal(limits.vindpm_mv, 3600);
     zassert_equal(limits.watchdog, 0x5); /* 40s */
     zassert_equal(limits.vac_ovp, 0x0);  /* 26V per field-table POR */
+    /* REG11 AUTO_INDET_EN reads back through the real driver; POR is 1
+     * (the emulator boots REG11=0x40). The device-side #169 assertion wants
+     * this readable to confirm charger_policy cleared it to 0 at boot. */
+    zassert_equal(limits.auto_indet_en, 1);
 
     zassert_ok(bq25792_set_input_current_limit_ma(bq_dev, 1500));
     zassert_ok(bq25792_set_input_voltage_limit_mv(bq_dev, 4600));

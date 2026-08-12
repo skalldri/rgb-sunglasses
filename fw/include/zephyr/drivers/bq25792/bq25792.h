@@ -221,6 +221,7 @@ struct bq25792_limits {
     uint32_t ico_ilim_ma; /**< REG19 ICO-discovered input limit (read-only) */
     uint8_t watchdog;     /**< REG10 WATCHDOG_2:0 raw encoding */
     uint8_t vac_ovp;      /**< REG10 VAC_OVP_1:0 raw encoding */
+    uint8_t auto_indet_en; /**< REG11 AUTO_INDET_EN (bit 6): 0 on this design (D+/D- NC, #169) */
 };
 
 /**

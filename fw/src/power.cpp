@@ -615,8 +615,8 @@ static int cmd_power_bq_limits(const struct shell *shell, size_t argc, char **ar
 
     shell_print(shell, "ICHG=%u mA  IINDPM=%u mA  VINDPM=%u mV  ICO_ILIM=%u mA", limits.ichg_ma,
                 limits.iindpm_ma, limits.vindpm_mv, limits.ico_ilim_ma);
-    shell_print(shell, "WATCHDOG=%s  VAC_OVP=%s", kWatchdog[limits.watchdog & 0x7],
-                kVacOvp[limits.vac_ovp & 0x3]);
+    shell_print(shell, "WATCHDOG=%s  VAC_OVP=%s  AUTO_INDET_EN=%u", kWatchdog[limits.watchdog & 0x7],
+                kVacOvp[limits.vac_ovp & 0x3], limits.auto_indet_en);
     shell_print(shell, "IINDPM_STAT=%u VINDPM_STAT=%u WD_STAT=%u POORSRC=%u PG=%u VBUS_PRESENT=%u",
                 st.iindpm_active ? 1 : 0, st.vindpm_active ? 1 : 0, st.wd_expired ? 1 : 0,
                 st.poor_source ? 1 : 0, st.power_good ? 1 : 0, st.vbus_present ? 1 : 0);

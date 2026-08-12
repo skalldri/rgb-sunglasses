@@ -76,15 +76,22 @@ def test_no_battery_charge_gating(rgb: RgbShell):
 
 @pytest.mark.requires_charging
 def test_charging_actually_charges(rgb: RgbShell):
-    """The observable half of #169 (BC1.2 on floating pins blocked charging).
+    """#169: BC1.2 on floating D+/D- pins blocked charging.
 
-    Full pin (AUTO_INDET_EN readout) is deferred to issue #335 — and note
-    VBUS_STAT==8 was observed on a HEALTHY charging board (2026-08-11), so
-    the catalogue's VBUS_STAT!=8 expectation is wrong; do not add it.
-    Here: with battery + VBUS + enable, the charger must be in a charging
-    or termination state, never permanently idle.
+    Two halves, both now shell-assertable (AUTO_INDET_EN readout added by
+    #335). Note VBUS_STAT==8 was observed on a HEALTHY charging board
+    (2026-08-11), so the catalogue's VBUS_STAT!=8 expectation is wrong; do
+    not add it.
     """
     kv = rgb.parse_kv(rgb.exec("power bq limits"))
+    # The #169 fix itself: charger_policy clears AUTO_INDET_EN at boot so
+    # BC1.2 never probes the NC pins. If this regresses to 1, the floating
+    # pins can latch "not qualified adaptor" and charging stops.
+    assert kv["AUTO_INDET_EN"] == 0, (
+        f"AUTO_INDET_EN={kv['AUTO_INDET_EN']} — the #169 boot-time clear "
+        f"regressed; BC1.2 will probe the NC D+/D- pins: {kv}"
+    )
+    # And the observable consequence: charging actually proceeds.
     # CHG_STAT 0 = not charging; 1-6 = charging phases; 7 = termination done.
     assert kv["CHG_STAT"] != 0, (
         f"CHG_STAT=0 (not charging) despite battery+VBUS+enable: {kv}"
