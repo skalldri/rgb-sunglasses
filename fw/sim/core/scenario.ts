@@ -69,6 +69,15 @@ export interface ScenarioImuSine {
   axis: 0 | 1 | 2;
   amplitude: number;
   hz: number;
+  /** Constant sample the sine rides on. SineImuProvider has always supported
+   * this; it was simply unreachable from a scenario file.
+   *
+   * Defaults to gravity on +Z — which per fw/docs/imu-coordinate-frame.md is a
+   * wearer lying SUPINE, since +Z points out the back of the head. Any scenario
+   * meant to depict an upright head must set `{ "accel": [9.81, 0, 0] }`
+   * (+X is the crown), or an extension that gates on orientation before
+   * reacting will sit idle for the whole run and still exit 0. */
+  base?: { accel: [number, number, number]; gyro?: [number, number, number] };
 }
 export interface ScenarioImuKeyframes {
   type: "keyframes";

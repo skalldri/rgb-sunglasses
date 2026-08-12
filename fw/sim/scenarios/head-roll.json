@@ -1,0 +1,23 @@
+{
+  "schema": "rgbx-scenario/1",
+  "name": "head-roll",
+  "description": "Lateral head tilt, ear toward each shoulder: gravity swept along a constant-magnitude arc from -40 to +40 degrees about +Z, with the matching 0.175 rad/s on gyro-Z. head-tilt sweeps accel-X (inverted -> crown-up); nothing exercised roll until this.",
+  "durationMs": 8000,
+  "seed": 0,
+  "audio": { "type": "silence" },
+  "imu": {
+    "type": "keyframes",
+    "frames": [
+      { "atMs": 0,    "accel": [7.515, -6.306, 0], "gyro": [0, 0, 0.175] },
+      { "atMs": 1000, "accel": [8.495, -4.905, 0], "gyro": [0, 0, 0.175] },
+      { "atMs": 2000, "accel": [9.218, -3.355, 0], "gyro": [0, 0, 0.175] },
+      { "atMs": 3000, "accel": [9.661, -1.703, 0], "gyro": [0, 0, 0.175] },
+      { "atMs": 4000, "accel": [9.810,  0.000, 0], "gyro": [0, 0, 0.175] },
+      { "atMs": 5000, "accel": [9.661,  1.703, 0], "gyro": [0, 0, 0.175] },
+      { "atMs": 6000, "accel": [9.218,  3.355, 0], "gyro": [0, 0, 0.175] },
+      { "atMs": 7000, "accel": [8.495,  4.905, 0], "gyro": [0, 0, 0.175] },
+      { "atMs": 8000, "accel": [7.515,  6.306, 0], "gyro": [0, 0, 0.175] }
+    ]
+  },
+  "expect": { "nonBlackBeforeMs": 500, "visibleAfterBrightness": true }
+}

@@ -135,6 +135,9 @@ function buildImuProvider(imu: ScenarioImu | undefined, durationMs: number): Imu
         axis: imu.axis,
         amplitude: imu.amplitude,
         hz: imu.hz,
+        base: imu.base
+          ? { accel: imu.base.accel, gyro: imu.base.gyro ?? [0, 0, 0] }
+          : undefined,
       });
     case "keyframes":
       return new KeyframeImuProvider(imu.frames);
