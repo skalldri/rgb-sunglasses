@@ -259,6 +259,41 @@ static atomic_t s_tap_armed;
 static atomic_t s_tap_dropped;
 #endif /* CONFIG_APP_AUDIO_DEBUG */
 
+/* Sector-aligned WAV prologue. Needed by BOTH capture paths: PCM that starts
+ * at the canonical 44-byte offset makes every subsequent 4096-byte write
+ * straddle a sector boundary, and each one then pays the FF_FS_TINY
+ * shared-window read-modify-write penalty. Measured: that alone dropped 34 of
+ * 250 blocks on an 8 s capture, and a deeper queue did NOT help because the
+ * deficit is continuous rather than bursty.
+ */
+#define WAV_DATA_OFFSET 4096
+#define WAV_JUNK_PAD (WAV_DATA_OFFSET - 12 - 24 - 8 - 8)
+
+#if defined(CONFIG_APP_CAPTURE)
+/* Lean capture tap: PCM only.
+ *
+ * The rich tap above carries the analysis result alongside every block and feeds
+ * a per-frame CSV. That is most of what makes CONFIG_APP_AUDIO_DEBUG cost ~33 KB
+ * of appcore RAM: an 18 KB queue of 1128-byte frames, an 8 KB WAV batch and a
+ * 4.6 KB CSV batch. A scenario capture needs none of the analysis — the simulator
+ * replays the WAV through the real DSP and re-derives the features itself — so
+ * this queue carries bare PCM blocks and nothing else.
+ *
+ * Depth is a Kconfig symbol because it is a real tuning knob against FAT stalls,
+ * not an arbitrary number: the rich path needed 16 entries because its drain loop
+ * also wrote the CSV, and 8 dropped frames on every recording. This one writes
+ * only the WAV, in single-sector batches, so it does far less work per frame —
+ * but a flash sector erase still stalls the writer for hundreds of ms, and
+ * s_capture_dropped is how you find out the depth is wrong rather than guessing. */
+struct capture_pcm_block {
+    int16_t pcm[AUDIO_FFT_SIZE];
+};
+K_MSGQ_DEFINE(capture_pcm_q, sizeof(struct capture_pcm_block),
+              CONFIG_APP_CAPTURE_QUEUE_FRAMES, 4);
+static atomic_t s_capture_armed;
+static atomic_t s_capture_dropped;
+#endif /* CONFIG_APP_CAPTURE */
+
 /* Set once the DSP thread's capture loop is actually streaming; lets shell
  * commands distinguish "no frames yet" from "audio pipeline never started". */
 static atomic_t s_dsp_running;
@@ -533,6 +568,17 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
         }
 #endif
 
+#if defined(CONFIG_APP_CAPTURE)
+        /* No intermediate copy: pcm is already exactly one block, so the msgq
+         * copies straight out of it. Only runs while a capture is armed, so an
+         * idle device pays one atomic read per block. */
+        if (atomic_get(&s_capture_armed)) {
+            if (k_msgq_put(&capture_pcm_q, pcm, K_NO_WAIT) != 0) {
+                atomic_inc(&s_capture_dropped);
+            }
+        }
+#endif
+
         k_mem_slab_free(&mem_slab, buffer);
 
         /* Apply the gain decision AFTER the old-domain block was processed (see
@@ -691,8 +737,6 @@ struct __attribute__((packed)) wav_header {
  * chunks (Python's wave module, librosa, and the replay harness's chunk walker).
  *
  * Layout: RIFF(12) + fmt(24) + JUNK(8 + WAV_JUNK_PAD) + data hdr(8) = 4096. */
-#define WAV_DATA_OFFSET 4096
-#define WAV_JUNK_PAD (WAV_DATA_OFFSET - 12 - 24 - 8 - 8)
 #endif /* CONFIG_APP_AUDIO_DEBUG */
 
 #define DEFAULT_WAV_PATH "/NAND:/sound.wav"
@@ -1373,6 +1417,169 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
  *
  * Clearing the stop flag HERE rather than in the worker means a stop requested
  * while idle cannot leak into the next capture and end it instantly. */
+#if defined(CONFIG_APP_CAPTURE)
+/* Batched straight into one FAT sector. 4 blocks x 1024 B is exactly 4096, so
+ * every write lands sector-aligned without a JUNK-padded prologue — the same
+ * alignment the analysis CSV needs, reached here by arithmetic instead of by
+ * padding, because with no CSV competing for the FatFS window the WAV header can
+ * stay the canonical 44 bytes. */
+#define CAPTURE_BATCH_BLOCKS 4
+static int16_t s_capture_batch[CAPTURE_BATCH_BLOCKS * AUDIO_FFT_SIZE];
+
+/* Capture from the lean PCM tap: the DSP thread stays the sole dmic_read()
+ * consumer (so beat-reactive animations keep running through a recording) and
+ * this drains its copy. No analysis sidecar — see the tap's comment. */
+static int record_wav_capture(const struct shell *shell, uint32_t duration_s, const char *path) {
+    const uint32_t total_blocks = (duration_s * MSEC_PER_SEC) / BLOCK_CAPTURE_TIME_MS;
+
+    if (!atomic_cas(&s_capture_armed, 0, 1)) {
+        shell_error(shell, "A capture is already draining the tap");
+        return -EBUSY;
+    }
+
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    int ret = fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
+    if (ret < 0) {
+        shell_error(shell, "Failed to open %s: %d", path, ret);
+        atomic_set(&s_capture_armed, 0);
+        return ret;
+    }
+
+    struct wav_header hdr = {
+        .riff_id = {'R', 'I', 'F', 'F'},
+        .file_size = 0,
+        .wave_id = {'W', 'A', 'V', 'E'},
+        .fmt_id = {'f', 'm', 't', ' '},
+        .fmt_size = 16,
+        .audio_format = 1,
+        .num_channels = NUM_AUDIO_CHANNELS,
+        .sample_rate = SAMPLE_RATE_HZ,
+        .byte_rate = SAMPLE_RATE_HZ * NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
+        .block_align = NUM_AUDIO_CHANNELS * BYTES_PER_SAMPLE,
+        .bits_per_sample = SAMPLE_BIT_WIDTH,
+        .data_id = {'d', 'a', 't', 'a'},
+        .data_size = 0,
+    };
+    /* One full sector: RIFF+fmt, a JUNK pad, then the data chunk header, so PCM
+     * begins exactly at WAV_DATA_OFFSET and every batch write below is
+     * sector-aligned. s_capture_batch doubles as the scratch for it — it is
+     * exactly one sector and the drain loop has not started yet. */
+    memset(s_capture_batch, 0, sizeof(s_capture_batch));
+    uint8_t *prologue = (uint8_t *)s_capture_batch;
+    memcpy(&prologue[0], &hdr, 36); /* RIFF(12) + fmt(24), without the data header */
+    const uint32_t junk_size = WAV_JUNK_PAD;
+    memcpy(&prologue[36], "JUNK", 4);
+    memcpy(&prologue[40], &junk_size, 4);
+    memcpy(&prologue[WAV_DATA_OFFSET - 8], "data", 4);
+    if (fs_write(&f, prologue, WAV_DATA_OFFSET) != (ssize_t)WAV_DATA_OFFSET) {
+        shell_error(shell, "Failed to write WAV header");
+        fs_close(&f);
+        atomic_set(&s_capture_armed, 0);
+        return -EIO;
+    }
+
+#if defined(CONFIG_IMU)
+    struct imu_sidecar imu_sc = {};
+    if (imu_sidecar_open(&imu_sc, path, k_uptime_get()) < 0) {
+        shell_warn(shell, "IMU sidecar could not be opened; recording audio only");
+    }
+#endif
+
+    /* Purge AFTER arming and opening: anything queued while the files were being
+     * created predates t=0 and would desynchronise the WAV from the sidecar. */
+    k_msgq_purge(&capture_pcm_q);
+    atomic_set(&s_capture_dropped, 0);
+    shell_print(shell, "Recording %u s (%u blocks) to %s ...", duration_s, total_blocks, path);
+
+    uint32_t blocks_captured = 0;
+    uint32_t batched = 0;
+    uint32_t total_bytes = 0;
+    uint32_t timeouts = 0;
+    bool io_error = false;
+    bool stopped_early = false;
+
+    while (blocks_captured < total_blocks) {
+        if (record_stop_requested()) {
+            stopped_early = true;
+            break;
+        }
+        /* Drained straight into its slot in the batch — no separate 1 KB staging
+         * buffer, which is a saving worth having on a path whose whole point is
+         * being lean. */
+        ret = k_msgq_get(&capture_pcm_q, &s_capture_batch[batched * AUDIO_FFT_SIZE],
+                         K_MSEC(1000));
+        if (ret != 0) {
+            if (++timeouts >= 5) {
+                shell_error(shell, "Tap produced nothing for 5 s - aborting at block %u",
+                            blocks_captured);
+                io_error = true;
+                break;
+            }
+            continue;
+        }
+        timeouts = 0;
+        blocks_captured++;
+        batched++;
+
+#if defined(CONFIG_IMU)
+        imu_sidecar_drain(&imu_sc);
+#endif
+
+        if (batched == CAPTURE_BATCH_BLOCKS) {
+            ssize_t written = fs_write(&f, s_capture_batch, sizeof(s_capture_batch));
+            if (written != (ssize_t)sizeof(s_capture_batch)) {
+                shell_error(shell, "PCM write failed: %d", (int)written);
+                io_error = true;
+                break;
+            }
+            total_bytes += (uint32_t)written;
+            batched = 0;
+        }
+    }
+
+    /* Flush the partial batch so an early stop keeps every block it captured. */
+    if (batched > 0 && !io_error) {
+        size_t tail = batched * AUDIO_FFT_SIZE * sizeof(int16_t);
+        ssize_t written = fs_write(&f, s_capture_batch, tail);
+        if (written == (ssize_t)tail) {
+            total_bytes += (uint32_t)written;
+        }
+    }
+
+    atomic_set(&s_capture_armed, 0);
+
+    /* Patch the two sizes in place rather than rewriting the sector: file_size at
+     * offset 4, data_size in the data-chunk header at WAV_DATA_OFFSET - 4. */
+    uint32_t file_size = total_bytes + WAV_DATA_OFFSET - 8;
+    fs_seek(&f, 4, FS_SEEK_SET);
+    fs_write(&f, &file_size, sizeof(file_size));
+    fs_seek(&f, WAV_DATA_OFFSET - 4, FS_SEEK_SET);
+    fs_write(&f, &total_bytes, sizeof(total_bytes));
+    fs_close(&f);
+
+#if defined(CONFIG_IMU)
+    imu_sidecar_close(&imu_sc, shell);
+#endif
+
+    uint32_t dropped = (uint32_t)atomic_get(&s_capture_dropped);
+    if (io_error) {
+        shell_error(shell, "ABORTED: %u of %u blocks saved to %s", blocks_captured, total_blocks,
+                    path);
+        return -EIO;
+    }
+    if (stopped_early) {
+        shell_print(shell, "Stopped early at %u of %u blocks", blocks_captured, total_blocks);
+    }
+    shell_print(shell, "Wrote %u bytes of PCM to %s (%u blocks, %u dropped)", total_bytes, path,
+                blocks_captured, dropped);
+    if (dropped > 0) {
+        shell_warn(shell, "%u blocks dropped - raise CONFIG_APP_CAPTURE_QUEUE_FRAMES", dropped);
+    }
+    return 0;
+}
+#endif /* CONFIG_APP_CAPTURE */
+
 int sound_record_wav(const struct shell *shell, uint32_t duration_s, const char *path) {
     atomic_set(&s_record_stop_requested, 0);
 #if defined(CONFIG_APP_AUDIO_DEBUG)
@@ -1382,10 +1589,17 @@ int sound_record_wav(const struct shell *shell, uint32_t duration_s, const char 
     shell_warn(shell,
                "DSP thread not streaming - falling back to direct capture (no analysis "
                "sidecar)");
+#endif
+#if defined(CONFIG_APP_CAPTURE)
+    if (atomic_get(&s_dsp_running)) {
+        /* The DSP owns the PDM stream, so the direct path cannot have the mic.
+         * Before this existed that was simply an error on a stock build, which
+         * made field capture impossible without the 33 KB analysis tap. */
+        return record_wav_capture(shell, duration_s, path);
+    }
 #else
     if (atomic_get(&s_dsp_running)) {
-        shell_error(shell, "DSP thread owns the PDM stream and the tap recorder is compiled "
-                           "out - rebuild with CONFIG_APP_AUDIO_DEBUG=y");
+        shell_error(shell, "DSP thread owns the PDM stream and no capture tap is compiled in");
         return -ENOTSUP;
     }
 #endif

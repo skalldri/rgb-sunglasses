@@ -101,6 +101,17 @@ config APP_CAPTURE
 	  GATT write. A write handler runs on the BT RX thread and must never
 	  block for the length of a recording.
 
+config APP_CAPTURE_QUEUE_FRAMES
+	int "Capture PCM tap depth, in 32 ms blocks"
+	default 8
+	depends on APP_CAPTURE
+	help
+	  Buffering between the DSP thread and the capture writer. A flash sector
+	  erase stalls the writer for hundreds of ms, and anything not buffered
+	  across that stall is a dropped block. 8 blocks is ~256 ms. The recorder
+	  reports its drop count, so raise this if a capture reports drops rather
+	  than guessing.
+
 config APP_CAPTURE_THREAD_STACK_SIZE
 	int "Capture worker stack size"
 	default 4096
