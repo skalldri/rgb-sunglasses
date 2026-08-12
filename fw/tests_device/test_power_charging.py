@@ -74,15 +74,37 @@ def test_no_battery_charge_gating(rgb: RgbShell):
     )
 
 
+def test_auto_indet_disabled(rgb: RgbShell):
+    """#169 (the fix itself, config-INDEPENDENT): charger_policy_boot_init
+    clears BQ25792 AUTO_INDET_EN unconditionally at boot — before any battery
+    or VBUS read — because the D+/D- pins are NC and BC1.2 must not probe
+    them. So this holds on EVERY board in EVERY power configuration, which is
+    exactly why it is NOT `requires_charging`: a batteryless CI rig (where
+    the charging test below skips) is precisely where a reintroduced #169
+    would otherwise ship green.
+    """
+    kv = rgb.parse_kv(rgb.exec("power bq limits"))
+    # Presence check first: pre-#335 firmware has no such field, and
+    # parse_kv omits absent keys — distinguish "the fix regressed" from
+    # "you're testing a stale image" (HIL runs don't always reflash).
+    assert "AUTO_INDET_EN" in kv, (
+        "`power bq limits` has no AUTO_INDET_EN field — firmware predates "
+        f"#335; reflash before trusting this test. Parsed: {kv}"
+    )
+    assert kv["AUTO_INDET_EN"] == 0, (
+        f"AUTO_INDET_EN={kv['AUTO_INDET_EN']} — the #169 boot-time clear "
+        f"regressed; BC1.2 will probe the NC D+/D- pins and can latch 'not "
+        f"qualified adaptor', blocking all charging: {kv}"
+    )
+
+
 @pytest.mark.requires_charging
 def test_charging_actually_charges(rgb: RgbShell):
-    """The observable half of #169 (BC1.2 on floating pins blocked charging).
-
-    Full pin (AUTO_INDET_EN readout) is deferred to issue #335 — and note
-    VBUS_STAT==8 was observed on a HEALTHY charging board (2026-08-11), so
-    the catalogue's VBUS_STAT!=8 expectation is wrong; do not add it.
-    Here: with battery + VBUS + enable, the charger must be in a charging
-    or termination state, never permanently idle.
+    """#169 observable consequence: with battery + VBUS + enable, charging
+    actually proceeds. (The fix itself is covered config-independently by
+    test_auto_indet_disabled above.) Note VBUS_STAT==8 was observed on a
+    HEALTHY charging board (2026-08-11), so the catalogue's VBUS_STAT!=8
+    expectation is wrong; do not add it.
     """
     kv = rgb.parse_kv(rgb.exec("power bq limits"))
     # CHG_STAT 0 = not charging; 1-6 = charging phases; 7 = termination done.

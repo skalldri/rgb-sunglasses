@@ -192,6 +192,34 @@ ZTEST(emul_tps25750, test_watchdog_disable_and_ico_enable) {
     zassert_equal(reg0f & BIT(4), 0);
 }
 
+/* REG11 AUTO_INDET_EN readback (bq25792_get_auto_indet_en) — the diagnostic
+ * getter behind 'power bq limits' AUTO_INDET_EN, used by the on-device #169
+ * regression assertion. Exercise BOTH decode states: POR 1, and the 0 the
+ * HIL test actually depends on (charger_policy clears it at boot). */
+ZTEST(emul_tps25750, test_auto_indet_readback) {
+    emul_tps25750_bq_por_defaults(tps_emul);
+
+    uint8_t ai = 0xFF;
+    zassert_ok(bq25792_get_auto_indet_en(bq_dev, &ai));
+    zassert_equal(ai, 1, "POR AUTO_INDET_EN should read 1 (REG11=0x40)");
+
+    /* Set the field low (bit 6 of REG11) and confirm the getter decodes 0 —
+     * the state the #169 fix produces and the HIL test asserts. */
+    uint8_t reg11 = 0;
+    zassert_ok(emul_tps25750_get_bq_reg(tps_emul, 0x11, &reg11, 1));
+    reg11 &= (uint8_t)~BIT(6);
+    zassert_ok(emul_tps25750_set_bq_reg(tps_emul, 0x11, &reg11, 1));
+
+    ai = 0xFF;
+    zassert_ok(bq25792_get_auto_indet_en(bq_dev, &ai));
+    zassert_equal(ai, 0, "AUTO_INDET_EN should read 0 after clearing REG11 bit 6");
+
+    /* And the sanctioned setter drives it back — the real charger_policy path. */
+    zassert_ok(bq25792_auto_indet_enable(bq_dev, false));
+    zassert_ok(bq25792_get_auto_indet_en(bq_dev, &ai));
+    zassert_equal(ai, 0);
+}
+
 /* A bridged-write failure surfaces from the setter instead of silently
  * leaving the register unchanged (read-back-verify contract). */
 ZTEST(emul_tps25750, test_setter_propagates_bridge_failure) {

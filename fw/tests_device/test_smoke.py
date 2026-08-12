@@ -44,7 +44,9 @@ def test_bq_status_format(rgb: RgbShell):
 
 def test_bq_limits_format(rgb: RgbShell):
     kv = rgb.bq_limits()
-    for key in ("ICHG", "IINDPM", "VINDPM", "VBAT_PRESENT", "VBUS_PRESENT"):
+    # AUTO_INDET_EN included (#335): ungated presence check so a firmware that
+    # dropped the field is caught even on rigs where the charging tests skip.
+    for key in ("ICHG", "IINDPM", "VINDPM", "VBAT_PRESENT", "VBUS_PRESENT", "AUTO_INDET_EN"):
         assert key in kv, f"missing {key} in `power bq limits`: {kv}"
 
 

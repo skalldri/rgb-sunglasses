@@ -32,6 +32,17 @@ int bq25792_adc_enable(const struct device* dev, bool enable);
  */
 int bq25792_auto_indet_enable(const struct device* dev, bool enable);
 
+/**
+ * @brief Read REG11 AUTO_INDET_EN (bit 6) — the peer readback of
+ *        bq25792_auto_indet_enable(). Diagnostic only: no charger-policy path
+ *        consumes it, so it is NOT folded into bq25792_get_limits() (that
+ *        getter gates safety-relevant reconciliation and must not fail on a
+ *        diagnostic read). Expected 0 on this design (D+/D- NC, #169).
+ * @param out receives 0 (disabled) or 1 (enabled). Untouched on error.
+ * @return 0 on success, negative errno on failure.
+ */
+int bq25792_get_auto_indet_en(const struct device* dev, uint8_t* out);
+
 int bq25792_pfm_enable(const struct device* dev, bool enable);
 
 typedef enum {
