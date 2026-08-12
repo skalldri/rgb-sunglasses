@@ -32,14 +32,17 @@ tracking issue (create on first run: "E2E run results — issue #333"):
   "run": {"date": "...", "fw_version": "...", "app_commit": "...",
            "phone": "...", "plan_version": "1.0.0"},
   "scenarios": [
-    {"id": "E2E-01", "status": "pass|fail|skip|flake",
+    {"id": "E2E-01", "status": "pass|fail|skip|flake|deferred",
      "evidence": ["serial excerpts", "screenshot paths"], "notes": "..."}
   ]
 }
 ```
 
 `flake` = failed, then passed on retry with a known-flake signature (each
-scenario lists its own). Anything else that fails twice is `fail`.
+scenario lists its own). Anything else that fails twice is `fail`. `skip` = a
+precondition made it inapplicable (e.g. no battery); `deferred` = deliberately
+not attempted this pass (e.g. a board/bond-destructive scenario held for a
+supervised run, or E2E-03 which is human-supervised by design).
 
 **Version preconditions**: record `serial print`, `mcuboot_version`, and
 `kernel version` from the shell plus the app build (Settings screen or
