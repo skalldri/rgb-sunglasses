@@ -22,6 +22,8 @@ const WASM_DIR = path.join(SIM_DIR, "out", "wasm");
 const GOLDEN_SPECS: { ext: string; scenario: string }[] = [
   { ext: "hello", scenario: "buttons-tour" },
   { ext: "hello", scenario: "metronome-120" },
+  { ext: "hello", scenario: "head-roll" },
+  { ext: "hello", scenario: "dance" },
   { ext: "cpptest", scenario: "silence" },
   { ext: "cpptest", scenario: "color-modes" },
 ];
