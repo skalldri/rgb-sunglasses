@@ -28,6 +28,16 @@ from helpers.rgb_shell import RgbShell  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
+def pytest_collection_modifyitems(items):
+    """Destructive tests run LAST, whatever the filename sort says.
+
+    They wipe settings/FAT and end with a multi-minute reprovision; anything
+    ordered after them would run against a freshly-wiped-then-reprovisioned
+    board instead of the state the session fixtures probed.
+    """
+    items.sort(key=lambda item: 1 if item.get_closest_marker("destructive") else 0)
+
+
 @pytest.fixture(scope="session")
 def rgb(dut: DeviceAdapter, shell: Shell) -> RgbShell:
     """The suite's shell handle: quirk-hardened exec with retval checking."""

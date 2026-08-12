@@ -43,8 +43,13 @@ the lock (when `CLAUDECODE` is set) and never acquires it itself.
 | `dfu` | MCUmgr firmware-update loop | explicit `--tier dfu` |
 | `soak` | minutes-to-hours drift/timing assertions | explicit `--tier soak` |
 
-Destructive tests run LAST within a run and their teardown reprovisions the
-board (fw/scripts/provision-device.sh) — the board must always be left usable.
+Destructive tests run LAST within a run (enforced by a collection hook, not
+filename order) and their teardown reprovisions the board
+(fw/scripts/provision-device.sh + reboot + manifest re-verify, even on
+failure) — the board must always be left usable. Two side effects to know:
+`factory_reset` erases BLE bonds (the shared phone needs `/re-pair`
+afterwards), and the reprovision downloads the GLIM source videos (~2-3 min,
+needs network).
 
 ## House rules
 
