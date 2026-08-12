@@ -212,6 +212,12 @@ class RgbShell:
         m = self.probe("kernel uptime", r"Uptime:\s*(\d+)\s*ms")
         return int(m.group(1)) if m else None
 
+    def mark_reboot_reference(self) -> None:
+        """Snapshot the current uptime as wait_reboot()'s freshness
+        reference, for reboots triggered OUTSIDE the shell (mcumgr reset,
+        J-Link) where exec_oneway()'s automatic snapshot never runs."""
+        self._oneway_ref_uptime = self.probe_uptime_ms()
+
     def exec_oneway(self, cmd: str) -> None:
         """Fire a command that will NOT come back to a usable prompt.
 
