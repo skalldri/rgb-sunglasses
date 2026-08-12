@@ -113,7 +113,7 @@ class RgbShell:
             time.sleep(1.0)
         logger.warning("boot settle: `anim get` still 'none' after %.0fs", timeout)
 
-    def _exec_with_retry(self, cmd: str, timeout: float | None) -> list[str]:
+    def _exec_with_retry(self, cmd: str, timeout: float | None, attempts: int = 3) -> list[str]:
         """One shell exchange, retried on echo-smear timeouts.
 
         An async log line can interleave with the command's echo so the
@@ -122,7 +122,7 @@ class RgbShell:
         the second try in practice.
         """
         last_exc: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(attempts):
             try:
                 return self.shell.exec_command(cmd, timeout=timeout or 10.0)
             except TwisterHarnessTimeoutException as exc:
@@ -131,9 +131,15 @@ class RgbShell:
                 self.dut.write(b"\x03")
                 time.sleep(0.2)
                 self.dut.clear_buffer()
-        raise AssertionError(f"exchange {cmd!r} failed after 3 attempts: {last_exc}")
+        raise AssertionError(f"exchange {cmd!r} failed after {attempts} attempt(s): {last_exc}")
 
-    def exec(self, cmd: str, timeout: float | None = None, check: bool = True) -> list[str]:
+    def exec(
+        self,
+        cmd: str,
+        timeout: float | None = None,
+        check: bool = True,
+        attempts: int = 3,
+    ) -> list[str]:
         """Run a command; return its filtered output lines.
 
         With check=True (default), also runs `retval` and fails the test if
@@ -151,7 +157,11 @@ class RgbShell:
         self.dut.write(b"\x03")
         time.sleep(0.05)
         self.dut.clear_buffer()
-        out = self.shell.get_filtered_output(self._exec_with_retry(cmd, timeout))
+        # attempts=1 makes the send single-shot for commands whose EFFECT is
+        # not idempotent even though re-running them is syntactically fine
+        # (e.g. re-arming a fault injector after the fault already cleared
+        # it): an echo smear then fails the exchange instead of double-firing.
+        out = self.shell.get_filtered_output(self._exec_with_retry(cmd, timeout, attempts))
         if check:
             rv = self.last_retval()
             if rv != 0:
@@ -422,6 +432,40 @@ class RgbShell:
                 stats[current][f"{kind}_avg"] = int(m.group(3))
                 stats[current][f"{kind}_max"] = int(m.group(4))
         return stats
+
+    def ext_faults(self) -> list[dict]:
+        """`ext faults` → [{slot, name, what, count, params_reset, state}].
+
+        Empty list when the firmware prints "no extension faults recorded".
+        """
+        records: list[dict] = []
+        cur: dict | None = None
+        for line in self.exec("ext faults"):
+            s = line.strip()
+            m = re.match(r"^\[(\d+)\]\s+'(.*)':\s+(.*)$", s)
+            if m:
+                cur = {
+                    "slot": int(m.group(1)),
+                    "name": m.group(2),
+                    "what": m.group(3),
+                    "count": None,
+                    "params_reset": None,
+                    "state": None,
+                }
+                records.append(cur)
+                continue
+            if cur is None:
+                continue
+            m = re.search(r"(\d+)\s+time\(s\) since clear", s)
+            if m:
+                cur["count"] = int(m.group(1))
+            m = re.match(r"^params reset to manifest defaults:\s+(yes|no)", s)
+            if m:
+                cur["params_reset"] = m.group(1) == "yes"
+            m = re.match(r"^currently:\s+(.*)$", s)
+            if m:
+                cur["state"] = m.group(1)
+        return records
 
     def settings_keys(self) -> list[str]:
         return [
