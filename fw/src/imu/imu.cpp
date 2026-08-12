@@ -13,6 +13,10 @@
 LOG_MODULE_REGISTER(imu);
 
 K_MSGQ_DEFINE(imu_result_q, sizeof(struct imu_analysis_result), 4, 4);
+/* Deeper than imu_result_q (8 vs 4): a capture's drain is driven by the audio
+ * frame cadence rather than by DRDY, so it must tolerate a few samples of jitter
+ * without losing any. ~224 B. */
+K_MSGQ_DEFINE(imu_tap_q, sizeof(struct imu_analysis_result), 8, 4);
 K_SEM_DEFINE(imu_drdy_sem, 0, 1);
 
 // imu_thread runs in user mode under CONFIG_USERSPACE (issue #79, proto0 only -- see
@@ -113,6 +117,11 @@ static void imu_thread_func(void* a, void* b, void* c) {
             k_msgq_purge(&imu_result_q);
             k_msgq_put(&imu_result_q, &result, K_NO_WAIT);
         }
+
+        /* Capture tap. Deliberately NOT purge-and-retry like the queue above: a
+         * capture wants every sample in order, and when no capture is running the
+         * queue is simply full and the put fails, which is the normal state. */
+        (void)k_msgq_put(&imu_tap_q, &result, K_NO_WAIT);
     }
 }
 
@@ -178,7 +187,11 @@ static int imu_init(void) {
     // handle, result queue, DRDY semaphore) and add it to a memory domain covering the
     // plain globals above -- user threads have zero permissions by default on
     // anything they don't own.
-    k_thread_access_grant(tid, s_imu_dev, &imu_result_q, &imu_drdy_sem);
+    /* imu_tap_q is granted too: this thread runs in USER MODE under
+     * CONFIG_USERSPACE, where it has zero permissions on any kernel object it was
+     * not explicitly given — a missing grant here is a fault on the first put, not
+     * a dropped sample. */
+    k_thread_access_grant(tid, s_imu_dev, &imu_result_q, &imu_tap_q, &imu_drdy_sem);
 
     // z_libc_partition holds z_arm_tls_ptr (the current thread's TLS pointer, read by
     // every thread at entry via __aeabi_read_tp() when CONFIG_CURRENT_THREAD_USE_TLS

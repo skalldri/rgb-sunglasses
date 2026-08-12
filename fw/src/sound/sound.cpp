@@ -698,6 +698,125 @@ struct __attribute__((packed)) wav_header {
 #define DEFAULT_WAV_PATH "/NAND:/sound.wav"
 #define DEFAULT_RECORD_DURATION_S 10
 
+#if defined(CONFIG_IMU)
+#include <imu/imu.h>
+
+/* IMU sidecar: "<wav path>.imu.csv", written by the SAME capture loop as the WAV
+ * and timestamped from the same t0, so the two streams share a timebase by
+ * construction. That is the whole reason this lives inside record_wav rather than
+ * as its own `imu record` command: the Zephyr shell is single-threaded, so two
+ * commands cannot run concurrently, and anything else would need the host to
+ * align two independently-started recordings after the fact.
+ *
+ * Deliberately a SEPARATE file rather than extra columns on the analysis CSV:
+ * fw/sim/node/dline.ts accepts exactly 21 or 41 comma-separated fields per D-line,
+ * so widening those rows would break every existing beat_lab consumer.
+ *
+ * Batched in sector-aligned 4096-byte chunks for the hardware-measured reason
+ * given for s_csv_batch above — a misaligned flush pays the FF_FS_TINY shared-
+ * window RMW penalty and stalls the drain loop long enough to DROP AUDIO FRAMES.
+ * A 512-byte buffer would have flushed ~4x per second, misaligned, and quietly
+ * degraded the very recording it is part of. */
+#define IMU_CSV_CHUNK 4096
+#define IMU_CSV_LINE_MAX 96
+static char s_imu_batch[IMU_CSV_CHUNK + IMU_CSV_LINE_MAX];
+
+/* Values are scaled integers, not floats: CONFIG_CBPRINTF_FP_SUPPORT is off (see
+ * fw/CLAUDE.md), so a %f here would print the literal specifier. The scale is
+ * stated in the file header so the host converter does not have to assume it. */
+#define IMU_CSV_SCALE 1000
+
+struct imu_sidecar {
+    struct fs_file_t file;
+    bool open;
+    int64_t t0_ms;
+    size_t len;
+    uint32_t samples;
+};
+
+static void imu_sidecar_flush(struct imu_sidecar *sc, bool final) {
+    while (sc->len >= IMU_CSV_CHUNK || (final && sc->len > 0)) {
+        size_t take = (sc->len >= IMU_CSV_CHUNK) ? IMU_CSV_CHUNK : sc->len;
+        if (fs_write(&sc->file, s_imu_batch, take) < 0) {
+            sc->open = false; /* stop trying; the WAV is the primary artifact */
+            return;
+        }
+        sc->len -= take;
+        if (sc->len > 0) {
+            memmove(s_imu_batch, &s_imu_batch[take], sc->len);
+        }
+    }
+}
+
+static int imu_sidecar_open(struct imu_sidecar *sc, const char *wav_path, int64_t t0_ms) {
+    char path[96];
+    (void)snprintf(path, sizeof(path), "%s.imu.csv", wav_path);
+
+    fs_file_t_init(&sc->file);
+    int ret = fs_open(&sc->file, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
+    if (ret < 0) {
+        return ret;
+    }
+    sc->open = true;
+    sc->t0_ms = t0_ms;
+    sc->len = 0;
+    sc->samples = 0;
+
+    /* Header padded to a full sector, so every subsequent chunk lands aligned —
+     * same trick as the analysis CSV's #PARAMS line. */
+    memset(s_imu_batch, ' ', IMU_CSV_CHUNK);
+    int n = snprintf(s_imu_batch, IMU_CSV_CHUNK,
+                     "#IMU scale=%d cols=ms,seq,ax,ay,az,gx,gy,gz units=mm/s2,mrad/s",
+                     IMU_CSV_SCALE);
+    if (n > 0 && (size_t)n < IMU_CSV_CHUNK) {
+        s_imu_batch[n] = ' ';
+    }
+    s_imu_batch[IMU_CSV_CHUNK - 1] = '\n';
+    if (fs_write(&sc->file, s_imu_batch, IMU_CSV_CHUNK) < 0) {
+        fs_close(&sc->file);
+        sc->open = false;
+        return -EIO;
+    }
+    k_msgq_purge(&imu_tap_q);
+    return 0;
+}
+
+/* Called once per audio frame from the capture loop; drains whatever the IMU
+ * thread has produced since the last call. */
+static void imu_sidecar_drain(struct imu_sidecar *sc) {
+    if (!sc->open) {
+        return;
+    }
+    struct imu_analysis_result r;
+    while (k_msgq_get(&imu_tap_q, &r, K_NO_WAIT) == 0) {
+        int n = snprintf(&s_imu_batch[sc->len], IMU_CSV_LINE_MAX,
+                         "I,%d,%u,%d,%d,%d,%d,%d,%d\n",
+                         (int)(k_uptime_get() - sc->t0_ms), r.seq,
+                         (int)(r.accel_x * IMU_CSV_SCALE), (int)(r.accel_y * IMU_CSV_SCALE),
+                         (int)(r.accel_z * IMU_CSV_SCALE), (int)(r.gyro_x * IMU_CSV_SCALE),
+                         (int)(r.gyro_y * IMU_CSV_SCALE), (int)(r.gyro_z * IMU_CSV_SCALE));
+        if (n > 0) {
+            sc->len += (size_t)n;
+            sc->samples++;
+        }
+        if (sc->len >= IMU_CSV_CHUNK) {
+            imu_sidecar_flush(sc, false);
+        }
+    }
+}
+
+static void imu_sidecar_close(struct imu_sidecar *sc, const struct shell *shell) {
+    if (!sc->open) {
+        return;
+    }
+    imu_sidecar_flush(sc, true);
+    fs_close(&sc->file);
+    sc->open = false;
+    shell_print(shell, "IMU sidecar: %u samples", sc->samples);
+}
+#endif /* CONFIG_IMU */
+
+
 #if defined(CONFIG_APP_AUDIO_DEBUG)
 /* Tap frame text format: field order lives in audio_tap_format.h (shared with
  * the host replay harness so the two producers can never drift; decoder in
@@ -863,6 +982,9 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
         shell_error(shell, "Failed to write WAV header: %d", ret);
         fs_close(&f);
         fs_close(&fcsv);
+#if defined(CONFIG_IMU)
+    imu_sidecar_close(&imu_sc, shell);
+#endif
         return -EIO;
     }
 
@@ -897,6 +1019,16 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
         fs_close(&fcsv);
         return -EBUSY;
     }
+
+#if defined(CONFIG_IMU)
+    /* Opened here so its t0 is the same instant the WAV's first frame is timed
+     * from. A failure is non-fatal: the WAV is the primary artifact and a capture
+     * without the sidecar is still useful. */
+    struct imu_sidecar imu_sc = {};
+    if (imu_sidecar_open(&imu_sc, path, k_uptime_get()) < 0) {
+        shell_warn(shell, "IMU sidecar could not be opened; recording audio only");
+    }
+#endif
 
     shell_print(shell, "Recording %u s (%u frames) to %s + %s ...", duration_s, total_frames,
                 path, csv_path);
@@ -965,6 +1097,9 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
             memmove(s_csv_batch, &s_csv_batch[TAP_CSV_CHUNK], csv_pos);
         }
         frames_captured++;
+#if defined(CONFIG_IMU)
+        imu_sidecar_drain(&imu_sc);
+#endif
     }
 
     atomic_set(&s_tap_armed, 0);
@@ -1144,6 +1279,18 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
         return ret;
     }
 
+#if defined(CONFIG_IMU)
+    /* The IMU sidecar is written on BOTH capture paths on purpose. This one runs
+     * whenever CONFIG_APP_AUDIO_DEBUG is off — which is the default, because the
+     * analysis tap costs 33 KB of appcore RAM. Logging IMU only on the tap path
+     * would have made recording a scenario require a special build and a reflash,
+     * for data the IMU thread produces regardless of the audio configuration. */
+    struct imu_sidecar imu_sc = {};
+    if (imu_sidecar_open(&imu_sc, path, k_uptime_get()) < 0) {
+        shell_warn(shell, "IMU sidecar could not be opened; recording audio only");
+    }
+#endif
+
     shell_print(shell, "Recording %u s to %s (direct capture, no analysis sidecar) ...",
                 duration_s, path);
 
@@ -1161,6 +1308,9 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
             continue;
         }
 
+#if defined(CONFIG_IMU)
+        imu_sidecar_drain(&imu_sc);
+#endif
         ssize_t written = fs_write(&f, buffer, size);
         if (written != (ssize_t)size) {
             shell_error(shell, "Short write on block %u (%d of %u bytes)", i, (int)written,
@@ -1181,6 +1331,9 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
     fs_write(&f, &hdr, sizeof(hdr));
     fs_close(&f);
 
+#if defined(CONFIG_IMU)
+    imu_sidecar_close(&imu_sc, shell);
+#endif
     shell_print(shell, "Wrote %u bytes of PCM to %s", total_bytes, path);
     return 0;
 }

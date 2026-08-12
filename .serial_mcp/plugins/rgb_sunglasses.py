@@ -160,6 +160,35 @@ TOOLS = [
         },
     ),
     Tool(
+        name="rgb_sunglasses.capture_scenario",
+        description=(
+            "Record a REAL audio + IMU capture for use as a simulator scenario "
+            "(`sound mic record_wav`, which also writes a synchronised .imu.csv "
+            "sidecar). Both streams are timestamped from the same t0 by the one "
+            "capture loop, so they need no host-side alignment. Freezes AGC gain "
+            "during the capture so the stimulus is reproducible. Afterwards, pull "
+            "the .wav and .imu.csv off the USB mass-storage disk and run "
+            "fw/tools/capture_to_scenario.py to emit the scenario JSON. Full "
+            "procedure: the /capture-scenario skill."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "duration_s": {"type": "integer", "minimum": 1, "maximum": 120},
+                "name": {
+                    "type": "string",
+                    "description": "capture name; files land at /NAND:/<name>.wav(+.imu.csv)",
+                },
+                "gain": {
+                    "type": "string",
+                    "description": "PDM gain register to freeze at, e.g. '0x28' (0 dB)",
+                },
+            },
+            "required": ["connection_id", "duration_s", "name"],
+        },
+    ),
+    Tool(
         name="rgb_sunglasses.glim_set_loop_mode",
         description=(
             "Set the Glim Player's loop mode (`glim set_loop_mode <mode>`): loop_one "
@@ -343,6 +372,54 @@ async def handle_sound_record(state: SerialState, args: dict) -> dict:
                contiguous=(int(m.group(4)) == 0), agc_restored=restored)
 
 
+async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
+    """Record audio + IMU together for a sim scenario.
+
+    Deliberately reuses record_wav rather than adding a second capture command:
+    the Zephyr shell is single-threaded, so two concurrent recordings are
+    impossible, and one loop writing both files is what gives them a shared t0.
+    """
+    connection_id = args["connection_id"]
+    duration_s = args["duration_s"]
+    name = args["name"]
+    gain = args.get("gain", "0x28")
+    path = f"/NAND:/{name}.wav"
+
+    freeze_out = await _run_command(state, connection_id, f"sound agc gain {gain}")
+    if "set to" not in freeze_out:
+        return _err("agc_gain_failed", freeze_out or "no response to 'sound agc gain'")
+
+    output = await _run_command(
+        state, connection_id, f"sound mic record_wav {duration_s} {path}",
+        timeout_ms=(duration_s + 15) * 1000, max_rounds=12,
+    )
+    # Always unfreeze: leaving the AGC pinned would silently kill gain adaptation
+    # (and every beat-reactive animation) for the rest of the board's uptime.
+    restored = "off" in await _run_command(state, connection_id, "sound agc freeze off")
+
+    if "Wrote" not in output:
+        return _err("record_failed",
+                    (output[-500:] if output else "no response from record_wav")
+                    + f" (agc_restored={restored})")
+
+    imu = re.search(r"IMU sidecar: (\d+) samples", output)
+    result = {
+        "wav_path": path,
+        "imu_csv_path": path + ".imu.csv",
+        "analysis_csv_path": path + ".csv",
+        "imu_samples": int(imu.group(1)) if imu else 0,
+        "agc_restored": restored,
+    }
+    if not imu:
+        # CONFIG_IMU off, or the sidecar could not be opened. The WAV is still
+        # usable; the scenario just has no IMU track.
+        result["warning"] = "no IMU sidecar reported — scenario will be audio-only"
+    m = re.search(r"Wrote (\d+) bytes of PCM", output)
+    if m:
+        result["bytes"] = int(m.group(1))
+    return _ok(**result)
+
+
 async def handle_sound_dump(state: SerialState, args: dict) -> dict:
     connection_id = args["connection_id"]
     frames = args["frames"]
@@ -410,5 +487,6 @@ HANDLERS = {
     "rgb_sunglasses.glim_select": handle_glim_select,
     "rgb_sunglasses.glim_set_loop_mode": handle_glim_set_loop_mode,
     "rgb_sunglasses.sound_record": handle_sound_record,
+    "rgb_sunglasses.capture_scenario": handle_capture_scenario,
     "rgb_sunglasses.sound_dump": handle_sound_dump,
 }
