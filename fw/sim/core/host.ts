@@ -30,7 +30,7 @@ import {
   setStringSlot,
   writeInputs,
 } from "./abi";
-import { ColorModeResolver } from "./colorMode";
+import { ColorModeResolver, sweepPhaseOffset } from "./colorMode";
 import { mulberry32 } from "./rng";
 import type { ManifestMetadata } from "./manifest";
 import type { ManifestResult } from "./manifest";
@@ -38,7 +38,8 @@ import {
   AUDIO_FRAME_MS,
   AudioFeatureProvider,
   AudioFeatures,
-  BeatLatch,
+  BeatCounter,
+  BeatCursor,
   IMU_PERIOD_MS,
   ImuProvider,
   SilenceAudioProvider,
@@ -126,7 +127,7 @@ export class SimHost {
 
   audioProvider: AudioFeatureProvider;
   imuProvider: ImuProvider;
-  readonly beatLatch = new BeatLatch();
+  readonly beatCounter = new BeatCounter();
 
   private adapter: SandboxAdapter | null = null;
   private requestId = 0;
@@ -213,11 +214,31 @@ export class SimHost {
 
     // One resolver per COLOR param; arm resets exactly like
     // extension_host::activate() arms every resolver's notifyActivated().
-    this.colorResolvers = this.metadata.params.map((p) =>
-      p.type === RgbxParamType.Color
-        ? new ColorModeResolver(this.rng, () => this.simTimeMs, () => this.beatLatch.consume())
-        : null,
-    );
+    //
+    // Two details mirror the firmware's issue #344 fix. Each resolver gets its OWN beat
+    // cursor over the shared counter, so with two colours on RandomOnBeat both re-roll
+    // rather than the first consuming the beat and the second never seeing one. And each
+    // gets a distinct sweep phase keyed on its COLOR ORDINAL (not its raw param index),
+    // so two concurrent Spectrum Sweeps are half a wheel apart instead of bit-identical,
+    // while a sole COLOR param stays at offset 0 regardless of where it sits among the
+    // other params.
+    const colorParamCount = this.metadata.params.filter(
+      (p) => p.type === RgbxParamType.Color,
+    ).length;
+    let colorOrdinal = 0;
+    this.colorResolvers = this.metadata.params.map((p) => {
+      if (p.type !== RgbxParamType.Color) {
+        return null;
+      }
+      const cursor = new BeatCursor(this.beatCounter);
+      const resolver = new ColorModeResolver(
+        this.rng,
+        () => this.simTimeMs,
+        () => cursor.consume(),
+        sweepPhaseOffset(colorOrdinal++, colorParamCount),
+      );
+      return resolver;
+    });
     for (const r of this.colorResolvers) {
       r?.notifyActivated();
     }
@@ -300,7 +321,7 @@ export class SimHost {
     while (this.audioFramesDelivered * AUDIO_FRAME_MS <= this.simTimeMs) {
       const frame = await this.audioProvider.nextFrame(this.audioFramesDelivered);
       this.lastAudioFeatures = frame;
-      this.beatLatch.onAudioFrame(frame);
+      this.beatCounter.onAudioFrame(frame);
       this.audioFramesDelivered++;
     }
     inputs.audioBandEnergy.set(this.lastAudioFeatures.bandEnergy);

@@ -21,15 +21,6 @@ namespace {
  * format change (issue #259). */
 constexpr size_t kColorBeatBand = 0;
 
-/* One latch per independent beat consumer. consumeBeat() is destructive, so a single
- * shared latch would let whichever consumer ran first in a tick eat the beat and the
- * other see none — and both can be live at once (Pulse in beat-sync mode with its color
- * set to RandomOnBeat drives its envelope and its color resolver off the same frame). */
-enum BeatConsumer {
-    kBeatConsumerColorMode = 0,
-    kBeatConsumerPulse,
-    kBeatConsumerCount,
-};
 
 /* Single shared instance: only one audio animation is active at a time,
  * so a single drain-and-cache source serves both without double-reads. */
@@ -37,28 +28,22 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
    public:
     /* Drain the message queue and cache the most recent frame.
      * Called once per animation tick so the animation sees a consistent snapshot.
-     * Beats for the edge-triggered consumers are LATCHED here, at drain time (once
+     * Beats for the edge-triggered consumers are COUNTED here, at drain time (once
      * per drained frame), not read from cache_.beat[] — so it doesn't matter which
      * of the potentially-several update() calls in a tick (the Beat animation's own,
-     * or either beat source below) drains a beat-carrying frame, and a beat
-     * flag persisting in cache_ across ticks can't cause repeated re-rolls. */
+     * or the beat source below) drains a beat-carrying frame, and a beat flag
+     * persisting in cache_ across ticks can't cause repeated re-rolls. */
     void update() override {
         audio_analysis_result tmp;
         while (k_msgq_get(&audio_result_q, &tmp, K_NO_WAIT) == 0) {
             cache_ = tmp;
             if (tmp.beat[kColorBeatBand]) {
-                for (bool &pending : pendingBeat_) {
-                    pending = true;
-                }
+                beatCount_++;
             }
         }
     }
 
-    bool consumePendingBeat(BeatConsumer consumer) {
-        const bool beat = pendingBeat_[consumer];
-        pendingBeat_[consumer] = false;
-        return beat;
-    }
+    uint32_t beatCount() const { return beatCount_; }
 
     size_t numBands() const override { return AUDIO_NUM_BANDS; }
 
@@ -78,46 +63,41 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
 
    private:
     audio_analysis_result cache_ = {};
-    bool pendingBeat_[kBeatConsumerCount] = {};
+    uint32_t beatCount_ = 0;
 };
 
 SoundAnimationAudioSource sSoundSource;
 
-/* Beat feed for the ColorModeSource resolvers (issue #259) and for Pulse's
- * beat-sync envelope (issue #148). Its own update() call is harmless when the
- * active animation already drained the queue this tick — the latch above makes
- * drain order irrelevant.
+/* Single beat feed shared by every consumer: the ColorModeSource resolvers
+ * (issue #259) and Pulse's beat-sync envelope (issue #148). Its own update()
+ * call is harmless when the active animation already drained the queue this
+ * tick — counting at drain time makes drain order irrelevant.
  *
- * "Only one animation ticks at a time" used to be the argument for a SINGLE
- * shared latch. That argument is wrong and this file no longer relies on it:
- * consumeBeat() is destructive, and one animation can hold several independent
- * consumers in the same tick (Pulse in beat-sync mode with a RandomOnBeat
- * colour), so whichever ran first would eat the beat. Hence the per-consumer
- * latch — do not collapse pendingBeat_[] back to one flag. Note the per-consumer
- * split is still not enough for N resolvers sharing kBeatConsumerColorMode; see
- * issue #344. */
-template <BeatConsumer Consumer>
+ * One object is correct here precisely BECAUSE it reports a count rather than
+ * consuming a latch: the per-consumer state lives in each consumer's own
+ * AnimationBeatCursor, so N consumers each observe every beat. Reintroducing a
+ * consume-once latch here — even one split per consumer, as issue #148 first
+ * did — reintroduces issue #344, because the consumer set is not fixed (an
+ * extension may declare up to RGBX_MAX_PARAMS colour params, each resolving
+ * through its own ColorModeSource). */
 class SoundBeatSource : public AnimationBeatSource {
    public:
-    bool consumeBeat() override {
+    uint32_t beatCount() override {
         sSoundSource.update();
-        return sSoundSource.consumePendingBeat(Consumer);
+        return sSoundSource.beatCount();
     }
 };
 
-SoundBeatSource<kBeatConsumerColorMode> sColorBeatSource;
-#if defined(CONFIG_ANIMATION_PULSE)
-SoundBeatSource<kBeatConsumerPulse> sPulseBeatSource;
-#endif
+SoundBeatSource sBeatSource;
 }  // namespace
 
 void color_mode_bind_default_beat_source() {
-    ColorModeSource::setDefaultBeatSource(&sColorBeatSource);
+    ColorModeSource::setDefaultBeatSource(&sBeatSource);
 }
 
 #if defined(CONFIG_ANIMATION_PULSE)
 void pulse_animation_bind_default_sound_dependencies() {
-    PulseAnimation::getInstance()->setBeatSource(&sPulseBeatSource);
+    PulseAnimation::getInstance()->setBeatSource(&sBeatSource);
 }
 #endif
 

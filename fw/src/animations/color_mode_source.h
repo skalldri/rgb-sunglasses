@@ -40,6 +40,20 @@ enum class ColorMode : uint8_t {
 uint32_t anim_color_from_hue(uint16_t hue1536);
 
 /**
+ * @brief Distinct SpectrumSweep starting phase for the @p index -th of @p count
+ * concurrent resolvers, spread evenly around the hue wheel.
+ *
+ * Deterministic rather than random: two sweeps must differ, but they must also be
+ * reproducible across activations, and a random offset would reintroduce the
+ * activation-time hue jump that skipping the re-roll exists to prevent.
+ *
+ * @param index Resolver index.
+ * @param count Total resolvers to spread across (0 is treated as 1).
+ * @return Starting phase in the accumulator's Q16 units.
+ */
+uint32_t anim_sweep_phase_offset(uint16_t index, uint16_t count);
+
+/**
  * @brief Resolves a raw mode-carrying Color characteristic value into the effective
  * per-tick 0x00RRGGBB color.
  *
@@ -60,13 +74,41 @@ class ColorModeSource : public AnimationUint32ParameterSource {
     using RandomFn = uint32_t (*)();   // production: sys_rand32_get
     using UptimeFn = int64_t (*)();    // production: k_uptime_get
 
-    ColorModeSource(const AnimationUint32ParameterSource &raw, RandomFn rng, UptimeFn now)
-        : raw_(raw), rng_(rng), now_(now) {}
+    /**
+     * @param raw Underlying mode-carrying characteristic value.
+     * @param rng Random source (production: sys_rand32_get).
+     * @param now Uptime source (production: k_uptime_get).
+     * @param sweepPhaseOffsetQ16 Starting phase for SpectrumSweep, in the same Q16 units
+     *        as the internal accumulator. Defaults to 0, which is every built-in
+     *        animation: they have one COLOR characteristic each, so there is nothing to
+     *        separate from. Callers that build SEVERAL resolvers which can sweep at once
+     *        must give each a distinct offset (see @ref anim_sweep_phase_offset and
+     *        issue #344) — otherwise identically-configured sweeps stay bit-identical
+     *        forever, since reset zeroes the phase and deliberately skips the random
+     *        re-roll for this mode. Callers whose resolver set is fixed at construction
+     *        pass it here; callers that only learn the layout later use
+     *        @ref setSweepPhaseOffset.
+     */
+    ColorModeSource(const AnimationUint32ParameterSource &raw, RandomFn rng, UptimeFn now,
+                    uint32_t sweepPhaseOffsetQ16 = 0)
+        : raw_(raw), rng_(rng), now_(now), sweepPhaseOffsetQ16_(sweepPhaseOffsetQ16) {}
 
     uint32_t get() const override;
 
     /** @brief Arm a state reset (new random color, restarted phase) for the next get(). */
     void notifyActivated() { resetPending_.store(true, std::memory_order_relaxed); }
+
+    /**
+     * @brief Set the SpectrumSweep starting phase after construction.
+     *
+     * For resolver pools built once but re-keyed per activation: the extension host owns
+     * one resolver per param SLOT, but the spread has to be computed over the COLOR
+     * params of whichever manifest is active, which is only known at activation time.
+     * Takes effect on the next armed reset.
+     *
+     * @param offsetQ16 Starting phase in the accumulator's Q16 units.
+     */
+    void setSweepPhaseOffset(uint32_t offsetQ16) { sweepPhaseOffsetQ16_ = offsetQ16; }
 
     /** @brief Per-instance beat source override (tests). nullptr = use the default. */
     void setBeatSource(AnimationBeatSource *src) { beatSource_ = src; }
@@ -83,7 +125,16 @@ class ColorModeSource : public AnimationUint32ParameterSource {
     const AnimationUint32ParameterSource &raw_;
     RandomFn rng_;
     UptimeFn now_;
+    /** @brief Instance override else the shared default; may be null. Stated once so a
+     * future change to the fallback rule cannot be applied to one call site and missed
+     * on the other. */
+    AnimationBeatSource *beats() const { return beatSource_ ? beatSource_ : sDefaultBeatSource_; }
+
     AnimationBeatSource *beatSource_ = nullptr;
+    uint32_t sweepPhaseOffsetQ16_ = 0;
+    // mutable: advanced from the const get(); each resolver owns its own cursor so
+    // several can observe the same beat (issue #344).
+    mutable AnimationBeatCursor beatCursor_;
     static AnimationBeatSource *sDefaultBeatSource_;  // constant-init (see .cpp)
 
     // mutable: consumed (exchange) inside the const get(); see threading note.

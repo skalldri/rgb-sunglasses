@@ -215,6 +215,8 @@ class ActiveSlotParamSource : public AnimationUint32ParameterSource {
 };
 
 struct ParamColorResolver {
+    /* Sweep phase offsets are NOT set here: they are keyed on the COLOR-param ordinal
+     * of the ACTIVE manifest, which isn't known until activation (see activate()). */
     explicit ParamColorResolver(size_t index)
         : raw(index), mode(raw, sys_rand32_get, k_uptime_get) {}
     ActiveSlotParamSource raw;
@@ -1320,9 +1322,33 @@ bool activate(size_t slot) {
     sPendingLoadSlot = static_cast<int>(slot);
     /* Arm a color-mode state reset (fresh RandomOnActivate roll, restarted
      * sweep phase) on every resolver — cheap, and covers slot switches where
-     * the same param index is a COLOR param in both slots. */
-    for (auto &resolver : sParamColorResolvers) {
-        resolver.mode.notifyActivated();
+     * the same param index is a COLOR param in both slots.
+     *
+     * Sweep phases are spread across this manifest's COLOR params by their COLOR
+     * ORDINAL, not their raw param index (issue #344 review). Keying on the raw index
+     * would couple the spread to unrelated params: a lone COLOR param sitting at index
+     * 5 would start its sweep 5/16 of the way round the wheel instead of at 0 — silently
+     * changing the activation colour of an already-published single-colour extension —
+     * and two colours would separate by however many non-colour params happened to sit
+     * between them (45 degrees for plasma) rather than the full 180 available. Ordinals
+     * also restore offset 0 for the single-colour case, so those extensions are
+     * unchanged. Slots whose param isn't a COLOR here are reset to 0 so a previous
+     * slot's offset can't linger. */
+    uint16_t colorParamCount = 0;
+    for (size_t p = 0; p < s.meta.paramCount && p < RGBX_MAX_PARAMS; p++) {
+        if (s.meta.params[p].type == RGBX_PARAM_COLOR) {
+            colorParamCount++;
+        }
+    }
+    uint16_t colorOrdinal = 0;
+    for (size_t p = 0; p < RGBX_MAX_PARAMS; p++) {
+        uint32_t offset = 0;
+        if (p < s.meta.paramCount && s.meta.params[p].type == RGBX_PARAM_COLOR) {
+            offset = anim_sweep_phase_offset(colorOrdinal, colorParamCount);
+            colorOrdinal++;
+        }
+        sParamColorResolvers[p].mode.setSweepPhaseOffset(offset);
+        sParamColorResolvers[p].mode.notifyActivated();
     }
     LOG_INF("extension '%s' activation queued", s.meta.displayName);
     return true;

@@ -46,6 +46,18 @@ void ColorModeSource::setDefaultBeatSource(AnimationBeatSource *src) {
     sDefaultBeatSource_ = src;
 }
 
+uint32_t anim_sweep_phase_offset(uint16_t index, uint16_t count) {
+    if (count == 0) {
+        count = 1;
+    }
+    /* Wrap rather than run off the end. index == count would return exactly
+     * kHueSpanQ16, which the accumulator's own modulo reduces to phase 0 on the first
+     * sweep tick — indistinguishable from index 0, which is the very collapse this
+     * function exists to prevent, and it would fail silently. */
+    index = static_cast<uint16_t>(index % count);
+    return static_cast<uint32_t>((static_cast<uint64_t>(kHueSpanQ16) * index) / count);
+}
+
 uint32_t anim_color_from_hue(uint16_t hue1536) {
     const uint32_t sector = (hue1536 % 1536u) >> 8;
     const uint32_t ramp = hue1536 & 0xFFu;
@@ -100,7 +112,12 @@ uint32_t ColorModeSource::get() const {
         lastMode_ = modeByte;
         lastNowMs_ = now;
         segmentStartMs_ = now;
-        huePhase16_ = 0;
+        huePhase16_ = sweepPhaseOffsetQ16_;
+        // Beats counted while this resolver was idle are stale; reporting them would
+        // fire an immediate re-roll on activation (issue #344).
+        if (AnimationBeatSource *src = beats()) {
+            beatCursor_.resync(*src);
+        }
         // Only the random modes consume entropy on reset. Rolls start from the
         // previous hue even across activations/mode changes, so the first color
         // of a new session is still visibly different from the last.
@@ -132,8 +149,8 @@ uint32_t ColorModeSource::get() const {
         case ColorMode::RandomOnBeat: {
             // No bound beat source (audio disabled / not wired) degrades to
             // RandomOnActivate: the reset above already rolled a color, hold it.
-            AnimationBeatSource *beats = beatSource_ ? beatSource_ : sDefaultBeatSource_;
-            if (beats != nullptr && beats->consumeBeat()) {
+            AnimationBeatSource *src = beats();
+            if (src != nullptr && beatCursor_.consumeBeat(*src)) {
                 currentHue_ = rollHueFrom(currentHue_);
             }
             return anim_color_from_hue(currentHue_);

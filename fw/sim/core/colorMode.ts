@@ -71,6 +71,22 @@ export function hueLerp(from: number, to: number, t256: number): number {
 export type ConsumeBeatFn = () => boolean;
 
 /**
+ * Distinct SpectrumSweep starting phase for the `index`-th of `count` concurrent
+ * resolvers, spread evenly round the hue wheel. Port of anim_sweep_phase_offset().
+ *
+ * Deterministic rather than random: two sweeps must differ, but must also be
+ * reproducible across activations — a random offset would reintroduce the
+ * activation-time hue jump that skipping the re-roll exists to prevent.
+ */
+export function sweepPhaseOffset(index: number, count: number): number {
+  const n = count === 0 ? 1 : count;
+  // Wrap rather than run off the end: index === count returns exactly one full span,
+  // which the accumulator's own modulo reduces to phase 0 — indistinguishable from
+  // index 0, i.e. the very collapse this exists to prevent.
+  return Math.trunc((HUE_SPAN_Q16 * (index % n)) / n);
+}
+
+/**
  * One resolver instance per COLOR param index (the firmware keeps a
  * ColorModeSource per param slot in sParamColorResolvers).
  */
@@ -85,10 +101,18 @@ export class ColorModeResolver {
   private targetHue = 0;
   private segmentStartMs = 0;
 
+  /**
+   * @param sweepPhaseOffsetQ16 Starting phase for SpectrumSweep (issue #344). Defaults
+   * to 0 — a sole resolver has nothing to separate from. Callers building several
+   * resolvers that can sweep at once must give each a distinct offset, or reset zeroes
+   * both phases and, since SpectrumSweep deliberately skips the re-roll, they stay
+   * bit-identical forever and any interpolation between them renders a flat field.
+   */
   constructor(
     private readonly rng: () => number,
     private readonly now: () => number,
     private beatSource: ConsumeBeatFn | null = null,
+    private readonly sweepPhaseOffsetQ16 = 0,
   ) {}
 
   setBeatSource(src: ConsumeBeatFn | null): void {
@@ -137,7 +161,7 @@ export class ColorModeResolver {
       this.lastMode = modeByte;
       this.lastNowMs = now;
       this.segmentStartMs = now;
-      this.huePhase16 = 0;
+      this.huePhase16 = this.sweepPhaseOffsetQ16;
       // Only the random modes consume entropy on reset; rolls start from the
       // previous hue so the first color of a new session still differs.
       if (mode !== ColorMode.SpectrumSweep) {
