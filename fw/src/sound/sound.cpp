@@ -698,6 +698,20 @@ struct __attribute__((packed)) wav_header {
 #define DEFAULT_WAV_PATH "/NAND:/sound.wav"
 #define DEFAULT_RECORD_DURATION_S 10
 
+/* Set by sound_record_request_stop() from another thread; polled by both capture
+ * loops. Distinct from the io_error abort below: that one means the capture
+ * FAILED and returns -EIO, this one means the operator ended it and the result is
+ * a shorter but perfectly good recording. */
+static atomic_t s_record_stop_requested;
+
+void sound_record_request_stop(void) {
+    atomic_set(&s_record_stop_requested, 1);
+}
+
+static bool record_stop_requested(void) {
+    return atomic_get(&s_record_stop_requested) != 0;
+}
+
 #if defined(CONFIG_IMU)
 #include <imu/imu.h>
 
@@ -982,9 +996,6 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
         shell_error(shell, "Failed to write WAV header: %d", ret);
         fs_close(&f);
         fs_close(&fcsv);
-#if defined(CONFIG_IMU)
-    imu_sidecar_close(&imu_sc, shell);
-#endif
         return -EIO;
     }
 
@@ -1045,7 +1056,12 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
     uint32_t consecutive_timeouts = 0; /* tap-empty polls in a row */
     bool io_error = false;
 
+    bool stopped_early = false;
     while (frames_captured < total_frames) {
+        if (record_stop_requested()) {
+            stopped_early = true;
+            break;
+        }
         ret = k_msgq_get(&audio_tap_q, &s_tap_drain, K_MSEC(1000));
         if (ret != 0) {
             /* The producer can legitimately stall for a moment (flash-erase
@@ -1145,6 +1161,9 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
         shell_error(shell, "CSV #DONE trailer write failed");
     }
     fs_close(&fcsv);
+#if defined(CONFIG_IMU)
+    imu_sidecar_close(&imu_sc, shell);
+#endif
 
     /* A capture that aborted must not look like a success: the files above were
      * finalized (headers patched, #DONE written) so what WAS captured stays
@@ -1156,6 +1175,9 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
                     "(%u dropped, %u io retries)",
                     frames_captured, total_frames, path, dropped, io_retries);
         return -EIO;
+    }
+    if (stopped_early) {
+        shell_print(shell, "Stopped early at %u of %u frames", frames_captured, total_frames);
     }
 
     shell_print(shell, "Wrote %u bytes of PCM to %s (%u frames, %u dropped, %u io retries)",
@@ -1295,7 +1317,12 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
                 duration_s, path);
 
     uint32_t total_bytes = 0;
+    bool stopped_early = false;
     for (uint32_t i = 0; i < total_blocks; i++) {
+        if (record_stop_requested()) {
+            stopped_early = true;
+            break;
+        }
         void *buffer = NULL;
         uint32_t size = 0;
 
@@ -1334,8 +1361,35 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
 #if defined(CONFIG_IMU)
     imu_sidecar_close(&imu_sc, shell);
 #endif
+    if (stopped_early) {
+        shell_print(shell, "Stopped early at %u of %u blocks", total_bytes / BLOCK_SIZE,
+                    total_blocks);
+    }
     shell_print(shell, "Wrote %u bytes of PCM to %s", total_bytes, path);
     return 0;
+}
+
+/* Shared by the shell command and the background capture worker.
+ *
+ * Clearing the stop flag HERE rather than in the worker means a stop requested
+ * while idle cannot leak into the next capture and end it instantly. */
+int sound_record_wav(const struct shell *shell, uint32_t duration_s, const char *path) {
+    atomic_set(&s_record_stop_requested, 0);
+#if defined(CONFIG_APP_AUDIO_DEBUG)
+    if (atomic_get(&s_dsp_running)) {
+        return record_wav_tap(shell, duration_s, path);
+    }
+    shell_warn(shell,
+               "DSP thread not streaming - falling back to direct capture (no analysis "
+               "sidecar)");
+#else
+    if (atomic_get(&s_dsp_running)) {
+        shell_error(shell, "DSP thread owns the PDM stream and the tap recorder is compiled "
+                           "out - rebuild with CONFIG_APP_AUDIO_DEBUG=y");
+        return -ENOTSUP;
+    }
+#endif
+    return record_wav_direct(shell, duration_s, path);
 }
 
 static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char **argv,
@@ -1358,21 +1412,7 @@ static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char
         path = argv[2];
     }
 
-#if defined(CONFIG_APP_AUDIO_DEBUG)
-    if (atomic_get(&s_dsp_running)) {
-        return record_wav_tap(shell, duration_s, path);
-    }
-    shell_warn(shell,
-               "DSP thread not streaming - falling back to direct capture (no analysis "
-               "sidecar)");
-#else
-    if (atomic_get(&s_dsp_running)) {
-        shell_error(shell, "DSP thread owns the PDM stream and the tap recorder is compiled "
-                           "out - rebuild with CONFIG_APP_AUDIO_DEBUG=y");
-        return -ENOTSUP;
-    }
-#endif
-    return record_wav_direct(shell, duration_s, path);
+    return sound_record_wav(shell, duration_s, path);
 }
 
 // Subcommands for "sound mic"
