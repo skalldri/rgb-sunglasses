@@ -9,7 +9,11 @@ The destructive tier's reprovision teardown lands with that tier (PR 2).
 
 from __future__ import annotations
 
+import contextlib
+import glob
 import os
+import subprocess
+import tempfile
 
 # .glim files provision-device.sh generates into /NAND:/glim.
 EXPECTED_GLIM = {"nyan_cat.glim", "bad_apple.glim", "4096.glim"}
@@ -18,6 +22,61 @@ EXPECTED_GLIM = {"nyan_cat.glim", "bad_apple.glim", "4096.glim"}
 # identified by manifest displayName (what `ext list` prints), NOT filename.
 # Hello is the fault-injection workhorse (Crash/Hang params).
 EXPECTED_EXT = {"Hello Extension"}
+
+
+def _find_nand_disk() -> str | None:
+    """The board's USB MSC disk, identified by SCSI strings — never /dev/sdX
+    position (same discovery as provision-device.sh)."""
+    for dev in glob.glob("/sys/block/sd*"):
+        try:
+            with open(os.path.join(dev, "device", "vendor")) as f:
+                vendor = f.read().strip()
+            with open(os.path.join(dev, "device", "model")) as f:
+                model = f.read().strip()
+        except OSError:
+            continue
+        if vendor == "RGB-SG" and model == "FlashDisk":
+            return "/dev/" + os.path.basename(dev)
+    return None
+
+
+@contextlib.contextmanager
+def nand_mount():
+    """Mount the board's NAND over USB MSC. FAT-coherence contract: the
+    firmware caches cluster allocations, so after any host-side write the
+    caller MUST reboot the board before firmware reads the files
+    (fw/CLAUDE.md, 'FAT concurrent access causes read corruption')."""
+    disk = _find_nand_disk()
+    assert disk, "NAND USB mass-storage disk not found (vendor=RGB-SG model=FlashDisk)"
+    mnt = tempfile.mkdtemp(prefix="hil-nand-")
+    subprocess.run(["mount", "-o", "rw", disk, mnt], check=True, timeout=30)
+    try:
+        yield mnt
+    finally:
+        subprocess.run(["sync"], timeout=60)
+        subprocess.run(["umount", mnt], timeout=60)
+        os.rmdir(mnt)
+
+
+def plant_corrupt_extension(name: str = "zz_bad.llext", source: str = "hello.llext") -> None:
+    """Write a deliberately-corrupted .llext into /NAND:/ext (the #89 case:
+    an untrusted file that must be rejected, not deref'd, at boot).
+
+    Takes a REAL installed extension from the board itself (no build-path
+    coupling), keeps the ELF header intact so it isn't rejected trivially at
+    the magic check, and scrambles the middle third — section tables and
+    manifest content become garbage pointers. Caller must reboot afterwards.
+    """
+    with nand_mount() as mnt:
+        src = os.path.join(mnt, "ext", source)
+        with open(src, "rb") as f:
+            data = bytearray(f.read())
+        assert len(data) > 512, f"{source} implausibly small ({len(data)} B)"
+        third = len(data) // 3
+        for i in range(third, 2 * third):
+            data[i] ^= 0xFF
+        with open(os.path.join(mnt, "ext", name), "wb") as f:
+            f.write(bytes(data))
 
 
 def reprovision(rgb, build_dir: str) -> None:

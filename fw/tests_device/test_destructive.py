@@ -10,9 +10,13 @@ INCLUDING BLE bonds — the shared phone must be re-paired (/re-pair) after a
 destructive run.
 
 In-file order is load-bearing:
-  1. coredump crash loop      (needs a healthy, provisioned board)
-  2. factory_reset soft       (must prove glim/ext SURVIVE — files intact)
-  3. fatfs corrupt + factory_reset now  (destroys the filesystem — last)
+  1. coredump crash loop      (needs a healthy, provisioned board AND a
+                               clean coredump baseline — the fault tests
+                               below stay coredump-free by using Hang)
+  2. ext fault latch/recovery (#308 — deliberate sandbox fault via Hang)
+  3. bad-manifest boot survival (#89 — plants a corrupt .llext, reboots)
+  4. factory_reset soft       (must prove glim/ext SURVIVE — files intact)
+  5. fatfs corrupt + factory_reset now  (destroys the filesystem — last)
 
 Regressions pinned:
 - #102/#80  crash → flash-partition capture → auto-reboot → drain to FAT.
@@ -26,6 +30,7 @@ Regressions pinned:
 
 from __future__ import annotations
 
+import re
 import time
 
 import pytest
@@ -110,6 +115,99 @@ def test_coredump_crash_loop(rgb: RgbShell):
     rgb.exec(f"fs rm /NAND:/coredump/{drained_file}", check=False)
     status = " ".join(rgb.exec("coredump_mgr status"))
     assert "no dumps" in status, f"cleanup failed: {status}"
+
+
+HELLO = "Hello Extension"
+
+
+def _hello_slot(rgb: RgbShell) -> int:
+    slots = [s for s in rgb.ext_list() if s["name"] == HELLO]
+    if not slots:
+        pytest.skip(f"{HELLO} not installed")
+    return slots[0]["slot"]
+
+
+def test_ext_fault_latch_and_recovery(rgb: RgbShell):
+    """The full #308 flow, using hello's Hang injector (wall-backstop fault —
+    host-detected, so no coredump side effects, unlike Crash).
+
+    Pins: fault latched with measurements + params-reset flag; the record
+    SURVIVES `ext select` recovery (that is the whole point of #308 — the
+    log line scrolls away, the record must not); persisted params were reset
+    to defaults (a poisoned param must not re-fault on retry, PR #89 rule);
+    `ext faults clear` drops records without touching slot state.
+    """
+    slot = _hello_slot(rgb)
+    rgb.exec("ext faults clear")
+
+    rgb.exec(f"ext select {slot}")
+    # Hang is param 3 (see fw/extensions/hello/hello.c). Params reach the
+    # extension at tick time; the 500 ms wall backstop then fires.
+    rgb.exec(f"ext param {slot} 3 1")
+    try:
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            if any(s["faulted"] for s in rgb.ext_list() if s["name"] == HELLO):
+                break
+            time.sleep(1.0)
+        else:
+            pytest.fail("Hang=1 never produced a sandbox fault within 15 s")
+
+        recs = [r for r in rgb.ext_faults() if r["name"] == HELLO]
+        assert recs, f"fault not latched in `ext faults`: {rgb.ext_faults()}"
+        rec = recs[0]
+        assert rec["params_reset"] is True, f"tick-time fault must reset params: {rec}"
+        assert rec["state"] == "FAULTED", rec
+        assert rec["count"] == 1, rec
+
+        # Recovery: ext select clears the slot's fault; the RECORD stays.
+        rgb.exec(f"ext select {slot}")
+        time.sleep(2.0)
+        assert not any(
+            s["faulted"] for s in rgb.ext_list() if s["name"] == HELLO
+        ), "ext select did not clear the fault"
+        rec = [r for r in rgb.ext_faults() if r["name"] == HELLO][0]
+        assert rec["state"] == "recovered", (
+            f"record must survive recovery with updated state (#308): {rec}"
+        )
+        # The reset params are what make the retry safe: Hang must be 0 now.
+        out = rgb.exec(f"ext param {slot} 3")
+        assert any(re.search(r"=\s*0\b", line) for line in out), (
+            f"Hang param not reset to default after the fault: {out}"
+        )
+    finally:
+        rgb.exec(f"ext param {slot} 3 0", check=False)  # belt-and-suspenders
+        rgb.exec("anim set zigzag")
+        rgb.exec("ext faults clear")
+    assert rgb.ext_faults() == [], "records survived `ext faults clear`"
+
+
+def test_bad_manifest_boot_survival(rgb: RgbShell, device_state: dict):
+    """#89: a corrupted .llext on NAND must be REJECTED at discovery — never
+    kernel-mode-deref'd (the original bug halted the whole firmware). The
+    board must boot, load every healthy extension, refuse the bad file, and
+    latch a discovery-failure record for it."""
+    expected_ext = {s["name"] for s in device_state["ext"]}
+    provisioning.plant_corrupt_extension(name="zz_bad.llext", source="hello.llext")
+    try:
+        rgb.reboot()  # also satisfies the FAT-coherence contract
+
+        loaded = {s["name"] for s in rgb.ext_list()}
+        assert loaded == expected_ext, (
+            f"healthy extensions did not all survive alongside the bad file: "
+            f"{sorted(loaded)} vs {sorted(expected_ext)}"
+        )
+        assert not any(
+            s["file"] == "zz_bad.llext" for s in rgb.ext_list()
+        ), "the corrupted extension was LOADED — #89 validation is gone"
+        discovery = [r for r in rgb.ext_faults() if "zz_bad" in r["name"]]
+        assert discovery, (
+            f"no discovery-failure record latched for the bad file: "
+            f"{rgb.ext_faults()}"
+        )
+    finally:
+        rgb.exec("fs rm /NAND:/ext/zz_bad.llext", check=False)
+        rgb.exec("ext faults clear", check=False)
 
 
 def test_factory_reset_soft_keeps_files(rgb: RgbShell):

@@ -423,6 +423,40 @@ class RgbShell:
                 stats[current][f"{kind}_max"] = int(m.group(4))
         return stats
 
+    def ext_faults(self) -> list[dict]:
+        """`ext faults` → [{slot, name, what, count, params_reset, state}].
+
+        Empty list when the firmware prints "no extension faults recorded".
+        """
+        records: list[dict] = []
+        cur: dict | None = None
+        for line in self.exec("ext faults"):
+            s = line.strip()
+            m = re.match(r"^\[(\d+)\]\s+'(.*)':\s+(.*)$", s)
+            if m:
+                cur = {
+                    "slot": int(m.group(1)),
+                    "name": m.group(2),
+                    "what": m.group(3),
+                    "count": None,
+                    "params_reset": None,
+                    "state": None,
+                }
+                records.append(cur)
+                continue
+            if cur is None:
+                continue
+            m = re.search(r"(\d+)\s+time\(s\) since clear", s)
+            if m:
+                cur["count"] = int(m.group(1))
+            m = re.match(r"^params reset to manifest defaults:\s+(yes|no)", s)
+            if m:
+                cur["params_reset"] = m.group(1) == "yes"
+            m = re.match(r"^currently:\s+(.*)$", s)
+            if m:
+                cur["state"] = m.group(1)
+        return records
+
     def settings_keys(self) -> list[str]:
         return [
             line.strip()
