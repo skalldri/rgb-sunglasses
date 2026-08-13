@@ -50,6 +50,13 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# Put the GLIM converters' python deps + yt-dlp/ffmpeg in reach before step 3
+# runs them — no-op in the devcontainer, activates the tools venv on a macOS host
+# (fails with instructions if neither is available; see scripts/tools-env.sh).
+# Deliberately before any hardware work so a half-set-up host fails immediately
+# instead of after mounting the board's disk.
+. "$REPO_ROOT/scripts/tools-env.sh"
+
 # 1. Locate the NAND USB mass-storage disk by SCSI vendor/product string
 #    (USBD_DEFINE_MSC_LUN(nand, "NAND", "RGB-SG", "FlashDisk", "0.00") in
 #    fw/src/usb/usb_init.c) rather than size or /dev/sdX letter, both of

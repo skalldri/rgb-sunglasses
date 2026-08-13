@@ -61,6 +61,22 @@ if [ "$(uname -s)" = "Darwin" ]; then
         echo "NCS toolchain: NOT READY  [no firmware builds — run scripts/macos-setup.sh]"
     fi
 
+    # The GLIM converters (fw/tools/convert_*.py) need importable Pillow/numpy/lz4
+    # plus yt-dlp and ffmpeg as subprocesses; macos-setup.sh puts the python side
+    # in a venv behind this version-stable symlink. Name which piece is missing so
+    # "brew removed ffmpeg" is distinguishable from "venv never built".
+    TOOLS_VENV="$HOME/.cache/rgb-sunglasses/tools-venv-current"
+    GLIM_MISSING=""
+    "$TOOLS_VENV/bin/python" -c 'import PIL, numpy, lz4.block' >/dev/null 2>&1 \
+        || GLIM_MISSING="$GLIM_MISSING python-deps"
+    [ -x "$TOOLS_VENV/bin/yt-dlp" ] || GLIM_MISSING="$GLIM_MISSING yt-dlp"
+    command -v ffmpeg >/dev/null 2>&1 || GLIM_MISSING="$GLIM_MISSING ffmpeg"
+    if [ -z "$GLIM_MISSING" ]; then
+        echo "GLIM tooling (Pillow/numpy/lz4 + yt-dlp + ffmpeg): OK  [. scripts/tools-env.sh to use]"
+    else
+        echo "GLIM tooling: NOT READY (missing:$GLIM_MISSING)  [no GLIM generation — run scripts/macos-setup.sh]"
+    fi
+
     echo "Twister tests: not supported on macOS (native_sim is Linux-only) — use CI or the devcontainer"
 fi
 
