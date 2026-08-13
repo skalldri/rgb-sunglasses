@@ -52,6 +52,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# deno — a JavaScript runtime for yt-dlp's YouTube nsig challenge. Recent
+# yt-dlp needs an external JS runtime to solve YouTube's signature; without
+# one, downloads 403 (issue #358), which breaks the GLIM asset generation in
+# fw/tools/convert_*.py → provision-device.sh → the HIL destructive tier's
+# reprovision. The system-wide /etc/yt-dlp.conf below makes every yt-dlp
+# invocation use it, so the convert scripts need no flag. (yt-dlp of this era
+# does not auto-detect deno without the flag; the config is version-agnostic.)
+RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip \
+    && unzip -o /tmp/deno.zip -d /usr/local/bin \
+    && chmod +x /usr/local/bin/deno \
+    && rm /tmp/deno.zip
+RUN printf -- '--js-runtimes deno\n' > /etc/yt-dlp.conf
+
 # wasi-sdk — pinned clang/wasm32 toolchain used by the extension simulator
 # (fw/sim/) to compile rgbx animation extensions to WebAssembly. The version
 # must stay in sync with fw/sim/scripts/install-toolchain.sh, which is the
