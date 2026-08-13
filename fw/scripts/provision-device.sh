@@ -207,20 +207,25 @@ fi
 
 mkdir -p "$MNT/glim" "$MNT/ext"
 
+# macOS cp exports each source file's extended attributes (com.apple.provenance
+# etc.) as an AppleDouble sidecar (._<name>) on FAT. Those names still end in
+# .glim/.llext, so the firmware picks them up as real assets: hardware-verified
+# that `glim list` showed ._4096.glim / ._bad_apple.glim / ._nyan_cat.glim
+# alongside the real files, with the 4 KB sidecar ._4096.glim SELECTED as the
+# active animation. (The extension registry rejects sidecars via manifest
+# validation, so only GLIM is user-visibly broken — but both dirs are kept
+# clean.) COPYFILE_DISABLE=1 does NOT fix this — it governs tar/copyfile, not
+# cp; hardware-verified that sidecars are still written with it exported. BSD
+# cp's -X ("do not copy extended attributes") is the real knob, plus a sweep
+# AFTER the copy as a backstop (a pre-copy sweep just gets recreated).
 if [ "$HOST_OS" = "Darwin" ]; then
-    # macOS cp writes an AppleDouble sidecar (._<name>) beside every file copied
-    # to a non-native filesystem. Those names still end in .glim/.llext, so the
-    # firmware picks them up as real assets: hardware-verified that without this,
-    # `glim list` showed ._4096.glim / ._bad_apple.glim / ._nyan_cat.glim
-    # alongside the real files, with the 4 KB sidecar ._4096.glim SELECTED as the
-    # active animation. (The extension registry rejects them via manifest
-    # validation, so only GLIM is user-visibly broken — but both are cleaned.)
-    export COPYFILE_DISABLE=1
-    rm -f "$MNT"/glim/._* "$MNT"/ext/._* 2>/dev/null || true
+    cp -X "$TMP_GLIM"/*.glim "$MNT/glim/"
+    cp -X "$BUILD_DIR"/extensions/*.llext "$MNT/ext/"
+    rm -f "$MNT"/glim/._* "$MNT"/ext/._*
+else
+    cp "$TMP_GLIM"/*.glim "$MNT/glim/"
+    cp "$BUILD_DIR"/extensions/*.llext "$MNT/ext/"
 fi
-
-cp "$TMP_GLIM"/*.glim "$MNT/glim/"
-cp "$BUILD_DIR"/extensions/*.llext "$MNT/ext/"
 sync
 
 echo "[*] Provisioned:"
