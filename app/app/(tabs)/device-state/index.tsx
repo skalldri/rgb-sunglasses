@@ -1,4 +1,5 @@
 import { BatteryCard } from "@/components/battery-card";
+import { CaptureCard } from "@/components/capture-card";
 import { CharacteristicBoolean } from "@/components/characteristic-boolean";
 import { WriteErrorIndicator } from "@/components/characteristic-write-error";
 import { ShuffleButton } from "@/components/shuffle-button";
@@ -11,7 +12,7 @@ import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { Section } from "@/components/ui/section";
-import { getServiceName, UUID_BATTERY_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
+import { getServiceName, UUID_BATTERY_SERVICE, UUID_CAPTURE_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
@@ -73,6 +74,10 @@ export default function DeviceStateMenuScreen() {
             // Power Debug is folded into the battery detail page (device-state/battery.tsx)
             // rather than getting its own generic Settings row.
             service.uuid !== UUID_POWER_DEBUG_SERVICE &&
+            // Capture gets its own tile + screen (CaptureCard). Rendered generically it
+            // would be a "Capture Control" number box, which is a foot-gun rather than a
+            // control: writing 1 starts a recording.
+            service.uuid !== UUID_CAPTURE_SERVICE &&
             selectedDevice?.serviceDisplayNames?.[service.uuid] == null
     );
     const hasBatteryService = visibleServices.some(service => service.uuid === UUID_BATTERY_SERVICE);
@@ -147,6 +152,9 @@ export default function DeviceStateMenuScreen() {
                     )}
 
                     {hasBatteryService && <BatteryCard style={styles.card} />}
+
+                    {/* Self-hides on firmware without the capture service. */}
+                    <CaptureCard style={styles.card} />
 
                     {firmwareService && (
                         <Card style={styles.card}>

@@ -13,6 +13,7 @@
 
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
 #include "sound/capture.h"
@@ -97,6 +98,31 @@ int CaptureControlCharacteristic::onWriteChecked(const uint32_t &command) {
     return ret;
 }
 
+/* The capture manager publishes only on transitions — start, and the end of a
+ * recording — because the worker thread is blocked inside the capture loop for
+ * everything in between. Without this tick, "Capture Elapsed S" would read 0 for
+ * the whole recording, which is worse than not exposing it: an app progress
+ * readout would sit frozen and look like a hung capture.
+ *
+ * capture_elapsed_seconds() is the mutex-only accessor precisely so this can run
+ * on the system workqueue — capture_get_status() walks the volume for the file
+ * count, and that flash I/O must never happen on a cooperative-priority thread. */
+void elapsed_tick(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(elapsed_work, elapsed_tick);
+
+void elapsed_tick(struct k_work *work) {
+    ARG_UNUSED(work);
+    /* Self-terminating rather than cancelled by the observer: a cancel racing a
+     * handler that has already started would leave the tick rescheduling itself
+     * forever. Re-checking here means the tick stops within a second of the
+     * capture ending, whichever way it ended. */
+    if (!capture_is_recording()) {
+        return;
+    }
+    captureElapsedS = capture_elapsed_seconds();
+    (void)k_work_schedule(&elapsed_work, K_SECONDS(1));
+}
+
 /* Runs on the capture worker, not on a BT thread. operator= notifies, and
  * bt_gatt_notify is safe from any thread. */
 void on_capture_state(const struct capture_status *status) {
@@ -104,6 +130,10 @@ void on_capture_state(const struct capture_status *status) {
     captureElapsedS = status->elapsed_s;
     captureRemainingS = status->remaining_s;
     captureCount = status->captures;
+
+    if (status->state == CAPTURE_RECORDING) {
+        (void)k_work_schedule(&elapsed_work, K_SECONDS(1));
+    }
 }
 
 int capture_service_init(void) {

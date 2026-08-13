@@ -46,6 +46,15 @@ mcp__serial__rgb_sunglasses_capture_scenario(
 Play the music and do the movement **during** those seconds — the whole point is that
 the stimulus is real. Returns `wav_path`, `imu_csv_path` and `imu_samples`.
 
+**Away from a laptop, use the companion app instead.** Controls → Capture starts and stops
+the same worker over BLE (`capture start`/`capture stop` and the GATT Capture service are two
+front ends onto one implementation), so a capture can be taken in the field and collected
+later. The phone never downloads anything — captures accumulate on `/NAND:` as
+`cap_NNNN.wav` + `.imu.csv` and step 2 is unchanged. The app's Length picker writes the
+persisted limit; the device clamps it to what the volume can still hold and the screen shows
+the clamped figure before you start. Note the app path does **not** freeze AGC gain the way
+the MCP tool does — for a reproducible stimulus, prefer the tool.
+
 **Check `imu_samples` is roughly `25 × duration_s`.** Zero means the sidecar never
 opened (firmware without `CONFIG_IMU`, or a full disk) and the scenario would be
 audio-only without saying so loudly.

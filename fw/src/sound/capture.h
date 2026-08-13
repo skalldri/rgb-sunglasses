@@ -65,6 +65,20 @@ void capture_get_status(struct capture_status *out);
 /** @brief Recordable seconds the free space can hold, for UI and pre-flight. */
 uint32_t capture_remaining_seconds(void);
 
+/**
+ * @brief Seconds into the running capture, 0 when idle.
+ *
+ * Deliberately cheaper than capture_get_status(): it touches only the state
+ * mutex, no filesystem. That is what makes it safe to call once a second from a
+ * workqueue to drive a live progress readout — capture_get_status() walks the
+ * volume for the file count, which is flash I/O and must not run on a
+ * cooperative-priority workqueue thread.
+ */
+uint32_t capture_elapsed_seconds(void);
+
+/** @brief Whether a capture is currently running (same cheap path as above). */
+bool capture_is_recording(void);
+
 /** @brief Count of capture files on the volume. */
 uint32_t capture_count(void);
 

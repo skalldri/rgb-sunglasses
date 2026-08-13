@@ -68,6 +68,22 @@ command, which refuses to run without a battery present (the 2026-07-05 wedge wa
 likely aggravated by running VBUS-only when GO2P dropped the PD PHY). It exists to
 exercise the runtime PTCH-wedge recovery path — see `/debug-fw`'s symptom table.
 
+### NEVER switch phones on your own
+
+**The OnePlus 9 Pro (LE2125) is the phone to use. If two phones are reachable over
+ADB, that is not an invitation to pick one — never switch to the Pixel (or any other
+device) automatically.** Instructed 2026-08-12 after an agent found the OnePlus
+apparently absent, connected the Pixel instead, and started deploying to it.
+
+If the OnePlus looks unavailable — not in `adb devices`, screen locked, app not
+installed — say so and ask. Do not treat "the other phone answers" as the fix. The
+tempting rationalisation to avoid: the Pixel has a spec-compliant BLE stack and so
+avoids the OnePlus's forget-and-re-pair dance after a GATT-changing reflash — that
+is a reason the Pixel is *easier*, not a reason it is the right device, and
+`/re-pair` exists precisely to make the OnePlus path routine. Verification done on
+the wrong phone also proves the wrong thing: the OnePlus is the strict device, so a
+result from the tolerant one does not carry over.
+
 ### NEVER reboot the shared Android phone on your own
 
 **Never run `adb reboot` (or any full OS-level reboot) against the shared test

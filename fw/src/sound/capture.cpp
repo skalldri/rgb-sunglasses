@@ -39,6 +39,24 @@ constexpr uint32_t kMaxLimitS = 180;
 K_SEM_DEFINE(s_start_sem, 0, 1);
 K_MUTEX_DEFINE(s_lock);
 
+/* How often the idle worker re-derives the volume-backed numbers (capture count,
+ * recordable seconds). This is not cosmetic polling — it is the only thing that
+ * makes those two values true:
+ *
+ *  - The volume mounts at SYS_INIT APPLICATION 90; every capture SYS_INIT hook runs
+ *    long before that, so anything sampled at init reads an unmounted filesystem and
+ *    lands on 0. Read-only characteristics keep whatever they were last given, so a
+ *    boot-time 0 is permanent — the app renders "no room left" on an empty volume
+ *    and disables its Record button. Observed on hardware 2026-08-12.
+ *  - Files also arrive and disappear over USB mass storage, which the device cannot
+ *    observe at all. Even a correct value goes stale the moment someone collects
+ *    their captures.
+ *
+ * It runs on the capture worker rather than a workqueue on purpose: fs_statvfs and
+ * the directory walk are flash I/O, which must never run on a cooperative-priority
+ * thread (fw/CLAUDE.md). Reads only — no flash-endurance cost. */
+constexpr uint32_t kIdleRefreshS = 5;
+
 struct capture_state_t {
     enum capture_state state = CAPTURE_IDLE;
     uint32_t limit_s = 0;
@@ -91,9 +109,32 @@ uint32_t highest_index() {
     return highest;
 }
 
+/* Republish only when a volume-backed number actually moved, so an idle device is
+ * not handing the BLE stack an identical status every few seconds. */
+void publish_if_changed() {
+    static uint32_t last_captures = UINT32_MAX;
+    static uint32_t last_remaining_s = UINT32_MAX;
+
+    struct capture_status status;
+    capture_get_status(&status);
+    if (status.captures == last_captures && status.remaining_s == last_remaining_s) {
+        return;
+    }
+    last_captures = status.captures;
+    last_remaining_s = status.remaining_s;
+
+    capture_state_observer observer = s_observer;
+    if (observer != nullptr) {
+        observer(&status);
+    }
+}
+
 void worker(void *, void *, void *) {
     for (;;) {
-        k_sem_take(&s_start_sem, K_FOREVER);
+        if (k_sem_take(&s_start_sem, K_SECONDS(kIdleRefreshS)) != 0) {
+            publish_if_changed();
+            continue;
+        }
 
         uint32_t limit_s;
         char path[sizeof(s_cap.path)];
@@ -144,6 +185,22 @@ uint32_t capture_remaining_seconds(void) {
     }
     uint64_t seconds = (avail - kReserveBytes) / kBytesPerSecond;
     return (seconds > kMaxLimitS) ? kMaxLimitS : (uint32_t)seconds;
+}
+
+uint32_t capture_elapsed_seconds(void) {
+    k_mutex_lock(&s_lock, K_FOREVER);
+    uint32_t elapsed = (s_cap.state == CAPTURE_RECORDING)
+                           ? (uint32_t)((k_uptime_get() - s_cap.started_ms) / 1000)
+                           : 0;
+    k_mutex_unlock(&s_lock);
+    return elapsed;
+}
+
+bool capture_is_recording(void) {
+    k_mutex_lock(&s_lock, K_FOREVER);
+    bool recording = (s_cap.state == CAPTURE_RECORDING);
+    k_mutex_unlock(&s_lock);
+    return recording;
 }
 
 uint32_t capture_count(void) {

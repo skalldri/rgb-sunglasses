@@ -13,6 +13,7 @@ export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0005-56789abc0000": "Battery",
     "12345678-1234-5678-0006-56789abc0000": "Power Debug",
     "12345678-1234-5678-0007-56789abc0000": "Shuffle",
+    "12345678-1234-5678-0008-56789abc0000": "Capture",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
@@ -83,6 +84,20 @@ export const UUID_SHUFFLE_SERVICE      = "12345678-1234-5678-0007-56789abc0000";
 export const UUID_SHUFFLE_ENABLED      = "12345678-1234-5678-0007-56789abc0000"; // boolean, read/write/notify
 export const UUID_SHUFFLE_MIN_DURATION = "12345678-1234-5678-0007-56789abc0001"; // uint32, seconds
 export const UUID_SHUFFLE_MAX_DURATION = "12345678-1234-5678-0007-56789abc0002"; // uint32, seconds
+
+// Capture service (service ID 8, issue #53 tooling) — start/stop an on-device audio + IMU
+// recording from the phone so a stimulus can be captured in the field and turned into a
+// simulator scenario later. Nothing here transfers files: captures accumulate on /NAND: and
+// are collected over USB mass storage. Characteristic UUIDs are auto-assigned in firmware
+// declaration order — these must match the declaration order in
+// fw/src/bluetooth/capture_service.cpp.
+export const UUID_CAPTURE_SERVICE     = "12345678-1234-5678-0008-56789abc0000";
+export const UUID_CAPTURE_CONTROL     = "12345678-1234-5678-0008-56789abc0000"; // uint32, write: 0=stop, 1=start
+export const UUID_CAPTURE_LIMIT_S     = "12345678-1234-5678-0008-56789abc0001"; // uint32, seconds, persisted
+export const UUID_CAPTURE_STATE       = "12345678-1234-5678-0008-56789abc0002"; // uint32, CaptureState, notify
+export const UUID_CAPTURE_ELAPSED_S   = "12345678-1234-5678-0008-56789abc0003"; // uint32, seconds, notify (1 Hz while recording)
+export const UUID_CAPTURE_REMAINING_S = "12345678-1234-5678-0008-56789abc0004"; // uint32, recordable seconds left
+export const UUID_CAPTURE_COUNT       = "12345678-1234-5678-0008-56789abc0005"; // uint32, capture files on the volume
 
 // Fixed characteristic UUID, identical across every animation service, exposing that
 // animation's human-readable name. Must match kAnimationNameCharacteristicUuid in
