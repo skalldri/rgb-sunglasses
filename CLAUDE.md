@@ -103,6 +103,28 @@ resetting the *board* (not the phone) if a stale GATT link is suspected. Only
 ask the user to power-cycle the phone themselves if those don't resolve it —
 never do it unilaterally via `adb reboot`.
 
+**When `svc bluetooth disable`/`enable` does not clear error 6, restart the
+Bluetooth stack PROCESS instead: `adb shell am force-stop com.android.bluetooth`**
+(it restarts itself; `settings get global bluetooth_on` still reads 1 afterwards).
+Measured 2026-08-12 on the OnePlus: four `svc` cycles left every scan failing with
+registration error 6, and one force-stop of the stack process fixed it on the next
+app launch. Force-stop the app first either way — its own registrations are part of
+what leaks. This is strictly lighter than the phone reboot the rule above forbids,
+so it belongs in the ladder before ever asking the user.
+
+Two things that will otherwise cost an hour on that phone:
+
+- **`pm grant` is blocked on OxygenOS** (`SecurityException: neither user 2000 nor
+  current process has GRANT_RUNTIME_PERMISSIONS`), so the pre-grant recipe in
+  `app/CLAUDE.md` does not work there. Grant through the UI instead:
+  `adb shell am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:<pkg>`
+  → Permissions → Location → "Allow only while using the app".
+- **Every board reboot needs a re-pair on this phone**, not just a GATT-changing
+  one — a plain reflash-and-reset wedges the bonded reconnect at `ATT MTU: 23`. Budget
+  for `/re-pair` after each flash, and expect its automated forget to need the
+  halt-the-board recipe (see `app/CLAUDE.md`); the forget only succeeds while the
+  board is unreachable.
+
 ### BLE pairing — use the `/re-pair` skill; otherwise ask the user for the passkey
 
 The firmware requires `BT_SECURITY_L4` (LE Secure Connections + bonding). On a
