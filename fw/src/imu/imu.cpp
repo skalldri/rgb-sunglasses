@@ -16,7 +16,7 @@ K_MSGQ_DEFINE(imu_result_q, sizeof(struct imu_analysis_result), 4, 4);
 /* Deeper than imu_result_q (8 vs 4): a capture's drain is driven by the audio
  * frame cadence rather than by DRDY, so it must tolerate a few samples of jitter
  * without losing any. ~224 B. */
-K_MSGQ_DEFINE(imu_tap_q, sizeof(struct imu_analysis_result), 8, 4);
+K_MSGQ_DEFINE(imu_tap_q, sizeof(struct imu_tap_sample), 8, 4);
 K_SEM_DEFINE(imu_drdy_sem, 0, 1);
 
 // imu_thread runs in user mode under CONFIG_USERSPACE (issue #79, proto0 only -- see
@@ -120,8 +120,13 @@ static void imu_thread_func(void* a, void* b, void* c) {
 
         /* Capture tap. Deliberately NOT purge-and-retry like the queue above: a
          * capture wants every sample in order, and when no capture is running the
-         * queue is simply full and the put fails, which is the normal state. */
-        (void)k_msgq_put(&imu_tap_q, &result, K_NO_WAIT);
+         * queue is simply full and the put fails, which is the normal state.
+         * Stamped here, at the moment of production — see imu_tap_sample. */
+        const struct imu_tap_sample tapped = {
+            .result = result,
+            .uptime_ms = (uint32_t)k_uptime_get(),
+        };
+        (void)k_msgq_put(&imu_tap_q, &tapped, K_NO_WAIT);
     }
 }
 

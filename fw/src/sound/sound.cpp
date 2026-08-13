@@ -748,8 +748,16 @@ struct __attribute__((packed)) wav_header {
  * a shorter but perfectly good recording. */
 static atomic_t s_record_stop_requested;
 
+/* One-at-a-time guard for the direct (no-DSP) capture path, mirroring
+ * s_tap_armed / s_capture_armed on the other two. */
+static atomic_t s_direct_armed;
+
 void sound_record_request_stop(void) {
     atomic_set(&s_record_stop_requested, 1);
+}
+
+void sound_record_arm(void) {
+    atomic_set(&s_record_stop_requested, 0);
 }
 
 static bool record_stop_requested(void) {
@@ -795,7 +803,21 @@ struct imu_sidecar {
 static void imu_sidecar_flush(struct imu_sidecar *sc, bool final) {
     while (sc->len >= IMU_CSV_CHUNK || (final && sc->len > 0)) {
         size_t take = (sc->len >= IMU_CSV_CHUNK) ? IMU_CSV_CHUNK : sc->len;
-        if (fs_write(&sc->file, s_imu_batch, take) < 0) {
+        /* A SHORT write is a failure here, not a partial success: on a nearly
+         * full volume FatFs returns FR_OK with fewer bytes than asked, which
+         * arrives as a non-negative count. Treating that as written would drop
+         * the tail and splice the next CSV line onto a truncated one — and the
+         * host converter skips malformed rows silently, so the scenario would
+         * just be missing a span of IMU keyframes with nothing to notice.
+         * Matches the `written != size` check the two WAV writers use. */
+        if (fs_write(&sc->file, s_imu_batch, take) != (ssize_t)take) {
+            /* Give the handle back immediately. FatFs allows only
+             * CONFIG_FS_FATFS_NUM_FILES (4) open files device-wide, and leaving
+             * it open would starve GLIM loads, extension loads, coredump writes
+             * and MCUmgr DFU staging alike — every fs_open would return -ENOMEM
+             * until reboot. imu_sidecar_close() early-returns on !open, so this
+             * is the only place that can release it. */
+            fs_close(&sc->file);
             sc->open = false; /* stop trying; the WAV is the primary artifact */
             return;
         }
@@ -845,11 +867,20 @@ static void imu_sidecar_drain(struct imu_sidecar *sc) {
     if (!sc->open) {
         return;
     }
-    struct imu_analysis_result r;
-    while (k_msgq_get(&imu_tap_q, &r, K_NO_WAIT) == 0) {
+    /* `open` gates every iteration, not just entry: a flush failing mid-loop
+     * clears it WITHOUT consuming the buffer, so len stays >= IMU_CSV_CHUNK and
+     * the next line would be formatted at &s_imu_batch[len] — past the end of a
+     * buffer that is only IMU_CSV_CHUNK + one line long, growing by a line for
+     * every sample still queued. Its .bss neighbours are the capture batch and
+     * the audio-tap statics. A mid-capture write failure is all it takes, and
+     * the free-space clamp cannot rule that out: it works from a cached figure,
+     * and a host can add files over USB during a recording. */
+    struct imu_tap_sample s;
+    while (sc->open && k_msgq_get(&imu_tap_q, &s, K_NO_WAIT) == 0) {
+        const struct imu_analysis_result r = s.result;
         int n = snprintf(&s_imu_batch[sc->len], IMU_CSV_LINE_MAX,
                          "I,%d,%u,%d,%d,%d,%d,%d,%d\n",
-                         (int)(k_uptime_get() - sc->t0_ms), r.seq,
+                         (int)((int64_t)s.uptime_ms - sc->t0_ms), r.seq,
                          (int)(r.accel_x * IMU_CSV_SCALE), (int)(r.accel_y * IMU_CSV_SCALE),
                          (int)(r.accel_z * IMU_CSV_SCALE), (int)(r.gyro_x * IMU_CSV_SCALE),
                          (int)(r.gyro_y * IMU_CSV_SCALE), (int)(r.gyro_z * IMU_CSV_SCALE));
@@ -1301,13 +1332,23 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
     int ret;
     const uint32_t total_blocks = (duration_s * MSEC_PER_SEC) / BLOCK_CAPTURE_TIME_MS;
 
+    /* Same one-at-a-time guard the tap and capture paths carry. Without it a
+     * shell `sound mic record_wav` and a BLE-triggered capture can both land
+     * here — two callers driving one PDM stream into two files. */
+    if (!atomic_cas(&s_direct_armed, 0, 1)) {
+        shell_error(shell, "A capture is already running");
+        return -EBUSY;
+    }
+
     if (!device_is_ready(pdm0)) {
         shell_error(shell, "%s is not ready", pdm0->name);
+        atomic_set(&s_direct_armed, 0);
         return -ENOEXEC;
     }
     ret = configure_pdm();
     if (ret < 0) {
         shell_error(shell, "Failed to configure the driver: %d", ret);
+        atomic_set(&s_direct_armed, 0);
         return ret;
     }
 
@@ -1316,6 +1357,7 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
     ret = fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
     if (ret < 0) {
         shell_error(shell, "Failed to open %s: %d", path, ret);
+        atomic_set(&s_direct_armed, 0);
         return ret;
     }
 
@@ -1341,6 +1383,7 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
     if (ret != sizeof(hdr)) {
         shell_error(shell, "Failed to write WAV header: %d", ret);
         fs_close(&f);
+        atomic_set(&s_direct_armed, 0);
         return -EIO;
     }
 
@@ -1348,6 +1391,7 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
     if (ret < 0) {
         shell_error(shell, "START trigger failed: %d", ret);
         fs_close(&f);
+        atomic_set(&s_direct_armed, 0);
         return ret;
     }
 
@@ -1411,6 +1455,7 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
 #if defined(CONFIG_IMU)
     imu_sidecar_close(&imu_sc, shell);
 #endif
+    atomic_set(&s_direct_armed, 0);
     if (stopped_early) {
         shell_print(shell, "Stopped early at %u of %u blocks", total_bytes / BLOCK_SIZE,
                     total_blocks);
@@ -1441,6 +1486,38 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
     if (!atomic_cas(&s_capture_armed, 0, 1)) {
         shell_error(shell, "A capture is already draining the tap");
         return -EBUSY;
+    }
+
+    /* Free-space pre-flight, same contract as record_wav_tap()'s — this path
+     * REPLACES that one on a default build, so without it `sound mic record_wav
+     * 180 ...` on a near-full volume fills the disk to zero and aborts partway,
+     * after which unrelated writes and DFU staging fail with -ENOSPC. The BLE
+     * front end clamps against its own cached figure before getting here; this
+     * covers the shell caller, and re-checks with a live figure for both.
+     * WAV (1024 B/frame) + IMU sidecar (~56 B/frame at 25 Hz) + the prologues +
+     * 64 KB of slack for FAT metadata and whatever else writes meanwhile. */
+    struct fs_statvfs vfs;
+    if (fs_statvfs("/NAND:", &vfs) == 0) {
+#if defined(CONFIG_IMU)
+        const uint64_t per_frame = BLOCK_SIZE + 56;
+        const uint64_t overhead = WAV_DATA_OFFSET + IMU_CSV_CHUNK + 64 * 1024;
+#else
+        const uint64_t per_frame = BLOCK_SIZE; /* no sidecar on this build */
+        const uint64_t overhead = WAV_DATA_OFFSET + 64 * 1024;
+#endif
+        uint64_t free_bytes = (uint64_t)vfs.f_bfree * vfs.f_frsize;
+        uint64_t needed = (uint64_t)total_blocks * per_frame + overhead;
+        if (needed > free_bytes) {
+            uint32_t max_s =
+                (uint32_t)((free_bytes > overhead)
+                               ? (free_bytes - overhead) /
+                                     (per_frame * (MSEC_PER_SEC / BLOCK_CAPTURE_TIME_MS))
+                               : 0);
+            shell_error(shell, "Not enough free space for %u s (max ~%u s free)", duration_s,
+                        max_s);
+            atomic_set(&s_capture_armed, 0);
+            return -ENOSPC;
+        }
     }
 
     struct fs_file_t f;
@@ -1587,7 +1664,13 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
 #endif /* CONFIG_APP_CAPTURE */
 
 int sound_record_wav(const struct shell *shell, uint32_t duration_s, const char *path) {
-    atomic_set(&s_record_stop_requested, 0);
+    /* Deliberately does NOT clear the stop flag — sound_record_arm() does, at the
+     * moment the capture is REQUESTED. Clearing here loses a stop pressed during
+     * the pre-roll: the capture manager publishes RECORDING (so the app's Stop
+     * button is live) before the worker has finished its free-space check and
+     * directory scan, and a stop landing in that window was ACKed, wiped here,
+     * and then never honoured — the device recorded the full limit while the UI
+     * showed a press that did nothing. */
 #if defined(CONFIG_APP_AUDIO_DEBUG)
     if (atomic_get(&s_dsp_running)) {
         return record_wav_tap(shell, duration_s, path);
@@ -1632,6 +1715,10 @@ static int cmd_sound_mic_record_wav(const struct shell *shell, size_t argc, char
         path = argv[2];
     }
 
+    /* This path has no pre-roll — the request and the loop are the same call —
+     * but it still has to clear any stale flag, since sound_record_wav() no
+     * longer does. See sound_record_arm(). */
+    sound_record_arm();
     return sound_record_wav(shell, duration_s, path);
 }
 

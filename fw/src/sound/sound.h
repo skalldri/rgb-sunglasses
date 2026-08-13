@@ -42,6 +42,16 @@ int sound_record_wav(const struct shell *shell, uint32_t duration_s, const char 
  *
  * A requested stop is a SUCCESS, not the existing io_error abort: the recording
  * simply ended when the user said so, and the WAV and sidecar are closed and
- * valid. Cleared automatically at the start of each capture.
+ * valid. Cleared by sound_record_arm(), not by sound_record_wav().
  */
 void sound_record_request_stop(void);
+
+/**
+ * @brief Clear any pending stop request, at the moment a capture is REQUESTED.
+ *
+ * Separate from sound_record_wav() so that a stop arriving during the pre-roll —
+ * after the capture manager has published RECORDING and lit the app's Stop
+ * button, but before the worker reaches the loop — is still honoured instead of
+ * being cleared out from under the user.
+ */
+void sound_record_arm(void);

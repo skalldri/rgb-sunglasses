@@ -299,6 +299,11 @@ int capture_start(uint32_t limit_s) {
         k_mutex_unlock(&s_lock);
         return -ENOSPC;
     }
+    /* Armed at REQUEST time, not when the worker reaches the loop: the state
+     * below makes the app's Stop button live immediately, and the worker still
+     * has a free-space check and a directory scan to do first. A stop landing in
+     * that window has to survive. */
+    sound_record_arm();
     /* The path is filled in by the worker once it knows the next free index; until
      * then it is empty rather than stale from the previous capture. */
     s_cap.path[0] = '\0';

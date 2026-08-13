@@ -26,11 +26,16 @@ function decodeUint32OrNull(encoded: string | null | undefined): number | null {
  * are waiting to be collected. Tapping it opens the capture screen
  * (app/(tabs)/device-state/capture.tsx), which owns the actual start/stop control.
  *
- * Deliberately does no reads or subscriptions of its own — this card sits on the
- * screen the app lives on for a whole session, and capture state only changes
- * because of something the user did on the capture screen (or a capture hitting
- * its own limit, which notifies). Adding a poll here would spend BLE traffic and
- * an Android notification slot on a value that is already pushed.
+ * Does no reads or subscriptions of its own: Capture State is in the always-on
+ * monitor set (use-ble-connection.ts), so this tile tracks a capture that ends by
+ * itself. It has to be always-on rather than screen-scoped — a capture reaching
+ * its length limit is a device-side push with nobody on the capture screen to
+ * hear it, and scoping it there left this tile reading "Recording" forever after
+ * the user navigated back.
+ *
+ * The count is NOT notifiable (files also arrive and vanish over USB, which the
+ * device cannot observe), so it can lag until the capture screen polls it. That
+ * is the honest trade: a stale count is cosmetic, a stale state is a lie.
  */
 export function CaptureCard({ style }: { style?: ViewStyle }) {
     const { selectedDevice } = useBluetooth();
