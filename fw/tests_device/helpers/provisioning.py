@@ -20,8 +20,11 @@ EXPECTED_GLIM = {"nyan_cat.glim", "bad_apple.glim", "4096.glim"}
 
 # In-repo extensions (fw/extensions/*/) built + copied into /NAND:/ext,
 # identified by manifest displayName (what `ext list` prints), NOT filename.
-# Hello is the fault-injection workhorse (Crash/Hang params).
-EXPECTED_EXT = {"Hello Extension"}
+# Hello is the fault-injection workhorse (Crash/Hang params); C++ Test is the
+# alphabetically-earlier sibling the #303 persist-by-name test deletes to
+# force a slot renumber — so it must be part of the verified baseline, not
+# left to chance (PR #359 review).
+EXPECTED_EXT = {"Hello Extension", "C++ Test"}
 
 
 def _find_nand_disk() -> str | None:
@@ -41,19 +44,22 @@ def _find_nand_disk() -> str | None:
 
 
 @contextlib.contextmanager
-def nand_mount():
-    """Mount the board's NAND over USB MSC. FAT-coherence contract: the
-    firmware caches cluster allocations, so after any host-side write the
-    caller MUST reboot the board before firmware reads the files
-    (fw/CLAUDE.md, 'FAT concurrent access causes read corruption')."""
+def nand_mount(ro: bool = False):
+    """Mount the board's NAND over USB MSC. FAT-coherence contract: a rw mount
+    (the default) dirties FAT metadata that the firmware's live mount then
+    can't see, so after any host-side WRITE the caller MUST reboot the board
+    before firmware reads the files (fw/CLAUDE.md, 'FAT concurrent access
+    causes read corruption'). Pass ro=True for a pure read — a read-only mount
+    touches nothing on the volume, so no reboot is needed (PR #359 review)."""
     disk = _find_nand_disk()
     assert disk, "NAND USB mass-storage disk not found (vendor=RGB-SG model=FlashDisk)"
     mnt = tempfile.mkdtemp(prefix="hil-nand-")
-    subprocess.run(["mount", "-o", "rw", disk, mnt], check=True, timeout=30)
+    subprocess.run(["mount", "-o", "ro" if ro else "rw", disk, mnt], check=True, timeout=30)
     try:
         yield mnt
     finally:
-        subprocess.run(["sync"], timeout=60)
+        if not ro:
+            subprocess.run(["sync"], timeout=60)
         # check=True is load-bearing: a swallowed umount failure leaves the
         # volume mounted rw with dirty blocks while the firmware remounts
         # FAT — the double-writer corruption this docstring warns about —
@@ -64,8 +70,10 @@ def nand_mount():
 
 
 def nand_read_ext(name: str) -> bytes:
-    """Read /NAND:/ext/<name> off the board over USB MSC (host-side)."""
-    with nand_mount() as mnt:
+    """Read /NAND:/ext/<name> off the board over USB MSC (host-side). Uses a
+    READ-ONLY mount, so it needs no reboot afterwards (unlike the write
+    helpers below, which dirty FAT and require the FAT-coherence reboot)."""
+    with nand_mount(ro=True) as mnt:
         with open(os.path.join(mnt, "ext", name), "rb") as f:
             return f.read()
 

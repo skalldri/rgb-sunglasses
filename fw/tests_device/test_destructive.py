@@ -286,22 +286,23 @@ def test_ext_param_persists_by_name(rgb: RgbShell):
 
     Mechanism: delete the alphabetically-earlier baseline extension
     (cpptest.llext) so hello renumbers from slot 1 → slot 0 across a reboot.
-    Uses USB MSC directly — the app-driven FILE_MGMT group-64 delete path is
-    a different surface, covered by E2E-04. Self-restoring (re-writes
-    cpptest's own bytes); the destructive-tier reprovision is the backstop.
+    Both hello AND cpptest are provisioning baseline (EXPECTED_EXT), so a
+    missing sibling is a fixable setup error (FAIL, not skip — a skip would
+    silently retire this #303 pin, PR #359 review) rather than a rig
+    difference. Uses USB MSC directly — the app-driven FILE_MGMT group-64
+    delete path is a different surface, covered by E2E-04. Self-restoring
+    (re-writes cpptest's own bytes); the destructive-tier reprovision is the
+    backstop.
     """
     EARLIER = "cpptest.llext"  # sorts before hello.llext → occupies slot 0
 
-    slots = rgb.ext_list()
-    hello = next((s for s in slots if s["name"] == HELLO), None)
-    assert hello, f"{HELLO} not installed — run fw/scripts/provision-device.sh"
-    earlier = next((s for s in slots if s["file"] == EARLIER), None)
-    if earlier is None or earlier["slot"] >= hello["slot"]:
-        pytest.skip(
-            f"need {EARLIER} installed at a lower slot than {HELLO} to force a "
-            f"renumber; got {[(s['file'], s['slot']) for s in slots]}"
-        )
-    orig_slot = hello["slot"]
+    orig_slot = _hello_slot(rgb)  # FAILs (not skips) if hello is missing
+    earlier = next((s for s in rgb.ext_list() if s["file"] == EARLIER), None)
+    assert earlier is not None and earlier["slot"] < orig_slot, (
+        f"need {EARLIER} installed at a lower slot than {HELLO} to force a "
+        f"renumber — run fw/scripts/provision-device.sh; got "
+        f"{[(s['file'], s['slot']) for s in rgb.ext_list()]}"
+    )
 
     # Save cpptest's bytes so the test can restore it without a full reprovision.
     cpptest_bytes = provisioning.nand_read_ext(EARLIER)
@@ -309,14 +310,19 @@ def test_ext_param_persists_by_name(rgb: RgbShell):
     NEW_SPEED = 91  # distinct from hello's default (50)
     orig_speed = _read_hello_speed(rgb, orig_slot)
     marker_written = False
+    deleted = False
     try:
         rgb.exec(f"ext param {orig_slot} 0 {NEW_SPEED}")
-        assert _read_hello_speed(rgb, orig_slot) == NEW_SPEED
+        # Set BEFORE the read-back: once the write lands the device may hold
+        # the marker, so the restore must fire even if the read-back itself
+        # fails (PR #359 review — else Speed=91 persists into later sessions).
         marker_written = True
+        assert _read_hello_speed(rgb, orig_slot) == NEW_SPEED
         time.sleep(3.0)  # let the debounced persist flush to NVS
 
         # Renumber: remove the earlier-sorting sibling, reboot to re-scan.
         provisioning.nand_remove_ext(EARLIER)
+        deleted = True
         rgb.reboot()
 
         after = rgb.ext_list()
@@ -337,15 +343,23 @@ def test_ext_param_persists_by_name(rgb: RgbShell):
             f"not name (#303 regression)"
         )
     finally:
-        # Restore cpptest and hello's default, without depending on the full
-        # reprovision (which is still the module-teardown backstop).
-        provisioning.nand_write_ext(EARLIER, cpptest_bytes)
-        rgb.reboot()
-        if marker_written:
-            h = next((s for s in rgb.ext_list() if s["name"] == HELLO), None)
-            if h:
-                rgb.exec(f"ext param {h['slot']} 0 {orig_speed}", check=False)
-                time.sleep(3.0)
+        # Guarded so a cleanup hiccup never REPLACES the #303 assertion
+        # failure that carries the evidence (PR #348/#359 review). Only
+        # rewrite cpptest if it was actually removed (`deleted`) — a "wb"
+        # truncate of an un-deleted file reallocates its cluster chain under
+        # the live FAT mount (double-writer corruption, fw/CLAUDE.md).
+        try:
+            if deleted:
+                provisioning.nand_write_ext(EARLIER, cpptest_bytes)
+            rgb.reboot()
+            if marker_written:
+                h = next((s for s in rgb.ext_list() if s["name"] == HELLO), None)
+                if h:
+                    rgb.exec(f"ext param {h['slot']} 0 {orig_speed}", check=False)
+                    time.sleep(3.0)
+        except Exception:
+            # Restore failed — the module reprovision teardown is the backstop.
+            pass
 
 
 def test_factory_reset_soft_keeps_files(rgb: RgbShell):
