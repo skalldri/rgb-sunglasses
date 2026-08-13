@@ -225,6 +225,10 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
   const artifacts: Record<string, string | null> = { report: null, framesDir: null };
 
   let fault: FaultInfo | null = await host.activate();
+  // Drain rgbx_init's printk before anything else can early-return: it is
+  // populated on the fault path too, and an init fault is exactly when its
+  // contents matter most.
+  stats.recordInitLog(host.initLog);
   const timeline = [...(scenario.timeline ?? [])].sort((a, b) => a.atMs - b.atMs);
   let timelineAt = 0;
 

@@ -144,6 +144,24 @@ export class SimHost {
   faulted = false;
   faultInfo: FaultInfo | null = null;
 
+  /**
+   * printk output produced by rgbx_init during the most recent activate(),
+   * or "" if it logged nothing. Reset at the start of every activate().
+   *
+   * This is a field rather than part of activate()'s return value because
+   * activate() reports faults (`FaultInfo | null`) and the init log is
+   * orthogonal — it exists on the success path too, and is populated even
+   * when init then fails (traps often follow logs). Callers that surface a
+   * printk console must drain it after activate(), the same way they drain
+   * TickOk.log after every tick; nothing else in the host reads it.
+   *
+   * It used to be dropped on the floor: the worker returned it in
+   * InitOkResponse.log and activate() simply never looked, so an extension
+   * whose only printk was in rgbx_init — `hello`, for one — appeared to log
+   * nothing at all in both the CLI report and the browser console.
+   */
+  initLog = "";
+
   /** Sim clock: exactly tickIndex * dtMs (nominal, like the device). */
   simTimeMs = 0;
   tickIndex = 0;
@@ -177,6 +195,7 @@ export class SimHost {
     }
     this.faulted = false;
     this.faultInfo = null;
+    this.initLog = "";
     this.adapter = this.adapterFactory();
 
     const loadResp = await this.send(
@@ -251,9 +270,20 @@ export class SimHost {
       return this.fail("wall_backstop", "rgbx_init exceeded the wall backstop", false);
     }
     if (!initResp.ok) {
+      // Whatever init managed to print before it died is the most useful
+      // thing there is for diagnosing an init fault — keep it, don't let the
+      // failure path swallow it.
+      this.initLog = initResp.log ?? "";
       await this.terminate();
       return this.fail("init_failed", initResp.message, false);
     }
+    // Same narrowing guard tick() uses: `ok` alone leaves the OK union, and
+    // only InitOkResponse carries a log.
+    if (initResp.type !== "init") {
+      await this.terminate();
+      return this.fail("init_failed", "protocol error", false);
+    }
+    this.initLog = initResp.log;
     return null;
   }
 

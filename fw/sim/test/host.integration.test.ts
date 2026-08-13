@@ -235,3 +235,41 @@ test("hello: vprintk formats the first-tick line, once", { skip }, async () => {
     await host.terminate();
   }
 });
+
+/*
+ * rgbx_init's printk used to be dropped on the floor: the sandbox worker
+ * returned it in InitOkResponse.log and activate() simply never read it, so
+ * an extension whose only logging is in init — hello, and by construction
+ * anything following the getting-started guide, which puts printk in init()
+ * — appeared to log nothing at all in both the CLI report and the browser
+ * console. Nothing observed init-phase output, so nothing caught it.
+ */
+test("hello: rgbx_init's printk is surfaced, not dropped", { skip }, async () => {
+  const host = makeHost(helloBytes!);
+  try {
+    assert.equal(await host.activate(), null);
+    assert.equal(host.initLog, "hello: rgbx_init running inside the sandbox\n");
+
+    // Init output is drained separately from tick output and must not spill
+    // into it: tick 0 carries hello's own first-tick line and nothing else.
+    const first = await host.tick();
+    assert.equal(first.status, "ok");
+    assert.equal(first.log, "hello: tick1 dt=11 speed=050 msg=ok\n");
+  } finally {
+    await host.terminate();
+  }
+});
+
+test("initLog is reset by a re-activation, not accumulated", { skip }, async () => {
+  const host = makeHost(helloBytes!);
+  try {
+    assert.equal(await host.activate(), null);
+    assert.notEqual(host.initLog, "");
+    // Re-activation re-instantiates the module, so rgbx_init runs again —
+    // the previous activation's text must not still be there in front of it.
+    assert.equal(await host.activate(), null);
+    assert.equal(host.initLog, "hello: rgbx_init running inside the sandbox\n");
+  } finally {
+    await host.terminate();
+  }
+});
