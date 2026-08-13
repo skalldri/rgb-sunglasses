@@ -301,7 +301,25 @@ info "Installing/updating yt-dlp + the deno JS runtime..."
 # abort the script under set -e (`! -e` is false for a broken symlink).
 ln -sf "$(basename "${TOOLS_VENV}")" "${TOOLS_VENV_CURRENT}"
 
-# --- 11. Summary ---------------------------------------------------------------
+# --- 11. Headless disk automount policy ----------------------------------------
+# loginwindow blocks disk mounts and EJECTS newly-appearing disks while the
+# screen is locked (issue #367 — this is what makes the board's NAND vanish on a
+# locked Mac). AutomountDisksWithoutUserLogin tells diskarbitrationd to mount
+# without an unlocked console session, which this Mac needs to act as a headless
+# CI machine. The only sudo step in this script; non-fatal if declined.
+if [ "$(defaults read /Library/Preferences/SystemConfiguration/autodiskmount AutomountDisksWithoutUserLogin 2>/dev/null)" = "1" ]; then
+    info "AutomountDisksWithoutUserLogin already enabled"
+else
+    info "Enabling AutomountDisksWithoutUserLogin (headless disk mounts — needs sudo)..."
+    if sudo defaults write /Library/Preferences/SystemConfiguration/autodiskmount AutomountDisksWithoutUserLogin -bool true; then
+        # Restart diskarbitrationd so the new policy applies without a reboot.
+        sudo launchctl kickstart -k system/com.apple.diskarbitrationd || true
+    else
+        warn "sudo declined — the board's disk will not mount while the screen is locked (#367)."
+    fi
+fi
+
+# --- 12. Summary ---------------------------------------------------------------
 info "Done."
 echo
 echo "Firmware dev loop on this Mac:"
