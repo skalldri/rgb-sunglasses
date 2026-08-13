@@ -318,5 +318,5 @@ echo "  - The first proto0 build configures from scratch and is very slow (tens 
 echo "  - Twister tests (native_sim) do NOT run on macOS — use CI or the devcontainer."
 echo "  - fw-env.sh and tools-env.sh activate DIFFERENT venvs — use separate shells."
 echo "  - yt-dlp goes stale as YouTube changes; re-run this script to refresh it."
-echo "  - Copying .glim files to the board is Linux-only (see fw/CLAUDE.md, issue #367)."
+echo "  - Board disk access needs the screen UNLOCKED — loginwindow ejects it when locked (#367)."
 echo "  - iOS app toolchain is separate: app/scripts/macos-setup.sh"
