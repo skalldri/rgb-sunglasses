@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 
 PROMPT_RE = r"uart:~\$"
 
+# The settings store coalesces writes and flushes CONFIG_APP_SETTINGS_SAVE_
+# DEBOUNCE_MS (1000 ms) after the last one; 3 s is a generous margin. Single
+# source of truth for the persist-flush wait, so a debounce-config change is a
+# one-line update instead of chasing hardcoded sleeps across the suite (#362).
+PERSIST_FLUSH_S = 3.0
+
 # "0x20001234 thread_name (real size 2048):  unused 1234  usage 814 / 2048 (39 %)"
 # The percentage is printed with %2u ("( 7 %)" below 10%) — the \s* after the
 # open paren is load-bearing; without it every thread under 10% was silently
@@ -57,6 +63,12 @@ class RgbShell:
         self.shell = shell
 
     # ---- plumbing --------------------------------------------------------
+
+    def wait_persist_flush(self) -> None:
+        """Block long enough for a debounced settings write to reach NVS
+        (PERSIST_FLUSH_S). Use after any BT/shell config write whose value a
+        later reboot must see."""
+        time.sleep(PERSIST_FLUSH_S)
 
     def sync(self, timeout: float = 30.0) -> None:
         """Get the shell to a clean, responsive prompt (post-boot/reconnect)."""
@@ -419,6 +431,28 @@ class RgbShell:
                 }
             )
         return slots
+
+    def ext_param(self, slot: int, idx: int) -> str:
+        """Raw value of `ext param <slot> <idx>` — the token(s) after ' = '.
+
+        Output is `<DisplayName>.<ParamName> = <value>` (extension_host.cpp
+        cmd_ext_param): `50`/`123 (0x7b)` for uint32/bool, `0x0000ff80` for
+        color, `"HELLO"` for string. Callers wanting an int use ext_param_int.
+        """
+        out = self.exec(f"ext param {slot} {idx}")
+        for line in out:
+            m = re.search(r"\.[^=]+=\s*(.+)$", line.strip())
+            if m:
+                return m.group(1).strip()
+        raise AssertionError(f"could not parse `ext param {slot} {idx}`: {out}")
+
+    def ext_param_int(self, slot: int, idx: int) -> int:
+        """Integer value of a uint32/bool ext param (tolerates the trailing
+        ` (0x..)` the shell appends)."""
+        raw = self.ext_param(slot, idx)
+        m = re.match(r"-?\d+", raw)
+        assert m, f"ext param {slot}/{idx} is not an integer: {raw!r}"
+        return int(m.group(0))
 
     def ext_stats(self) -> dict[str, dict[str, int]]:
         """`ext stats` → {name: {ticks, cpu_min/avg/max, wall_min/avg/max}}."""
