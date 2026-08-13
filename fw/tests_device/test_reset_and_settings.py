@@ -14,8 +14,6 @@ Regressions pinned:
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from helpers.rgb_shell import RgbShell
@@ -59,9 +57,9 @@ def test_anim_not_persisted(rgb: RgbShell):
     rgb.exec("anim set rainbow")
     assert rgb.anim_get() == "rainbow"
 
-    # The switch must not schedule a settings write (issue #311 removed it;
-    # the store's debounce is well under 3 s).
-    time.sleep(3.0)
+    # The switch must not schedule a settings write (issue #311 removed it).
+    # Wait a full debounce window, then confirm no new key appeared.
+    rgb.wait_persist_flush()
     new_keys = set(rgb.settings_keys()) - keys_before
     assert not new_keys, f"animation switch created settings key(s): {new_keys}"
 
@@ -93,11 +91,7 @@ def test_settings_roundtrip(rgb: RgbShell):
     # hello param 0 is Speed (UINT32, default 50) — see fw/extensions/hello.
     # NEVER write params 2/3 here: those are the Crash/Hang fault injectors.
     def read_speed(slot_no: int) -> int:
-        out = rgb.exec(f"ext param {slot_no} 0")
-        kv = RgbShell.parse_kv([line.replace(" = ", "=") for line in out])
-        vals = [v for k, v in kv.items() if k.lower().endswith("speed")]
-        assert vals, f"could not read hello.Speed: {out}"
-        return vals[0]
+        return rgb.ext_param_int(slot_no, 0, name="Speed")
 
     orig_speed = read_speed(slot)
     new_speed = 77 if orig_speed != 77 else 78
@@ -114,8 +108,7 @@ def test_settings_roundtrip(rgb: RgbShell):
     try:
         rgb.glim_select_name(target_glim)
         rgb.exec(f"ext param {slot} 0 {new_speed}")
-        # Persistence is debounced; give the store one flush window.
-        time.sleep(3.0)
+        rgb.wait_persist_flush()  # let the debounced store flush before reboot
 
         rgb.reboot()
         # NOTE deliberately NOT asserting on boot-log contents here: the CDC
@@ -139,4 +132,4 @@ def test_settings_roundtrip(rgb: RgbShell):
         rgb.exec(f"ext param {_find_ext(rgb, HELLO)['slot']} 0 {orig_speed}")
         if orig_glim_name is not None:
             rgb.glim_select_name(orig_glim_name)
-        time.sleep(3.0)  # let the restore flush before any later reboot
+        rgb.wait_persist_flush()  # let the restore flush before any later reboot

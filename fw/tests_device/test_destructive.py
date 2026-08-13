@@ -34,7 +34,6 @@ Regressions pinned:
 from __future__ import annotations
 
 import os
-import re
 import time
 
 import pytest
@@ -201,9 +200,12 @@ def test_ext_fault_latch_and_recovery(rgb: RgbShell):
             f"record must survive recovery with updated state (#308): {rec}"
         )
         # The reset params are what make the retry safe: Hang must be 0 now.
-        out = rgb.exec(f"ext param {slot} 3")
-        assert any(re.search(r"=\s*0\b", line) for line in out), (
-            f"Hang param not reset to default after the fault: {out}"
+        # Read through the shared helper with the name cross-check (idx 3 ==
+        # Hang) rather than a hand-rolled regex left inline in the deduped
+        # file — same assertion, and it fails loudly if a manifest reorder
+        # ever moved Hang off index 3 (PR #365 review).
+        assert rgb.ext_param_int(slot, 3, name="Hang") == 0, (
+            "Hang param not reset to default after the fault"
         )
     finally:
         # All check=False: a cleanup hiccup on a just-faulted, noisy console
@@ -267,11 +269,7 @@ def test_bad_manifest_boot_survival(rgb: RgbShell, dut, device_state: dict):
 
 
 def _read_hello_speed(rgb: RgbShell, slot: int) -> int:
-    out = rgb.exec(f"ext param {slot} 0")
-    kv = RgbShell.parse_kv([line.replace(" = ", "=") for line in out])
-    vals = [v for k, v in kv.items() if k.lower().endswith("speed")]
-    assert vals, f"could not read hello.Speed from `ext param {slot} 0`: {out}"
-    return vals[0]
+    return rgb.ext_param_int(slot, 0, name="Speed")  # hello param 0 = Speed
 
 
 def test_ext_param_persists_by_name(rgb: RgbShell):
@@ -318,7 +316,7 @@ def test_ext_param_persists_by_name(rgb: RgbShell):
         # fails (PR #359 review — else Speed=91 persists into later sessions).
         marker_written = True
         assert _read_hello_speed(rgb, orig_slot) == NEW_SPEED
-        time.sleep(3.0)  # let the debounced persist flush to NVS
+        rgb.wait_persist_flush()
 
         # Renumber: remove the earlier-sorting sibling, reboot to re-scan.
         provisioning.nand_remove_ext(EARLIER)
@@ -356,7 +354,7 @@ def test_ext_param_persists_by_name(rgb: RgbShell):
                 h = next((s for s in rgb.ext_list() if s["name"] == HELLO), None)
                 if h:
                     rgb.exec(f"ext param {h['slot']} 0 {orig_speed}", check=False)
-                    time.sleep(3.0)
+                    rgb.wait_persist_flush()
         except Exception:
             # Restore failed — the module reprovision teardown is the backstop.
             pass
@@ -370,7 +368,7 @@ def test_factory_reset_soft_keeps_files(rgb: RgbShell):
     # Marker: a persisted selection that a settings wipe must erase.
     target = glim_before[-1]
     rgb.glim_select_name(target)
-    time.sleep(3.0)  # let the debounced store flush
+    rgb.wait_persist_flush()
 
     rgb.exec_oneway("factory_reset soft")
     rgb.wait_reboot()
