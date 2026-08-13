@@ -8,6 +8,7 @@ import {
     UUID_ANIMATION_NAME_CHARACTERISTIC,
     UUID_BATTERY_CHARGE_STATUS,
     UUID_BATTERY_PERCENT,
+    UUID_CAPTURE_STATE,
     UUID_CCC_DESCRIPTOR,
     UUID_CPF_DESCRIPTOR,
     UUID_CUD_DESCRIPTOR,
@@ -42,6 +43,12 @@ const ALWAYS_ON_MONITOR_UUIDS: string[] = [
     UUID_ACTIVE_ANIMATION,
     UUID_BATTERY_PERCENT,
     UUID_BATTERY_CHARGE_STATUS,
+    // Capture State earns a permanent slot because a capture ENDS on its own —
+    // it hits its length limit with nobody watching. The Capture tile on
+    // Controls is reachable from anywhere, and scoping this to the capture
+    // screen froze the tile on "Recording" forever once the user navigated
+    // back. That is the device-side-push case the budget rule exists to allow.
+    UUID_CAPTURE_STATE,
 ];
 
 interface UseBleConnectionResult {

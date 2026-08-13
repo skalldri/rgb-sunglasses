@@ -92,6 +92,42 @@ config IMU
 	  animations can consume the data without knowing about the driver.
 	  Proto0 only — the legacy DK board (dk-support branch) has no BMI270.
 
+config APP_CAPTURE
+	bool "Background audio + IMU capture worker"
+	depends on AUDIO && FILE_SYSTEM
+	default y
+	help
+	  Runs record_wav on its own thread so a capture can be started from a
+	  GATT write. A write handler runs on the BT RX thread and must never
+	  block for the length of a recording.
+
+config APP_CAPTURE_QUEUE_FRAMES
+	int "Capture PCM tap depth, in 32 ms blocks"
+	default 8
+	depends on APP_CAPTURE
+	help
+	  Buffering between the DSP thread and the capture writer. A flash sector
+	  erase stalls the writer for hundreds of ms, and anything not buffered
+	  across that stall is a dropped block. 8 blocks is ~256 ms. The recorder
+	  reports its drop count, so raise this if a capture reports drops rather
+	  than guessing.
+
+config APP_CAPTURE_THREAD_STACK_SIZE
+	int "Capture worker stack size"
+	default 4096
+	depends on APP_CAPTURE
+	help
+	  Sized for FATFS writes on the capture path, matching the SMP workqueue
+	  which was raised to 4096 for the same reason.
+
+config APP_CAPTURE_THREAD_PRIORITY
+	int "Capture worker thread priority"
+	default 14
+	depends on APP_CAPTURE
+	help
+	  Preemptible, and deliberately below the render and audio threads: this
+	  does filesystem I/O, which must never starve them (fw/docs/threading.md).
+
 config IMU_THREAD_PRIORITY
 	int "IMU thread priority"
 	default 7

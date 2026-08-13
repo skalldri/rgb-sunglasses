@@ -68,6 +68,22 @@ command, which refuses to run without a battery present (the 2026-07-05 wedge wa
 likely aggravated by running VBUS-only when GO2P dropped the PD PHY). It exists to
 exercise the runtime PTCH-wedge recovery path — see `/debug-fw`'s symptom table.
 
+### NEVER switch phones on your own
+
+**The OnePlus 9 Pro (LE2125) is the phone to use. If two phones are reachable over
+ADB, that is not an invitation to pick one — never switch to the Pixel (or any other
+device) automatically.** Instructed 2026-08-12 after an agent found the OnePlus
+apparently absent, connected the Pixel instead, and started deploying to it.
+
+If the OnePlus looks unavailable — not in `adb devices`, screen locked, app not
+installed — say so and ask. Do not treat "the other phone answers" as the fix. The
+tempting rationalisation to avoid: the Pixel has a spec-compliant BLE stack and so
+avoids the OnePlus's forget-and-re-pair dance after a GATT-changing reflash — that
+is a reason the Pixel is *easier*, not a reason it is the right device, and
+`/re-pair` exists precisely to make the OnePlus path routine. Verification done on
+the wrong phone also proves the wrong thing: the OnePlus is the strict device, so a
+result from the tolerant one does not carry over.
+
 ### NEVER reboot the shared Android phone on your own
 
 **Never run `adb reboot` (or any full OS-level reboot) against the shared test
@@ -86,6 +102,28 @@ Bluetooth stack, re-navigating the app's screen to restart a scan, or
 resetting the *board* (not the phone) if a stale GATT link is suspected. Only
 ask the user to power-cycle the phone themselves if those don't resolve it —
 never do it unilaterally via `adb reboot`.
+
+**When `svc bluetooth disable`/`enable` does not clear error 6, restart the
+Bluetooth stack PROCESS instead: `adb shell am force-stop com.android.bluetooth`**
+(it restarts itself; `settings get global bluetooth_on` still reads 1 afterwards).
+Measured 2026-08-12 on the OnePlus: four `svc` cycles left every scan failing with
+registration error 6, and one force-stop of the stack process fixed it on the next
+app launch. Force-stop the app first either way — its own registrations are part of
+what leaks. This is strictly lighter than the phone reboot the rule above forbids,
+so it belongs in the ladder before ever asking the user.
+
+Two things that will otherwise cost an hour on that phone:
+
+- **`pm grant` is blocked on OxygenOS** (`SecurityException: neither user 2000 nor
+  current process has GRANT_RUNTIME_PERMISSIONS`), so the pre-grant recipe in
+  `app/CLAUDE.md` does not work there. Grant through the UI instead:
+  `adb shell am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:<pkg>`
+  → Permissions → Location → "Allow only while using the app".
+- **Every board reboot needs a re-pair on this phone**, not just a GATT-changing
+  one — a plain reflash-and-reset wedges the bonded reconnect at `ATT MTU: 23`. Budget
+  for `/re-pair` after each flash, and expect its automated forget to need the
+  halt-the-board recipe (see `app/CLAUDE.md`); the forget only succeeds while the
+  board is unreachable.
 
 ### BLE pairing — use the `/re-pair` skill; otherwise ask the user for the passkey
 
@@ -321,6 +359,7 @@ This is the project's **single** routing table — other docs link here, never c
 | App+device E2E test run (AI-driven, phone + board) | /e2e-test (executes `fw/docs/e2e-test-plan.md`) |
 | Debug a firmware symptom | /debug-fw |
 | Debug a device↔app BLE symptom | /debug-ble |
+| Record a real audio + IMU capture as a sim scenario | /capture-scenario |
 | Validate app changes without a phone | /validate-app |
 | Drive the app's UI on the physical phone (tap, wait for a screen change) | /drive-app |
 | Memory / FLASH / RAM work | /rom-ram-budget |

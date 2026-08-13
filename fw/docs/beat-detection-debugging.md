@@ -100,6 +100,19 @@ Ground-truth options for step 5: `--ref-librosa beats` (librosa beat tracker),
 `--ref-librosa onsets`, or `--ref annotations.txt` (one time-in-seconds per
 line; Audacity label-track exports work).
 
+## Recording new corpus material
+
+`/capture-scenario` records audio **and IMU together** on the device (one
+`record_wav` loop, one `t0`, so the two streams need no host-side alignment) and
+converts the result into a simulator scenario via
+`fw/tools/capture_to_scenario.py`. Use it to expand the corpus below — the Phase 5
+assessment is explicitly blocked on getting from 3 clips to 6-8, and on the fact
+that one of the current three cannot be tempo-tracked at all.
+
+The sidecar it adds (`<wav>.imu.csv`) is a separate file on purpose: `parseDLines`
+accepts exactly 21 or 41 fields per `D,` row, so widening the analysis CSV would
+break every consumer in this directory.
+
 ## The corpus
 
 `fw/testdata/beat-corpus/` holds the clips every tuning claim in issue #264 is
