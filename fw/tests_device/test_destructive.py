@@ -34,7 +34,6 @@ Regressions pinned:
 from __future__ import annotations
 
 import os
-import re
 import time
 
 import pytest
@@ -201,9 +200,12 @@ def test_ext_fault_latch_and_recovery(rgb: RgbShell):
             f"record must survive recovery with updated state (#308): {rec}"
         )
         # The reset params are what make the retry safe: Hang must be 0 now.
-        out = rgb.exec(f"ext param {slot} 3")
-        assert any(re.search(r"=\s*0\b", line) for line in out), (
-            f"Hang param not reset to default after the fault: {out}"
+        # Read through the shared helper with the name cross-check (idx 3 ==
+        # Hang) rather than a hand-rolled regex left inline in the deduped
+        # file — same assertion, and it fails loudly if a manifest reorder
+        # ever moved Hang off index 3 (PR #365 review).
+        assert rgb.ext_param_int(slot, 3, name="Hang") == 0, (
+            "Hang param not reset to default after the fault"
         )
     finally:
         # All check=False: a cleanup hiccup on a just-faulted, noisy console
@@ -267,7 +269,7 @@ def test_bad_manifest_boot_survival(rgb: RgbShell, dut, device_state: dict):
 
 
 def _read_hello_speed(rgb: RgbShell, slot: int) -> int:
-    return rgb.ext_param_int(slot, 0)  # hello param 0 = Speed
+    return rgb.ext_param_int(slot, 0, name="Speed")  # hello param 0 = Speed
 
 
 def test_ext_param_persists_by_name(rgb: RgbShell):

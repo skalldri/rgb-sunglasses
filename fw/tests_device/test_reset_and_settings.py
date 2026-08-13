@@ -91,7 +91,7 @@ def test_settings_roundtrip(rgb: RgbShell):
     # hello param 0 is Speed (UINT32, default 50) — see fw/extensions/hello.
     # NEVER write params 2/3 here: those are the Crash/Hang fault injectors.
     def read_speed(slot_no: int) -> int:
-        return rgb.ext_param_int(slot_no, 0)
+        return rgb.ext_param_int(slot_no, 0, name="Speed")
 
     orig_speed = read_speed(slot)
     new_speed = 77 if orig_speed != 77 else 78

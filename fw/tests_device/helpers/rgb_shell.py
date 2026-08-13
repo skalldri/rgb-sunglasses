@@ -432,25 +432,70 @@ class RgbShell:
             )
         return slots
 
-    def ext_param(self, slot: int, idx: int) -> str:
-        """Raw value of `ext param <slot> <idx>` — the token(s) after ' = '.
+    def ext_param(self, slot: int, idx: int, name: str | None = None) -> str:
+        """Raw value of `ext param <slot> <idx>` — the value after ' = '.
 
         Output is `<DisplayName>.<ParamName> = <value>` (extension_host.cpp
-        cmd_ext_param): `50`/`123 (0x7b)` for uint32/bool, `0x0000ff80` for
-        color, `"HELLO"` for string. Callers wanting an int use ext_param_int.
+        cmd_ext_param, lines 1573-1595): `50` for uint32, `0 (0x0)` for bool,
+        `0x00ff80` for color (`0x%06x` of a 24-bit-masked value — six hex
+        digits, not eight), `"HELLO"` for string. Callers wanting an int use
+        ext_param_int.
+
+        `Shell.get_filtered_output` (NCS shell.py) only strips prompt and
+        `<dbg>/<inf>/<wrn>/<err>` log lines — an interleaved `printk` or a
+        `shell_print` from another subsystem can still reach `out`, and a
+        naive "first line with a dot and a later `=`" match would return it.
+        The per-test parsers this helper replaced were immune because they
+        scanned every line and selected by param name; restore that here:
+        collect every `<label> = <value>` line, and
+
+          * if `name` is given, keep only the line whose ParamName matches it.
+            This is the guard that ties a hardcoded index to the param it is
+            meant to read (the old `k.lower().endswith("speed")` check) — a
+            manifest reorder then fails the READ loudly instead of silently
+            returning, and letting the caller write, the wrong param. That
+            matters most for hello, whose params 2/3 are the Crash/Hang fault
+            injectors (PR #365 review).
+          * otherwise require exactly one match, so an interleaved line that
+            happens to look like `k = v` can't silently win.
         """
         out = self.exec(f"ext param {slot} {idx}")
+        matches: list[tuple[str, str]] = []  # (param_name, value)
         for line in out:
-            m = re.search(r"\.[^=]+=\s*(.+)$", line.strip())
-            if m:
-                return m.group(1).strip()
-        raise AssertionError(f"could not parse `ext param {slot} {idx}`: {out}")
+            m = re.match(r"^\s*(\S.*?)\s*=\s*(.*\S)\s*$", line)
+            if not m:
+                continue
+            label, value = m.group(1), m.group(2)
+            param_name = label.rsplit(".", 1)[-1]  # <display>.<param>
+            matches.append((param_name, value))
+        if name is not None:
+            matches = [(p, v) for (p, v) in matches if p.lower() == name.lower()]
+            assert len(matches) == 1, (
+                f"expected exactly one `ext param {slot} {idx}` line for param "
+                f"{name!r}, got {matches or 'none'} (manifest reorder? #365): {out}"
+            )
+        else:
+            assert len(matches) == 1, (
+                f"expected exactly one `<name> = <value>` line from "
+                f"`ext param {slot} {idx}`, got {len(matches)}: {out}"
+            )
+        return matches[0][1]
 
-    def ext_param_int(self, slot: int, idx: int) -> int:
+    def ext_param_int(self, slot: int, idx: int, name: str | None = None) -> int:
         """Integer value of a uint32/bool ext param (tolerates the trailing
-        ` (0x..)` the shell appends)."""
-        raw = self.ext_param(slot, idx)
-        m = re.match(r"-?\d+", raw)
+        ` (0x..)` the shell appends to bools). `name`, if given, is
+        cross-checked against the printed ParamName — see ext_param.
+
+        Matches with re.fullmatch on the first whitespace-delimited token, NOT
+        re.match: a bare `re.match(r"-?\\d+")` anchors only at the start, so a
+        COLOR value like `0x00ff80` would decode to its leading `0` and this
+        would silently return 0 — the worst failure for a persistence pin, a
+        before/after-reboot compare of a reset color reading `0 == 0` and
+        passing green (PR #365 review). fullmatch makes a non-integer value
+        fail the assert loudly instead."""
+        raw = self.ext_param(slot, idx, name=name)
+        tok = raw.split()[0]  # drop the trailing ' (0x7b)' on bool output
+        m = re.fullmatch(r"-?\d+", tok)
         assert m, f"ext param {slot}/{idx} is not an integer: {raw!r}"
         return int(m.group(0))
 
