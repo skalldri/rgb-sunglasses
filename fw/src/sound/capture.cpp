@@ -68,15 +68,20 @@ struct capture_state_t {
 capture_state_t s_cap;
 capture_state_observer s_observer = nullptr;
 
-void publish() {
-    capture_state_observer observer = s_observer;
-    if (observer == nullptr) {
-        return;
-    }
-    struct capture_status status;
-    capture_get_status(&status);
-    observer(&status);
-}
+/* The two volume-derived numbers, cached because deriving them is flash I/O.
+ *
+ * This cache is what lets capture_get_status(), capture_count() and
+ * capture_remaining_seconds() honour their "safe from any thread" contract: a GATT
+ * write handler runs on the BT RX work queue, which is COOPERATIVE (priority −8,
+ * fw/docs/threading.md), and fw/CLAUDE.md forbids flash I/O there outright. An
+ * earlier version of this file derived both inline, so every "start capture" write
+ * from the phone stalled the entire Bluetooth host for an fs_statvfs plus a full
+ * directory walk — a walk whose cost grows with each capture collected, which is
+ * exactly what this feature is for.
+ *
+ * Only the worker thread writes these (see refresh_volume_stats), under s_lock. */
+uint32_t s_cached_captures = 0;
+uint32_t s_cached_remaining_s = 0;
 
 uint64_t free_bytes() {
     struct fs_statvfs vfs;
@@ -86,11 +91,22 @@ uint64_t free_bytes() {
     return (uint64_t)vfs.f_bfree * vfs.f_frsize;
 }
 
+/* Recordable seconds the free space can hold. Worker-thread only — flash I/O. */
+uint32_t derive_remaining_seconds() {
+    uint64_t avail = free_bytes();
+    if (avail <= kReserveBytes) {
+        return 0;
+    }
+    uint64_t seconds = (avail - kReserveBytes) / kBytesPerSecond;
+    return (seconds > kMaxLimitS) ? kMaxLimitS : (uint32_t)seconds;
+}
+
 /* Highest existing cap_NNNN.wav index, so captures accumulate instead of
  * overwriting each other — the whole point of field capture is coming back with
- * several. Rescanned per capture rather than cached: the volume is also written
- * by a host over USB mass storage, so a cached counter would go stale exactly
- * when someone deletes the ones they already collected. */
+ * several. Rescanned immediately before each capture rather than kept as a
+ * counter: the volume is also written by a host over USB mass storage, so a
+ * counter would go stale exactly when someone deletes the ones they already
+ * collected. Worker-thread only — this is a directory walk. */
 uint32_t highest_index() {
     uint32_t highest = 0;
     fs_util::for_each_file(kDir, [&](const char *name) {
@@ -109,46 +125,103 @@ uint32_t highest_index() {
     return highest;
 }
 
-/* Republish only when a volume-backed number actually moved, so an idle device is
- * not handing the BLE stack an identical status every few seconds. */
-void publish_if_changed() {
-    static uint32_t last_captures = UINT32_MAX;
-    static uint32_t last_remaining_s = UINT32_MAX;
+/* Capture files currently on the volume. Worker-thread only — directory walk. */
+uint32_t count_capture_files() {
+    uint32_t count = 0;
+    fs_util::for_each_file(kDir, [&](const char *name) {
+        if (strncmp(name, kPrefix, strlen(kPrefix)) == 0 && fs_util::has_suffix(name, kSuffix)) {
+            count++;
+        }
+        return true;
+    });
+    return count;
+}
 
-    struct capture_status status;
-    capture_get_status(&status);
-    if (status.captures == last_captures && status.remaining_s == last_remaining_s) {
+void publish() {
+    capture_state_observer observer = s_observer;
+    if (observer == nullptr) {
         return;
     }
-    last_captures = status.captures;
-    last_remaining_s = status.remaining_s;
+    struct capture_status status;
+    capture_get_status(&status);
+    observer(&status);
+}
 
-    capture_state_observer observer = s_observer;
-    if (observer != nullptr) {
-        observer(&status);
+/* Re-derive the cached volume numbers. Worker thread only — this is the ONLY
+ * place either of them is computed, which is what keeps flash I/O off every
+ * other caller's thread. Returns true if either value moved. */
+bool refresh_volume_stats() {
+    uint32_t captures = count_capture_files();
+    uint32_t remaining_s = derive_remaining_seconds();
+
+    k_mutex_lock(&s_lock, K_FOREVER);
+    bool changed = (captures != s_cached_captures) || (remaining_s != s_cached_remaining_s);
+    s_cached_captures = captures;
+    s_cached_remaining_s = remaining_s;
+    k_mutex_unlock(&s_lock);
+    return changed;
+}
+
+/* Republish only when a volume-backed number actually moved, so an idle device is
+ * not handing the BLE stack an identical status every few seconds. */
+void refresh_and_publish_if_changed() {
+    if (refresh_volume_stats()) {
+        publish();
     }
 }
 
 void worker(void *, void *, void *) {
     for (;;) {
         if (k_sem_take(&s_start_sem, K_SECONDS(kIdleRefreshS)) != 0) {
-            publish_if_changed();
+            refresh_and_publish_if_changed();
             continue;
         }
+
+        /* Everything the volume has to answer happens HERE, on this thread: the
+         * free-space clamp and the next free index. capture_start() only records
+         * the request, because it runs on whatever thread asked — for a BLE start
+         * that is the cooperative BT RX work queue. */
+        refresh_volume_stats();
+        uint32_t room_s = capture_remaining_seconds();
 
         uint32_t limit_s;
         char path[sizeof(s_cap.path)];
         k_mutex_lock(&s_lock, K_FOREVER);
         limit_s = s_cap.limit_s;
-        memcpy(path, s_cap.path, sizeof(path));
         k_mutex_unlock(&s_lock);
 
-        /* Progress and errors go to the UART shell. A BLE-triggered capture has
-         * no shell of its own, and routing to the console keeps one diagnostic
-         * path for both front ends rather than a second, log-only one that would
-         * drift from it. */
-        const struct shell *sh = shell_backend_uart_get_ptr();
-        int ret = (sh != nullptr) ? sound_record_wav(sh, limit_s, path) : -ENODEV;
+        int ret;
+        if (room_s == 0) {
+            /* The volume filled between the request and now (a host can add files
+             * over USB at any moment), so the pre-flight check capture_start() did
+             * against the cache no longer holds. */
+            ret = -ENOSPC;
+            path[0] = '\0';
+        } else {
+            /* Clamp to what will actually fit rather than failing: a field user who
+             * asks for 60 s on a nearly-full disk is better served by a 20 s capture
+             * than by an error they cannot act on without a laptop. */
+            if (limit_s == 0 || limit_s > room_s) {
+                limit_s = room_s;
+            }
+            (void)snprintf(path, sizeof(path), "%s/%s%04u%s", kDir, kPrefix,
+                           (unsigned)(highest_index() + 1), kSuffix);
+
+            /* Publish the clamped limit and the real path before recording, so a
+             * progress readout counts against the length that will actually run. */
+            k_mutex_lock(&s_lock, K_FOREVER);
+            s_cap.limit_s = limit_s;
+            memcpy(s_cap.path, path, sizeof(s_cap.path));
+            k_mutex_unlock(&s_lock);
+            publish();
+
+            /* Progress and errors go to the UART shell. A BLE-triggered capture has
+             * no shell of its own, and routing to the console keeps one diagnostic
+             * path for both front ends rather than a second, log-only one that would
+             * drift from it. */
+            const struct shell *sh = shell_backend_uart_get_ptr();
+            ret = (sh != nullptr) ? sound_record_wav(sh, limit_s, path) : -ENODEV;
+        }
 
         k_mutex_lock(&s_lock, K_FOREVER);
         s_cap.state = (ret == 0) ? CAPTURE_IDLE : CAPTURE_FAILED;
@@ -161,30 +234,27 @@ void worker(void *, void *, void *) {
         } else {
             LOG_ERR("capture failed (%d): %s", ret, path);
         }
+        /* The new file changed both volume numbers; refresh before publishing so
+         * the app's count and remaining room settle in the same notification. */
+        refresh_volume_stats();
         publish();
     }
 }
 
-K_THREAD_STACK_DEFINE(s_worker_stack, CONFIG_APP_CAPTURE_THREAD_STACK_SIZE);
-struct k_thread s_worker_thread;
-
-int capture_init(void) {
-    k_thread_create(&s_worker_thread, s_worker_stack, CONFIG_APP_CAPTURE_THREAD_STACK_SIZE, worker,
-                    nullptr, nullptr, nullptr, CONFIG_APP_CAPTURE_THREAD_PRIORITY, 0, K_NO_WAIT);
-    k_thread_name_set(&s_worker_thread, "capture");
-    return 0;
-}
-SYS_INIT(capture_init, APPLICATION, 2);
+/* K_KERNEL_THREAD_DEFINE, not K_THREAD_STACK_DEFINE + k_thread_create: this thread
+ * stays kernel-mode, so it needs none of the dynamic-creation workaround a K_USER
+ * conversion does (fw/CLAUDE.md, CONFIG_USERSPACE), and a kernel stack avoids the
+ * ~1 KB of privileged stack a userspace-capable stack reserves per thread. */
+K_KERNEL_THREAD_DEFINE(capture_worker_thread, CONFIG_APP_CAPTURE_THREAD_STACK_SIZE, worker, NULL,
+                       NULL, NULL, CONFIG_APP_CAPTURE_THREAD_PRIORITY, 0, 0);
 
 }  // namespace
 
 uint32_t capture_remaining_seconds(void) {
-    uint64_t avail = free_bytes();
-    if (avail <= kReserveBytes) {
-        return 0;
-    }
-    uint64_t seconds = (avail - kReserveBytes) / kBytesPerSecond;
-    return (seconds > kMaxLimitS) ? kMaxLimitS : (uint32_t)seconds;
+    k_mutex_lock(&s_lock, K_FOREVER);
+    uint32_t remaining_s = s_cached_remaining_s;
+    k_mutex_unlock(&s_lock);
+    return remaining_s;
 }
 
 uint32_t capture_elapsed_seconds(void) {
@@ -204,38 +274,34 @@ bool capture_is_recording(void) {
 }
 
 uint32_t capture_count(void) {
-    uint32_t count = 0;
-    fs_util::for_each_file(kDir, [&](const char *name) {
-        if (strncmp(name, kPrefix, strlen(kPrefix)) == 0 && fs_util::has_suffix(name, kSuffix)) {
-            count++;
-        }
-        return true;
-    });
+    k_mutex_lock(&s_lock, K_FOREVER);
+    uint32_t count = s_cached_captures;
+    k_mutex_unlock(&s_lock);
     return count;
 }
 
 int capture_start(uint32_t limit_s) {
+    /* Records the request and returns; the worker does the space clamp, the
+     * directory scan for the next index, and the recording itself. Nothing here
+     * may touch the filesystem: a BLE start runs this on the BT RX work queue,
+     * which is cooperative (see the s_cached_* comment above). */
     k_mutex_lock(&s_lock, K_FOREVER);
     if (s_cap.state == CAPTURE_RECORDING) {
         k_mutex_unlock(&s_lock);
         return -EBUSY;
     }
-    k_mutex_unlock(&s_lock);
-
-    /* Clamp to what the volume can hold rather than failing: a field user who
-     * asks for 60 s on a nearly-full disk is better served by a 20 s capture than
-     * by an error they cannot act on without a laptop. */
-    uint32_t room_s = capture_remaining_seconds();
-    if (room_s == 0) {
+    /* Pre-flight against the cached figure so a start onto a full volume is
+     * refused with an ATT error the app can show, rather than accepted and then
+     * failed asynchronously. At most kIdleRefreshS stale, and the worker re-checks
+     * authoritatively before recording — this only has to catch the case the user
+     * can already see on screen. */
+    if (s_cached_remaining_s == 0) {
+        k_mutex_unlock(&s_lock);
         return -ENOSPC;
     }
-    if (limit_s == 0 || limit_s > room_s) {
-        limit_s = room_s;
-    }
-
-    k_mutex_lock(&s_lock, K_FOREVER);
-    (void)snprintf(s_cap.path, sizeof(s_cap.path), "%s/%s%04u%s", kDir, kPrefix,
-                   (unsigned)(highest_index() + 1), kSuffix);
+    /* The path is filled in by the worker once it knows the next free index; until
+     * then it is empty rather than stale from the previous capture. */
+    s_cap.path[0] = '\0';
     s_cap.state = CAPTURE_RECORDING;
     s_cap.limit_s = limit_s;
     s_cap.started_ms = k_uptime_get();
@@ -264,6 +330,8 @@ void capture_get_status(struct capture_status *out) {
     if (out == nullptr) {
         return;
     }
+    /* One lock, no filesystem: every field is either live state or a cached
+     * volume figure, which is what makes this callable from the BT RX thread. */
     k_mutex_lock(&s_lock, K_FOREVER);
     out->state = s_cap.state;
     out->limit_s = s_cap.limit_s;
@@ -271,10 +339,9 @@ void capture_get_status(struct capture_status *out) {
     out->elapsed_s = (s_cap.state == CAPTURE_RECORDING)
                          ? (uint32_t)((k_uptime_get() - s_cap.started_ms) / 1000)
                          : 0;
+    out->captures = s_cached_captures;
+    out->remaining_s = s_cached_remaining_s;
     k_mutex_unlock(&s_lock);
-
-    out->captures = capture_count();
-    out->remaining_s = capture_remaining_seconds();
 }
 
 void capture_register_observer(capture_state_observer observer) {

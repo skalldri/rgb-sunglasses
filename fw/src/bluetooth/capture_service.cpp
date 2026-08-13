@@ -145,7 +145,11 @@ int capture_service_init(void) {
     on_capture_state(&status);
     return 0;
 }
-/* After capture_init (APPLICATION 2) so the manager exists to be queried. */
+/* The seeded values are the capture manager's cached volume figures, which are
+ * still zero this early — the volume only mounts at APPLICATION 90. The capture
+ * worker's first refresh a few seconds into boot is what fills them in and
+ * notifies; seeding here just avoids publishing anything before the observer
+ * exists. */
 SYS_INIT(capture_service_init, APPLICATION, 3);
 
 }  // namespace

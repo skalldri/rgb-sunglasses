@@ -62,7 +62,14 @@ int capture_stop(void);
 /** @brief Current state, safe to call from any thread. */
 void capture_get_status(struct capture_status *out);
 
-/** @brief Recordable seconds the free space can hold, for UI and pre-flight. */
+/**
+ * @brief Recordable seconds the free space can hold, for UI and pre-flight.
+ *
+ * A cached figure, re-derived by the capture worker every few seconds. Deriving
+ * it is flash I/O, and this is called from GATT write handlers on the cooperative
+ * BT RX work queue, where fw/CLAUDE.md forbids that outright.
+ * @return Recordable seconds, clamped to the capture ceiling.
+ */
 uint32_t capture_remaining_seconds(void);
 
 /**
@@ -79,7 +86,7 @@ uint32_t capture_elapsed_seconds(void);
 /** @brief Whether a capture is currently running (same cheap path as above). */
 bool capture_is_recording(void);
 
-/** @brief Count of capture files on the volume. */
+/** @brief Count of capture files on the volume (cached; see capture_remaining_seconds). */
 uint32_t capture_count(void);
 
 /**

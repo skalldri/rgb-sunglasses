@@ -853,7 +853,13 @@ static void imu_sidecar_drain(struct imu_sidecar *sc) {
                          (int)(r.accel_x * IMU_CSV_SCALE), (int)(r.accel_y * IMU_CSV_SCALE),
                          (int)(r.accel_z * IMU_CSV_SCALE), (int)(r.gyro_x * IMU_CSV_SCALE),
                          (int)(r.gyro_y * IMU_CSV_SCALE), (int)(r.gyro_z * IMU_CSV_SCALE));
-        if (n > 0) {
+        /* snprintf returns what it WOULD have written, so a truncated line would
+         * advance len past the bytes actually stored and shift every following
+         * line — silently corrupting the sidecar rather than overflowing (the
+         * size argument still bounds the write). A sane sample cannot reach 96
+         * bytes; a garbage one from a sensor glitch could, so drop it instead of
+         * writing a half-line. Matches the guard imu_sidecar_open() already uses. */
+        if (n > 0 && n < IMU_CSV_LINE_MAX) {
             sc->len += (size_t)n;
             sc->samples++;
         }
