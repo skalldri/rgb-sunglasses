@@ -63,6 +63,29 @@ def nand_mount():
         os.rmdir(mnt)
 
 
+def nand_read_ext(name: str) -> bytes:
+    """Read /NAND:/ext/<name> off the board over USB MSC (host-side)."""
+    with nand_mount() as mnt:
+        with open(os.path.join(mnt, "ext", name), "rb") as f:
+            return f.read()
+
+
+def nand_remove_ext(name: str) -> None:
+    """Delete /NAND:/ext/<name> (host-side). Caller must reboot afterwards so
+    the firmware re-scans (FAT-coherence contract)."""
+    with nand_mount() as mnt:
+        path = os.path.join(mnt, "ext", name)
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def nand_write_ext(name: str, data: bytes) -> None:
+    """Write /NAND:/ext/<name> = data (host-side). Caller must reboot after."""
+    with nand_mount() as mnt:
+        with open(os.path.join(mnt, "ext", name), "wb") as f:
+            f.write(data)
+
+
 def plant_corrupt_extension(name: str = "zz_bad.llext", source: str = "hello.llext") -> None:
     """Write a deliberately-corrupted .llext into /NAND:/ext (the #89 case:
     an untrusted file that must be rejected, not deref'd, at boot).

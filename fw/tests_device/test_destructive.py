@@ -15,14 +15,17 @@ In-file order is load-bearing:
                                below stay coredump-free by using Hang)
   2. ext fault latch/recovery (#308 — deliberate sandbox fault via Hang)
   3. bad-manifest boot survival (#89 — plants a corrupt .llext, reboots)
-  4. factory_reset soft       (must prove glim/ext SURVIVE — files intact)
-  5. fatfs corrupt + factory_reset now  (destroys the filesystem — last)
+  4. ext param persists by name (#303 — deletes a sibling to renumber slots)
+  5. factory_reset soft       (must prove glim/ext SURVIVE — files intact)
+  6. fatfs corrupt + factory_reset now  (destroys the filesystem — last)
 
 Regressions pinned:
 - #102/#80  crash → flash-partition capture → auto-reboot → drain to FAT.
 - #308 (partial)  dump presence asserted via BOTH `coredump find` AND the
         FAT directory, each in its phase-correct state — `find` alone misses
         drained dumps.
+- #303  extension persisted params are keyed by display name, so they follow
+        the extension across a slot renumber (delete an earlier sibling).
 - #268/#183  factory reset phases: soft keeps files, now wipes them.
 - #327  boot-time FAT auto-format after `fatfs corrupt`.
 - #325/#105  main-stack high-water bound while that boot ran f_mkfs on main.
@@ -261,6 +264,88 @@ def test_bad_manifest_boot_survival(rgb: RgbShell, dut, device_state: dict):
         except Exception:
             provisioning.hard_reset(str(dut.device_config.id))
             rgb.wait_reboot()
+
+
+def _read_hello_speed(rgb: RgbShell, slot: int) -> int:
+    out = rgb.exec(f"ext param {slot} 0")
+    kv = RgbShell.parse_kv([line.replace(" = ", "=") for line in out])
+    vals = [v for k, v in kv.items() if k.lower().endswith("speed")]
+    assert vals, f"could not read hello.Speed from `ext param {slot} 0`: {out}"
+    return vals[0]
+
+
+def test_ext_param_persists_by_name(rgb: RgbShell):
+    """#303: an extension's persisted params follow its DISPLAY NAME, not its
+    slot index, across a NAND file-set change that renumbers slots.
+
+    The persistence key is `appcfg/ext/<displayName>` (extension_host.cpp
+    scan_slot → extension_param_persistence::build_settings_key), and boot
+    load is one `settings_load_subtree("appcfg/ext")` keyed by name — so a
+    slot that renumbers must still recover its blob. If persistence were
+    keyed by index, the renumbered extension would come up with defaults.
+
+    Mechanism: delete the alphabetically-earlier baseline extension
+    (cpptest.llext) so hello renumbers from slot 1 → slot 0 across a reboot.
+    Uses USB MSC directly — the app-driven FILE_MGMT group-64 delete path is
+    a different surface, covered by E2E-04. Self-restoring (re-writes
+    cpptest's own bytes); the destructive-tier reprovision is the backstop.
+    """
+    EARLIER = "cpptest.llext"  # sorts before hello.llext → occupies slot 0
+
+    slots = rgb.ext_list()
+    hello = next((s for s in slots if s["name"] == HELLO), None)
+    assert hello, f"{HELLO} not installed — run fw/scripts/provision-device.sh"
+    earlier = next((s for s in slots if s["file"] == EARLIER), None)
+    if earlier is None or earlier["slot"] >= hello["slot"]:
+        pytest.skip(
+            f"need {EARLIER} installed at a lower slot than {HELLO} to force a "
+            f"renumber; got {[(s['file'], s['slot']) for s in slots]}"
+        )
+    orig_slot = hello["slot"]
+
+    # Save cpptest's bytes so the test can restore it without a full reprovision.
+    cpptest_bytes = provisioning.nand_read_ext(EARLIER)
+
+    NEW_SPEED = 91  # distinct from hello's default (50)
+    orig_speed = _read_hello_speed(rgb, orig_slot)
+    marker_written = False
+    try:
+        rgb.exec(f"ext param {orig_slot} 0 {NEW_SPEED}")
+        assert _read_hello_speed(rgb, orig_slot) == NEW_SPEED
+        marker_written = True
+        time.sleep(3.0)  # let the debounced persist flush to NVS
+
+        # Renumber: remove the earlier-sorting sibling, reboot to re-scan.
+        provisioning.nand_remove_ext(EARLIER)
+        rgb.reboot()
+
+        after = rgb.ext_list()
+        hello_after = next((s for s in after if s["name"] == HELLO), None)
+        assert hello_after, f"{HELLO} vanished after removing {EARLIER}: {after}"
+        assert not any(s["file"] == EARLIER for s in after), (
+            f"{EARLIER} still present after delete+reboot: {after}"
+        )
+        # The renumber must actually have happened, or the test proves nothing.
+        assert hello_after["slot"] < orig_slot, (
+            f"{HELLO} did not renumber (still slot {hello_after['slot']}) — "
+            f"can't distinguish by-name from by-index: {after}"
+        )
+        # THE #303 assertion: the param followed the NAME to the new slot.
+        assert _read_hello_speed(rgb, hello_after["slot"]) == NEW_SPEED, (
+            f"hello.Speed did not survive the slot {orig_slot}->"
+            f"{hello_after['slot']} renumber — persistence is keyed by index, "
+            f"not name (#303 regression)"
+        )
+    finally:
+        # Restore cpptest and hello's default, without depending on the full
+        # reprovision (which is still the module-teardown backstop).
+        provisioning.nand_write_ext(EARLIER, cpptest_bytes)
+        rgb.reboot()
+        if marker_written:
+            h = next((s for s in rgb.ext_list() if s["name"] == HELLO), None)
+            if h:
+                rgb.exec(f"ext param {h['slot']} 0 {orig_speed}", check=False)
+                time.sleep(3.0)
 
 
 def test_factory_reset_soft_keeps_files(rgb: RgbShell):
