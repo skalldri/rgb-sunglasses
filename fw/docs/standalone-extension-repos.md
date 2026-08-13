@@ -80,7 +80,10 @@ verification experiment (§4.1) shows the actual surface is tiny:
   `struct llext_const_symbol` entry in section `.exported_sym`
   (NCS `zephyr/include/zephyr/llext/symbol.h`) — reproducible as a ~40-line
   standalone shim header with no transitive Zephyr includes.
-- `<zephyr/kernel.h>` is only needed for the `printk` declaration — a 3-line shim.
+- `<zephyr/kernel.h>` is only needed for the `printk` declaration — a shim that
+  forwards to `<rgbx/rgbx_sys.h>`, where the SDK single-sources the declarations
+  for the whole sanctioned symbol surface. It used to carry its own prototype,
+  which is how it came to disagree with the simulator shim's (issue #351).
 - The EDK's compile flags are deliberately host-path-free (Zephyr's
   `llext-edk.cmake` strips sysroot and prefix-map flags); everything that
   matters is generic GCC: `-mcpu=cortex-m33 -mthumb -mfloat-abi=hard
@@ -153,9 +156,11 @@ rgbx-sdk-<fw-version>/
                                "armToolchain": "arm-gnu-13.2.Rel1", "wasiSdk": "33.0" }
   include/rgbx/rgbx_api.h    copied verbatim from fw/include/rgbx/
   include/rgbx/rgbx_animation.h
+  include/rgbx/rgbx_sys.h    declarations for the allowed-symbols surface, so an
+                             author never hand-writes a prototype (issue #351)
   arm/
     shim/include/zephyr/llext/symbol.h   EXPORT_SYMBOL -> .exported_sym entry (new, §4)
-    shim/include/zephyr/kernel.h         printk declaration (new)
+    shim/include/zephyr/kernel.h         forwards to <rgbx/rgbx_sys.h>
     allowed-symbols.txt                  strcpy strncpy strlen strcmp strncmp
                                          memcmp memcpy memset printk
     check-llext.sh                       nm -u gate against allowed-symbols.txt

@@ -39,14 +39,29 @@ CC="$WASI_SDK/bin/clang"
 CXX="$WASI_SDK/bin/clang++"
 
 # Shared flags. -isystem puts the Zephyr shim headers (EXPORT_SYMBOL no-op,
-# printk decl) ahead of nothing in particular — the wasi sysroot has no
-# zephyr/ headers — but keeps them out of warning scope.
+# and a <zephyr/kernel.h> that forwards to <rgbx/rgbx_sys.h>) ahead of nothing
+# in particular — the wasi sysroot has no zephyr/ headers — but keeps them out
+# of warning scope. That forward is why -I fw/include must accompany the
+# -isystem everywhere the shim tree is used, including the DSP build below.
+#
+# -Wl,--fatal-warnings promotes wasm-ld's "function signature mismatch"
+# warning to a link error. wasm calls are typed by full signature, so a
+# mismatch is not a discarded return value — wasm-ld emits a stub that traps
+# with `RuntimeError: unreachable` on first call, having only warned (exit 0)
+# at build time. That is the issue #351 failure mode, and it covers every
+# sanctioned symbol, not just printk: declare `float sinf(double)` by hand and
+# this catches it against wasi-libc's definition. The ARM side has no
+# equivalent linker check (ELF resolution is by name alone), which is why
+# <rgbx/rgbx_sys.h> shipping the declarations is the primary fix and this is
+# the backstop. NOTE: COMMON_FLAGS is not universal in this script — the
+# audio_dsp link below builds its own flag list and repeats the flag itself.
 COMMON_FLAGS=(
     -O2 -g
     -mexec-model=reactor
     -I "$REPO_ROOT/fw/include"
     -isystem "$SIM_DIR/shim/include"
     -Wall -Wextra
+    "-Wl,--fatal-warnings"
 )
 # The export surface is single-sourced in shim/rgbx-exports.txt (also read
 # by the rgbx-sdk's cmake/rgbx-sdk-config.cmake — keep them from drifting).
@@ -144,8 +159,17 @@ if [ "$#" -eq 0 ]; then
             "$CC" -O2 -g "${DSP_DEFS[@]}" "${DSP_INC[@]}" \
                 -c "$CMSIS_DSP/Source/$group/$group.c" -o "$dsp_obj/$group.o"
         done
-        "$CXX" -O2 -g -mexec-model=reactor -std=c++23 -fno-exceptions -fno-rtti \
+        # This link spells its own flags rather than reusing COMMON_FLAGS, so
+        # --fatal-warnings has to be repeated here — and this is the module
+        # that needs it most: it is the only one linking firmware C++
+        # (audio_dsp.cpp, clang++) against third-party C (the CMSIS-DSP groups,
+        # clang). An NCS bump that changes an arm_* signature would otherwise
+        # link green and trap with RuntimeError: unreachable inside the parity
+        # run, instead of failing the build with the symbol named.
+        "$CXX" -O2 -g -mexec-model=reactor -Wl,--fatal-warnings \
+            -std=c++23 -fno-exceptions -fno-rtti \
             -I "$REPO_ROOT/fw/src" -I "$REPO_ROOT/fw/src/sound" \
+            -I "$REPO_ROOT/fw/include" \
             -isystem "$SIM_DIR/shim/include" \
             "${DSP_DEFS[@]}" "${DSP_INC[@]}" \
             -Wl,--export=sim_pcm -Wl,--export=sim_band_energy \

@@ -13,6 +13,12 @@
  * rejects anything not on that list); build.yaml's check-allowed-symbols.sh
  * fails if the list ever names a symbol this image stopped exporting.
  *
+ * A THIRD file moves with those two (issue #351): fw/include/rgbx/rgbx_sys.h
+ * must DECLARE whatever the list sanctions, so extension authors never write
+ * their own prototype — a wrong one links anyway (extern "C" matches on the
+ * name) and then behaves differently on ARM than in the wasm simulator.
+ * sdk-ci.yml's check-sys-header.sh asserts that, in both directions.
+ *
  * Curation rules:
  *  - Single-precision only. The FPU (fpv5-sp-d16) inlines float
  *    add/sub/mul/div/abs, and the M33 integer core provides UDIV/SDIV

@@ -45,6 +45,9 @@ issue #295 — the authoritative list is
 [`allowed-symbols.txt`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/sdk/arm/allowed-symbols.txt),
 and the build gates enforce it). Anything
 else — notably all double-precision math — fails symbol resolution at load.
+Include [`rgbx_sys.h`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/include/rgbx/rgbx_sys.h)
+for the declarations rather than writing your own prototypes: a wrong one links
+anyway and then diverges between the device and the simulator (issue #351).
 See the template's
 [`src/main.c`](https://github.com/skalldri/rgbx-extension-template/blob/main/src/main.c)
 for a complete raw-C extension exercising the full surface.

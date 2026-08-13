@@ -1,10 +1,20 @@
 /*
  * Simulator-side support code compiled into every extension .wasm module.
  *
- * Provides printk(): the one Zephyr symbol the in-repo extensions call. On
- * the device it goes to the UART console; here it formats into an exported
- * append buffer (rgbx_sim_log_buf/rgbx_sim_log_len) that the harness drains
- * after each init/tick call and surfaces as the printk console.
+ * Provides printk()/vprintk(): the Zephyr symbols the device exports to
+ * extensions (fw/sdk/arm/allowed-symbols.txt). On the device they go to the
+ * UART console; here they format into an exported append buffer
+ * (rgbx_sim_log_buf/rgbx_sim_log_len) that the harness drains after each
+ * init/tick call and surfaces as the printk console.
+ *
+ * Both return void, matching Zephyr (zephyr/include/zephyr/sys/printk.h).
+ * printk used to return an int byte count here, which no caller ever read
+ * and which made the simulator the odd one out: an extension declaring the
+ * device-correct `void printk(...)` linked against this `int` definition and
+ * trapped on first call with `RuntimeError: unreachable`, because wasm calls
+ * are typed by full signature. Issue #351. The declarations now come from
+ * <rgbx/rgbx_sys.h> — included below precisely so a future divergence is a
+ * compile error here rather than a runtime trap in someone's extension.
  *
  * The formatter is deliberately self-contained (wasi-libc's vsnprintf pulls
  * in stdio FILE machinery and with it fd_write/fd_seek/fd_close imports,
@@ -17,6 +27,7 @@
  * on-target.
  */
 
+#include <rgbx/rgbx_sys.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -74,12 +85,8 @@ static void emit_unsigned(uint64_t value, unsigned int base, bool upper, bool ze
     }
 }
 
-int printk(const char *fmt, ...)
+void vprintk(const char *fmt, va_list ap)
 {
-    va_list ap;
-    uint32_t start = rgbx_sim_log_len;
-
-    va_start(ap, fmt);
     while (*fmt != '\0') {
         if (*fmt != '%') {
             emit_char(*fmt++);
@@ -181,7 +188,13 @@ int printk(const char *fmt, ...)
             break;
         }
     }
-    va_end(ap);
+}
 
-    return (int)(rgbx_sim_log_len - start);
+void printk(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    vprintk(fmt, ap);
+    va_end(ap);
 }
