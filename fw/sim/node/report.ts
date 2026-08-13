@@ -88,6 +88,15 @@ export class RunStats {
     this.pushLog("init", log);
   }
 
+  /** printk from a tick that FAULTED. record() never runs for such a tick —
+   * there is no framebuffer to account — but its log is the most valuable
+   * line in the report: the worker drains it precisely because traps often
+   * follow logs. Without this the one diagnostic explaining the trap is the
+   * one line missing. Tagged `[tick N]` like any other tick. */
+  recordFaultLog(tick: number, log: string): void {
+    this.pushLog(`tick ${tick}`, log);
+  }
+
   record(tick: number, frame: Uint8Array, wallMs: number, beatMask: number,
          goodMoment: boolean, manifestIntact: boolean, log: string): void {
     this.ticks++;

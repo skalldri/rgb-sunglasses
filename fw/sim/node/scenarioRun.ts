@@ -279,6 +279,10 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
       pumpTimeline();
       const warm = await host.tick();
       if (warm.status === "fault") {
+        // Warm-up ticks are not recorded, but a fault during warm-up is just
+        // as opaque without its log — and it reports a negative tick index,
+        // which is exactly the signal that it happened before the window.
+        stats.recordFaultLog(toRecordedTick(warm.fault.tick), warm.log);
         fault = { ...warm.fault, tick: toRecordedTick(warm.fault.tick) };
       }
     }
@@ -288,6 +292,12 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
 
       const out = await host.tick();
       if (out.status === "fault") {
+        // Drain BEFORE the break: TickFault carries the log the worker
+        // captured on the way down, and it is the line that explains the
+        // trap. The browser console already gets this right (stepOnce
+        // appends outcome.log before handling the fault); only the report
+        // dropped it.
+        stats.recordFaultLog(host.tickIndex - 1 - opts.warmupTicks, out.log);
         fault = { ...out.fault, tick: toRecordedTick(out.fault.tick) };
         break;
       }
