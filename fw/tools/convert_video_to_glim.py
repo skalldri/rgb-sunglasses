@@ -20,6 +20,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # Target display geometry (matches src/led_config.h)
@@ -108,7 +109,14 @@ def write_glim_lz4(f, frames, fps: int) -> int:
 
 
 def download_video(url: str, output_path: Path) -> None:
-    """Download a video via yt-dlp."""
+    """Download a video via yt-dlp, retrying transient YouTube throttling.
+
+    yt-dlp needs the deno JS runtime + yt-dlp-ejs to solve YouTube's nsig
+    challenge (installed via the `yt-dlp[default,deno]` pip extras, issue
+    #358). Even with those, YouTube 403s intermittently under rapid repeated
+    requests (CDN throttling), so retry with backoff rather than aborting a
+    whole provisioning run on one flaky download.
+    """
     print(f"Downloading {url} ...")
     cmd = [
         "yt-dlp",
@@ -116,12 +124,22 @@ def download_video(url: str, output_path: Path) -> None:
         "--output", str(output_path),
         url,
     ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"yt-dlp failed: {e.stderr.decode('utf-8', errors='replace')}")
-    except FileNotFoundError:
-        raise RuntimeError("yt-dlp not found. Install with: pip install yt-dlp")
+    attempts = 4
+    for attempt in range(1, attempts + 1):
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            return
+        except subprocess.CalledProcessError as e:
+            err = e.stderr.decode("utf-8", errors="replace")
+            if attempt == attempts:
+                raise RuntimeError(f"yt-dlp failed after {attempts} attempts: {err}")
+            wait = 15 * attempt  # 15s, 30s, 45s
+            print(f"  download attempt {attempt} failed (retrying in {wait}s): "
+                  f"{err.strip().splitlines()[-1] if err.strip() else '?'}")
+            time.sleep(wait)
+        except FileNotFoundError:
+            raise RuntimeError(
+                "yt-dlp not found. Install with: pip install 'yt-dlp[default,deno]'")
 
 
 def extract_frames_rgb24(video_path: Path, fps: int):
