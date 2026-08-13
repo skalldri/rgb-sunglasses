@@ -77,6 +77,18 @@ case "$HOST_OS" in
         done
         ;;
     Darwin)
+        # loginwindow "block[s] disk mounts during screen lock" (its own log
+        # wording): with the console locked it dissents the mount and EJECTS the
+        # disk ~2.7 s after it appears, and Zephyr's MSC latches the eject until
+        # the board reboots. Root-caused on the Mac Mini 2026-08-13 (issue #367)
+        # after this masqueraded as several other bugs — fail fast with the real
+        # reason instead of "could not find the disk".
+        if [ "$(ioreg -n Root -d1 -a 2>/dev/null | plutil -extract IOConsoleLocked raw - 2>/dev/null)" = "true" ]; then
+            echo "[!] This Mac's screen is LOCKED — macOS loginwindow ejects the board's disk" >&2
+            echo "    on sight while locked, so provisioning cannot reach it." >&2
+            echo "    Unlock the screen, reboot the board (mcumgr reset), then re-run." >&2
+            exit 1
+        fi
         # IOKit names the published media "<vendor> <product> Media", so the
         # single string below pins vendor AND product the way the Linux branch
         # does with two files. Taking the BSD name from the IOMedia node (rather
@@ -101,12 +113,13 @@ if [ -z "$DISK" ]; then
     echo "[!] Could not find the board's NAND USB mass-storage disk (vendor=RGB-SG, model=FlashDisk)." >&2
     echo "    Run /check-hardware and confirm the board is connected and enumerated." >&2
     if [ "$HOST_OS" = "Darwin" ]; then
-        # Seen on a board carrying a stale image: the LUN answers TEST UNIT READY
-        # with CHECK CONDITION and REQUEST SENSE 03 02 3A 00 (MEDIUM NOT PRESENT),
-        # so macOS attaches the USB MSC stack but never publishes any IOMedia.
-        echo "    If the board is enumerated and the shell works but no disk appears," >&2
-        echo "    reflash current firmware first — a stale image can leave the LUN" >&2
-        echo "    reporting MEDIUM NOT PRESENT. Check with:" >&2
+        # After any macOS-side eject (loginwindow does one whenever the disk
+        # appears while the screen is locked), Zephyr's MSC latches the LUN as
+        # MEDIUM NOT PRESENT until the board reboots — so "no disk" here usually
+        # just means the board hasn't been rebooted since the last eject.
+        echo "    The screen is unlocked but no disk was found — most likely the LUN is" >&2
+        echo "    still latched from an earlier macOS eject. Reboot the board" >&2
+        echo "    (mcumgr reset) and re-run. To see the SCSI state:" >&2
         echo "      /usr/bin/log show --last 5m --predicate 'eventMessage CONTAINS \"IOUSBMassStorageDriver\"'" >&2
     fi
     exit 1
@@ -226,12 +239,7 @@ echo "[*] Done. Reboot the board (mcumgr reset, or a physical reset) so the" \
      "firmware re-mounts FAT and discovers the new files."
 
 if [ "$HOST_OS" = "Darwin" ]; then
-    # Measured on the Mac Mini: once the volume is unmounted, macOS stops
-    # auto-mounting it and ~40-60 s later sends START STOP UNIT; Zephyr's handler
-    # latches medium_loaded=false, so the LUN answers MEDIUM NOT PRESENT for the
-    # rest of that boot. A board reboot clears the firmware side but macOS still
-    # won't re-publish the volume — only re-plugging the cable does.
-    echo "[*] macOS note: the disk will not reappear on this Mac until you unplug and"
-    echo "    replug the board's USB cable (a board reboot alone is not enough — macOS"
-    echo "    keeps the volume marked ejected). The board itself is unaffected."
+    echo "[*] macOS note: if the Mac's screen locks, loginwindow will eject the board's"
+    echo "    disk the moment it re-appears (\"block disk mounts during screen lock\")."
+    echo "    Unlock the screen and reboot the board to get the disk back."
 fi
