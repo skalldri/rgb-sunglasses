@@ -388,22 +388,21 @@ The full firmware dev loop (build → flash → serial verify) also runs nativel
 | Build env | west on PATH | `. scripts/fw-env.sh` first (skills do this) |
 | Twister tests | `/test-fw` (native_sim) | **not supported** (native_sim is Linux-only) — use CI or the devcontainer |
 | GLIM converter deps | pip/apt in the image | `. scripts/tools-env.sh` first (venv installed by `scripts/macos-setup.sh`) |
-| /NAND: disk mount | `dmesg`/`lsblk`/`mount` | **does not mount** — the LUN ends up reporting MEDIUM NOT PRESENT (issue #367) |
-| Provisioning (`/provision-device`) | supported | **not supported** — needs the disk above; generate `.glim` files here, copy them from the devcontainer |
+| /NAND: disk mount | `dmesg`/`lsblk`/`mount` | Finder/`diskutil` (`/Volumes`); same sync → eject → reboot discipline |
 
 Never hardcode the `cu.usbmodem` names — discover them via `/check-hardware` (they can shift on re-enumeration, same rule as ttyACM). Everything else — hw-lock discipline, `mcp__serial__*` usage, the shell command surface — is identical; `scripts/hw-lock.sh` re-execs itself into Homebrew bash on macOS.
 
 **`fw-env.sh` and `tools-env.sh` activate different python venvs** — whichever is sourced last owns `python3`, and a `west build` after `tools-env.sh` configures against the wrong interpreter. Use separate shells: one for building firmware, one for generating GLIM assets.
 
-**Why the NAND disk doesn't mount on macOS (issue #367):** the whole USB mass-storage chain attaches down to `IOBlockStorageDriver` with the right `RGB-SG`/`FlashDisk` INQUIRY strings, then stops with no `IOMedia` child, so no `/dev/diskN` ever appears. The FAT volume itself is fine (the firmware reads it normally). Don't debug this as a formatting or cabling problem.
+**The NAND disk mounts on macOS**, and `/provision-device` is supported there (`fw/scripts/provision-device.sh` finds the disk via IOKit and uses `diskutil`). Verified end-to-end on the Mac Mini 2026-08-13: assets generated, extensions built, files copied to `/Volumes/NO NAME`. The same FAT-concurrency rule as the devcontainer applies: write → `sync` → `diskutil unmount` → **reboot the board**.
 
-What the evidence shows (`log show --predicate 'eventMessage CONTAINS "IOUSBMassStorageDriver"'` — note `/usr/bin/log`, since `log` is shadowed in zsh):
+Three macOS-specific behaviours that will otherwise waste hours:
 
-- INQUIRY and READ(10) both **succeed** — macOS reads the disk fine, so the 4096-byte sector size is **not** the problem. Don't "fix" this by lowering `disk_sector_size`; that would mean sub-page writes to the MX25R6435F's 4 KB erase pages, and it would not help.
-- macOS logs exactly one error against the device: `[IOSCSIPeripheralDeviceType00:DetermineMediumWriteProtectState] [FlashDisk]: MODE_SENSE_06 failed`. Zephyr's `usbd_msc_scsi.c` MODE SENSE(6) handler accepts **only page code `0x3F`** (ALL_PAGES) and returns `INVALID_FIELD_IN_CDB` for anything else.
-- A START STOP UNIT (`0x1B`) then arrives, and Zephyr's handler treats LOEJ+START=0 as an eject: `medium_loaded = false`. From then on TEST UNIT READY answers CHECK CONDITION and REQUEST SENSE returns `03 02 3A 00` — NOT READY / **MEDIUM NOT PRESENT** — once a second, forever, so macOS never publishes media.
+- **Once the volume is unmounted, macOS stops re-publishing it, and only a physical USB replug brings it back.** Measured: after an unmount, macOS declines to auto-mount and ~40-60 s later issues START STOP UNIT; Zephyr's handler latches `medium_loaded = false`, so the LUN answers NOT READY / MEDIUM NOT PRESENT (`03 02 3A 00`) for the rest of that boot. Rebooting the board clears the firmware side (`scsi_reset()` sets `medium_loaded = true`), but macOS still won't publish the volume — it keeps it marked ejected. **A board with a healthy FAT can therefore present no disk at all on the host; that is expected after an unmount, not a fault.** Confirm with `/usr/bin/log show --last 5m --predicate 'eventMessage CONTAINS "IOUSBMassStorageDriver"'` — the driver's `-Misc>` line decodes as `Tur:`/`Inq:`/`StS:`/`Sen:` (opcode + status), and a healthy attach shows INQUIRY and READ(10) succeeding before any eject.
+- **macOS `cp` writes AppleDouble sidecars (`._name`) onto FAT, and the firmware treats them as real assets.** Hardware-verified: `glim list` showed `._4096.glim`, `._bad_apple.glim`, `._nyan_cat.glim` next to the real files, with the 4 KB `._4096.glim` **selected** as the active animation. `provision-device.sh` sets `COPYFILE_DISABLE=1` and sweeps `._*`; do the same for any manual `cp` to the board. (The extension registry rejects sidecars via manifest validation, so only GLIM is user-visibly affected.)
+- **`MODE_SENSE_06 failed ... DetermineMediumWriteProtectState` in the macOS log is benign noise.** It is emitted on *every* attach, including ones that mount perfectly — Zephyr's MODE SENSE(6) handler only accepts page code `0x3F`. Do not chase it.
 
-The MODE SENSE(6) rejection is the leading suspected trigger for that eject, but the causal link between the two is **not** confirmed (that would need a USB analyzer to see the page code macOS actually asks for). The eject-then-no-medium mechanism itself is directly evidenced by the sense data above.
+Note `log` is shadowed by a zsh builtin: a bare `log show ...` fails with "too many arguments" and the empty output reads as "nothing logged". Always use `/usr/bin/log`.
 
 ## Serial Console (Zephyr Shell)
 
@@ -510,7 +509,7 @@ python3 fw/tools/convert_bad_apple.py --output fw/bad_apple.glim   # downloads f
 python3 fw/tools/convert_video_to_glim.py --url "https://youtu.be/e9DfSCk-6Ko" --output fw/4096.glim --fps 24 --lz4
 ```
 
-Then copy both into `/NAND:/glim/` on the board and reset. **The copy step is devcontainer/Linux-only** — generation works anywhere, but the board's disk does not mount on macOS (issue #367; see the macOS host section above). If the NAND disk on a new board is unformatted (FAT read errors in dmesg), it needs `mkfs.vfat -F 12 -s 8 -S 4096 /dev/sdX` before mounting — ask the user to run this as it is destructive.
+Then copy both into `/NAND:/glim/` on the board and reset (this works on macOS too — see the macOS host section). If the NAND disk on a new board is unformatted (FAT read errors in dmesg), it needs `mkfs.vfat -F 12 -s 8 -S 4096 /dev/sdX` before mounting — ask the user to run this as it is destructive.
 
 ### Useful shell commands
 
