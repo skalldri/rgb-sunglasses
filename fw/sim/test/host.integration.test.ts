@@ -202,3 +202,36 @@ test("determinism: same seed + inputs => identical frames", { skip }, async () =
   const b = await run();
   assert.deepEqual(Array.from(a), Array.from(b));
 });
+
+/*
+ * The only automated cover for vprintk and for the simulator's printk
+ * formatter (fw/sim/shim/sim_shim.c). Both were previously untested:
+ * no test asserted log content at all, and vprintk in particular is GC'd out
+ * of every module unless something calls it, so the zero-import gate and the
+ * export/import parity check both passed regardless of whether it worked.
+ *
+ * hello routes its first-tick line through a va_list helper, so this pins the
+ * hand-off (a scalar void* on wasm32, array-typed on x86-64 — the part most
+ * likely to be got wrong in a refactor) plus three conversions: plain %u,
+ * width-with-zero-padding %03u, and %s. An exact-string assert is deliberate:
+ * a formatter regression should read as a diff, not a silence.
+ */
+test("hello: vprintk formats the first-tick line, once", { skip }, async () => {
+  const host = makeHost(helloBytes!);
+  try {
+    assert.equal(await host.activate(), null);
+
+    const first = await host.tick();
+    assert.equal(first.status, "ok", JSON.stringify(first));
+    assert.equal(first.log, "hello: tick1 dt=11 speed=050 msg=ok\n");
+
+    // One-shot: the guard must hold for every subsequent tick.
+    for (let t = 0; t < 5; t++) {
+      const out = await host.tick();
+      assert.equal(out.status, "ok");
+      assert.equal(out.log, "", `tick ${t + 1} logged again`);
+    }
+  } finally {
+    await host.terminate();
+  }
+});

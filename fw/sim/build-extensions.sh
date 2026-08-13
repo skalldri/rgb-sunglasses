@@ -53,14 +53,15 @@ CXX="$WASI_SDK/bin/clang++"
 # this catches it against wasi-libc's definition. The ARM side has no
 # equivalent linker check (ELF resolution is by name alone), which is why
 # <rgbx/rgbx_sys.h> shipping the declarations is the primary fix and this is
-# the backstop.
+# the backstop. NOTE: COMMON_FLAGS is not universal in this script — the
+# audio_dsp link below builds its own flag list and repeats the flag itself.
 COMMON_FLAGS=(
     -O2 -g
     -mexec-model=reactor
     -I "$REPO_ROOT/fw/include"
     -isystem "$SIM_DIR/shim/include"
     -Wall -Wextra
-    -Wl,--fatal-warnings
+    "-Wl,--fatal-warnings"
 )
 # The export surface is single-sourced in shim/rgbx-exports.txt (also read
 # by the rgbx-sdk's cmake/rgbx-sdk-config.cmake — keep them from drifting).
@@ -158,7 +159,15 @@ if [ "$#" -eq 0 ]; then
             "$CC" -O2 -g "${DSP_DEFS[@]}" "${DSP_INC[@]}" \
                 -c "$CMSIS_DSP/Source/$group/$group.c" -o "$dsp_obj/$group.o"
         done
-        "$CXX" -O2 -g -mexec-model=reactor -std=c++23 -fno-exceptions -fno-rtti \
+        # This link spells its own flags rather than reusing COMMON_FLAGS, so
+        # --fatal-warnings has to be repeated here — and this is the module
+        # that needs it most: it is the only one linking firmware C++
+        # (audio_dsp.cpp, clang++) against third-party C (the CMSIS-DSP groups,
+        # clang). An NCS bump that changes an arm_* signature would otherwise
+        # link green and trap with RuntimeError: unreachable inside the parity
+        # run, instead of failing the build with the symbol named.
+        "$CXX" -O2 -g -mexec-model=reactor -Wl,--fatal-warnings \
+            -std=c++23 -fno-exceptions -fno-rtti \
             -I "$REPO_ROOT/fw/src" -I "$REPO_ROOT/fw/src/sound" \
             -I "$REPO_ROOT/fw/include" \
             -isystem "$SIM_DIR/shim/include" \

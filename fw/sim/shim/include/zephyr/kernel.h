@@ -22,6 +22,13 @@
 #ifndef RGBX_SIM_SHIM_ZEPHYR_KERNEL_H_
 #define RGBX_SIM_SHIM_ZEPHYR_KERNEL_H_
 
+/* <stdint.h> is NOT redundant: the real <zephyr/kernel.h> provides the
+ * fixed-width types transitively, so a TU that includes only this header and
+ * then writes `uint8_t` must keep compiling. rgbx_sys.h pulls in stddef/
+ * stdarg/string/math but deliberately not stdint — its remit is the allowed
+ * FUNCTION surface, not the type surface this shim is standing in for. */
+#include <stdint.h>
+
 #include <rgbx/rgbx_sys.h>
 
 #endif /* RGBX_SIM_SHIM_ZEPHYR_KERNEL_H_ */

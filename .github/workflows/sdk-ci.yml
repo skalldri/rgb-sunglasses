@@ -72,14 +72,24 @@ jobs:
       # right prototype, or authors are back to hand-writing one and getting a
       # clean build that traps at runtime. Issue #351. Run against the packaged
       # SDK's include tree — that is what a standalone author actually gets —
-      # under both real extension toolchains plus the host compiler.
+      # under both real extension toolchains plus the host compiler, and in
+      # BOTH languages: extensions are written in C and C++ alike (the C++
+      # wrapper path is what getting-started.md leads with), and a C-only probe
+      # cannot see a dropped `extern "C"` block or a collision with the
+      # noexcept/overload set a C++ libc header attaches.
       - name: Check rgbx_sys.h declares the allowed-symbol surface
         run: |
           ARM_TC="$(fw/sdk/scripts/install-arm-toolchain.sh)"
           WASI_TC="$(fw/sim/scripts/install-toolchain.sh)"
-          for cc in cc "$ARM_TC/bin/arm-none-eabi-gcc" "$WASI_TC/bin/clang"; do
-            fw/sdk/scripts/check-sys-header.sh --cc "$cc" \
+          check() {
+            fw/sdk/scripts/check-sys-header.sh --cc "$1" --lang "$2" \
               --include-dir "$SDK_DIR/include" --allowed "$SDK_DIR/arm/allowed-symbols.txt"
+          }
+          for cc in cc "$ARM_TC/bin/arm-none-eabi-gcc" "$WASI_TC/bin/clang"; do
+            check "$cc" c
+          done
+          for cxx in c++ "$ARM_TC/bin/arm-none-eabi-g++" "$WASI_TC/bin/clang++"; do
+            check "$cxx" c++
           done
 
       - name: Build hello + cpptest via the SDK (arm, strict)
@@ -92,10 +102,22 @@ jobs:
         run: |
           TC="$(fw/sdk/scripts/install-arm-toolchain.sh)"
           NM="$TC/bin/arm-none-eabi-nm"
-          # hello may need only memset + printk; cpptest must need nothing.
+          # hello may need only memset + printk + vprintk; cpptest must need
+          # nothing. vprintk joined the list with issue #351: hello routes its
+          # first-tick line through a va_list helper so that the sanctioned
+          # vprintk export has automated cover on both targets (the sim side
+          # asserts its exact output in host.integration.test.ts). This list
+          # stays exhaustive on purpose — widen it only for a symbol something
+          # deliberately calls.
           for sym in $("$NM" -u "$RUNNER_TEMP/b-arm/hello.llext" | awk '{print $NF}'); do
-            case "$sym" in memset|printk) ;; *) echo "unexpected undefined symbol in hello.llext: $sym"; exit 1 ;; esac
+            case "$sym" in memset|printk|vprintk) ;; *) echo "unexpected undefined symbol in hello.llext: $sym"; exit 1 ;; esac
           done
+          # ...and vprintk must actually be there, or the cover above is a
+          # no-op the next refactor deletes without noticing.
+          if ! "$NM" -u "$RUNNER_TEMP/b-arm/hello.llext" | grep -q '\bvprintk$'; then
+            echo "hello.llext should reference vprintk (issue #351 cover for the va_list path)"
+            exit 1
+          fi
           if [ -n "$("$NM" -u "$RUNNER_TEMP/b-arm/cpptest.llext")" ]; then
             echo "cpptest.llext should have no undefined symbols:"
             "$NM" -u "$RUNNER_TEMP/b-arm/cpptest.llext"

@@ -8,7 +8,17 @@
  *  - every input source: IMU (accel tilts the scan head), audio (bottom row
  *    is the 20-bucket spectrum, top row flashes on band beats), buttons
  *    (corner markers light after a press);
- *  - logging from inside the sandbox (printk in rgbx_init).
+ *  - logging from inside the sandbox: printk in rgbx_init, and a one-shot
+ *    vprintk-formatted line on the first tick. The vprintk path is here
+ *    deliberately — it is the only sanctioned symbol whose correctness
+ *    depends on a va_list hand-off, which is ABI-dependent (scalar void* on
+ *    wasm32, array-typed on x86-64) and would otherwise have no automated
+ *    cover at all: nothing else in-repo calls it and wasm-ld GCs it out of
+ *    every module. host.integration.test.ts asserts the exact output, so a
+ *    refactor of the simulator's formatter cannot silently break it.
+ *    First tick rather than init because the simulator currently drops
+ *    rgbx_init's log (core/host.ts discards InitOkResponse.log) — tracked
+ *    separately; tick output is what a test can actually observe today.
  *
  * Visuals are drawn at full 255 brightness so the animation stays visible
  * after the pattern controller's global brightness scaling.
@@ -20,6 +30,9 @@
  * keep running, notify Is Active = false, render the proxy's fault banner,
  * and recover via `ext select`.
  */
+
+#include <stdarg.h>
+#include <stdbool.h>
 
 #include <rgbx/rgbx_api.h>
 #include <zephyr/kernel.h>
@@ -60,6 +73,7 @@ const struct rgbx_manifest rgbx_manifest = {
 
 static uint32_t pos_ms;
 static uint32_t button_glow_ms[5]; /* per-button corner marker countdown */
+static bool logged_first_tick;     /* one-shot guard for the vprintk line */
 
 static void set_px(uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b)
 {
@@ -74,10 +88,25 @@ static void set_px(uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b)
 void rgbx_init(void)
 {
 	pos_ms = 0;
+	logged_first_tick = false;
 	for (uint32_t i = 0; i < 5u; i++) {
 		button_glow_ms[i] = 0;
 	}
 	printk("hello: rgbx_init running inside the sandbox\n");
+}
+
+/* Wraps vprintk the way an extension realistically would — a diagnostic
+ * helper of its own that forwards an already-started va_list. This is the
+ * shape the sanctioned vprintk export exists to support.
+ */
+__attribute__((format(printf, 1, 2)))
+static void hello_log(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vprintk(fmt, ap);
+	va_end(ap);
 }
 
 void rgbx_tick(void)
@@ -92,6 +121,16 @@ void rgbx_tick(void)
 	}
 
 	const uint32_t dt = rgbx_inputs.dt_ms;
+
+	/* One-shot, so the UART/log pane isn't spammed at 90 Hz. Covers a
+	 * width/zero-pad conversion and a %s alongside the plain integer one —
+	 * enough that a formatter regression shows up as a diff, not a silence. */
+	if (!logged_first_tick) {
+		logged_first_tick = true;
+		hello_log("hello: tick1 dt=%u speed=%03u msg=%s\n", dt,
+			  rgbx_inputs.params[P_SPEED], "ok");
+	}
+
 	pos_ms += dt * rgbx_inputs.params[P_SPEED] / 50u; /* 50 == 1x */
 
 	for (uint32_t i = 0; i < sizeof(rgbx_framebuffer); i++) {

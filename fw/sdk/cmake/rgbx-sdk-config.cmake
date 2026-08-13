@@ -12,6 +12,21 @@
 #   RGBX_TARGET            ("arm" | "wasm", set by the toolchain file)
 #   RGBX_SDK_SOURCE_DIR    (consumer-side override: use a local SDK tree)
 #   RGBX_STRICT_TOOLCHAIN  (make toolchain-pin deviations fatal; CI sets it)
+#
+# "Append-only" governs the CMake surface above — the names and arguments a
+# consumer's CMakeLists.txt spells out. It does NOT extend to the compile/link
+# flags applied underneath, and those are not frozen: TIGHTENING THEM IS A
+# BREAKING, VERSIONED EVENT. A registry extension pinned at a `rev` compiles
+# against whatever the *release's* SDK passes, so a newly-fatal diagnostic can
+# stop it building with no commit of its own — the extension did not change,
+# the gate did. Precedent: issue #351 added -Wl,--fatal-warnings to the wasm
+# link, which turns a hand-written `extern "C" int printk(...)` from a silently
+# trapping module into a link error (rgbx-mask-eyes was exactly that case).
+# That was deliberate — it is the only automated signature check wasm has, and
+# the alternative is shipping modules that trap on first call. But it belongs
+# in release notes as a breaking change, and a registry extension that stops
+# building after an SDK bump should be checked against this list before its
+# author is told the breakage is theirs.
 
 get_filename_component(_RGBX_SDK_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
