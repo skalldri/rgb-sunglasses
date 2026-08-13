@@ -388,14 +388,22 @@ The full firmware dev loop (build → flash → serial verify) also runs nativel
 | Build env | west on PATH | `. scripts/fw-env.sh` first (skills do this) |
 | Twister tests | `/test-fw` (native_sim) | **not supported** (native_sim is Linux-only) — use CI or the devcontainer |
 | GLIM converter deps | pip/apt in the image | `. scripts/tools-env.sh` first (venv installed by `scripts/macos-setup.sh`) |
-| /NAND: disk mount | `dmesg`/`lsblk`/`mount` | **not possible** — the disk never mounts on macOS (issue #367) |
+| /NAND: disk mount | `dmesg`/`lsblk`/`mount` | **does not mount** — the LUN ends up reporting MEDIUM NOT PRESENT (issue #367) |
 | Provisioning (`/provision-device`) | supported | **not supported** — needs the disk above; generate `.glim` files here, copy them from the devcontainer |
 
 Never hardcode the `cu.usbmodem` names — discover them via `/check-hardware` (they can shift on re-enumeration, same rule as ttyACM). Everything else — hw-lock discipline, `mcp__serial__*` usage, the shell command surface — is identical; `scripts/hw-lock.sh` re-execs itself into Homebrew bash on macOS.
 
 **`fw-env.sh` and `tools-env.sh` activate different python venvs** — whichever is sourced last owns `python3`, and a `west build` after `tools-env.sh` configures against the wrong interpreter. Use separate shells: one for building firmware, one for generating GLIM assets.
 
-**Why the NAND disk can't mount on macOS (issue #367):** the LUN reports 4096-byte logical blocks (`disk_sector_size: 4096` in `pm_static_rgb_sunglasses_proto0_nrf5340_cpuapp.yml`, required because the MX25R6435F erases in 4 KB pages), and macOS's block-storage stack never publishes media for it — the whole USB mass-storage chain attaches down to `IOBlockStorageDriver` with the right `RGB-SG`/`FlashDisk` INQUIRY strings, then stops with no `IOMedia` child, so no `/dev/diskN` ever appears. The FAT volume itself is fine (the firmware reads it normally). Don't debug this as a formatting or cabling problem, and don't lower the sector size to work around it — that would mean sub-page writes to the external flash.
+**Why the NAND disk doesn't mount on macOS (issue #367):** the whole USB mass-storage chain attaches down to `IOBlockStorageDriver` with the right `RGB-SG`/`FlashDisk` INQUIRY strings, then stops with no `IOMedia` child, so no `/dev/diskN` ever appears. The FAT volume itself is fine (the firmware reads it normally). Don't debug this as a formatting or cabling problem.
+
+What the evidence shows (`log show --predicate 'eventMessage CONTAINS "IOUSBMassStorageDriver"'` — note `/usr/bin/log`, since `log` is shadowed in zsh):
+
+- INQUIRY and READ(10) both **succeed** — macOS reads the disk fine, so the 4096-byte sector size is **not** the problem. Don't "fix" this by lowering `disk_sector_size`; that would mean sub-page writes to the MX25R6435F's 4 KB erase pages, and it would not help.
+- macOS logs exactly one error against the device: `[IOSCSIPeripheralDeviceType00:DetermineMediumWriteProtectState] [FlashDisk]: MODE_SENSE_06 failed`. Zephyr's `usbd_msc_scsi.c` MODE SENSE(6) handler accepts **only page code `0x3F`** (ALL_PAGES) and returns `INVALID_FIELD_IN_CDB` for anything else.
+- A START STOP UNIT (`0x1B`) then arrives, and Zephyr's handler treats LOEJ+START=0 as an eject: `medium_loaded = false`. From then on TEST UNIT READY answers CHECK CONDITION and REQUEST SENSE returns `03 02 3A 00` — NOT READY / **MEDIUM NOT PRESENT** — once a second, forever, so macOS never publishes media.
+
+The MODE SENSE(6) rejection is the leading suspected trigger for that eject, but the causal link between the two is **not** confirmed (that would need a USB analyzer to see the page code macOS actually asks for). The eject-then-no-medium mechanism itself is directly evidenced by the sense data above.
 
 ## Serial Console (Zephyr Shell)
 
