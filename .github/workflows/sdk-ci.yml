@@ -66,6 +66,22 @@ jobs:
         with:
           version: 0.0.0-ci
 
+      # Third member of the allowed-symbols lockstep set (the other two are
+      # extension_exports.c, checked by build.yaml's check-allowed-symbols.sh):
+      # every sanctioned symbol must be DECLARED by <rgbx/rgbx_sys.h> with the
+      # right prototype, or authors are back to hand-writing one and getting a
+      # clean build that traps at runtime. Issue #351. Run against the packaged
+      # SDK's include tree — that is what a standalone author actually gets —
+      # under both real extension toolchains plus the host compiler.
+      - name: Check rgbx_sys.h declares the allowed-symbol surface
+        run: |
+          ARM_TC="$(fw/sdk/scripts/install-arm-toolchain.sh)"
+          WASI_TC="$(fw/sim/scripts/install-toolchain.sh)"
+          for cc in cc "$ARM_TC/bin/arm-none-eabi-gcc" "$WASI_TC/bin/clang"; do
+            fw/sdk/scripts/check-sys-header.sh --cc "$cc" \
+              --include-dir "$SDK_DIR/include" --allowed "$SDK_DIR/arm/allowed-symbols.txt"
+          done
+
       - name: Build hello + cpptest via the SDK (arm, strict)
         run: |
           cmake -S fw/sdk/tests/consumer -B "$RUNNER_TEMP/b-arm" \

@@ -120,7 +120,14 @@ function(rgbx_add_extension name)
             endif()
             list(APPEND _rgbx_export_flags "-Wl,--export-if-defined=${_line}")
         endforeach()
-        target_link_options(${name} PRIVATE -mexec-model=reactor ${_rgbx_export_flags})
+        # --fatal-warnings promotes wasm-ld's "function signature mismatch"
+        # warning to a link error. wasm calls are typed by full signature, so
+        # a mismatch is not a discarded return value: wasm-ld emits a stub
+        # that traps with `RuntimeError: unreachable` on first call, having
+        # only warned at build time. Issue #351. Keep this in step with
+        # fw/sim/build-extensions.sh, which passes the same flag.
+        target_link_options(${name} PRIVATE -mexec-model=reactor
+                            -Wl,--fatal-warnings ${_rgbx_export_flags})
         add_custom_command(TARGET ${name} POST_BUILD
             COMMAND "${RGBX_NODE}" "${_RGBX_SDK_ROOT}/wasm/check-wasm.mjs" "$<TARGET_FILE:${name}>"
             COMMENT "Gating ${name}.wasm (zero imports + required exports)"

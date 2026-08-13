@@ -82,6 +82,14 @@ ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = NO
 PREDEFINED             = __cplusplus
 
+# Authoring gotcha, since these headers document printf-style APIs: Doxygen
+# strips a '%' that precedes a word, and backticks do NOT protect it — `%f`
+# renders as "f", silently turning a specifier list into gibberish that no
+# warning catches (the gate below only checks that a comment EXISTS). Verified
+# against Doxygen 1.12.0: only two spellings survive — "\%f" in plain prose, or
+# a \code ... \endcode block, where nothing is interpreted. Prefer the escape
+# inline and the block for multi-line examples; do not use backticks for these.
+
 # Warnings are the gate (sdk-ci.yml). WARN_NO_PARAMDOC is what makes a missing
 # @param an error rather than a silently thinner page — don't relax these to
 # make a build pass; fix the comment instead.

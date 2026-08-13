@@ -124,7 +124,23 @@ void init() override {
 > a parameter, do it on the first tick instead.
 
 `printk()` works from inside the sandbox and shows up on the serial console —
-handy while bringing an animation up.
+handy while bringing an animation up. It comes from `<rgbx/rgbx_sys.h>`:
+
+```cpp
+#include <rgbx/rgbx_sys.h>
+```
+
+> **Never hand-write a prototype for `printk` or anything else on the allowed
+> list.** `extern "C"` matches on the *name*, so a wrong signature still links —
+> and then does something different on each target. The classic is
+> `void printk(...)` vs `int printk(...)`: on ARM the wrong one is usually
+> survivable, but WebAssembly types calls by full signature, so in the simulator
+> it traps on the first call with `RuntimeError: unreachable` and nothing in the
+> build says why. `<rgbx/rgbx_sys.h>` has the right declarations for the whole
+> sanctioned surface (it pulls in `<string.h>` and `<math.h>` for you) — include
+> it and the mistake becomes a compile error instead.
+>
+> For the record, `printk` returns **void**. It is Zephyr's, not `printf`'s.
 
 ## 5. Read the inputs
 
@@ -202,12 +218,17 @@ section layout is loadable, and that you fit in the 24 KB extension heap. The
 wasm build checks you import nothing.
 
 The most common failure is calling something the firmware does not export. You
-get the string and memory functions, `printk`, **single-precision** libm
-(`sinf`, `cosf`, `sqrtf`, `atan2f`, …), and the 64-bit division helpers — the
-full list is
-[`allowed-symbols.txt`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/sdk/arm/allowed-symbols.txt).
-Notably **all double-precision math is unavailable**: write `sinf(x)`, not
-`sin(x)`, and `1.0f`, not `1.0`.
+get the string and memory functions, `printk`/`vprintk`, **single-precision**
+libm (`sinf`, `cosf`, `sqrtf`, `atan2f`, …), and the 64-bit division helpers —
+the full list is
+[`allowed-symbols.txt`](https://github.com/skalldri/rgb-sunglasses/blob/main/fw/sdk/arm/allowed-symbols.txt),
+and `<rgbx/rgbx_sys.h>` declares all of it. Notably **all double-precision math
+is unavailable**: write `sinf(x)`, not `sin(x)`, and `1.0f`, not `1.0`.
+
+Including `<rgbx/rgbx_sys.h>` does not restrict what you can *call* — it pulls
+in the real `<string.h>` and `<math.h>`, which declare plenty the device does
+not export. That is what this gate is for; the header's job is making sure the
+sanctioned calls have the right *signature*, which no gate can check for you.
 
 ## 9. Try it in the simulator
 
@@ -250,9 +271,8 @@ extension from a pinned commit and ship it to users automatically. See
 Everything above, in one file. This compiles and passes the device gates as-is.
 
 ```cpp
-#include <math.h>
 #include <rgbx/rgbx_animation.h>
-#include <zephyr/kernel.h>
+#include <rgbx/rgbx_sys.h>
 
 /* Must match the host display, and the values passed to RGBX_ANIMATION(). */
 #define WIDTH 40
@@ -415,11 +435,8 @@ If you would rather not use C++, here is the identical animation against the
 raw ABI. The wrapper generates roughly this.
 
 ```c
-#include <math.h>
-#include <string.h>
-
 #include <rgbx/rgbx_api.h>
-#include <zephyr/kernel.h>
+#include <rgbx/rgbx_sys.h>
 #include <zephyr/llext/symbol.h>
 
 #define WIDTH 40

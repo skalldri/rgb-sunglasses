@@ -5,6 +5,14 @@
 # precision libm, 64-bit division helpers, memmove — issue #295; keep the
 # two files in lockstep, see the invariant note in each).
 #
+# A THIRD file moves with those two: fw/include/rgbx/rgbx_sys.h DECLARES this
+# surface, so extension authors include a header instead of hand-writing a
+# prototype — a wrong one links anyway (extern "C" matches on the name) and then
+# diverges between the device and the wasm simulator (issue #351).
+# fw/sdk/scripts/check-sys-header.sh asserts the header covers exactly this
+# list, in both directions. The __aeabi_* entries are its one exclusion: the
+# compiler emits those calls, nothing declares or names them.
+#
 # No double-precision math: fpv5-sp-d16 soft-floats doubles through the
 # __aeabi_d* family, which stays deliberately unexported — use float
 # expressions.

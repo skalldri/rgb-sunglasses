@@ -12,11 +12,14 @@
  * before pointing at THIS file as budget evidence for anything.
  */
 
+/* <rgbx/rgbx_sys.h> is the sanctioned way to reach printk and the libm/string
+ * subset (issue #351) — it pulls in <math.h>/<string.h> and declares
+ * printk/vprintk itself. Included here rather than the individual headers so
+ * sdk-ci compiles it under BOTH real extension toolchains, not just the host
+ * compiler that check-sys-header.sh defaults to. */
 #include <rgbx/rgbx_api.h>
-#include <zephyr/kernel.h>
+#include <rgbx/rgbx_sys.h>
 #include <zephyr/llext/symbol.h>
-#include <math.h>
-#include <string.h>
 
 #define WIDTH 40u
 #define HEIGHT 12u
