@@ -376,7 +376,7 @@ Run `/check-hardware` at the start of any session to discover what's available. 
 
 ### macOS host (Mac Mini)
 
-The full firmware dev loop (build → flash → serial verify) also runs natively on the Mac Mini when the board is attached there. One-time setup: `scripts/macos-setup.sh` (idempotent — Homebrew bash for hw-lock, Go + mcumgr, NCS v3.1.1 west workspace + Zephyr SDK at `~/ncs`, `serial_mcp`). Differences from the devcontainer:
+The full firmware dev loop (build → flash → serial verify) also runs natively on the Mac Mini when the board is attached there. One-time setup: `scripts/macos-setup.sh` (idempotent — Homebrew bash for hw-lock, Go + mcumgr, NCS v3.1.1 west workspace + Zephyr SDK at `~/ncs`, `serial_mcp`, and the GLIM converter tooling: ffmpeg + a python venv with Pillow/numpy/lz4/yt-dlp). Differences from the devcontainer:
 
 | Aspect | devcontainer | macOS host |
 |---|---|---|
@@ -387,9 +387,22 @@ The full firmware dev loop (build → flash → serial verify) also runs nativel
 | b0n (netcore bootloader) reflash | J-Link | not possible — use the devcontainer |
 | Build env | west on PATH | `. scripts/fw-env.sh` first (skills do this) |
 | Twister tests | `/test-fw` (native_sim) | **not supported** (native_sim is Linux-only) — use CI or the devcontainer |
+| GLIM converter deps | pip/apt in the image | `. scripts/tools-env.sh` first (venv installed by `scripts/macos-setup.sh`) |
 | /NAND: disk mount | `dmesg`/`lsblk`/`mount` | Finder/`diskutil` (`/Volumes`); same sync → eject → reboot discipline |
 
 Never hardcode the `cu.usbmodem` names — discover them via `/check-hardware` (they can shift on re-enumeration, same rule as ttyACM). Everything else — hw-lock discipline, `mcp__serial__*` usage, the shell command surface — is identical; `scripts/hw-lock.sh` re-execs itself into Homebrew bash on macOS.
+
+**`fw-env.sh` and `tools-env.sh` activate different python venvs** — whichever is sourced last owns `python3`, and a `west build` after `tools-env.sh` configures against the wrong interpreter. Use separate shells: one for building firmware, one for generating GLIM assets.
+
+**The NAND disk mounts on macOS**, and `/provision-device` is supported there (`fw/scripts/provision-device.sh` finds the disk via IOKit and uses `diskutil`). Verified end-to-end on the Mac Mini 2026-08-13: assets generated, extensions built, files copied to `/Volumes/NO NAME`. The same FAT-concurrency rule as the devcontainer applies: write → `sync` → `diskutil unmount` → **reboot the board**.
+
+Three macOS-specific behaviours that will otherwise waste hours:
+
+- **Once the volume is unmounted, macOS stops re-publishing it, and only a physical USB replug brings it back.** Measured: after an unmount, macOS declines to auto-mount and ~40-60 s later issues START STOP UNIT; Zephyr's handler latches `medium_loaded = false`, so the LUN answers NOT READY / MEDIUM NOT PRESENT (`03 02 3A 00`) for the rest of that boot. Rebooting the board clears the firmware side (`scsi_reset()` sets `medium_loaded = true`), but macOS still won't publish the volume — it keeps it marked ejected. **A board with a healthy FAT can therefore present no disk at all on the host; that is expected after an unmount, not a fault.** Confirm with `/usr/bin/log show --last 5m --predicate 'eventMessage CONTAINS "IOUSBMassStorageDriver"'` — the driver's `-Misc>` line decodes as `Tur:`/`Inq:`/`StS:`/`Sen:` (opcode + status), and a healthy attach shows INQUIRY and READ(10) succeeding before any eject.
+- **macOS `cp` writes AppleDouble sidecars (`._name`) onto FAT, and the firmware treats them as real assets.** Hardware-verified: `glim list` showed `._4096.glim`, `._bad_apple.glim`, `._nyan_cat.glim` next to the real files, with the 4 KB `._4096.glim` **selected** as the active animation. `provision-device.sh` sets `COPYFILE_DISABLE=1` and sweeps `._*`; do the same for any manual `cp` to the board. (The extension registry rejects sidecars via manifest validation, so only GLIM is user-visibly affected.)
+- **`MODE_SENSE_06 failed ... DetermineMediumWriteProtectState` in the macOS log is benign noise.** It is emitted on *every* attach, including ones that mount perfectly — Zephyr's MODE SENSE(6) handler only accepts page code `0x3F`. Do not chase it.
+
+Note `log` is shadowed by a zsh builtin: a bare `log show ...` fails with "too many arguments" and the empty output reads as "nothing logged". Always use `/usr/bin/log`.
 
 ## Serial Console (Zephyr Shell)
 
@@ -489,13 +502,14 @@ to generate one.
 **Setting up GLIM files on a new board:** All GLIM assets are generated using in-repo Python scripts — nothing is checked in as a binary. Generate them before provisioning:
 
 ```bash
+. scripts/tools-env.sh   # Pillow/numpy/lz4 + yt-dlp/ffmpeg; no-op in the devcontainer
 python3 fw/tools/generate_nyan_cat_glim.py --output fw/nyan_cat.glim
 python3 fw/tools/convert_bad_apple.py --output fw/bad_apple.glim   # downloads from YouTube, ~1 min
 # 4096 "greatest hits" (issue #96) — canonical LZ4-compressed GLIM (format 4):
 python3 fw/tools/convert_video_to_glim.py --url "https://youtu.be/e9DfSCk-6Ko" --output fw/4096.glim --fps 24 --lz4
 ```
 
-Then copy both into `/NAND:/glim/` on the board and reset. If the NAND disk on a new board is unformatted (FAT read errors in dmesg), it needs `mkfs.vfat -F 12 -s 8 -S 4096 /dev/sdX` before mounting — ask the user to run this as it is destructive.
+Then copy both into `/NAND:/glim/` on the board and reset (this works on macOS too — see the macOS host section). If the NAND disk on a new board is unformatted (FAT read errors in dmesg), it needs `mkfs.vfat -F 12 -s 8 -S 4096 /dev/sdX` before mounting — ask the user to run this as it is destructive.
 
 ### Useful shell commands
 
@@ -561,7 +575,7 @@ interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts 
 `bad_apple.glim`, `nyan_cat.glim`, and similar assets get onto the device (see
 `fw/tools/convert_bad_apple.py`, `generate_nyan_cat_glim.py`).
 
-**GLIM format**: `src/storage/GLIM_FORMAT.md` is the normative spec, with `src/storage/glim_decoder.{h,cpp}` as the reference implementation; converters live in `fw/tools/` and are gated by CI's `python-tests` job (run locally: `cd fw && pytest tools/tests/ -v`). `fw/scripts/img_to_c.py` is a broken stub (it never writes any output) — do not use it.
+**GLIM format**: `src/storage/GLIM_FORMAT.md` is the normative spec, with `src/storage/glim_decoder.{h,cpp}` as the reference implementation; converters live in `fw/tools/` and are gated by CI's `python-tests` job (run locally **in the devcontainer**: `cd fw && pytest tools/tests/ -v` — the macOS tools venv deliberately carries only what the converters import, not pytest or the `beat_lab` scipy/librosa stack). `fw/scripts/img_to_c.py` is a broken stub (it never writes any output) — do not use it.
 
 This is exclusive-write access to the board's disk — hold the `board` lock first (`Monitor(command: "scripts/hw-lock.sh hold board", persistent: true)`) if doing this by hand instead of via `/provision-device` (which enforces it for you). The hook can't catch an ad-hoc `mount` command — this remains convention-only.
 

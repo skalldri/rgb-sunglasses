@@ -50,24 +50,65 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# Put the GLIM converters' python deps + yt-dlp/ffmpeg in reach before step 3
+# runs them — no-op in the devcontainer, activates the tools venv on a macOS host
+# (fails with instructions if neither is available; see scripts/tools-env.sh).
+# Deliberately before any hardware work so a half-set-up host fails immediately
+# instead of after mounting the board's disk.
+. "$REPO_ROOT/scripts/tools-env.sh"
+
 # 1. Locate the NAND USB mass-storage disk by SCSI vendor/product string
 #    (USBD_DEFINE_MSC_LUN(nand, "NAND", "RGB-SG", "FlashDisk", "0.00") in
-#    fw/src/usb/usb_init.c) rather than size or /dev/sdX letter, both of
-#    which shift depending on what else is attached.
+#    fw/src/usb/usb_init.c) rather than size or device-node name, both of
+#    which shift depending on what else is attached. Both hosts match on the
+#    same two strings, just through different registries.
+HOST_OS="$(uname -s)"
 DISK=""
-for dev in /sys/block/sd*; do
-    [ -e "$dev/device/vendor" ] || continue
-    vendor=$(tr -d ' \n' < "$dev/device/vendor" 2>/dev/null || true)
-    model=$(tr -d ' \n' < "$dev/device/model" 2>/dev/null || true)
-    if [ "$vendor" = "RGB-SG" ] && [ "$model" = "FlashDisk" ]; then
-        DISK="/dev/$(basename "$dev")"
-        break
-    fi
-done
+case "$HOST_OS" in
+    Linux)
+        for dev in /sys/block/sd*; do
+            [ -e "$dev/device/vendor" ] || continue
+            vendor=$(tr -d ' \n' < "$dev/device/vendor" 2>/dev/null || true)
+            model=$(tr -d ' \n' < "$dev/device/model" 2>/dev/null || true)
+            if [ "$vendor" = "RGB-SG" ] && [ "$model" = "FlashDisk" ]; then
+                DISK="/dev/$(basename "$dev")"
+                break
+            fi
+        done
+        ;;
+    Darwin)
+        # IOKit names the published media "<vendor> <product> Media", so the
+        # single string below pins vendor AND product the way the Linux branch
+        # does with two files. Taking the BSD name from the IOMedia node (rather
+        # than scraping `diskutil list`) also means we never guess a partition
+        # suffix: the FAT volume IS the whole disk here (mkfs'd FM_SFD, no
+        # partition table), so /dev/diskN is both the disk and the volume.
+        # NB: awk must NOT `exit` on the first match — closing the pipe early
+        # sends SIGPIPE to ioreg, and `set -o pipefail` then kills this script
+        # with 141 before it prints anything. Flag the first hit instead.
+        DISK_ID="$(ioreg -w0 -r -c IOMedia -l 2>/dev/null | awk '
+            /RGB-SG FlashDisk Media/ { found = 1 }
+            found && !got && /"BSD Name"/ { gsub(/^.*= "/, ""); gsub(/".*$/, ""); print; got = 1 }')"
+        [ -n "$DISK_ID" ] && DISK="/dev/$DISK_ID"
+        ;;
+    *)
+        echo "[!] Unsupported host OS: $HOST_OS (expected Linux or Darwin)." >&2
+        exit 1
+        ;;
+esac
 
 if [ -z "$DISK" ]; then
     echo "[!] Could not find the board's NAND USB mass-storage disk (vendor=RGB-SG, model=FlashDisk)." >&2
     echo "    Run /check-hardware and confirm the board is connected and enumerated." >&2
+    if [ "$HOST_OS" = "Darwin" ]; then
+        # Seen on a board carrying a stale image: the LUN answers TEST UNIT READY
+        # with CHECK CONDITION and REQUEST SENSE 03 02 3A 00 (MEDIUM NOT PRESENT),
+        # so macOS attaches the USB MSC stack but never publishes any IOMedia.
+        echo "    If the board is enumerated and the shell works but no disk appears," >&2
+        echo "    reflash current firmware first — a stale image can leave the LUN" >&2
+        echo "    reporting MEDIUM NOT PRESENT. Check with:" >&2
+        echo "      /usr/bin/log show --last 5m --predicate 'eventMessage CONTAINS \"IOUSBMassStorageDriver\"'" >&2
+    fi
     exit 1
 fi
 echo "[*] Found NAND disk: $DISK"
@@ -99,23 +140,71 @@ python3 "$REPO_ROOT/fw/tools/convert_video_to_glim.py" \
     --url "https://youtu.be/e9DfSCk-6Ko" --output "$TMP_GLIM/4096.glim" --fps 24 --lz4
 
 # 4. Build every extension under fw/extensions/*/.
+#    In a SUBSHELL that sources fw-env.sh, because extensions/build.sh needs west
+#    on PATH (it regenerates the llext EDK) — a no-op in the devcontainer, the
+#    ~/ncs venv on macOS. It has to be scoped: fw-env.sh and tools-env.sh
+#    activate different python venvs and whichever is sourced last owns python3,
+#    so leaking fw-env into this shell would break the converters above if the
+#    steps were ever reordered.
 echo "[*] Building extensions..."
-"$REPO_ROOT/fw/extensions/build.sh" "$BUILD_DIR"
+( . "$REPO_ROOT/scripts/fw-env.sh" && "$REPO_ROOT/fw/extensions/build.sh" "$BUILD_DIR" )
 
 # 5. Mount, copy, unmount.
-MNT="$(mktemp -d /tmp/provision-mnt.XXXXXX)"
-trap 'umount "$MNT" 2>/dev/null || true; rmdir "$MNT" 2>/dev/null || true; rm -rf "$TMP_GLIM"' EXIT
-
-echo "[*] Mounting $DISK..."
-if ! mount -o rw "$DISK" "$MNT" 2>/tmp/provision-device-mount.log; then
-    echo "[!] Failed to mount $DISK:" >&2
-    cat /tmp/provision-device-mount.log >&2
+#    macOS automounts removable FAT volumes, so there is no mount dir of ours to
+#    create or clean up there — `diskutil mount` only has to cover the case where
+#    the volume was ejected (which latches until the disk re-enumerates).
+mount_fail_help() {
     echo "[!] The FAT filesystem may be corrupt or unformatted. Reformat it with the" >&2
     echo "    firmware's own 'fatfs reformat' shell command (over mcp__serial), reboot" >&2
     echo "    the board, then re-run this script — do not mkfs.vfat it from the host." >&2
-    exit 1
+}
+
+if [ "$HOST_OS" = "Darwin" ]; then
+    trap 'diskutil unmount "$DISK" >/dev/null 2>&1 || true; rm -rf "$TMP_GLIM"' EXIT
+
+    MNT="$(diskutil info "$DISK" 2>/dev/null | awk -F':[[:space:]]*' '/^ *Mount Point/{print $2}')"
+    if [ -z "$MNT" ]; then
+        echo "[*] Mounting $DISK..."
+        if ! diskutil mount "$DISK" >/tmp/provision-device-mount.log 2>&1; then
+            echo "[!] Failed to mount $DISK:" >&2
+            cat /tmp/provision-device-mount.log >&2
+            mount_fail_help
+            exit 1
+        fi
+        MNT="$(diskutil info "$DISK" 2>/dev/null | awk -F':[[:space:]]*' '/^ *Mount Point/{print $2}')"
+    else
+        echo "[*] $DISK already mounted at $MNT"
+    fi
+    if [ -z "$MNT" ]; then
+        echo "[!] $DISK mounted but no mount point was reported." >&2
+        exit 1
+    fi
+else
+    MNT="$(mktemp -d /tmp/provision-mnt.XXXXXX)"
+    trap 'umount "$MNT" 2>/dev/null || true; rmdir "$MNT" 2>/dev/null || true; rm -rf "$TMP_GLIM"' EXIT
+
+    echo "[*] Mounting $DISK..."
+    if ! mount -o rw "$DISK" "$MNT" 2>/tmp/provision-device-mount.log; then
+        echo "[!] Failed to mount $DISK:" >&2
+        cat /tmp/provision-device-mount.log >&2
+        mount_fail_help
+        exit 1
+    fi
 fi
+
 mkdir -p "$MNT/glim" "$MNT/ext"
+
+if [ "$HOST_OS" = "Darwin" ]; then
+    # macOS cp writes an AppleDouble sidecar (._<name>) beside every file copied
+    # to a non-native filesystem. Those names still end in .glim/.llext, so the
+    # firmware picks them up as real assets: hardware-verified that without this,
+    # `glim list` showed ._4096.glim / ._bad_apple.glim / ._nyan_cat.glim
+    # alongside the real files, with the 4 KB sidecar ._4096.glim SELECTED as the
+    # active animation. (The extension registry rejects them via manifest
+    # validation, so only GLIM is user-visibly broken — but both are cleaned.)
+    export COPYFILE_DISABLE=1
+    rm -f "$MNT"/glim/._* "$MNT"/ext/._* 2>/dev/null || true
+fi
 
 cp "$TMP_GLIM"/*.glim "$MNT/glim/"
 cp "$BUILD_DIR"/extensions/*.llext "$MNT/ext/"
@@ -125,6 +214,24 @@ echo "[*] Provisioned:"
 ls -la "$MNT/glim"
 ls -la "$MNT/ext"
 
-umount "$MNT"
+# Unmount so the firmware's own FAT mount is the only writer again — the reboot
+# below is what makes the board see the new files (see fw/CLAUDE.md on FAT
+# concurrent access).
+if [ "$HOST_OS" = "Darwin" ]; then
+    diskutil unmount "$DISK" >/dev/null
+else
+    umount "$MNT"
+fi
 echo "[*] Done. Reboot the board (mcumgr reset, or a physical reset) so the" \
      "firmware re-mounts FAT and discovers the new files."
+
+if [ "$HOST_OS" = "Darwin" ]; then
+    # Measured on the Mac Mini: once the volume is unmounted, macOS stops
+    # auto-mounting it and ~40-60 s later sends START STOP UNIT; Zephyr's handler
+    # latches medium_loaded=false, so the LUN answers MEDIUM NOT PRESENT for the
+    # rest of that boot. A board reboot clears the firmware side but macOS still
+    # won't re-publish the volume — only re-plugging the cable does.
+    echo "[*] macOS note: the disk will not reappear on this Mac until you unplug and"
+    echo "    replug the board's USB cable (a board reboot alone is not enough — macOS"
+    echo "    keeps the volume marked ejected). The board itself is unaffected."
+fi

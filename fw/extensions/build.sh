@@ -25,10 +25,43 @@ EDK_DIR="$BUILD_DIR/extensions/edk"
 OUT_DIR="$BUILD_DIR/extensions"
 EXT_SRC_DIR="$REPO_ROOT/fw/extensions"
 
-# Locate the Zephyr SDK cross toolchain the same way the firmware build does.
-TOOLCHAIN_BIN=$(ls -d /root/ncs/toolchains/*/opt/zephyr-sdk/arm-zephyr-eabi/bin 2>/dev/null | head -1)
+# Locate the Zephyr SDK cross toolchain. Two lookups, because the SDK lands in a
+# different place on each supported host:
+#   - devcontainer: bundled under the NCS toolchain dir (/root/ncs/toolchains/...)
+#   - macOS host:   installed by `west sdk install` into ~/zephyr-sdk-<version>
+# The second lookup reads the CMake package registry the SDK writes on install,
+# which is how Zephyr's own build finds it — so it works on any host rather than
+# hardcoding another absolute path.
+#
+# Deliberately NOT `ls ... | head -1`: with `set -o pipefail` a non-matching ls
+# makes the whole pipeline fail, and `set -e` then kills this script BEFORE the
+# error message below can print — a silent exit 1 (hit for real on macOS).
+find_toolchain_bin() {
+    local dir sdk_cmake sdk_root
+    for dir in /root/ncs/toolchains/*/opt/zephyr-sdk/arm-zephyr-eabi/bin; do
+        if [ -d "$dir" ]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    for sdk_cmake in "$HOME"/.cmake/packages/Zephyr-sdk/*; do
+        [ -f "$sdk_cmake" ] || continue
+        # each registry file holds the SDK's cmake dir: <sdk-root>/cmake
+        sdk_root="$(dirname "$(cat "$sdk_cmake")")"
+        if [ -d "$sdk_root/arm-zephyr-eabi/bin" ]; then
+            echo "$sdk_root/arm-zephyr-eabi/bin"
+            return 0
+        fi
+    done
+    return 1
+}
+
+TOOLCHAIN_BIN="$(find_toolchain_bin || true)"
 if [ -z "$TOOLCHAIN_BIN" ]; then
-    echo "error: Zephyr SDK toolchain not found under /root/ncs/toolchains/*/opt/zephyr-sdk" >&2
+    echo "error: Zephyr SDK arm-zephyr-eabi toolchain not found." >&2
+    echo "       Looked in /root/ncs/toolchains/*/opt/zephyr-sdk (devcontainer) and" >&2
+    echo "       the CMake package registry ~/.cmake/packages/Zephyr-sdk (macOS)." >&2
+    echo "       On macOS run scripts/macos-setup.sh to install it." >&2
     exit 1
 fi
 CC="$TOOLCHAIN_BIN/arm-zephyr-eabi-gcc"
@@ -86,7 +119,9 @@ for dir in "$EXT_SRC_DIR"/*/; do
     # plain-C extensions.
     "$LD" -r "$obj" -o "$OUT_DIR/$name.llext"
     rm -f "$obj"
-    echo "built $OUT_DIR/$name.llext ($(stat -c%s "$OUT_DIR/$name.llext") bytes)"
+    # `wc -c` rather than stat: -c%s is GNU-only and macOS stat wants -f%z, so
+    # the size printed empty there ("built ... ( bytes)").
+    echo "built $OUT_DIR/$name.llext ($(wc -c < "$OUT_DIR/$name.llext" | tr -d ' ') bytes)"
     built=$((built + 1))
 done
 

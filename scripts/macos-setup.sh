@@ -14,6 +14,8 @@
 #                                ~/ncs/v3.1.1 (mirrors the devcontainer's
 #                                /root/ncs/v3.1.1) — a very large download
 #   - serial-mcp-server ........ the `serial_mcp` MCP server .mcp.json expects
+#   - GLIM asset tooling ....... ffmpeg + a python venv (Pillow/numpy/lz4/yt-dlp)
+#                                that the fw/tools/convert_*.py generators need
 #
 # The iOS app toolchain is separate: app/scripts/macos-setup.sh.
 #
@@ -31,6 +33,18 @@ NCS_SDK_DIR="${NCS_DIR}/${NCS_VERSION}"
 NCS_VENV="${NCS_DIR}/venv-${NCS_VERSION}"
 NCS_ENV_FILE="${NCS_DIR}/env-${NCS_VERSION}.sh"
 NRFUTIL_URL="https://developer.nordicsemi.com/.pc-tools/nrfutil/universal-osx/nrfutil"
+
+# The Homebrew python formula every venv here is built on. Deliberately pinned
+# one minor behind Homebrew's rolling `python3`: a venv built on that one dangles
+# the day the formula behind it is replaced/autoremoved, and the existence probes
+# below would still pass, so re-running this script would NOT repair it. Pinning
+# also buys the binary-wheel availability window (checked 2026-08: lz4 ships
+# cp314 but not yet cp315, while numpy/Pillow already ship both). Bumping this
+# one line and re-running is the whole upgrade procedure.
+PYTHON_PIN="3.12"
+TOOLS_VENV_DIR="${HOME}/.cache/rgb-sunglasses"
+TOOLS_VENV="${TOOLS_VENV_DIR}/tools-venv-${PYTHON_PIN}"
+TOOLS_VENV_CURRENT="${TOOLS_VENV_DIR}/tools-venv-current"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*" >&2; }
@@ -136,17 +150,18 @@ if ! command -v timeout >/dev/null 2>&1; then
     info "Linked timeout -> gtimeout in ${BREW_BIN}"
 fi
 
-# A pinned modern python for the venv (the OS python can be too old).
-if ! command -v python3.12 >/dev/null 2>&1; then
-    info "Installing python@3.12 via Homebrew..."
-    brew install python@3.12
+# A pinned modern python for the venvs (the OS python can be too old); see
+# PYTHON_PIN at the top of this file for why it is pinned rather than `python3`.
+if ! command -v "python${PYTHON_PIN}" >/dev/null 2>&1; then
+    info "Installing python@${PYTHON_PIN} via Homebrew..."
+    brew install "python@${PYTHON_PIN}"
 fi
 
 if [[ -x "${NCS_VENV}/bin/west" ]]; then
     info "west venv already present (${NCS_VENV})"
 else
     info "Creating the NCS python venv at ${NCS_VENV}..."
-    python3.12 -m venv "${NCS_VENV}"
+    "python${PYTHON_PIN}" -m venv "${NCS_VENV}"
     "${NCS_VENV}/bin/pip" install --quiet --upgrade pip west
 fi
 
@@ -224,7 +239,69 @@ fi
 # Symlink onto PATH so `doxygen` resolves in non-login shells (agent Bash calls).
 ln -sf "${DOXYGEN_PREFIX}/bin/doxygen" "${BREW_BIN}/doxygen"
 
-# --- 10. Summary ---------------------------------------------------------------
+# --- 10. GLIM asset tooling (the fw/tools converters) --------------------------
+# Every .glim asset is generated from source by fw/tools/convert_*.py — nothing is
+# checked into the repo as a binary (fw/CLAUDE.md, "Setting up GLIM files on a new
+# board"). Those scripts need four things this Mac ships none of: ffmpeg and
+# yt-dlp as subprocesses, plus Pillow/numpy/lz4 as importable modules.
+#
+# Homebrew's python3 is PEP 668 externally-managed, so a plain `pip3 install` is
+# refused outright; the packages go in a dedicated venv that scripts/tools-env.sh
+# activates — the same split as the NCS venv + scripts/fw-env.sh above.
+#
+# ONE venv rather than pipx-for-yt-dlp plus a venv for the libraries, even though
+# section 4 uses pipx for serial-mcp-server: pipx installs *applications*, and
+# Pillow/numpy/lz4 are importable libraries with no console scripts, so they need
+# this venv regardless. Co-locating yt-dlp in it is also what makes the deno JS
+# runtime work with no PATH surgery at all — yt-dlp needs deno to solve YouTube's
+# nsig challenge (issue #358; the `deno` pip extra ships the binary as a wheel),
+# and it looks for that binary in its OWN interpreter's scripts dir before
+# falling back to PATH (_find_exe() in yt_dlp/utils/_jsruntime.py).
+#
+# Deliberately NOT installed: yaspin and tqdm (both in the devcontainer's pip
+# line) — nothing in this repo imports either one. numpy IS installed explicitly
+# because convert_bad_apple.py imports it directly.
+
+# Hand-rolled rather than brew_ensure: ffmpeg spells its version flag `-version`,
+# so the helper's `--version` probe prints an empty version string. Same reason
+# the bash and python@N steps above bypass it.
+if command -v ffmpeg >/dev/null 2>&1; then
+    info "ffmpeg already present ($(ffmpeg -version 2>/dev/null | head -1))"
+else
+    info "Installing ffmpeg via Homebrew (large dependency closure — several minutes)..."
+    brew install ffmpeg
+fi
+
+if [[ -x "${TOOLS_VENV}/bin/python" ]]; then
+    info "GLIM tools venv already present (${TOOLS_VENV})"
+else
+    info "Creating the GLIM tools python venv at ${TOOLS_VENV}..."
+    "python${PYTHON_PIN}" -m venv "${TOOLS_VENV}"
+    "${TOOLS_VENV}/bin/pip" install --quiet --upgrade pip
+fi
+
+# Unconditional, and cheap: once every requirement is satisfied pip touches no
+# network and prints nothing, so re-running is also what makes a newly-added
+# package land in an existing venv.
+info "Installing the GLIM converter python dependencies..."
+"${TOOLS_VENV}/bin/pip" install --quiet Pillow numpy lz4
+
+# yt-dlp is the one package here that goes stale on its own — YouTube breaks
+# extraction on a weeks timescale, and unlike the devcontainer (whose pip line
+# re-runs on every rebuild) this venv would otherwise keep its first version
+# forever. --upgrade makes "re-run scripts/macos-setup.sh" the documented fix for
+# a GLIM download that suddenly starts failing.
+info "Installing/updating yt-dlp + the deno JS runtime..."
+"${TOOLS_VENV}/bin/pip" install --quiet --upgrade 'yt-dlp[default,deno]'
+
+# Version-stable symlink, same idea as ~/ncs/env-current.sh: scripts/tools-env.sh
+# and check-software.sh reference only this name, so bumping PYTHON_PIN at the top
+# of this file and re-running is the complete procedure (the old venv is left
+# behind rather than silently reused). -sf so a stale/broken leftover link can't
+# abort the script under set -e (`! -e` is false for a broken symlink).
+ln -sf "$(basename "${TOOLS_VENV}")" "${TOOLS_VENV_CURRENT}"
+
+# --- 11. Summary ---------------------------------------------------------------
 info "Done."
 echo
 echo "Firmware dev loop on this Mac:"
@@ -232,7 +309,14 @@ echo "  . scripts/fw-env.sh              # put west + the NCS toolchain on PATH"
 echo "  /build-proto0                    # (or the west build command it documents)"
 echo "  fw/scripts/mcumgr-flash.sh       # OTA-flash the app image over serial (no J-Link)"
 echo
+echo "GLIM asset generation on this Mac:"
+echo "  . scripts/tools-env.sh           # Pillow/numpy/lz4 + yt-dlp/ffmpeg for the converters"
+echo "  python3 fw/tools/generate_nyan_cat_glim.py --output nyan_cat.glim"
+echo
 echo "Notes:"
 echo "  - The first proto0 build configures from scratch and is very slow (tens of minutes)."
 echo "  - Twister tests (native_sim) do NOT run on macOS — use CI or the devcontainer."
+echo "  - fw-env.sh and tools-env.sh activate DIFFERENT venvs — use separate shells."
+echo "  - yt-dlp goes stale as YouTube changes; re-run this script to refresh it."
+echo "  - Copying .glim files to the board is Linux-only (see fw/CLAUDE.md, issue #367)."
 echo "  - iOS app toolchain is separate: app/scripts/macos-setup.sh"
