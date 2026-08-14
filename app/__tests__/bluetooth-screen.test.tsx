@@ -479,4 +479,92 @@ describe('BluetoothScreen', () => {
       unmount();
     });
   });
+
+  // Issue #136: on iOS first launch, CBCentralManager sits in Unknown while the
+  // Bluetooth permission prompt is up, and a scan started then dies with
+  // "BluetoothLE is in unknown state" (hardware-verified; the old fixed 2s retry
+  // died the same way). The scan must wait for PoweredOn instead.
+  it('waits for PoweredOn before scanning when the BLE stack is not ready (issue #136)', async () => {
+    const setIsScanning = jest.fn();
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      isScanning: false,
+      setIsScanning,
+    } as any);
+
+    let focusCallback: (() => void | (() => void)) | null = null;
+    jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+      focusCallback = cb;
+      return undefined as any;
+    });
+    jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+
+    (BleHook.bleManager.state as jest.Mock).mockResolvedValue('Unknown');
+    let stateListener: ((s: string) => void) | null = null;
+    const removeSub = jest.fn();
+    (BleHook.bleManager.onStateChange as jest.Mock).mockImplementation(
+      (listener: (s: string) => void, _emitCurrent: boolean) => {
+        stateListener = listener;
+        return { remove: removeSub };
+      },
+    );
+
+    const { unmount } = render(<BluetoothScreen />);
+    await act(async () => {
+      focusCallback?.();
+    });
+
+    // Stack not ready: the scan must NOT have been started, and the gate must be
+    // subscribed waiting for a state change.
+    expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
+    expect(stateListener).not.toBeNull();
+
+    // A non-terminal state keeps waiting (still no scan)...
+    await act(async () => {
+      stateListener?.('PoweredOff');
+    });
+    expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
+
+    // ...and PoweredOn releases the gate: subscription removed, scan started.
+    await act(async () => {
+      stateListener?.('PoweredOn');
+    });
+    expect(removeSub).toHaveBeenCalled();
+    expect(BleHook.bleManager.startDeviceScan).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      unmount();
+    });
+  });
+
+  it('gives up cleanly instead of waiting forever when Bluetooth is Unauthorized (issue #136)', async () => {
+    const setIsScanning = jest.fn();
+    jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+      isScanning: false,
+      setIsScanning,
+    } as any);
+
+    let focusCallback: (() => void | (() => void)) | null = null;
+    jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+      focusCallback = cb;
+      return undefined as any;
+    });
+    jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+
+    (BleHook.bleManager.state as jest.Mock).mockResolvedValue('Unauthorized');
+
+    const { unmount } = render(<BluetoothScreen />);
+    await act(async () => {
+      focusCallback?.();
+    });
+
+    // Permission denied is terminal: no scan, no state subscription to leak, and
+    // the scanning spinner is dropped so the empty state shows.
+    expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
+    expect(BleHook.bleManager.onStateChange).not.toHaveBeenCalled();
+    expect(setIsScanning).toHaveBeenLastCalledWith(false);
+
+    await act(async () => {
+      unmount();
+    });
+  });
 });

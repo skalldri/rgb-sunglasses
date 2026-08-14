@@ -258,17 +258,18 @@ smoke-test step's `BUNDLE_ID` is `com.autom8ed.rgbsunglassesapp.dev`, not the pr
 
 **iOS BLE behavior differences (all hardware-verified):**
 
-- **First-time pairing is lazy and races discovery**: iOS does NOT pair during `connectToDevice()`.
-  The app's discovery loop runs to completion on the unencrypted link with every read failing
-  `attErrorCode: 5` ("Authentication is insufficient", `errorCode: 402`) — services render as bare
-  UUIDs — and only afterwards does CoreBluetooth surface the passkey pairing dialog. After the user
-  enters the board's passkey (bonded from then on), a **disconnect + reconnect** is needed for a
-  clean, fully-named discovery pass; security elevates instantly on the bonded reconnect. Nothing is
-  wrong firmware-side when this happens (`bt_state` shows L1 during the race, L4 after re-pair).
-  NEEDS RE-VERIFICATION after the issue #232 firmware fix: the firmware now sends its SMP Security
-  Request from the `connected()` callback (before the first ATT read), which may make iOS surface
-  the pairing dialog immediately instead of after the failed discovery pass — re-test on an iPhone
-  and update this bullet with what's observed.
+- **First-time pairing leads discovery (re-verified 2026-08-13, iPhone iOS 26.6, post-#232 firmware)**:
+  the firmware sends its SMP Security Request from the `connected()` callback, and iOS surfaces the
+  passkey pairing dialog ~1 s after connect — BEFORE discovery runs. iOS holds ATT traffic while the
+  pairing is pending (passkey entry took ~14 s in testing; zero authentication/encryption errors in
+  the whole discovery pass), then discovery runs once, fully encrypted: every characteristic named
+  and valued, monitors up, **no manual disconnect+reconnect needed**. This replaces the pre-#232
+  behavior (full unauthenticated discovery pass with every read failing `attErrorCode: 5`, dialog
+  only afterwards, manual reconnect required — issue #137, now closed). If the user ignores the
+  dialog, SMP times out ~30 s in and the connect fails CLEANLY (firmware: `SMP Timeout` → disconnect
+  reason 22; app: connect error → row returns to Connect; retry works). The passkey is printed only
+  on the board's serial console (`Passkey for <addr>: NNNNNN`) — read it there and enter it on the
+  phone within the ~30 s window.
 - **ATT MTU on iOS is 293** (iPhone 15/iOS 26) — iOS negotiates on its own; `requestMTU(247)` is a
   no-op there. Comfortable headroom over Android's 247; zero `bt_att: No ATT channel for MTU`
   warnings in a multi-hour session with all 35 monitors streaming.
@@ -276,10 +277,14 @@ smoke-test step's `BUNDLE_ID` is `com.autom8ed.rgbsunglassesapp.dev`, not the pr
   working (it does work, verified) — iOS has no `requestConnectionPriority` equivalent and the
   firmware's `bt_conn_le_param_update()` still yields a 15 ms interval, so the gap is likely
   iOS-side GATT scheduling. Unoptimized as of 2026-07; measure before assuming regressions.
-- **First-launch scan fails with `BleError: BluetoothLE is in unknown state`**: the Bluetooth tab
-  starts scanning while CoreBluetooth is still initializing / the Bluetooth permission prompt is up.
-  It recovers on the next tab focus; a state-aware scan start (wait for PoweredOn) would fix it
-  properly.
+- **First-launch scan now waits for PoweredOn (issue #136, fixed)**: `startBluetoothScan` gates on
+  `bleManager.state()` / `onStateChange` before scanning, because CoreBluetooth sits in `Unknown`
+  while initializing — and on the app's very first launch the Bluetooth permission prompt holds it
+  there for as long as the user takes to answer (hardware-verified: the ungated scan AND its old
+  fixed 2 s retry both died with `BluetoothLE is in unknown state`, leaving a dead empty screen
+  until refocus). `Unauthorized`/`Unsupported` drop to the empty state instead of waiting forever;
+  `PoweredOff` waits, so flipping Bluetooth back on auto-starts the scan. The wait subscription is
+  generation-guarded and removed in the focus-effect cleanup (`stateSubRef`).
 - **`device.id` is NOT a MAC on iOS**: CoreBluetooth never exposes BLE MAC addresses; ble-plx's
   `device.id` there is an opaque per-phone peripheral UUID (can change if the bond is forgotten).
   Everything keyed off "macAddress" in the app still works (it's just an opaque key), but don't

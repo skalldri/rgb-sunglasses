@@ -18,7 +18,7 @@ import { bleManager, requestPermissions } from "@/hooks/ble-manager";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { APP_SELF_UPDATE_SUPPORTED, getCurrentAppVersion } from "@/services/app-update";
 import { Link, useFocusEffect } from "expo-router";
-import { LogLevel, ScanMode } from "react-native-ble-plx";
+import { LogLevel, ScanMode, State } from "react-native-ble-plx";
 
 // Set log level once at module load
 if (__DEV__) bleManager.setLogLevel(LogLevel.Verbose);
@@ -96,6 +96,13 @@ export default function BluetoothScreen() {
     // starts a second concurrent scan (setDevices([]) also wipes the live scan's
     // results). null when no retry is scheduled.
     const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Subscription for the wait-for-PoweredOn gate in startBluetoothScan (issue
+    // #136), kept in a ref so the focus-effect cleanup can remove it if the
+    // screen blurs while the wait is still pending - the gate's own generation
+    // checks only run when a state EVENT arrives, so without this a blur during
+    // a quiet wait would leak the subscription. null when no wait is pending.
+    const stateSubRef = useRef<{ remove: () => void } | null>(null);
 
     // Per-device last-seen timestamps (mac -> epoch ms). Kept in a ref, NOT state, so the
     // high-frequency scan callback (fires on every advertisement) doesn't re-render the
@@ -239,6 +246,59 @@ export default function BluetoothScreen() {
                 return;
             }
 
+            // Wait for the BLE stack to actually be ready before scanning (issue #136).
+            // On iOS, CBCentralManager starts in Unknown and only reaches PoweredOn
+            // asynchronously - and on the app's very FIRST launch the Bluetooth
+            // permission prompt is up during exactly this window, so the state stays
+            // Unknown for as long as the user takes to answer (hardware-verified: both
+            // the initial scan and the old fixed 2s retry died with "BluetoothLE is in
+            // unknown state" while the prompt sat unanswered). Android doesn't normally
+            // hit this because requestPermissions()' native round-trips delay the scan
+            // past adapter init, but the gate is correct on both platforms. PoweredOff
+            // also parks here, which is a UX improvement for free: flipping Bluetooth
+            // back on starts the scan without needing a tab refocus.
+            const state = await bleManager.state();
+            if (state !== State.PoweredOn) {
+                if (state === State.Unsupported || state === State.Unauthorized) {
+                    // No state event will ever deliver PoweredOn (no radio /
+                    // permission denied) - drop to the empty state instead of
+                    // spinning forever.
+                    console.log(`Bluetooth unavailable (state: ${state}) - not scanning`);
+                    setIsScanning(false);
+                    return;
+                }
+                console.log(`Bluetooth not ready (state: ${state}) - waiting for PoweredOn...`);
+                const ready = await new Promise<boolean>((resolve) => {
+                    // emitCurrentState:true re-delivers the state as of subscription,
+                    // closing the race where it flipped between state() above and here.
+                    stateSubRef.current = bleManager.onStateChange((s) => {
+                        const done = (result: boolean) => {
+                            stateSubRef.current?.remove();
+                            stateSubRef.current = null;
+                            resolve(result);
+                        };
+                        if (scanGenRef.current !== gen) {
+                            done(false);
+                        } else if (s === State.PoweredOn) {
+                            done(true);
+                        } else if (s === State.Unsupported || s === State.Unauthorized) {
+                            done(false);
+                        }
+                        // Unknown / Resetting / PoweredOff: keep waiting. If the screen
+                        // blurs with no further event, the focus-effect cleanup removes
+                        // this subscription; the suspended await simply never resumes,
+                        // which is inert (everything after it is generation-guarded).
+                    }, true);
+                });
+                if (!ready || scanGenRef.current !== gen) {
+                    if (scanGenRef.current === gen) {
+                        setIsScanning(false);
+                    }
+                    return;
+                }
+                console.log('Bluetooth powered on - starting scan');
+            }
+
             registerScanCallback(gen);
 
             // Check if any devices are already paired with the OS with the "Core Config Service" UUID
@@ -359,6 +419,12 @@ export default function BluetoothScreen() {
                 if (retryTimerRef.current) {
                     clearTimeout(retryTimerRef.current);
                     retryTimerRef.current = null;
+                }
+                // Remove a pending wait-for-PoweredOn subscription (issue #136) so a
+                // blur during a quiet wait can't leak it into the next focus session.
+                if (stateSubRef.current) {
+                    stateSubRef.current.remove();
+                    stateSubRef.current = null;
                 }
                 if (pruneTimerRef.current) {
                     clearInterval(pruneTimerRef.current);
