@@ -1,5 +1,5 @@
-import { IconSymbol } from "@/components/ui/icon-symbol";
 import { AppButton } from "@/components/ui/app-button";
+import { IconSymbol } from "@/components/ui/icon-symbol";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";

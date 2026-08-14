@@ -19,12 +19,12 @@ import {
 } from "@/constants/bluetooth";
 import { CharacteristicInfo, useBluetooth } from "@/context/bluetooth-context";
 import { bleManager } from "@/hooks/ble-manager";
+import { describeConnectError } from "@/services/ble-errors";
 import {
     startConnectionService,
     stopConnectionService,
     updateConnectionNotification,
 } from "@/services/ble-foreground-service";
-import { describeConnectError } from "@/services/ble-errors";
 import { decodeUint32FromBase64, decodeUtf8FromBase64, MetadataBlobEntry, parseMetadataBlob } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useCallback, useEffect, useRef, useState } from "react";

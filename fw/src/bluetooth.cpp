@@ -510,10 +510,11 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
     // promote via `int tmp = arg + 0;`; enums have no such overload, so the promotion
     // has to happen here. Applies to EVERY enum logged from C++ in this codebase - see
     // fw/CLAUDE.md, "Logging an enum from C++ prints garbage without an (int) cast".
+    // Cast type matches each specifier: (unsigned) for %u, (int) for %d.
     if (!err) {
-        LOG_INF("Security changed: %s level %u", addr, (int)level);
+        LOG_INF("Security changed: %s level %u", addr, (unsigned)level);
     } else {
-        LOG_ERR("Security failed: %s level %u err %d", addr, (int)level, (int)err);
+        LOG_ERR("Security failed: %s level %u err %d", addr, (unsigned)level, (int)err);
     }
 
     BtThreadCommand cmd;
