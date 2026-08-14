@@ -230,7 +230,17 @@ smoke-test step's `BUNDLE_ID` is `com.autom8ed.rgbsunglassesapp.dev`, not the pr
 
 ### Physical-iPhone dev builds + BLE (verified 2026-07-11, iPhone 15 / iOS 26.5, Xcode 26.2)
 
-**Deploying a local dev build to a physical iPhone** (`npx expo run:ios --device <UDID>`):
+**Deploying a local dev build to a physical iPhone — use `app/scripts/launch-app-ios.sh --device <UDID>`,
+never a bare `npx expo run:ios`.** The wrapper is the iOS sibling of `launch-app.sh`: it verifies the
+`app` hardware lock (agent sessions), always re-runs `expo prebuild --platform ios` (incremental) so
+config-plugin output lands no matter how old the checked-out `ios/` is, and then **asserts the Debug
+configuration carries the `.dev` bundle id before building** — refusing loudly otherwise. That assert
+exists because of a real incident (2026-08-13): a bare `expo run:ios` against a stale `ios/` predating
+`withDevVariantIos` built Debug under the PRODUCTION bundle id and silently replaced the TestFlight
+install on the shared iPhone. (Verified: the incremental prebuild fully retrofits even a tree that
+predates the #320 rename — such a tree keeps its old `RGBSunglasses.*` project name, which is why the
+wrapper globs `ios/*.xcodeproj` rather than hardcoding a name.) Run it as a harness-managed background
+task, same as the Android wrapper.
 
 - Pass the **traditional hardware UDID** from `xcrun xctrace list devices` (`00008120-…`), NOT the
   CoreDevice UUID that `xcrun devicectl list devices` prints — Expo CLI doesn't match the latter.
