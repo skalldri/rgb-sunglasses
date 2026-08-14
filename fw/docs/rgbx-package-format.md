@@ -107,10 +107,42 @@ failure:
    functions, globals, locals, memory, metering, and fully compile the module in
    the `K_USER` Wasm sandbox.
 
+## SHA-256 adapter
+
+`rgbx_package::verifySha256Psa()` is the production crypto adapter for the
+parser callback. It calls PSA `psa_hash_compare()` directly and maps every PSA
+error or digest mismatch to a closed admission failure. The platform must have
+initialized PSA Crypto before validation starts; the adapter does not initialize
+crypto, allocate memory, log package contents, or provide a fallback hash.
+
+The adapter and parser currently compile only in the dedicated ARM QEMU test
+image. That image checks the standard SHA-256 `abc` vector, admits a genuinely
+SHA-sealed package, and rejects changes in the manifest, Wasm payload, or digest
+trailer.
+
 The first parser implementation is intentionally not linked into production.
 The dual-runtime image is too close to its flash and RAM stop-loss. Filesystem
 loading and execution remain disabled until an independently reviewed promotion
 packet either recovers enough measured capacity or retires LLEXT.
+
+## Production promotion checklist
+
+- Independently review integer bounds, pointer formation, canonical-CBOR
+  behavior, digest coverage, policy enforcement, and parser stack use.
+- Copy the candidate into one bounded staging buffer and validate that immutable
+  snapshot. Do not validate one file view and execute another.
+- Require exact read length and file size before parsing. Short reads, growth,
+  replacement, padding, and concatenated packages fail the transaction.
+- Enable canonical zcbor support only with the reviewed production parser wiring
+  and attribute its measured flash and RAM cost.
+- Inspect and fully compile the Wasm module inside the unprivileged sandbox before
+  changing the registry, active extension, persistent settings, or installed-file
+  state.
+- Keep package bytes and digests out of ordinary logs. Report only bounded result
+  codes and the already-reviewed extension identity after successful admission.
+- Preserve at least 64 KiB free app-core flash and 24 KiB free app-core RAM, or
+  retire enough LLEXT code and data to restore those margins before enabling the
+  path.
 
 ## LLEXT retirement
 

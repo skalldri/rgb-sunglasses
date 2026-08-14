@@ -9,6 +9,7 @@ set(FW_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../..)
 target_sources(app PRIVATE
   src/main.cpp
   ${FW_ROOT}/src/extensions/rgbx_package.cpp
+  ${FW_ROOT}/src/extensions/rgbx_package_psa.cpp
 )
 
 target_include_directories(app PRIVATE ${FW_ROOT}/src)

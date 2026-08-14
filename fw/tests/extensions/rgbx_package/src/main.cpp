@@ -1,4 +1,6 @@
 #include <extensions/rgbx_package.h>
+#include <extensions/rgbx_package_psa.h>
+#include <psa/crypto.h>
 #include <zcbor_common.h>
 #include <zcbor_encode.h>
 #include <zephyr/ztest.h>
@@ -149,6 +151,17 @@ void seal(std::vector<uint8_t>& package) {
     std::memcpy(package.data() + coveredSize, digest.data(), digest.size());
 }
 
+void sealSha256(std::vector<uint8_t>& package) {
+    const size_t coveredSize = package.size() - rgbx_package::kDigestSize;
+    std::array<uint8_t, rgbx_package::kDigestSize> digest{};
+    size_t digestSize = 0;
+    const psa_status_t status = psa_hash_compute(PSA_ALG_SHA_256, package.data(), coveredSize,
+                                                 digest.data(), digest.size(), &digestSize);
+    zassert_equal(status, PSA_SUCCESS, "PSA SHA-256 fixture sealing failed: %d", status);
+    zassert_equal(digestSize, digest.size());
+    std::memcpy(package.data() + coveredSize, digest.data(), digest.size());
+}
+
 struct DigestObservation {
     const uint8_t* covered = nullptr;
     size_t coveredSize = 0;
@@ -195,9 +208,67 @@ Result validateSpec(const ManifestSpec& spec) {
     return validate(package, out);
 }
 
+void* setupSuite() {
+    const psa_status_t status = psa_crypto_init();
+    zassert_equal(status, PSA_SUCCESS, "PSA Crypto initialization failed: %d", status);
+    return nullptr;
+}
+
 }  // namespace
 
-ZTEST_SUITE(rgbx_package, nullptr, nullptr, nullptr, nullptr, nullptr);
+ZTEST_SUITE(rgbx_package, nullptr, setupSuite, nullptr, nullptr, nullptr);
+
+ZTEST(rgbx_package, test_psa_sha256_verifier_matches_standard_vector) {
+    constexpr std::array<uint8_t, 3> kMessage = {'a', 'b', 'c'};
+    constexpr std::array<uint8_t, rgbx_package::kDigestSize> kExpected = {
+        0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40,
+        0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17,
+        0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+    };
+
+    zassert_true(
+        rgbx_package::verifySha256Psa(nullptr, kMessage.data(), kMessage.size(), kExpected.data()));
+
+    auto wrong = kExpected;
+    wrong[0] ^= 0x01;
+    zassert_false(
+        rgbx_package::verifySha256Psa(nullptr, kMessage.data(), kMessage.size(), wrong.data()));
+    zassert_false(
+        rgbx_package::verifySha256Psa(nullptr, nullptr, kMessage.size(), kExpected.data()));
+    zassert_false(
+        rgbx_package::verifySha256Psa(nullptr, kMessage.data(), kMessage.size(), nullptr));
+}
+
+ZTEST(rgbx_package, test_psa_sha256_admits_package_and_rejects_every_tampered_region) {
+    const auto manifest = encodeManifest(ManifestSpec{});
+    auto package = buildPackage(manifest);
+    sealSha256(package);
+    rgbx_package::PackageView out{};
+
+    zassert_equal(rgbx_package::validate(package.data(), package.size(), policy(),
+                                         rgbx_package::verifySha256Psa, nullptr, out),
+                  Result::Ok);
+
+    auto tamperedHeader = package;
+    writeLe32(tamperedHeader.data() + 8, static_cast<uint32_t>(manifest.size() - 1));
+    writeLe32(tamperedHeader.data() + 12, static_cast<uint32_t>(validWasm().size() + 1));
+    zassert_equal(rgbx_package::validate(tamperedHeader.data(), tamperedHeader.size(), policy(),
+                                         rgbx_package::verifySha256Psa, nullptr, out),
+                  Result::DigestMismatch);
+
+    const std::array<size_t, 3> coveredOffsets = {
+        rgbx_package::kHeaderSize,
+        package.size() - rgbx_package::kDigestSize - 1,
+        package.size() - 1,
+    };
+    for (const size_t offset : coveredOffsets) {
+        auto tampered = package;
+        tampered[offset] ^= 0x01;
+        zassert_equal(rgbx_package::validate(tampered.data(), tampered.size(), policy(),
+                                             rgbx_package::verifySha256Psa, nullptr, out),
+                      Result::DigestMismatch);
+    }
+}
 
 ZTEST(rgbx_package, test_valid_golden_package_copies_metadata_and_views) {
     const auto manifest = encodeManifest(ManifestSpec{});
