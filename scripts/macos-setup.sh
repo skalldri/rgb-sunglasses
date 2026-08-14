@@ -301,33 +301,33 @@ info "Installing/updating yt-dlp + the deno JS runtime..."
 # abort the script under set -e (`! -e` is false for a broken symlink).
 ln -sf "$(basename "${TOOLS_VENV}")" "${TOOLS_VENV_CURRENT}"
 
-# --- 11. Headless-CI policies (board disk access, issue #367) ------------------
+# --- 11. Headless-CI policy checks (board disk access, issue #367) -------------
 # loginwindow blocks disk mounts and EJECTS newly-appearing disks whenever its
 # lock shield is up — and the shield engages on DISPLAY DIM
 # (kLWLockFromDisplayDim), not just an explicit lock. Two measured facts govern
 # what helps here (2026-08-13, on this Mac Mini):
-#   - AutomountDisksWithoutUserLogin does NOT stop the lock-shield eject (tested:
-#     identical dissent 0xF8DA0008 + eject with it set). It is still set below
-#     because it covers the OTHER headless case — mounting disks when nobody has
-#     logged in at all, e.g. after a power cycle. (SIP blocks kickstarting
-#     diskarbitrationd, so it fully applies from the next macOS reboot.)
 #   - `pmset -a displaysleep 0` is what actually keeps the disk reachable: the
 #     display never dims, so the shield (and its DA blockers) never re-arm.
-# Sudo steps; each is idempotent and non-fatal if declined.
+#   - AutomountDisksWithoutUserLogin does NOT stop the lock-shield eject (tested:
+#     identical dissent 0xF8DA0008 + eject with it set); it covers the OTHER
+#     headless case — mounting disks when nobody has logged in at all, e.g.
+#     after a power cycle. (SIP blocks kickstarting diskarbitrationd, so it
+#     applies fully from the next macOS reboot.)
+# These are machine-wide, security-relevant settings, so this script only
+# CHECKS them and RECOMMENDS the command — it never modifies machine
+# configuration itself (owner decision, 2026-08-13). No sudo anywhere here.
 if [ "$(defaults read /Library/Preferences/SystemConfiguration/autodiskmount AutomountDisksWithoutUserLogin 2>/dev/null)" = "1" ]; then
     info "AutomountDisksWithoutUserLogin already enabled"
 else
-    info "Enabling AutomountDisksWithoutUserLogin (mount with no user logged in — needs sudo)..."
-    sudo defaults write /Library/Preferences/SystemConfiguration/autodiskmount AutomountDisksWithoutUserLogin -bool true \
-        || warn "sudo declined — disks won't mount when no user is logged in."
+    warn "disks will not mount when no user is logged in (post-power-cycle headless case)."
+    warn "  to enable: sudo defaults write /Library/Preferences/SystemConfiguration/autodiskmount AutomountDisksWithoutUserLogin -bool true"
 fi
 
 if pmset -g 2>/dev/null | grep -qE '^[[:space:]]*displaysleep[[:space:]]+0([[:space:]]|$)'; then
     info "Display sleep already disabled"
 else
-    info "Disabling display sleep (display dim re-arms the disk-eject shield — needs sudo)..."
-    sudo pmset -a displaysleep 0 \
-        || warn "sudo declined — the board's disk will vanish whenever the display dims (#367)."
+    warn "display dim arms the disk-eject shield (#367) — the board's disk will vanish when the display dims."
+    warn "  to disable display sleep: sudo pmset -a displaysleep 0"
 fi
 
 # --- 12. Summary ---------------------------------------------------------------
