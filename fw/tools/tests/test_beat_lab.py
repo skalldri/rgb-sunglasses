@@ -91,6 +91,56 @@ class TestCodec:
         assert np.array_equal(back, samples)
 
 
+def _write_capture_sidecar(path, lines):
+    """Write a byte-exact replica of the firmware's <wav>.audio.csv.
+
+    The shape matters, not just the field order: the capture writer pads the
+    #PARAMS line with spaces out to a full 4096-byte FAT sector so every
+    subsequent chunk write lands sector-aligned (a misaligned flush stalls the
+    drain loop long enough to drop audio frames — see fw/src/sound/sound.cpp).
+    Nothing else that produces this format pads anything, so the padding is
+    exercised nowhere else in this suite.
+    """
+    params, *rest = lines
+    with open(path, "w") as f:
+        f.write(params.ljust(4095) + "\n")
+        f.write("".join(line + "\n" for line in rest))
+
+
+class TestCaptureSidecar:
+    """The <wav>.audio.csv written beside every capture on a stock build."""
+
+    def test_parses_sector_padded_sidecar(self, tmp_path):
+        p = tmp_path / "cap_0001.wav.audio.csv"
+        _write_capture_sidecar(p, _make_dump_lines(n=30, buckets=True))
+        d = frames.parse_dump(str(p))
+
+        assert len(d.seq) == 30
+        assert d.frames_reported == 30 and d.dropped == 0
+        # Captures always include the buckets: the firmware calls the formatter
+        # with buckets=true, so a 21-field sidecar means something regressed.
+        assert d.buckets is not None
+        assert d.buckets.shape == (30, frames.NUM_BUCKETS)
+        assert d.params["gain"] == 0x28
+        assert d.params["attack"] == 3 and d.params["release"] == 15
+
+    def test_gain_column_tracks_a_live_agc(self, tmp_path):
+        # The reason this file exists. A capture started from the phone runs
+        # with the AGC live, so the gain steps mid-recording and the recorded
+        # samples already contain those steps — the per-frame gain column is
+        # the only record of them, and a host cannot recover it from the WAV.
+        lines = _make_dump_lines(n=6, buckets=True)
+        gains = [0x28, 0x28, 0x2A, 0x2A, 0x2C, 0x26]
+        rows = [
+            row.replace(f",{0x28:02x},", f",{g:02x},", 1)
+            for row, g in zip(lines[1:-1], gains)
+        ]
+        _write_capture_sidecar(tmp_path / "c.audio.csv", [lines[0], *rows, lines[-1]])
+
+        d = frames.parse_dump(str(tmp_path / "c.audio.csv"))
+        assert list(d.gain) == gains
+
+
 class TestEvaluate:
     def test_perfect_score(self):
         ref = np.array([1.0, 2.0, 3.0])

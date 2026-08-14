@@ -164,10 +164,12 @@ TOOLS = [
         description=(
             "Record a REAL audio + IMU capture for use as a simulator scenario "
             "(`sound mic record_wav`, which also writes a synchronised .imu.csv "
-            "sidecar). Both streams are timestamped from the same t0 by the one "
+            "sidecar and, on a build with CONFIG_APP_CAPTURE_AUDIO_SIDECAR, a "
+            "per-frame .audio.csv of the analysis the DSP computed for those "
+            "samples). All streams are timestamped from the same t0 by the one "
             "capture loop, so they need no host-side alignment. Freezes AGC gain "
             "during the capture so the stimulus is reproducible. Afterwards, pull "
-            "the .wav and .imu.csv off the USB mass-storage disk and run "
+            "the .wav and its sidecars off the USB mass-storage disk and run "
             "fw/tools/capture_to_scenario.py to emit the scenario JSON. Full "
             "procedure: the /capture-scenario skill."
         ),
@@ -178,7 +180,10 @@ TOOLS = [
                 "duration_s": {"type": "integer", "minimum": 1, "maximum": 120},
                 "name": {
                     "type": "string",
-                    "description": "capture name; files land at /NAND:/<name>.wav(+.imu.csv)",
+                    "description": (
+                        "capture name; files land at "
+                        "/NAND:/<name>.wav (+.imu.csv, +.audio.csv)"
+                    ),
                 },
                 "gain": {
                     "type": "string",
@@ -403,13 +408,26 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
                     + f" (agc_restored={restored})")
 
     imu = re.search(r"IMU sidecar: (\d+) samples", output)
+    audio = re.search(r"Audio sidecar: (\d+) frames", output)
     result = {
         "wav_path": path,
         "imu_csv_path": path + ".imu.csv",
-        "analysis_csv_path": path + ".csv",
         "imu_samples": int(imu.group(1)) if imu else 0,
         "agc_restored": restored,
     }
+    # Which analysis sidecar exists — and under which name — depends on the
+    # firmware's record_wav path, so take it from what the firmware said rather
+    # than assuming. A stock build's capture path announces "Audio sidecar: N
+    # frames" and writes "<wav>.audio.csv"; a CONFIG_APP_AUDIO_DEBUG build's
+    # rich tap writes "<wav>.csv" and reports io retries. This used to report
+    # "<wav>.csv" unconditionally, which on a stock build named a file that was
+    # never written — worse than reporting none, since every consumer
+    # downstream then fails on a missing path.
+    if audio:
+        result["analysis_csv_path"] = path + ".audio.csv"
+        result["analysis_frames"] = int(audio.group(1))
+    elif "io retries" in output:
+        result["analysis_csv_path"] = path + ".csv"
     if not imu:
         # CONFIG_IMU off, or the sidecar could not be opened. The WAV is still
         # usable; the scenario just has no IMU track.

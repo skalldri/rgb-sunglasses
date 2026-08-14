@@ -21,10 +21,19 @@ constexpr const char *kDir = "/NAND:";
 constexpr const char *kPrefix = "cap_";
 constexpr const char *kSuffix = ".wav";
 
-/* Bytes per second of capture: 16 kHz mono 16-bit WAV plus the IMU sidecar at
- * 25 Hz. Used to turn free space into a recordable-seconds figure the app can
- * show, and to clamp a requested limit to what will actually fit. */
-constexpr uint32_t kBytesPerSecond = 16000u * 2u + 1400u;
+/* Bytes per second of capture: 16 kHz mono 16-bit WAV, plus the IMU sidecar at
+ * 25 Hz, plus (when enabled) the audio-analysis sidecar at 31.25 frames/s. Used
+ * to turn free space into a recordable-seconds figure the app can show, and to
+ * clamp a requested limit to what will actually fit.
+ *
+ * The analysis figure is a rate, not a guess: a 41-field D-line is 38 hex-encoded
+ * floats at 9 bytes each plus ~17 bytes of prefix and newline, so ~360 B per
+ * 32 ms frame. It has to be counted here or the app offers capture lengths the
+ * volume cannot hold — this constant is the only thing behind both the Remaining
+ * S readout and the clamp capture_start() applies. */
+constexpr uint32_t kAudioSidecarBytesPerSecond =
+    IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) ? 11250u : 0u;
+constexpr uint32_t kBytesPerSecond = 16000u * 2u + 1400u + kAudioSidecarBytesPerSecond;
 
 /* Headroom left unclaimed so a capture cannot fill the volume to the point where
  * the filesystem itself struggles — the same instinct as record_wav's own check,

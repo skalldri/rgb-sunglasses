@@ -29,9 +29,12 @@ goldens, the CI smoke list — works on it unchanged.
 - **Firmware built from a tree containing the IMU sidecar** (`imu_tap_q` in
   `fw/src/imu/imu.cpp`). Older firmware records the WAV but no `.imu.csv`, and the
   capture silently comes out audio-only.
-- **Disk space.** The WAV is ~32 KB/s and the sidecar ~1.4 KB/s into a 6.9 MiB volume,
-  so **~3 minutes is the hard ceiling** and 20–30 s is the useful range. `record_wav`
-  fails early if the volume cannot hold the capture.
+- **Disk space.** The WAV is ~32 KB/s, the IMU sidecar ~1.4 KB/s and the analysis
+  sidecar ~11 KB/s into a 6.9 MiB volume, so **~160 s is the hard ceiling** and 20–30 s
+  is the useful range. `record_wav` fails early if the volume cannot hold the capture,
+  and `capture status` reports the recordable seconds left. Building with
+  `CONFIG_APP_CAPTURE_AUDIO_SIDECAR=n` drops the analysis file and puts the ceiling
+  back near 180 s.
 
 ## 1. Record
 
@@ -44,16 +47,20 @@ mcp__serial__rgb_sunglasses_capture_scenario(
 ```
 
 Play the music and do the movement **during** those seconds — the whole point is that
-the stimulus is real. Returns `wav_path`, `imu_csv_path` and `imu_samples`.
+the stimulus is real. Returns `wav_path`, `imu_csv_path`, `imu_samples`, and —
+when the firmware wrote one — `analysis_csv_path` + `analysis_frames`.
 
 **Away from a laptop, use the companion app instead.** Controls → Capture starts and stops
 the same worker over BLE (`capture start`/`capture stop` and the GATT Capture service are two
 front ends onto one implementation), so a capture can be taken in the field and collected
 later. The phone never downloads anything — captures accumulate on `/NAND:` as
-`cap_NNNN.wav` + `.imu.csv` and step 2 is unchanged. The app's Length picker writes the
-persisted limit; the device clamps it to what the volume can still hold and the screen shows
-the clamped figure before you start. Note the app path does **not** freeze AGC gain the way
-the MCP tool does — for a reproducible stimulus, prefer the tool.
+`cap_NNNN.wav` + `.imu.csv` + `.audio.csv` and step 2 is unchanged. The app's Length picker
+writes the persisted limit; the device clamps it to what the volume can still hold and the
+screen shows the clamped figure before you start. Note the app path does **not** freeze AGC
+gain the way the MCP tool does — for a reproducible stimulus, prefer the tool. What the app
+path *does* give you is `<wav>.audio.csv`, the per-frame analysis (gain, beats, spectrogram)
+the DSP computed for those samples, which is the only way to reconstruct what the detector
+saw across a live-AGC recording — see `fw/docs/beat-detection-debugging.md`.
 
 **Check `imu_samples` is roughly `25 × duration_s`.** Zero means the sidecar never
 opened (firmware without `CONFIG_IMU`, or a full disk) and the scenario would be
@@ -123,9 +130,11 @@ executed when someone types its name.
 - **The board must be worn or moved for the IMU track to mean anything.** A capture
   taken with the glasses flat on a desk has a valid IMU track that is a constant
   gravity vector — which looks fine in the JSON and teaches nothing.
-- **`sound dump` is a different tool.** It streams analysis D-lines for beat-detection
-  work (`fw/docs/beat-detection-debugging.md`) and has no IMU. Use it when tuning the
-  detector; use this when you need a stimulus.
+- **`sound dump` is a different tool.** It streams the same analysis D-lines this
+  capture now writes to `<wav>.audio.csv`, but live to the console, with no audio and
+  no IMU, and only on a `CONFIG_APP_AUDIO_DEBUG=y` build
+  (`fw/docs/beat-detection-debugging.md`). Use it to watch the detector while you turn
+  a knob; use this when you need a stimulus you can replay.
 - **Do not reformat or write to the NAND disk while the firmware has it mounted.**
 - After fetching, reset the board if you also *wrote* to the disk — the firmware's
   cached FAT will not see host-side changes.

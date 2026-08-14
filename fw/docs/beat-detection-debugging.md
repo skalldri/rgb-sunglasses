@@ -35,12 +35,19 @@ grep CONFIG_APP_AUDIO_DEBUG fw/build/fw/zephyr/include/generated/zephyr/autoconf
 ```
 
 **What still works with it OFF** — the whole tuning surface, just not the
-measurement one: `sound dsp params` / `sound dsp set` (every detector tunable),
-`sound agc status|gate|rate|attack|release`, `sound rms`, the BLE `audio/`
-characteristics, and `sound mic record_wav` itself (it falls back to a direct
-raw capture, so you still get a WAV — without the analysis sidecar). What you
-lose: `sound dump`, `sound agc freeze`, `sound agc gain`, and the sidecar CSV —
-i.e. only device-vs-host replay comparison needs `=y`.
+console measurement one: `sound dsp params` / `sound dsp set` (every detector
+tunable), `sound agc status|gate|rate|attack|release`, `sound rms`, the BLE
+`audio/` characteristics, and `sound mic record_wav` itself. What you lose:
+`sound dump`, `sound agc freeze` and `sound agc gain`.
+
+**A per-frame analysis sidecar is NOT one of the things you lose.** A stock
+build's capture path writes `<wav>.audio.csv` under
+`CONFIG_APP_CAPTURE_AUDIO_SIDECAR` (`default y`), in the same format, so
+device-vs-host comparison works on a shipping image. Two differences from the
+`=y` sidecar worth knowing: it is named `.audio.csv` rather than `.csv`, and it
+always carries the display buckets (41 fields, not 21). What `=y` still buys is
+the console tools and the ability to pin the gain — without `sound agc freeze`
+you cannot record a *fixed-gain* clip, which is what the corpus below wants.
 
 ## Pieces
 
@@ -49,6 +56,7 @@ i.e. only device-vs-host replay comparison needs `=y`.
 | Audio tap | `sound.cpp` (`audio_tap_q`) | DSP thread tees each 512-sample PCM block + `audio_analysis_result` into a 16-deep queue when armed; `record_wav`/`dump` drain it. The DSP thread stays the only `dmic_read()` consumer. |
 | `sound mic record_wav [s] [path]` | shell | Writes WAV (+ sidecar `.csv` with one D-line per frame) to `/NAND:` from the tap. Sector-aligned batched writes (JUNK-chunk-padded WAV header) — a 30 s capture runs at 0 dropped frames; transient QSPI errors are retried (close/reopen clears FatFS's sticky error flag). 180 s hard cap + an upfront free-space check; 30–60 s is the working size. An aborted capture prints `ABORTED: capture incomplete` and returns an error (the MCP tool reports `record_failed`). When the DSP thread isn't streaming (boot failure diagnosis) — or with `CONFIG_APP_AUDIO_DEBUG=n` — it falls back to a direct raw capture (WAV only, no sidecar), so mic capture exists in every build. |
 | `sound dump <frames> [buckets]` | shell | Streams live D-lines to the console (no MSC roundtrip). |
+| Capture analysis sidecar | `sound.cpp` (`audio_sidecar`), `CONFIG_APP_CAPTURE_AUDIO_SIDECAR` (**default y**) | `<wav>.audio.csv` beside every capture on the *stock* build — same `#PARAMS` + `D,` format as `sound dump`, buckets always included (41 fields). Fed by a second small tap (`capture_analysis_q`) drained in lockstep with the PCM one, so rows and WAV blocks share an index. ~6 KB RAM, ~11 KB/s of volume. This is what makes a phone-started capture analysable — see below. |
 | `sound agc freeze [on\|off]` / `sound agc gain <0..0x50>` | shell | Freeze AGC / set PDM gain directly (gain implies freeze). **Record with frozen gain** — a mid-capture gain step makes device-vs-host comparison impossible. |
 | `sound dsp params` / `sound dsp set <gamma\|floor\|alpha\|refractory\|sf_delta\|mode> <v>` | shell | Read/write the detector parameters (same values as the BLE `audio/` characteristics; persisted). `mode` selects the adaptive-threshold shape: 0 = `mean + alpha*sigma` (default), 1 = `median + sf_delta`. Switching modes takes effect on the next frame, so a live A/B needs no reflash. |
 | Replay harness | `fw/tests/sound/audio_dsp_replay/` | native_sim app compiling the **real** `audio_dsp.cpp`; env-driven (`BEAT_WAV`, `BEAT_GAMMA/ALPHA/FLOOR/REFRACTORY`, `BEAT_SF_DELTA`, `BEAT_THRESHOLD_MODE`, `BEAT_AGC=off\|sim`, `BEAT_GAIN`, `BEAT_OUT`, `BEAT_BUCKETS`). Its Twister scenario self-tests in CI. |
@@ -111,7 +119,20 @@ that one of the current three cannot be tempo-tracked at all.
 
 The sidecar it adds (`<wav>.imu.csv`) is a separate file on purpose: `parseDLines`
 accepts exactly 21 or 41 fields per `D,` row, so widening the analysis CSV would
-break every consumer in this directory.
+break every consumer in this directory. The analysis sidecar
+(`<wav>.audio.csv`) is separate for the same reason, and stays inside that 41-field
+arity rather than adding columns — which is why the AGC noise-gate `silent` flag
+is not in it. Approximate it from the row's RMS against `gate=` in `#PARAMS`.
+
+**A capture started from the phone is now worth analysing.** That path does not
+freeze the AGC — a field recording has to take the room as it finds it — so its
+gain steps mid-capture, and the recorded samples already contain those steps.
+Re-deriving features on the host from the WAV alone therefore cannot reproduce
+what the device saw. `<wav>.audio.csv`'s per-frame gain column is the missing
+piece; replay with `--params-from` and the gain column, not with a single
+`--gain`. `compare.py`'s notion of a PASS still assumes a constant gain, so a
+live-AGC capture is for *reading* what the detector did, not for re-validating
+the harness — use a frozen-gain bench clip for that.
 
 ## The corpus
 

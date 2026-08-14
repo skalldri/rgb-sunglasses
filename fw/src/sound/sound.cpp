@@ -16,10 +16,18 @@
 #include <algorithm>
 
 #include "audio_dsp.h"
-#if defined(CONFIG_APP_AUDIO_DEBUG)
+#if defined(CONFIG_APP_AUDIO_DEBUG) || defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
 #include "audio_tap_format.h"
 #endif
 #include "sound.h"
+
+/* Both frame-dump producers — the CONFIG_APP_AUDIO_DEBUG rich tap and the
+ * capture path's analysis sidecar — share one formatter and one #PARAMS
+ * snapshot, so this spells the union once instead of repeating the pair of
+ * symbols at every shared piece below. */
+#if defined(CONFIG_APP_AUDIO_DEBUG) || defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+#define APP_AUDIO_TAP_FORMAT_USED 1
+#endif
 
 /* ── Adaptive Gain Control ───────────────────────────────────────────────────
  * Decision policy lives in AgcController (agc_controller.{h,cpp}): asymmetric
@@ -292,6 +300,27 @@ K_MSGQ_DEFINE(capture_pcm_q, sizeof(struct capture_pcm_block),
               CONFIG_APP_CAPTURE_QUEUE_FRAMES, 4);
 static atomic_t s_capture_armed;
 static atomic_t s_capture_dropped;
+
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+/* Analysis for the same blocks, carried in a SECOND queue rather than as extra
+ * members of capture_pcm_block. The drain loop gets each PCM block by handing
+ * k_msgq_get() the address of its slot inside the sector-aligned WAV batch — no
+ * staging copy at all — and a wider entry would land the analysis bytes on top
+ * of the next block's slot. Splitting the streams keeps that loop and its 4 KB
+ * batch exactly as they were; the cost is one small queue (~164 B x
+ * CONFIG_APP_CAPTURE_QUEUE_FRAMES) instead of a second 1 KB staging block.
+ *
+ * The two queues stay index-aligned because the producer only publishes here
+ * after the PCM put succeeded, so a queue-full drop drops both halves of a
+ * frame. Rows still carry the DSP's seq, so a host can see the gap regardless. */
+struct capture_analysis_block {
+    struct audio_analysis_result result;
+    float rms;
+    uint8_t gain; /* pre-step: the gain this block was captured at */
+};
+K_MSGQ_DEFINE(capture_analysis_q, sizeof(struct capture_analysis_block),
+              CONFIG_APP_CAPTURE_QUEUE_FRAMES, 4);
+#endif /* CONFIG_APP_CAPTURE_AUDIO_SIDECAR */
 #endif /* CONFIG_APP_CAPTURE */
 
 /* Set once the DSP thread's capture loop is actually streaming; lets shell
@@ -576,6 +605,26 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
             if (k_msgq_put(&capture_pcm_q, pcm, K_NO_WAIT) != 0) {
                 atomic_inc(&s_capture_dropped);
             }
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+            else {
+                /* Only after the PCM landed — see the queue's comment. Both
+                 * queues are the same depth and are drained one entry each per
+                 * iteration, so this cannot fail while the PCM put succeeded;
+                 * the drop counter covers it if that ever stops being true.
+                 *
+                 * Static, not stack, for the same reason as the rich tap's
+                 * frame above: this thread runs on 2 KB and the neighbouring
+                 * code already treats that as tight. Safe because this thread
+                 * is the only producer. */
+                static struct capture_analysis_block a;
+                a.result = result;
+                a.rms = rms;
+                a.gain = s_agc_gain;
+                if (k_msgq_put(&capture_analysis_q, &a, K_NO_WAIT) != 0) {
+                    atomic_inc(&s_capture_dropped);
+                }
+            }
+#endif
         }
 #endif
 
@@ -912,17 +961,13 @@ static void imu_sidecar_close(struct imu_sidecar *sc, const struct shell *shell)
 #endif /* CONFIG_IMU */
 
 
-#if defined(CONFIG_APP_AUDIO_DEBUG)
+#if defined(APP_AUDIO_TAP_FORMAT_USED)
 /* Tap frame text format: field order lives in audio_tap_format.h (shared with
- * the host replay harness so the two producers can never drift; decoder in
- * fw/tools/beat_lab/frames.py). The wrappers below just bind the firmware's
- * data sources (tap frame struct, config providers, AGC state). */
-static size_t tap_frame_format(const struct audio_tap_frame *f, bool buckets, char *buf,
-                               size_t cap) {
-    return audio_tap_format_frame(&f->result, f->rms, f->gain, buckets, buf, cap);
-}
-
-/* Renders the #PARAMS snapshot line (no trailing newline); returns its length.
+ * the host replay harness so the producers can never drift; decoder in
+ * fw/tools/beat_lab/frames.py). The wrappers here just bind the firmware's
+ * data sources (config providers, AGC state).
+ *
+ * Renders the #PARAMS snapshot line (no trailing newline); returns its length.
  * Params can be changed at runtime (BLE/shell) — captures assume they stay
  * stable for the duration; this snapshot is what the replay harness replays with. */
 static size_t tap_params_format(char *buf, size_t cap) {
@@ -936,6 +981,182 @@ static size_t tap_params_format(char *buf, size_t cap) {
                                    sAgcProvider->getReleaseFrames(),
                                    sAgcProvider->getNoiseGateRms(), dsp->getSfDelta(),
                                    dsp->getThresholdMode(), buf, cap);
+}
+#endif /* APP_AUDIO_TAP_FORMAT_USED */
+
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+/* Audio-analysis sidecar: "<wav path>.audio.csv", written by the capture loop
+ * from capture_analysis_q — the analysis the DSP thread computed for the very
+ * blocks going into the WAV.
+ *
+ * This is what makes an app-triggered capture usable. That path deliberately
+ * does not freeze the AGC (a field recording has to cope with whatever it
+ * meets), so its gain steps mid-capture and the recorded samples already
+ * contain those steps. Re-deriving the features on the host from the WAV alone
+ * therefore cannot reproduce what the device saw; the per-frame gain column is
+ * the missing piece that makes the replay harness applicable at all.
+ *
+ * Same wire format as "sound dump" and the CONFIG_APP_AUDIO_DEBUG sidecar
+ * (audio_tap_format.h), buckets included — 41 fields, an arity that
+ * fw/tools/beat_lab/frames.py and fw/sim/node/dline.ts already accept, so this
+ * file needs no new decoder anywhere.
+ *
+ * Batched in sector-aligned 4096-byte chunks for the hardware-measured reason
+ * given for s_csv_batch below: a misaligned flush pays the FF_FS_TINY shared-
+ * window RMW penalty and stalls the drain loop long enough to DROP AUDIO
+ * FRAMES. Unlike that one, this path writes sequentially with plain fs_write
+ * and no reopen-and-retry — matching the WAV and IMU writers it runs beside,
+ * where a write failure retires the sidecar and lets the primary artifact
+ * continue rather than pausing the drain loop to recover a diagnostic file. */
+#define AUDIO_CSV_CHUNK 4096
+#define AUDIO_CSV_LINE_MAX 512
+static char s_audio_batch[AUDIO_CSV_CHUNK + AUDIO_CSV_LINE_MAX];
+
+/* Longest D-line the format can emit: "D," + a 10-digit seq + the gain and
+ * beatmask fields, then one 9-byte ",%08x" per float (rms, four bands x four
+ * statistics, and every display bucket), plus the newline. Tied to the field
+ * counts rather than to a measured number so adding a band or a bucket fails
+ * the build here instead of silently truncating rows on the device. */
+BUILD_ASSERT(AUDIO_CSV_LINE_MAX >=
+                 2 + 10 + 3 + 2 + 9 * (1 + 4 * AUDIO_NUM_BANDS + AUDIO_NUM_DISPLAY_BUCKETS) + 1,
+             "AUDIO_CSV_LINE_MAX too small for one D-line with buckets");
+
+struct audio_sidecar {
+    struct fs_file_t file;
+    bool open;
+    size_t len;
+    uint32_t frames;
+};
+
+static void audio_sidecar_flush(struct audio_sidecar *sc, bool final) {
+    while (sc->len >= AUDIO_CSV_CHUNK || (final && sc->len > 0)) {
+        size_t take = (sc->len >= AUDIO_CSV_CHUNK) ? AUDIO_CSV_CHUNK : sc->len;
+        /* A SHORT write is a failure, not a partial success — same reasoning as
+         * imu_sidecar_flush(): FatFs returns FR_OK with a short count on a
+         * nearly full volume, and treating that as written would splice the
+         * next row onto a truncated one. Give the handle back immediately; a
+         * capture holds three of the four FatFs slots and leaking one starves
+         * GLIM loads, extension loads and DFU staging until reboot. */
+        if (fs_write(&sc->file, s_audio_batch, take) != (ssize_t)take) {
+            fs_close(&sc->file);
+            sc->open = false; /* stop trying; the WAV is the primary artifact */
+            return;
+        }
+        sc->len -= take;
+        if (sc->len > 0) {
+            memmove(s_audio_batch, &s_audio_batch[take], sc->len);
+        }
+    }
+}
+
+static int audio_sidecar_open(struct audio_sidecar *sc, const char *wav_path) {
+    char path[96];
+    (void)snprintf(path, sizeof(path), "%s.audio.csv", wav_path);
+
+    fs_file_t_init(&sc->file);
+    int ret = fs_open(&sc->file, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
+    if (ret < 0) {
+        return ret;
+    }
+    sc->open = true;
+    sc->len = 0;
+    sc->frames = 0;
+
+    /* The #PARAMS snapshot, space-padded to a full sector so every subsequent
+     * chunk lands aligned — same trick as the IMU sidecar's header line. */
+    memset(s_audio_batch, ' ', AUDIO_CSV_CHUNK);
+    size_t n = tap_params_format(s_audio_batch, AUDIO_CSV_CHUNK - 1);
+    if (n < AUDIO_CSV_CHUNK - 1) {
+        s_audio_batch[n] = ' '; /* overwrite the NUL snprintf left behind */
+    }
+    s_audio_batch[AUDIO_CSV_CHUNK - 1] = '\n';
+    if (fs_write(&sc->file, s_audio_batch, AUDIO_CSV_CHUNK) != (ssize_t)AUDIO_CSV_CHUNK) {
+        fs_close(&sc->file);
+        sc->open = false;
+        return -EIO;
+    }
+    /* Deliberately does NOT purge capture_analysis_q — the caller purges it
+     * together with capture_pcm_q, which is the only way to start the two
+     * streams in step (see capture_taps_purge). */
+    return 0;
+}
+
+/* Writes the row for ONE captured block; called once per block by the capture
+ * loop, immediately after that block was drained from the PCM tap.
+ *
+ * Exactly one row per call, NOT "drain whatever is queued" the way the IMU
+ * sidecar does. Hardware-measured: a greedy drain runs ahead of the WAV,
+ * because analysis is queued for blocks still sitting in capture_pcm_q — a 20 s
+ * capture produced 627 rows for 625 blocks, the last two describing audio the
+ * loop stopped before ever writing. IMU rows carry a timestamp and survive
+ * that; these are paired POSITIONALLY (device row k <-> WAV block k, which is
+ * what fw/tools/beat_lab/compare.py assumes), so the pairing has to be exact by
+ * construction. One get per block makes it so.
+ *
+ * The get cannot come up empty: the producer publishes the analysis right after
+ * the PCM block, without blocking in between, and it runs at a higher priority
+ * than this loop — so a block reaching us means its analysis is already queued.
+ * audio_sidecar_close() re-checks the count against the block count rather than
+ * trusting that argument. */
+static void audio_sidecar_drain(struct audio_sidecar *sc) {
+    if (!sc->open) {
+        return;
+    }
+    struct capture_analysis_block a;
+    if (k_msgq_get(&capture_analysis_q, &a, K_NO_WAIT) != 0) {
+        return;
+    }
+    size_t n = audio_tap_format_frame(&a.result, a.rms, a.gain, /*buckets=*/true,
+                                      &s_audio_batch[sc->len], AUDIO_CSV_LINE_MAX - 1);
+    s_audio_batch[sc->len + n] = '\n';
+    sc->len += n + 1;
+    sc->frames++;
+    if (sc->len >= AUDIO_CSV_CHUNK) {
+        audio_sidecar_flush(sc, false);
+    }
+}
+
+static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *shell,
+                                uint32_t blocks, uint32_t dropped) {
+    if (!sc->open) {
+        return;
+    }
+    audio_sidecar_flush(sc, true);
+    /* The trailer only means anything if everything before it got out, and the
+     * flush above clears `open` (having already closed the handle) when it
+     * didn't. Report that case as a warning rather than the usual line: the
+     * MCP plugin keys on "Audio sidecar: N frames" to decide the file is there
+     * and worth parsing, so a truncated one must not produce it. */
+    if (!sc->open) {
+        shell_warn(shell, "Audio sidecar write failed - analysis CSV is incomplete");
+        return;
+    }
+    char trailer[64];
+    int n = snprintf(trailer, sizeof(trailer), "#DONE frames=%u dropped=%u\n", sc->frames, dropped);
+    if (n > 0) {
+        (void)fs_write(&sc->file, trailer, (size_t)n);
+    }
+    fs_close(&sc->file);
+    sc->open = false;
+    /* Row count MUST equal the block count — the two files are paired by
+     * position, so any drift makes every row after the drift point describe the
+     * wrong audio. Nothing downstream can detect that on its own (a D-line's
+     * seq counts produced frames, not written ones), so say it here rather than
+     * let a quietly misaligned capture be tuned against. */
+    if (sc->frames != blocks) {
+        shell_warn(shell, "Audio sidecar: %u frames for %u blocks - rows are NOT aligned to the WAV",
+                   sc->frames, blocks);
+        return;
+    }
+    shell_print(shell, "Audio sidecar: %u frames", sc->frames);
+}
+#endif /* CONFIG_APP_CAPTURE_AUDIO_SIDECAR */
+
+#if defined(CONFIG_APP_AUDIO_DEBUG)
+/* Binds the shared formatter to the rich tap's frame struct. */
+static size_t tap_frame_format(const struct audio_tap_frame *f, bool buckets, char *buf,
+                               size_t cap) {
+    return audio_tap_format_frame(&f->result, f->rms, f->gain, buckets, buf, cap);
 }
 
 /* Shell-side drain buffers, shared by record_wav and dump: too big for the shell
@@ -1477,9 +1698,37 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
 #define CAPTURE_BATCH_BLOCKS 4
 static int16_t s_capture_batch[CAPTURE_BATCH_BLOCKS * AUDIO_FFT_SIZE];
 
+/* Empty both capture taps, leaving them in step.
+ *
+ * A plain purge of each in turn is not enough. The DSP thread runs at a higher
+ * priority than this one and publishes the PCM block and its analysis as two
+ * separate puts, so a purge landing between them keeps one half of a frame and
+ * discards the other — after which the WAV and the sidecar are offset by one
+ * block for the whole recording, silently, because a PCM block carries nothing
+ * to align against.
+ *
+ * The re-check converges: the only interleaving that can leave the queues
+ * unequal is a purge splitting a pair, and that always leaves one queue
+ * non-empty, which the loop condition catches. Observing both empty while a
+ * put is in flight is harmless in the other direction — the producer always
+ * publishes PCM first, so a PCM already counted means its analysis is on the
+ * way and the pair arrives intact. */
+static void capture_taps_purge(void) {
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+    do {
+        k_msgq_purge(&capture_pcm_q);
+        k_msgq_purge(&capture_analysis_q);
+    } while (k_msgq_num_used_get(&capture_pcm_q) != 0 ||
+             k_msgq_num_used_get(&capture_analysis_q) != 0);
+#else
+    k_msgq_purge(&capture_pcm_q);
+#endif
+}
+
 /* Capture from the lean PCM tap: the DSP thread stays the sole dmic_read()
  * consumer (so beat-reactive animations keep running through a recording) and
- * this drains its copy. No analysis sidecar — see the tap's comment. */
+ * this drains its copy, plus — when CONFIG_APP_CAPTURE_AUDIO_SIDECAR is set —
+ * the matching per-frame analysis into "<wav>.audio.csv". */
 static int record_wav_capture(const struct shell *shell, uint32_t duration_s, const char *path) {
     const uint32_t total_blocks = (duration_s * MSEC_PER_SEC) / BLOCK_CAPTURE_TIME_MS;
 
@@ -1494,16 +1743,23 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
      * after which unrelated writes and DFU staging fail with -ENOSPC. The BLE
      * front end clamps against its own cached figure before getting here; this
      * covers the shell caller, and re-checks with a live figure for both.
-     * WAV (1024 B/frame) + IMU sidecar (~56 B/frame at 25 Hz) + the prologues +
-     * 64 KB of slack for FAT metadata and whatever else writes meanwhile. */
+     * WAV (1024 B/frame) + IMU sidecar (~56 B/frame at 25 Hz) + analysis
+     * sidecar (~360 B/frame, one D-line per block) + the prologues + 64 KB of
+     * slack for FAT metadata and whatever else writes meanwhile. Keep the
+     * per-frame figures in step with kBytesPerSecond in capture.cpp, which is
+     * what the app's Remaining S readout and the limit clamp are derived from. */
     struct fs_statvfs vfs;
     if (fs_statvfs("/NAND:", &vfs) == 0) {
 #if defined(CONFIG_IMU)
-        const uint64_t per_frame = BLOCK_SIZE + 56;
-        const uint64_t overhead = WAV_DATA_OFFSET + IMU_CSV_CHUNK + 64 * 1024;
+        uint64_t per_frame = BLOCK_SIZE + 56;
+        uint64_t overhead = WAV_DATA_OFFSET + IMU_CSV_CHUNK + 64 * 1024;
 #else
-        const uint64_t per_frame = BLOCK_SIZE; /* no sidecar on this build */
-        const uint64_t overhead = WAV_DATA_OFFSET + 64 * 1024;
+        uint64_t per_frame = BLOCK_SIZE; /* no IMU sidecar on this build */
+        uint64_t overhead = WAV_DATA_OFFSET + 64 * 1024;
+#endif
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+        per_frame += 360;
+        overhead += AUDIO_CSV_CHUNK;
 #endif
         uint64_t free_bytes = (uint64_t)vfs.f_bfree * vfs.f_frsize;
         uint64_t needed = (uint64_t)total_blocks * per_frame + overhead;
@@ -1568,10 +1824,19 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
         shell_warn(shell, "IMU sidecar could not be opened; recording audio only");
     }
 #endif
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+    /* Non-fatal, like the IMU one: the WAV is the primary artifact and a
+     * capture without the analysis is still a capture. Opened before the purge
+     * so its #PARAMS header describes the parameters in force at t=0. */
+    struct audio_sidecar audio_sc = {};
+    if (audio_sidecar_open(&audio_sc, path) < 0) {
+        shell_warn(shell, "Audio sidecar could not be opened; recording without analysis");
+    }
+#endif
 
     /* Purge AFTER arming and opening: anything queued while the files were being
      * created predates t=0 and would desynchronise the WAV from the sidecar. */
-    k_msgq_purge(&capture_pcm_q);
+    capture_taps_purge();
     atomic_set(&s_capture_dropped, 0);
     shell_print(shell, "Recording %u s (%u blocks) to %s ...", duration_s, total_blocks, path);
 
@@ -1608,6 +1873,9 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
 #if defined(CONFIG_IMU)
         imu_sidecar_drain(&imu_sc);
 #endif
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+        audio_sidecar_drain(&audio_sc);
+#endif
 
         if (batched == CAPTURE_BATCH_BLOCKS) {
             ssize_t written = fs_write(&f, s_capture_batch, sizeof(s_capture_batch));
@@ -1641,11 +1909,18 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
     fs_write(&f, &total_bytes, sizeof(total_bytes));
     fs_close(&f);
 
+    uint32_t dropped = (uint32_t)atomic_get(&s_capture_dropped);
+
 #if defined(CONFIG_IMU)
     imu_sidecar_close(&imu_sc, shell);
 #endif
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+    /* Whatever is still queued stays there: those blocks were produced after
+     * the last one this loop consumed, so they are not in the WAV and their
+     * rows would run past the end of the audio. */
+    audio_sidecar_close(&audio_sc, shell, blocks_captured, dropped);
+#endif
 
-    uint32_t dropped = (uint32_t)atomic_get(&s_capture_dropped);
     if (io_error) {
         shell_error(shell, "ABORTED: %u of %u blocks saved to %s", blocks_captured, total_blocks,
                     path);
