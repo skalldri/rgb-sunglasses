@@ -77,6 +77,18 @@ case "$HOST_OS" in
         done
         ;;
     Darwin)
+        # loginwindow "block[s] disk mounts during screen lock" (its own log
+        # wording): with the console locked it dissents the mount and EJECTS the
+        # disk ~2.7 s after it appears, and Zephyr's MSC latches the eject until
+        # the board reboots. Root-caused on the Mac Mini 2026-08-13 (issue #367)
+        # after this masqueraded as several other bugs — fail fast with the real
+        # reason instead of "could not find the disk".
+        if [ "$(ioreg -n Root -d1 -a 2>/dev/null | plutil -extract IOConsoleLocked raw - 2>/dev/null)" = "true" ]; then
+            echo "[!] This Mac's screen is LOCKED — macOS loginwindow ejects the board's disk" >&2
+            echo "    on sight while locked, so provisioning cannot reach it." >&2
+            echo "    Unlock the screen, reboot the board (mcumgr reset), then re-run." >&2
+            exit 1
+        fi
         # IOKit names the published media "<vendor> <product> Media", so the
         # single string below pins vendor AND product the way the Linux branch
         # does with two files. Taking the BSD name from the IOMedia node (rather
@@ -101,12 +113,17 @@ if [ -z "$DISK" ]; then
     echo "[!] Could not find the board's NAND USB mass-storage disk (vendor=RGB-SG, model=FlashDisk)." >&2
     echo "    Run /check-hardware and confirm the board is connected and enumerated." >&2
     if [ "$HOST_OS" = "Darwin" ]; then
-        # Seen on a board carrying a stale image: the LUN answers TEST UNIT READY
-        # with CHECK CONDITION and REQUEST SENSE 03 02 3A 00 (MEDIUM NOT PRESENT),
-        # so macOS attaches the USB MSC stack but never publishes any IOMedia.
-        echo "    If the board is enumerated and the shell works but no disk appears," >&2
-        echo "    reflash current firmware first — a stale image can leave the LUN" >&2
-        echo "    reporting MEDIUM NOT PRESENT. Check with:" >&2
+        # Three distinct macOS-side causes, in likelihood order: (1) the display
+        # dimmed — loginwindow's eject shield arms on dim WITHOUT setting
+        # IOConsoleLocked, so the guard above can't catch it; (2) Zephyr's MSC is
+        # still latched MEDIUM NOT PRESENT from an earlier macOS eject (clears on
+        # board reboot); (3) a stale image that never publishes media at all.
+        echo "    IOConsoleLocked was false, but note a DIMMED display arms the same eject" >&2
+        echo "    shield without setting it (#367) — wake the display and retry first." >&2
+        echo "    Otherwise the LUN is most likely still latched MEDIUM NOT PRESENT from an" >&2
+        echo "    earlier macOS eject (reboot the board with mcumgr reset and re-run), or the" >&2
+        echo "    board is carrying a stale image that never publishes media (reflash it)." >&2
+        echo "    To see the SCSI state:" >&2
         echo "      /usr/bin/log show --last 5m --predicate 'eventMessage CONTAINS \"IOUSBMassStorageDriver\"'" >&2
     fi
     exit 1
@@ -194,20 +211,25 @@ fi
 
 mkdir -p "$MNT/glim" "$MNT/ext"
 
+# macOS cp exports each source file's extended attributes (com.apple.provenance
+# etc.) as an AppleDouble sidecar (._<name>) on FAT. Those names still end in
+# .glim/.llext, so the firmware picks them up as real assets: hardware-verified
+# that `glim list` showed ._4096.glim / ._bad_apple.glim / ._nyan_cat.glim
+# alongside the real files, with the 4 KB sidecar ._4096.glim SELECTED as the
+# active animation. (The extension registry rejects sidecars via manifest
+# validation, so only GLIM is user-visibly broken — but both dirs are kept
+# clean.) COPYFILE_DISABLE=1 does NOT fix this — it governs tar/copyfile, not
+# cp; hardware-verified that sidecars are still written with it exported. BSD
+# cp's -X ("do not copy extended attributes") is the real knob, plus a sweep
+# AFTER the copy as a backstop (a pre-copy sweep just gets recreated).
 if [ "$HOST_OS" = "Darwin" ]; then
-    # macOS cp writes an AppleDouble sidecar (._<name>) beside every file copied
-    # to a non-native filesystem. Those names still end in .glim/.llext, so the
-    # firmware picks them up as real assets: hardware-verified that without this,
-    # `glim list` showed ._4096.glim / ._bad_apple.glim / ._nyan_cat.glim
-    # alongside the real files, with the 4 KB sidecar ._4096.glim SELECTED as the
-    # active animation. (The extension registry rejects them via manifest
-    # validation, so only GLIM is user-visibly broken — but both are cleaned.)
-    export COPYFILE_DISABLE=1
-    rm -f "$MNT"/glim/._* "$MNT"/ext/._* 2>/dev/null || true
+    cp -X "$TMP_GLIM"/*.glim "$MNT/glim/"
+    cp -X "$BUILD_DIR"/extensions/*.llext "$MNT/ext/"
+    rm -f "$MNT"/glim/._* "$MNT"/ext/._*
+else
+    cp "$TMP_GLIM"/*.glim "$MNT/glim/"
+    cp "$BUILD_DIR"/extensions/*.llext "$MNT/ext/"
 fi
-
-cp "$TMP_GLIM"/*.glim "$MNT/glim/"
-cp "$BUILD_DIR"/extensions/*.llext "$MNT/ext/"
 sync
 
 echo "[*] Provisioned:"
@@ -226,12 +248,7 @@ echo "[*] Done. Reboot the board (mcumgr reset, or a physical reset) so the" \
      "firmware re-mounts FAT and discovers the new files."
 
 if [ "$HOST_OS" = "Darwin" ]; then
-    # Measured on the Mac Mini: once the volume is unmounted, macOS stops
-    # auto-mounting it and ~40-60 s later sends START STOP UNIT; Zephyr's handler
-    # latches medium_loaded=false, so the LUN answers MEDIUM NOT PRESENT for the
-    # rest of that boot. A board reboot clears the firmware side but macOS still
-    # won't re-publish the volume — only re-plugging the cable does.
-    echo "[*] macOS note: the disk will not reappear on this Mac until you unplug and"
-    echo "    replug the board's USB cable (a board reboot alone is not enough — macOS"
-    echo "    keeps the volume marked ejected). The board itself is unaffected."
+    echo "[*] macOS note: if the Mac's screen locks, loginwindow will eject the board's"
+    echo "    disk the moment it re-appears (\"block disk mounts during screen lock\")."
+    echo "    Unlock the screen and reboot the board to get the disk back."
 fi

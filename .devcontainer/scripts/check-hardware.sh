@@ -82,6 +82,17 @@ if [ "$(uname -s)" = "Darwin" ]; then
         echo "iPhone (devicectl): N/A (xcrun not found — install Xcode)"
     fi
 
+    # loginwindow ejects the board's USB disk on sight while the screen is
+    # locked ("block disk mounts during screen lock", issue #367), which
+    # silently breaks provisioning / any /NAND: access. Surface it up front so
+    # a locked console is visible in the session-start table instead of being
+    # rediscovered mid-task.
+    if [ "$(ioreg -n Root -d1 -a 2>/dev/null | plutil -extract IOConsoleLocked raw - 2>/dev/null)" = "true" ]; then
+        echo "Screen lock: LOCKED  [board's USB disk will be ejected by loginwindow — unlock before provisioning (#367)]"
+    else
+        echo "Screen lock: not locked (IOConsoleLocked=false)  [NB: a dimmed display arms the same eject shield without setting this — see #367]"
+    fi
+
     echo ""
     echo "======================================"
     exit 0

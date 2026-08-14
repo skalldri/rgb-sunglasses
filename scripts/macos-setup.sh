@@ -301,7 +301,36 @@ info "Installing/updating yt-dlp + the deno JS runtime..."
 # abort the script under set -e (`! -e` is false for a broken symlink).
 ln -sf "$(basename "${TOOLS_VENV}")" "${TOOLS_VENV_CURRENT}"
 
-# --- 11. Summary ---------------------------------------------------------------
+# --- 11. Headless-CI policy checks (board disk access, issue #367) -------------
+# loginwindow blocks disk mounts and EJECTS newly-appearing disks whenever its
+# lock shield is up — and the shield engages on DISPLAY DIM
+# (kLWLockFromDisplayDim), not just an explicit lock. Two measured facts govern
+# what helps here (2026-08-13, on this Mac Mini):
+#   - `pmset -a displaysleep 0` is what actually keeps the disk reachable: the
+#     display never dims, so the shield (and its DA blockers) never re-arm.
+#   - AutomountDisksWithoutUserLogin does NOT stop the lock-shield eject (tested:
+#     identical dissent 0xF8DA0008 + eject with it set); it covers the OTHER
+#     headless case — mounting disks when nobody has logged in at all, e.g.
+#     after a power cycle. (SIP blocks kickstarting diskarbitrationd, so it
+#     applies fully from the next macOS reboot.)
+# These are machine-wide, security-relevant settings, so this script only
+# CHECKS them and RECOMMENDS the command — it never modifies machine
+# configuration itself (owner decision, 2026-08-13). No sudo anywhere here.
+if [ "$(defaults read /Library/Preferences/SystemConfiguration/autodiskmount AutomountDisksWithoutUserLogin 2>/dev/null)" = "1" ]; then
+    info "AutomountDisksWithoutUserLogin already enabled"
+else
+    warn "disks will not mount when no user is logged in (post-power-cycle headless case)."
+    warn "  to enable: sudo defaults write /Library/Preferences/SystemConfiguration/autodiskmount AutomountDisksWithoutUserLogin -bool true"
+fi
+
+if pmset -g 2>/dev/null | grep -qE '^[[:space:]]*displaysleep[[:space:]]+0([[:space:]]|$)'; then
+    info "Display sleep already disabled"
+else
+    warn "display dim arms the disk-eject shield (#367) — the board's disk will vanish when the display dims."
+    warn "  to disable display sleep: sudo pmset -a displaysleep 0"
+fi
+
+# --- 12. Summary ---------------------------------------------------------------
 info "Done."
 echo
 echo "Firmware dev loop on this Mac:"
@@ -318,5 +347,5 @@ echo "  - The first proto0 build configures from scratch and is very slow (tens 
 echo "  - Twister tests (native_sim) do NOT run on macOS — use CI or the devcontainer."
 echo "  - fw-env.sh and tools-env.sh activate DIFFERENT venvs — use separate shells."
 echo "  - yt-dlp goes stale as YouTube changes; re-run this script to refresh it."
-echo "  - Copying .glim files to the board is Linux-only (see fw/CLAUDE.md, issue #367)."
+echo "  - Board disk access needs the screen UNLOCKED — loginwindow ejects it when locked (#367)."
 echo "  - iOS app toolchain is separate: app/scripts/macos-setup.sh"
