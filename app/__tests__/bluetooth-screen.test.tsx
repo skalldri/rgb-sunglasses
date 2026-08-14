@@ -514,9 +514,12 @@ describe('BluetoothScreen', () => {
     });
 
     // Stack not ready: the scan must NOT have been started, and the gate must be
-    // subscribed waiting for a state change.
+    // subscribed waiting for a state change. The spinner is dropped while parked
+    // (a wait with the radio off can last forever - the empty state is the honest
+    // UI), to be re-asserted when the gate opens.
     expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
     expect(stateListener).not.toBeNull();
+    expect(setIsScanning).toHaveBeenLastCalledWith(false);
 
     // A non-terminal state keeps waiting (still no scan)...
     await act(async () => {
@@ -524,16 +527,81 @@ describe('BluetoothScreen', () => {
     });
     expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
 
-    // ...and PoweredOn releases the gate: subscription removed, scan started.
+    // ...and PoweredOn releases the gate: subscription removed, spinner
+    // re-asserted, scan started.
     await act(async () => {
       stateListener?.('PoweredOn');
     });
     expect(removeSub).toHaveBeenCalled();
+    expect(setIsScanning).toHaveBeenLastCalledWith(true);
     expect(BleHook.bleManager.startDeviceScan).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       unmount();
     });
+  });
+
+  // Regression for the review finding on the #136 gate: the focus effect used to
+  // arm the 10s rescan interval unconditionally, and that interval called
+  // registerScanCallback() directly - bypassing the gate and starting an ungated
+  // scan while CoreBluetooth was still initializing (first error burning the
+  // single retry, later ones killing the scanning state: the dead screen back
+  // again for anyone slower than 10s on the permission prompt). Timers must not
+  // run while the gate is waiting.
+  it('does not let the rescan timer start a scan while the PoweredOn gate is waiting', async () => {
+    jest.useFakeTimers();
+    try {
+      const setIsScanning = jest.fn();
+      jest.spyOn(BluetoothContext, 'useBluetooth').mockReturnValue({
+        isScanning: false,
+        setIsScanning,
+      } as any);
+
+      let focusCallback: (() => void | (() => void)) | null = null;
+      jest.spyOn(ExpoRouter, 'useFocusEffect').mockImplementation((cb: () => void | (() => void)) => {
+        focusCallback = cb;
+        return undefined as any;
+      });
+      jest.spyOn(BleHook, 'requestPermissions').mockResolvedValue(true);
+
+      (BleHook.bleManager.state as jest.Mock).mockResolvedValue('Unknown');
+      let stateListener: ((s: string) => void) | null = null;
+      (BleHook.bleManager.onStateChange as jest.Mock).mockImplementation(
+        (listener: (s: string) => void) => {
+          stateListener = listener;
+          return { remove: jest.fn() };
+        },
+      );
+
+      const { unmount } = render(<BluetoothScreen />);
+      await act(async () => {
+        focusCallback?.();
+      });
+
+      // Well past the 10s rescan interval while still parked: no scan may start.
+      await act(async () => {
+        jest.advanceTimersByTime(25_000);
+      });
+      expect(BleHook.bleManager.startDeviceScan).not.toHaveBeenCalled();
+
+      // Gate opens -> scan starts and the timers arm; the next rescan tick
+      // restarts the (now legitimately running) scan rather than starting the
+      // first one.
+      await act(async () => {
+        stateListener?.('PoweredOn');
+      });
+      expect(BleHook.bleManager.startDeviceScan).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        jest.advanceTimersByTime(10_000);
+      });
+      expect(BleHook.bleManager.startDeviceScan).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        unmount();
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('gives up cleanly instead of waiting forever when Bluetooth is Unauthorized (issue #136)', async () => {
