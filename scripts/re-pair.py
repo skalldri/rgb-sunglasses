@@ -315,14 +315,25 @@ class RePair:
         # Fail fast on a package that isn't there. Otherwise the pairing loop force-stops and
         # `monkey`-launches nothing at all, then reports "board not listed / Connect not tappable"
         # once per attempt — a message that points at the board or BLE rather than at the app.
-        # `pm list packages <filter>` substring-matches, so the dev variant would satisfy a query
-        # for the release package. Compare against the exact "package:<name>" lines instead.
+        # Filter on PKG itself, never a hardcoded product name: a hardcoded filter would
+        # return nothing for a renamed/forked/staging id that IS installed, and preflight
+        # would then die with a confidently wrong "not installed" — the exact class of
+        # misleading failure this check exists to remove. `pm list packages <filter>`
+        # substring-matches (so the dev variant satisfies a query for the release id),
+        # hence the comparison against exact "package:<name>" lines rather than the query.
         installed = {line.strip().removeprefix("package:")
-                     for line in self.a.shell("pm", "list", "packages", "rgbsunglasses").stdout.splitlines()
+                     for line in self.a.shell("pm", "list", "packages", PKG).stdout.splitlines()
                      if line.strip()}
         if PKG not in installed:
+            # Hint list derived from PKG's own vendor prefix (e.g. "com.autom8ed"), so a
+            # renamed package still gets useful candidates instead of an empty list.
+            prefix = ".".join(PKG.split(".")[:2])
+            siblings = sorted(
+                line.strip().removeprefix("package:")
+                for line in self.a.shell("pm", "list", "packages", prefix).stdout.splitlines()
+                if line.strip())
             die(f"package '{PKG}' is not installed on this device.\n"
-                f"    Installed RGB packages: {', '.join(sorted(installed)) or '(none)'}\n"
+                f"    Installed '{prefix}' packages: {', '.join(siblings) or '(none)'}\n"
                 f"    Use --package/--release to pick the right one.")
         if serial is None:
             die("pyserial not available (import serial failed).")

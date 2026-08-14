@@ -576,7 +576,12 @@ static void pairing_complete(struct bt_conn *conn, bool bonded) {
 
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-    LOG_INF("Pairing completed: %s, bonded: %d", addr, bonded);
+    // (int) for the same reason as the enum sites below: cbprintf_cxx.h has explicit
+    // promoting overloads for char/short/etc but none for `bool` either, so a bool is an
+    // EXACT match for the generic template (beating every conversion-requiring candidate)
+    // and takes the identical 4-bytes-out-of-a-1-byte-object path. Uncast, a successful
+    // pairing logged "bonded: 59609089" instead of "bonded: 1".
+    LOG_INF("Pairing completed: %s, bonded: %d", addr, (int)bonded);
 }
 
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason) {
