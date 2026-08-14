@@ -24,6 +24,7 @@ import {
     stopConnectionService,
     updateConnectionNotification,
 } from "@/services/ble-foreground-service";
+import { describeConnectError } from "@/services/ble-errors";
 import { decodeUint32FromBase64, decodeUtf8FromBase64, MetadataBlobEntry, parseMetadataBlob } from "@/services/ble-value-codec";
 import { SMP_CHARACTERISTIC_UUID, SMP_SERVICE_UUID } from "@/services/mcumgr";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -53,6 +54,15 @@ const ALWAYS_ON_MONITOR_UUIDS: string[] = [
 
 interface UseBleConnectionResult {
     isConnecting: boolean;
+    // Message for the most recent FAILED user-initiated connect, or null when the last attempt
+    // succeeded / none has run. Rendered by the device row so a failure is visible: connect()
+    // resolves false and the caller just doesn't navigate, which on its own looks like the button
+    // did nothing at all. Cleared at the start of every new attempt.
+    //
+    // Only 'initial' (user-initiated) attempts set this. The auto-reconnect loop (issue #124)
+    // retries indefinitely in the background and its per-attempt failures are expected, not
+    // something to keep flashing at the user; the row already shows "Reconnecting…" for that.
+    lastConnectError: string | null;
     // Resolves true only once the device is fully connected, discovered, and
     // selected; false if the attempt failed (the error is logged and the
     // half-open link cleaned up internally). Callers must gate navigation on the
@@ -112,6 +122,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
     } = useBluetooth();
 
     const [isConnecting, setIsConnecting] = useState(false);
+    const [lastConnectError, setLastConnectError] = useState<string | null>(null);
 
     // Guards against calling setIsConnecting after the component unmounts.
     const isMountedRef = useRef(true);
@@ -256,6 +267,11 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         const genAtStart = reconnectGeneration.current;
         const isReconnectAttempt = mode !== 'initial';
         setIsConnecting(true);
+        if (!isReconnectAttempt) {
+            // Clear any previous failure as soon as the user retries, so a stale message can't sit
+            // under a row that is now connecting again.
+            setLastConnectError(null);
+        }
         // Pin this device in the Connect screen's list for the whole attempt: it stops advertising
         // the moment its LE link comes up, so the scan-derived list would otherwise prune it
         // mid-pairing and unmount this row (with its progress indicator), making a still-in-progress
@@ -776,6 +792,12 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             return true;
         } catch (error) {
             console.error(`Connection failed for ${macAddress}:`, error);
+            if (!isReconnectAttempt && isMountedRef.current) {
+                // User-initiated attempts only — see lastConnectError's doc comment. Note the
+                // 'reconnect attempt superseded' throws are internal cancellations and are
+                // reconnect-mode by construction, so they can never land here.
+                setLastConnectError(describeConnectError(error));
+            }
             // Discovery can fail partway through, after the native BLE link is already
             // established. Without an explicit disconnect here, the device is left connected
             // at the OS level (so it stops advertising) while the app still thinks it's
@@ -938,5 +960,5 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
         }
     }
 
-    return { isConnecting, connect, disconnect, cancelReconnect, verifyConnection, startReconnectLoop };
+    return { isConnecting, lastConnectError, connect, disconnect, cancelReconnect, verifyConnection, startReconnectLoop };
 }

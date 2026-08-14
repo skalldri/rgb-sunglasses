@@ -47,6 +47,7 @@ describe('BluetoothDeviceListItem', () => {
     discoveryProgress = null as { current: number; total: number } | null,
     connect = jest.fn(async () => true),
     disconnect = jest.fn(async () => {}),
+    lastConnectError = null as string | null,
   } = {}) {
     (BluetoothContext.useBluetooth as jest.Mock).mockReturnValue({
       selectedDevice: selectedMac ? { mac: selectedMac } : null,
@@ -54,6 +55,7 @@ describe('BluetoothDeviceListItem', () => {
     });
     (BleConnectionHook.useBleConnection as jest.Mock).mockReturnValue({
       isConnecting,
+      lastConnectError,
       connect,
       disconnect,
     });
@@ -181,5 +183,48 @@ describe('BluetoothDeviceListItem', () => {
 
     expect(getByText('Querying characteristics: 12/48')).toBeTruthy();
     expect(UNSAFE_queryByType(ActivityIndicator)).toBeNull();
+  });
+
+  // A failed connect used to be entirely silent (connect() resolves false, the press handler just
+  // doesn't navigate), which is what made a bond mismatch read as "the app broke" rather than
+  // "this phone needs re-pairing".
+  describe('connect failure is visible', () => {
+    it('renders nothing when there is no failure', () => {
+      setupMocks({ lastConnectError: null });
+      const { queryByTestId } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
+      expect(queryByTestId('connect-error')).toBeNull();
+    });
+
+    it('shows a tappable failure indicator after a failed connect', () => {
+      setupMocks({ lastConnectError: 'Could not connect. GATT_INSUF_AUTHENTICATION' });
+      const { getByTestId, getByText } = render(
+        <BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />
+      );
+      expect(getByTestId('connect-error')).toBeTruthy();
+      expect(getByText('Could not connect — tap for details')).toBeTruthy();
+    });
+
+    it('surfaces the reason AND the forget-and-re-pair recovery in the alert', () => {
+      const { Alert } = require('react-native');
+      const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+      setupMocks({ lastConnectError: 'Could not connect. GATT_INSUF_AUTHENTICATION' });
+      const { getByTestId } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
+
+      fireEvent.press(getByTestId('connect-error'));
+
+      expect(alertSpy).toHaveBeenCalledTimes(1);
+      const [title, body] = alertSpy.mock.calls[0];
+      expect(title).toBe('Could not connect');
+      expect(body).toContain('GATT_INSUF_AUTHENTICATION');
+      expect(body).toMatch(/forget/i);
+    });
+
+    it('hides a stale failure while a retry is in flight', () => {
+      // Otherwise the retry shows an error next to its own spinner, which reads as
+      // "already failed again".
+      setupMocks({ lastConnectError: 'Could not connect.', isConnecting: true });
+      const { queryByTestId } = render(<BluetoothDeviceListItem deviceName="RGB" macAddress="AA:BB:CC" />);
+      expect(queryByTestId('connect-error')).toBeNull();
+    });
   });
 });

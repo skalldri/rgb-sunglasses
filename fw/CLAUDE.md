@@ -236,6 +236,18 @@ Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.
 
 **No `%f`/`%g` in log or shell format strings.** `CONFIG_CBPRINTF_FP_SUPPORT` and `CONFIG_PICOLIBC_IO_FLOAT` are disabled (~10KB FLASH, issue #79 ROM pass); a `%f` prints the literal specifier instead of the value (no crash). Print floats via integer fixed-point instead — see `fmt_fixed4()` / `agc_gain_db10()` in `src/sound/sound.cpp` (the only float-printing code in the app).
 
+**Logging an enum from C++ prints GARBAGE without an `(int)` cast.** `LOG_*("%d", someEnum)` from a `.cpp` file silently prints the true value in the low byte with three bytes of adjacent stack in the upper bits — e.g. `BT_SECURITY_L4` (literally `4`) printed as `59609092` (`0x038D9004`), and `err 2` as `66701314` (`0x03F9C802`). It does **not** crash and it is **not** obviously wrong at a glance, which is what makes it expensive: it cost most of a debugging session on a real BLE pairing failure (2026-08-14) because `PIN_OR_KEY_MISSING` was unreadable.
+
+Mechanism (verified in the SDK, `zephyr/include/zephyr/sys/cbprintf_cxx.h`): under `CONFIG_LOG_MODE_DEFERRED` the log arguments are packed, not passed as varargs, so **no integer promotion happens**. The C path (`_Generic` in `cbprintf_internal.h`) explicitly lists `char`/`short`/etc. and promotes them; the C++ path has matching `z_cbprintf_cxx_store_arg()` overloads for those scalar types (`int tmp = arg + 0;`) but **none for enums**, so an enum falls through to the generic template:
+
+```c
+size_t wlen = z_cbprintf_cxx_arg_size(arg) / sizeof(int);  /* MAX(sizeof(T), 4) = 4 bytes */
+void *p = &arg;                                            /* ...address of a 1-byte object */
+z_cbprintf_wcpy((int *)dst, (int *)p, wlen);               /* copies 4 bytes out of 1 */
+```
+
+Nearly every enum here is 1 byte: Zephyr marks many `enum __packed` (`bt_security_t`, `bt_conn_type`), and the ARM EABI build uses short enums, which shrinks small **project-defined** enums too. So this applies to our own enums, not just SDK ones. Rule: **cast every enum log argument to `(int)`** (`src/bluetooth.cpp`'s `security_changed()` carries the full rationale; `charger_policy.cpp:113` and `buttons.cpp:68` are other examples). `enum class` is safe by construction — it won't convert implicitly. Where the SDK ships a stringifier, prefer it over a hand-rolled name table (`bt_security_err_to_str()` needs `CONFIG_BT_SECURITY_ERR_TO_STR`, which is EXPERIMENTAL and costs a string table — currently off).
+
 **Changing a `default` here does not take effect on an incremental build** — see "An incremental build IGNORES a changed Kconfig `default`" above before you conclude a new value isn't working.
 
 **Don't reuse a Kconfig symbol from one subsystem to configure unrelated code in another, even if the value/semantics happen to line up.** E.g. a BT-free module's debounce/delay tunable should get its own `CONFIG_APP_*` symbol, not borrow `CONFIG_BT_SETTINGS_DELAYED_STORE_MS` just because the timing happens to match — that creates a hidden cross-subsystem dependency and works against this project's general push to decouple BT from non-BT code (see the animation/BT decoupling refactor above).

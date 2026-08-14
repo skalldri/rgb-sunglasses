@@ -1,4 +1,42 @@
-import { describeWriteError } from '@/services/ble-errors';
+import { CONNECT_FAILED_HINT, describeConnectError, describeWriteError } from '@/services/ble-errors';
+
+describe('describeConnectError', () => {
+  it('surfaces the native reason verbatim so a failure is diagnosable from the UI', () => {
+    // The board-side signature of the bond mismatch is "Security failed ... err 2"
+    // (PIN_OR_KEY_MISSING); app-side ble-plx puts the native stack's text in `reason`.
+    expect(describeConnectError({ reason: 'GATT_INSUF_AUTHENTICATION' })).toBe(
+      'Could not connect. GATT_INSUF_AUTHENTICATION'
+    );
+  });
+
+  it('prefers `reason` over `message` (reason is the more specific native text)', () => {
+    expect(describeConnectError({ reason: 'status 22', message: 'Operation failed' })).toBe(
+      'Could not connect. status 22'
+    );
+  });
+
+  it('falls back to Error.message for a plain throw', () => {
+    expect(describeConnectError(new Error('Device disconnected'))).toBe(
+      'Could not connect. Device disconnected'
+    );
+  });
+
+  it('degrades to the bare message when nothing useful is attached', () => {
+    // Must never render "undefined"/"null" at the user - the whole point is that the
+    // failure is legible.
+    expect(describeConnectError(null)).toBe('Could not connect.');
+    expect(describeConnectError(undefined)).toBe('Could not connect.');
+    expect(describeConnectError({})).toBe('Could not connect.');
+    expect(describeConnectError({ reason: '', message: '' })).toBe('Could not connect.');
+  });
+
+  it('names the forget-and-re-pair recovery in the hint', () => {
+    // This is the actionable half: a stale bond is the most likely cause and Android
+    // will not clear it on its own.
+    expect(CONNECT_FAILED_HINT).toMatch(/forget/i);
+    expect(CONNECT_FAILED_HINT).toMatch(/bluetooth settings/i);
+  });
+});
 
 describe('describeWriteError', () => {
   it('maps an ATT WRITE_REQ_REJECTED code (0xFC) in attErrorCode (iOS shape) to the friendly refused message', () => {
