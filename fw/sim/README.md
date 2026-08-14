@@ -77,7 +77,8 @@ The report (`report.json`, schema `rgbx-sim-report/1`; printed with
 - `timing.tickWallMs` — sim wall time (device CPU budget is ~50-100×
   tighter, see PARITY.md);
 - `printk` — the extension's log output (`%f` prints literally, like the
-  device).
+  device), each line tagged with the phase that produced it: `[init]` for
+  `rgbx_init`, `[tick N]` for the tick that emitted it.
 
 Useful flags: `--param Name=value` (repeatable; COLOR takes `0xMMRRGGBB`
 with the mode byte in `MM`), `--seed N`, `--ticks N`, `--png-every 30`

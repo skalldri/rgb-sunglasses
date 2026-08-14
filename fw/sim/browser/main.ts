@@ -190,6 +190,8 @@ function activateBytes(label: string, bytes: ArrayBuffer): Promise<void> {
       // Torn down while activating; the worker is already terminated.
       return;
     }
+    // rgbx_init's printk, which the console would otherwise never show.
+    consolePanel.append(h.initLog);
     resetStats();
     lastRaw = new Uint8Array(FRAME_BYTES);
     paramPanel.build(h);
@@ -582,6 +584,7 @@ async function clearFaultAndRetry(): Promise<void> {
   }
   h.clearFault();
   const fault = await h.activate();
+  consolePanel.append(h.initLog);
   paramPanel.build(h);
   updateMeta();
   if (fault !== null) {

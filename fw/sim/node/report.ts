@@ -67,6 +67,36 @@ export class RunStats {
 
   constructor(private readonly sampleTicks: Set<number>) {}
 
+  /** Splits one drained printk buffer into tagged lines, capped at 500 total
+   * so a chatty extension can't grow the report without bound. */
+  private pushLog(tag: string, log: string): void {
+    if (log.length === 0) {
+      return;
+    }
+    for (const line of log.split("\n")) {
+      if (line.length > 0 && this.logLines.length < 500) {
+        this.logLines.push(`[${tag}] ${line}`);
+      }
+    }
+  }
+
+  /** printk emitted by rgbx_init, drained from SimHost.initLog after
+   * activate(). Tagged `[init]` rather than `[tick N]` because it happens
+   * before tick 0 — an extension whose only logging is in init (hello) would
+   * otherwise show an empty printk section in the report. */
+  recordInitLog(log: string): void {
+    this.pushLog("init", log);
+  }
+
+  /** printk from a tick that FAULTED. record() never runs for such a tick —
+   * there is no framebuffer to account — but its log is the most valuable
+   * line in the report: the worker drains it precisely because traps often
+   * follow logs. Without this the one diagnostic explaining the trap is the
+   * one line missing. Tagged `[tick N]` like any other tick. */
+  recordFaultLog(tick: number, log: string): void {
+    this.pushLog(`tick ${tick}`, log);
+  }
+
   record(tick: number, frame: Uint8Array, wallMs: number, beatMask: number,
          goodMoment: boolean, manifestIntact: boolean, log: string): void {
     this.ticks++;
@@ -77,13 +107,7 @@ export class RunStats {
     if (!manifestIntact) {
       this.manifestViolationTicks++;
     }
-    if (log.length > 0) {
-      for (const line of log.split("\n")) {
-        if (line.length > 0 && this.logLines.length < 500) {
-          this.logLines.push(`[tick ${tick}] ${line}`);
-        }
-      }
-    }
+    this.pushLog(`tick ${tick}`, log);
 
     let nonBlack = false;
     let cutoutWrite = false;
