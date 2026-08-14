@@ -43,6 +43,9 @@ const char* describe(Result result);
 #if defined(CONFIG_ZTEST)
 /** Test-only: make the sandbox read kernel-only memory and report its contained death. */
 Result triggerMemoryFaultForTest(k_timepoint_t deadline);
+
+/** Test-only: wait until the sandbox has accepted an execution request. */
+bool waitForRequestStartForTest(k_timeout_t timeout);
 #endif
 
 }  // namespace wasm_mvp_runtime

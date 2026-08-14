@@ -13,6 +13,14 @@ namespace {
 constexpr uint32_t kExpectedCyan = 0x00ffff;
 constexpr uint32_t kExpectedMagenta = 0xff00ff;
 
+K_THREAD_STACK_DEFINE(sConcurrentTickStack, 2048);
+struct k_thread sConcurrentTickThread;
+
+struct ConcurrentTickState {
+    wasm_mvp_runtime::Result result = wasm_mvp_runtime::Result::RuntimeFailure;
+    wasm_mvp_runtime::TickOutput output{0xdeadbeef, 0};
+};
+
 k_timepoint_t deadline() {
     return sys_timepoint_calc(K_MSEC(CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS));
 }
@@ -44,6 +52,28 @@ std::vector<uint8_t> moduleVector() {
 void insertBytes(std::vector<uint8_t>& module, size_t offset,
                  std::initializer_list<uint8_t> bytes) {
     module.insert(module.begin() + static_cast<std::ptrdiff_t>(offset), bytes);
+}
+
+std::array<uint8_t, sizeof(kWasmMvpModule)> infiniteLoopModule() {
+    auto module = moduleCopy();
+    // loop { br 0 }, followed by unreachable nops to preserve the body size.
+    module[58] = 0x03;
+    module[59] = 0x40;
+    module[60] = 0x0c;
+    module[61] = 0x00;
+    module[62] = 0x0b;
+    for (size_t i = 63; i < 84; ++i) {
+        module[i] = 0x01;
+    }
+    module[84] = 0x0b;
+    return module;
+}
+
+void concurrentTickEntry(void* p1, void* p2, void* p3) {
+    auto* state = static_cast<ConcurrentTickState*>(p1);
+    (void)p2;
+    (void)p3;
+    state->result = wasm_mvp_runtime::tick(0, deadline(), state->output);
 }
 
 }  // namespace
@@ -145,17 +175,7 @@ ZTEST(wasm_mvp_runtime, test_guest_trap_discards_output_then_good_module_recover
 }
 
 ZTEST(wasm_mvp_runtime, test_infinite_loop_is_aborted_then_good_module_recovers) {
-    auto infiniteLoop = moduleCopy();
-    // loop { br 0 }, followed by unreachable nops to preserve the body size.
-    infiniteLoop[58] = 0x03;
-    infiniteLoop[59] = 0x40;
-    infiniteLoop[60] = 0x0c;
-    infiniteLoop[61] = 0x00;
-    infiniteLoop[62] = 0x0b;
-    for (size_t i = 63; i < 84; ++i) {
-        infiniteLoop[i] = 0x01;
-    }
-    infiniteLoop[84] = 0x0b;
+    auto infiniteLoop = infiniteLoopModule();
 
     zassert_equal(wasm_mvp_runtime::start(infiniteLoop.data(), infiniteLoop.size(), deadline()),
                   wasm_mvp_runtime::Result::Completed);
@@ -165,6 +185,29 @@ ZTEST(wasm_mvp_runtime, test_infinite_loop_is_aborted_then_good_module_recovers)
                      result == wasm_mvp_runtime::Result::WallBackstopExceeded,
                  "infinite guest returned unexpected result %u", static_cast<unsigned int>(result));
     zassert_equal(output.color, 0xdeadbeef, "an aborted generation must not commit partial output");
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_concurrent_stop_discards_in_flight_output_then_recovers) {
+    auto infiniteLoop = infiniteLoopModule();
+    zassert_equal(wasm_mvp_runtime::start(infiniteLoop.data(), infiniteLoop.size(), deadline()),
+                  wasm_mvp_runtime::Result::Completed);
+
+    ConcurrentTickState state;
+    k_tid_t tid = k_thread_create(&sConcurrentTickThread, sConcurrentTickStack,
+                                  K_THREAD_STACK_SIZEOF(sConcurrentTickStack), concurrentTickEntry,
+                                  &state, nullptr, nullptr, 4, 0, K_NO_WAIT);
+    zassert_not_null(tid);
+    zassert_true(wasm_mvp_runtime::waitForRequestStartForTest(K_SECONDS(1)));
+
+    wasm_mvp_runtime::stop();
+    zassert_equal(k_thread_join(tid, K_SECONDS(1)), 0);
+    zassert_true(state.result == wasm_mvp_runtime::Result::CpuBudgetExceeded ||
+                     state.result == wasm_mvp_runtime::Result::WallBackstopExceeded,
+                 "in-flight guest returned unexpected result %u",
+                 static_cast<unsigned int>(state.result));
+    zassert_equal(state.output.color, 0xdeadbeef,
+                  "concurrent stop must not expose an aborted generation's output");
     expectGoodActivationAndTick(0, kExpectedCyan);
 }
 

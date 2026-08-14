@@ -76,6 +76,9 @@ struct k_thread sSandboxThread;
 struct k_mem_domain sSandboxDomain;
 K_SEM_DEFINE(sRequestSem, 0, 1);
 K_SEM_DEFINE(sDoneSem, 0, 1);
+#if defined(CONFIG_ZTEST)
+K_SEM_DEFINE(sRequestStartedForTest, 0, 1);
+#endif
 K_MUTEX_DEFINE(sRuntimeLock);
 
 bool sSandboxAlive = false;
@@ -241,6 +244,9 @@ void stopLocked() {
     m3_ResetFixedHeap();
     k_sem_reset(&sRequestSem);
     k_sem_reset(&sDoneSem);
+#if defined(CONFIG_ZTEST)
+    k_sem_reset(&sRequestStartedForTest);
+#endif
 }
 
 const void* fillHost(IM3Runtime runtime, IM3ImportContext context, uint64_t* stack, void* memory) {
@@ -340,6 +346,7 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
     while (true) {
         k_sem_take(&sRequestSem, K_FOREVER);
 #if defined(CONFIG_ZTEST)
+        k_sem_give(&sRequestStartedForTest);
         if (shared->requestKind == RequestKind::MemoryFault) {
             // The supervisor supplies an address in kernel-owned application
             // data, outside the sandbox domain. This read must raise an MPU
@@ -393,7 +400,11 @@ Result start(const uint8_t* module, size_t moduleSize, k_timepoint_t deadline) {
         &sSandboxThread, sSandboxStack, K_THREAD_STACK_SIZEOF(sSandboxStack), sandboxEntry,
         &sShared, nullptr, nullptr, CONFIG_APP_WASM3_MVP_THREAD_PRIORITY, K_USER, K_FOREVER);
     k_thread_name_set(tid, "wasm_sandbox");
+#if defined(CONFIG_ZTEST)
+    k_thread_access_grant(tid, &sRequestSem, &sDoneSem, &sRequestStartedForTest);
+#else
     k_thread_access_grant(tid, &sRequestSem, &sDoneSem);
+#endif
     ret = k_mem_domain_add_thread(&sSandboxDomain, tid);
     if (ret != 0) {
         LOG_ERR("Wasm sandbox domain attach failed: %d", ret);
@@ -529,6 +540,10 @@ Result triggerMemoryFaultForTest(k_timepoint_t deadline) {
     const Result result = resultFromVerdict(verdict);
     stopLocked();
     return result;
+}
+
+bool waitForRequestStartForTest(k_timeout_t timeout) {
+    return k_sem_take(&sRequestStartedForTest, timeout) == 0;
 }
 #endif
 
