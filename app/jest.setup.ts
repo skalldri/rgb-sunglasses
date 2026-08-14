@@ -90,6 +90,10 @@ jest.mock('react-native-ble-plx', () => {
     connectToDevice = jest.fn();
     cancelDeviceConnection = jest.fn(async () => undefined);
     onDeviceDisconnected = jest.fn(() => ({ remove: jest.fn() }));
+    // Issue #136 wait-for-PoweredOn gate: default to an already-ready stack so
+    // existing scan tests pass straight through; gate tests override these.
+    state = jest.fn(async () => 'PoweredOn');
+    onStateChange = jest.fn(() => ({ remove: jest.fn() }));
   }
 
   return {
@@ -107,6 +111,15 @@ jest.mock('react-native-ble-plx', () => {
       LowPower: 0,
       Balanced: 1,
       LowLatency: 2,
+    },
+    // String values mirror react-native-ble-plx's State enum.
+    State: {
+      Unknown: 'Unknown',
+      Resetting: 'Resetting',
+      Unsupported: 'Unsupported',
+      Unauthorized: 'Unauthorized',
+      PoweredOff: 'PoweredOff',
+      PoweredOn: 'PoweredOn',
     },
   };
 });

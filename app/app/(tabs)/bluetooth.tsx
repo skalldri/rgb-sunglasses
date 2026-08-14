@@ -18,7 +18,7 @@ import { bleManager, requestPermissions } from "@/hooks/ble-manager";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import { APP_SELF_UPDATE_SUPPORTED, getCurrentAppVersion } from "@/services/app-update";
 import { Link, useFocusEffect } from "expo-router";
-import { LogLevel, ScanMode } from "react-native-ble-plx";
+import { LogLevel, ScanMode, State } from "react-native-ble-plx";
 
 // Set log level once at module load
 if (__DEV__) bleManager.setLogLevel(LogLevel.Verbose);
@@ -96,6 +96,13 @@ export default function BluetoothScreen() {
     // starts a second concurrent scan (setDevices([]) also wipes the live scan's
     // results). null when no retry is scheduled.
     const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Subscription for the wait-for-PoweredOn gate in startBluetoothScan (issue
+    // #136), kept in a ref so the focus-effect cleanup can remove it if the
+    // screen blurs while the wait is still pending - the gate's own generation
+    // checks only run when a state EVENT arrives, so without this a blur during
+    // a quiet wait would leak the subscription. null when no wait is pending.
+    const stateSubRef = useRef<{ remove: () => void } | null>(null);
 
     // Per-device last-seen timestamps (mac -> epoch ms). Kept in a ref, NOT state, so the
     // high-frequency scan callback (fires on every advertisement) doesn't re-render the
@@ -206,6 +213,37 @@ export default function BluetoothScreen() {
             });
     }
 
+    // Arm the prune + rescan timers for a scan that is actually running. Called
+    // from startBluetoothScan AFTER the issue-#136 readiness gate has opened -
+    // never from the focus effect - so neither timer can fire against a
+    // not-yet-ready BLE stack. Clear-then-arm because the failure-retry path
+    // re-enters startBluetoothScan with the same generation: without the clears,
+    // a retry would stack a second pair of intervals. The focus-effect cleanup
+    // remains the owner of clearing them on blur.
+    function armScanTimers(gen: number) {
+        if (pruneTimerRef.current) {
+            clearInterval(pruneTimerRef.current);
+        }
+        if (rescanTimerRef.current) {
+            clearInterval(rescanTimerRef.current);
+        }
+        // Age out devices that stop advertising while the screen stays focused (the
+        // scan-restart that used to be the only list-clear happens only on focus/blur).
+        pruneTimerRef.current = setInterval(pruneStaleDevices, PRUNE_INTERVAL_MS);
+        // Periodically restart the scan to defeat Android's report de-dup: a fresh
+        // startDeviceScan re-reports every currently-advertising device (refreshing its
+        // lastSeen) so a still-present board isn't pruned during Android's long gaps
+        // between duplicate reports. Does NOT clear the list -> no flicker. Guarded on
+        // the generation so it goes quiet the moment the screen is superseded.
+        rescanTimerRef.current = setInterval(() => {
+            if (scanGenRef.current !== gen) {
+                return;
+            }
+            bleManager.stopDeviceScan();
+            registerScanCallback(gen);
+        }, RESCAN_INTERVAL_MS);
+    }
+
     async function startBluetoothScan(gen: number) {
         console.log('Starting Bluetooth scan...');
         setIsScanning(true);
@@ -239,7 +277,101 @@ export default function BluetoothScreen() {
                 return;
             }
 
+            // Wait for the BLE stack to actually be ready before scanning (issue #136).
+            // On iOS, CBCentralManager starts in Unknown and only reaches PoweredOn
+            // asynchronously - and on the app's very FIRST launch the Bluetooth
+            // permission prompt is up during exactly this window, so the state stays
+            // Unknown for as long as the user takes to answer (hardware-verified: both
+            // the initial scan and the old fixed 2s retry died with "BluetoothLE is in
+            // unknown state" while the prompt sat unanswered). Android doesn't normally
+            // hit this because requestPermissions()' native round-trips delay the scan
+            // past adapter init, but the gate is correct on both platforms. PoweredOff
+            // also parks here, which is a UX improvement for free: flipping Bluetooth
+            // back on starts the scan without needing a tab refocus.
+            const state = await bleManager.state();
+            // Same rule as every other await in this function: the screen may have
+            // blurred while state() was in flight. Without this check, the
+            // subscription write below could land AFTER the focus cleanup already
+            // ran (which found nothing to remove), leaving a stale listener no
+            // cleanup will ever see - and on a fast blur/refocus it would clobber
+            // the NEW session's handle in stateSubRef, making that one
+            // unremovable too.
+            if (scanGenRef.current !== gen) {
+                return;
+            }
+            if (state !== State.PoweredOn) {
+                if (state === State.Unsupported || state === State.Unauthorized) {
+                    // No state event will ever deliver PoweredOn (no radio /
+                    // permission denied) - drop to the empty state instead of
+                    // spinning forever.
+                    console.log(`Bluetooth unavailable (state: ${state}) - not scanning`);
+                    setIsScanning(false);
+                    return;
+                }
+                console.log(`Bluetooth not ready (state: ${state}) - waiting for PoweredOn...`);
+                // No spinner while parked: with the radio off this wait can last
+                // indefinitely, and an endless "Scanning..." with no scan running is
+                // a lie - the empty state is the honest UI (matching the pre-gate
+                // outcome for a powered-off radio). Re-asserted true on release.
+                setIsScanning(false);
+                // The subscription handle is a LOCAL, with stateSubRef only
+                // mirroring the newest one for the focus-effect cleanup. done()
+                // removes its own subscription and only clears the ref if the ref
+                // still points at it - so even if another invocation with the SAME
+                // generation re-enters (the failure-retry path reuses the caller's
+                // gen) and overwrites the mirror, each waiter still removes exactly
+                // its own subscription and can never remove a newer session's.
+                const ready = await new Promise<boolean>((resolve) => {
+                    // `let` + optional-call rather than `const`: if the library ever
+                    // delivered the emitCurrentState callback synchronously (inside
+                    // the onStateChange call itself), a `const sub` would still be in
+                    // TDZ here. In that case done() resolves without removing; the
+                    // subscription stays mirrored in stateSubRef and the next event
+                    // (or the focus cleanup) removes it - resolve() twice is a no-op.
+                    let sub: { remove: () => void } | null = null;
+                    sub = bleManager.onStateChange((s) => {
+                        const done = (result: boolean) => {
+                            sub?.remove();
+                            if (stateSubRef.current === sub) {
+                                stateSubRef.current = null;
+                            }
+                            resolve(result);
+                        };
+                        if (scanGenRef.current !== gen) {
+                            done(false);
+                        } else if (s === State.PoweredOn) {
+                            done(true);
+                        } else if (s === State.Unsupported || s === State.Unauthorized) {
+                            done(false);
+                        }
+                        // Unknown / Resetting / PoweredOff: keep waiting. If the screen
+                        // blurs with no further event, the focus-effect cleanup removes
+                        // this subscription; the suspended await simply never resumes,
+                        // which is inert (everything after it is generation-guarded).
+                    }, true);
+                    stateSubRef.current = sub;
+                });
+                if (!ready || scanGenRef.current !== gen) {
+                    // isScanning is already false (set before parking); nothing to
+                    // reset here even when this generation still owns the screen.
+                    return;
+                }
+                console.log('Bluetooth powered on - starting scan');
+                // Re-assert the spinner: it was dropped while parked, and a
+                // concurrent error path may also have cleared it during the wait.
+                setIsScanning(true);
+            }
+
             registerScanCallback(gen);
+            // Timers arm only HERE - after the gate has opened and a scan is
+            // genuinely running - never from the focus effect (issue #136 review):
+            // arming them up front let the 10s rescan timer call
+            // registerScanCallback() ungated during the wait, resurrecting the
+            // unknown-state error mid-prompt (first one burning the single retry,
+            // every later one killing the scanning state). Both timers are
+            // meaningless without a live scan anyway. Clear-then-arm keeps the
+            // failure-retry path (which re-enters with the same gen) idempotent.
+            armScanTimers(gen);
 
             // Check if any devices are already paired with the OS with the "Core Config Service" UUID
             const connectedDevices = await bleManager.connectedDevices(["12345678-1234-5678-0001-56789abc0000"]);
@@ -332,22 +464,13 @@ export default function BluetoothScreen() {
                 };
             }
 
+            // The prune/rescan timers are NOT armed here anymore - startBluetoothScan
+            // arms them (via armScanTimers) only once the readiness gate has opened
+            // and a scan is actually running. Arming them here let the 10s rescan
+            // timer bypass the issue-#136 gate and start an ungated scan while
+            // CoreBluetooth was still initializing (see the comment at the
+            // armScanTimers call site). The cleanup below still clears them.
             startBluetoothScan(gen);
-            // Age out devices that stop advertising while the screen stays focused (the
-            // scan-restart that used to be the only list-clear happens only on focus/blur).
-            pruneTimerRef.current = setInterval(pruneStaleDevices, PRUNE_INTERVAL_MS);
-            // Periodically restart the scan to defeat Android's report de-dup: a fresh
-            // startDeviceScan re-reports every currently-advertising device (refreshing its
-            // lastSeen) so a still-present board isn't pruned during Android's long gaps
-            // between duplicate reports. Does NOT clear the list -> no flicker. Guarded on
-            // the generation so it goes quiet the moment the screen is superseded.
-            rescanTimerRef.current = setInterval(() => {
-                if (scanGenRef.current !== gen) {
-                    return;
-                }
-                bleManager.stopDeviceScan();
-                registerScanCallback(gen);
-            }, RESCAN_INTERVAL_MS);
 
             return () => {
                 // Invalidate this session's in-flight work (a pending permission
@@ -359,6 +482,12 @@ export default function BluetoothScreen() {
                 if (retryTimerRef.current) {
                     clearTimeout(retryTimerRef.current);
                     retryTimerRef.current = null;
+                }
+                // Remove a pending wait-for-PoweredOn subscription (issue #136) so a
+                // blur during a quiet wait can't leak it into the next focus session.
+                if (stateSubRef.current) {
+                    stateSubRef.current.remove();
+                    stateSubRef.current = null;
                 }
                 if (pruneTimerRef.current) {
                     clearInterval(pruneTimerRef.current);
