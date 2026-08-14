@@ -1,5 +1,6 @@
 #include <extensions/rgbx_package.h>
 #include <extensions/rgbx_package_psa.h>
+#include <extensions/rgbx_staged_package.h>
 #include <psa/crypto.h>
 #include <zcbor_common.h>
 #include <zcbor_encode.h>
@@ -167,6 +168,71 @@ struct DigestObservation {
     size_t coveredSize = 0;
 };
 
+enum class ReaderFault {
+    None,
+    Error,
+    ZeroData,
+    EndWithData,
+    OversizedCount,
+    UnknownStatus,
+};
+
+struct ReaderFixture {
+    const std::vector<uint8_t>* bytes = nullptr;
+    size_t offset = 0;
+    size_t maxChunk = SIZE_MAX;
+    size_t calls = 0;
+    size_t faultCall = SIZE_MAX;
+    ReaderFault fault = ReaderFault::None;
+};
+
+rgbx_package::ReadStatus readFixture(void* context, uint8_t* destination, size_t capacity,
+                                     size_t& bytesRead) {
+    auto& fixture = *static_cast<ReaderFixture*>(context);
+    const size_t call = fixture.calls++;
+    if (call == fixture.faultCall) {
+        switch (fixture.fault) {
+            case ReaderFault::Error:
+                return rgbx_package::ReadStatus::Error;
+            case ReaderFault::ZeroData:
+                bytesRead = 0;
+                return rgbx_package::ReadStatus::Data;
+            case ReaderFault::EndWithData:
+                bytesRead = 1;
+                return rgbx_package::ReadStatus::End;
+            case ReaderFault::OversizedCount:
+                bytesRead = capacity + 1;
+                return rgbx_package::ReadStatus::Data;
+            case ReaderFault::UnknownStatus:
+                return static_cast<rgbx_package::ReadStatus>(0xff);
+            case ReaderFault::None:
+                break;
+        }
+    }
+
+    if (fixture.bytes == nullptr || fixture.offset >= fixture.bytes->size()) {
+        bytesRead = 0;
+        return rgbx_package::ReadStatus::End;
+    }
+
+    const size_t remaining = fixture.bytes->size() - fixture.offset;
+    size_t chunk = remaining < capacity ? remaining : capacity;
+    if (chunk > fixture.maxChunk) {
+        chunk = fixture.maxChunk;
+    }
+    if (chunk == 0) {
+        bytesRead = 0;
+        return rgbx_package::ReadStatus::Data;
+    }
+
+    std::memcpy(destination, fixture.bytes->data() + fixture.offset, chunk);
+    fixture.offset += chunk;
+    bytesRead = chunk;
+    return rgbx_package::ReadStatus::Data;
+}
+
+rgbx_package::StagedPackage stagedPackage;
+
 bool verifyTestDigest(void* context, const uint8_t* covered, size_t coveredSize,
                       const uint8_t expected[rgbx_package::kDigestSize]) {
     auto* observation = static_cast<DigestObservation*>(context);
@@ -268,6 +334,145 @@ ZTEST(rgbx_package, test_psa_sha256_admits_package_and_rejects_every_tampered_re
                                              rgbx_package::verifySha256Psa, nullptr, out),
                       Result::DigestMismatch);
     }
+}
+
+ZTEST(rgbx_package, test_staging_owns_one_chunked_validated_snapshot) {
+    stagedPackage.reset();
+    const auto manifest = encodeManifest(ManifestSpec{});
+    auto package = buildPackage(manifest);
+    sealSha256(package);
+    ReaderFixture reader = {
+        .bytes = &package,
+        .maxChunk = 7,
+    };
+
+    const auto outcome =
+        stagedPackage.load(readFixture, &reader, policy(), rgbx_package::verifySha256Psa, nullptr);
+    zassert_true(outcome.ok());
+    zassert_true(outcome.packageChecked);
+    zassert_equal(outcome.packageResult, Result::Ok);
+    zassert_true(reader.calls > 2);
+    zassert_equal(stagedPackage.size(), package.size());
+    zassert_not_null(stagedPackage.package());
+    zassert_str_equal(stagedPackage.package()->metadata.extensionId, "demo.pulse");
+    zassert_not_equal(stagedPackage.package()->wasm,
+                      package.data() + rgbx_package::kHeaderSize + manifest.size());
+}
+
+ZTEST(rgbx_package, test_staging_rejects_truncation_and_digest_mismatch_with_parser_reason) {
+    stagedPackage.reset();
+    auto package = buildPackage(encodeManifest(ManifestSpec{}));
+    sealSha256(package);
+
+    auto truncated = package;
+    truncated.pop_back();
+    ReaderFixture reader = {.bytes = &truncated};
+    auto outcome =
+        stagedPackage.load(readFixture, &reader, policy(), rgbx_package::verifySha256Psa, nullptr);
+    zassert_equal(outcome.result, rgbx_package::StageResult::PackageRejected);
+    zassert_true(outcome.packageChecked);
+    zassert_equal(outcome.packageResult, Result::LengthMismatch);
+    zassert_is_null(stagedPackage.package());
+
+    package[rgbx_package::kHeaderSize] ^= 0x01;
+    reader = {.bytes = &package};
+    outcome =
+        stagedPackage.load(readFixture, &reader, policy(), rgbx_package::verifySha256Psa, nullptr);
+    zassert_equal(outcome.result, rgbx_package::StageResult::PackageRejected);
+    zassert_true(outcome.packageChecked);
+    zassert_equal(outcome.packageResult, Result::DigestMismatch);
+    zassert_is_null(stagedPackage.package());
+}
+
+ZTEST(rgbx_package, test_staging_distinguishes_exact_capacity_from_one_byte_oversize) {
+    stagedPackage.reset();
+    std::vector<uint8_t> exact(rgbx_package::kMaxPackageBytes, 0);
+    ReaderFixture reader = {.bytes = &exact};
+    auto outcome =
+        stagedPackage.load(readFixture, &reader, policy(), rgbx_package::verifySha256Psa, nullptr);
+    zassert_equal(outcome.result, rgbx_package::StageResult::PackageRejected);
+    zassert_true(outcome.packageChecked);
+    zassert_equal(outcome.packageResult, Result::BadMagic);
+
+    exact.push_back(0);
+    reader = {.bytes = &exact};
+    outcome =
+        stagedPackage.load(readFixture, &reader, policy(), rgbx_package::verifySha256Psa, nullptr);
+    zassert_equal(outcome.result, rgbx_package::StageResult::PackageTooLarge);
+    zassert_false(outcome.packageChecked);
+    zassert_is_null(stagedPackage.package());
+    zassert_equal(stagedPackage.size(), 0);
+}
+
+ZTEST(rgbx_package, test_staging_fails_closed_on_reader_errors_and_protocol_violations) {
+    stagedPackage.reset();
+    auto package = buildPackage(encodeManifest(ManifestSpec{}));
+    sealSha256(package);
+
+    ReaderFixture validReader = {.bytes = &package};
+    zassert_true(
+        stagedPackage
+            .load(readFixture, &validReader, policy(), rgbx_package::verifySha256Psa, nullptr)
+            .ok());
+    zassert_not_null(stagedPackage.package());
+
+    ReaderFixture blockedReader = {.bytes = &package};
+    auto outcome = stagedPackage.load(readFixture, &blockedReader, policy(),
+                                      rgbx_package::verifySha256Psa, nullptr);
+    zassert_equal(outcome.result, rgbx_package::StageResult::AlreadyAdmitted);
+    zassert_equal(blockedReader.calls, 0);
+    zassert_not_null(stagedPackage.package());
+
+    stagedPackage.reset();
+    outcome =
+        stagedPackage.load(nullptr, nullptr, policy(), rgbx_package::verifySha256Psa, nullptr);
+    zassert_equal(outcome.result, rgbx_package::StageResult::ReaderUnavailable);
+    zassert_is_null(stagedPackage.package());
+
+    constexpr std::array<ReaderFault, 4> kProtocolFaults = {
+        ReaderFault::ZeroData,
+        ReaderFault::EndWithData,
+        ReaderFault::OversizedCount,
+        ReaderFault::UnknownStatus,
+    };
+    for (const ReaderFault fault : kProtocolFaults) {
+        ReaderFixture reader = {
+            .bytes = &package,
+            .faultCall = 0,
+            .fault = fault,
+        };
+        outcome = stagedPackage.load(readFixture, &reader, policy(), rgbx_package::verifySha256Psa,
+                                     nullptr);
+        zassert_equal(outcome.result, rgbx_package::StageResult::ReaderProtocolError);
+        zassert_false(outcome.packageChecked);
+        zassert_is_null(stagedPackage.package());
+    }
+
+    ReaderFixture reader = {
+        .bytes = &package,
+        .maxChunk = 8,
+        .faultCall = 2,
+        .fault = ReaderFault::Error,
+    };
+    outcome =
+        stagedPackage.load(readFixture, &reader, policy(), rgbx_package::verifySha256Psa, nullptr);
+    zassert_equal(outcome.result, rgbx_package::StageResult::ReadFailed);
+    zassert_false(outcome.packageChecked);
+    zassert_is_null(stagedPackage.package());
+}
+
+ZTEST(rgbx_package, test_staging_reset_invalidates_an_admitted_view) {
+    stagedPackage.reset();
+    auto package = buildPackage(encodeManifest(ManifestSpec{}));
+    sealSha256(package);
+    ReaderFixture reader = {.bytes = &package};
+    zassert_true(
+        stagedPackage.load(readFixture, &reader, policy(), rgbx_package::verifySha256Psa, nullptr)
+            .ok());
+
+    stagedPackage.reset();
+    zassert_is_null(stagedPackage.package());
+    zassert_equal(stagedPackage.size(), 0);
 }
 
 ZTEST(rgbx_package, test_valid_golden_package_copies_metadata_and_views) {
@@ -536,5 +741,13 @@ ZTEST(rgbx_package, test_describe_covers_every_result) {
          raw <= static_cast<uint32_t>(Result::BadWasmHeader); ++raw) {
         zassert_not_equal(std::strcmp(rgbx_package::describe(static_cast<Result>(raw)), "unknown"),
                           0, "missing description for result %u", raw);
+    }
+
+    for (uint32_t raw = static_cast<uint32_t>(rgbx_package::StageResult::Ok);
+         raw <= static_cast<uint32_t>(rgbx_package::StageResult::PackageRejected); ++raw) {
+        zassert_not_equal(
+            std::strcmp(rgbx_package::describe(static_cast<rgbx_package::StageResult>(raw)),
+                        "unknown"),
+            0, "missing staging description for result %u", raw);
     }
 }

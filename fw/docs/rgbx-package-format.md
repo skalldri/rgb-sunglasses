@@ -120,7 +120,35 @@ image. That image checks the standard SHA-256 `abc` vector, admits a genuinely
 SHA-sealed package, and rejects changes in the manifest, Wasm payload, or digest
 trailer.
 
-The first parser implementation is intentionally not linked into production.
+## Immutable staging owner
+
+`rgbx_package::StagedPackage` owns the exact byte snapshot passed to the parser.
+Its fixed 10,292-byte capacity is the maximum header, manifest, Wasm, and digest
+size permitted by version 1. It is non-copyable because admitted manifest and
+Wasm views point into that buffer.
+
+The staging reader is sequential and deliberately small. `Data` must return
+between one byte and the supplied capacity, `End` must return zero bytes, and
+`Error` fails the transaction. Filling the buffer triggers a separate one-byte
+read so an exact-capacity input is distinguishable from an oversized stream.
+Invalid callback states fail as protocol errors. The trusted filesystem adapter
+must obey the write capacity; no filesystem adapter is production-wired yet.
+
+An admitted snapshot is write-locked. A second `load()` fails before calling its
+reader and preserves the first package. The owner can be reused only after an
+explicit `reset()` performed after every sandbox consumer has stopped. Failed,
+truncated, oversized, malformed, or digest-mismatched streams expose no package
+view and cannot mutate registry or runtime state. The owner is deliberately not
+thread-safe; its future production lifecycle must be serialized with sandbox
+activation, termination, and reset.
+
+The ARM QEMU symbol for the complete staging owner is 11,484 bytes, including
+the byte buffer and copied metadata. That alone exceeds the dual-runtime image's
+5,184-byte RAM margin above the stop-loss by 6,300 bytes. The owner therefore
+remains out of the production link until capacity is recovered, with LLEXT
+retirement as the planned recovery.
+
+The package-admission implementation is intentionally not linked into production.
 The dual-runtime image is too close to its flash and RAM stop-loss. Filesystem
 loading and execution remain disabled until an independently reviewed promotion
 packet either recovers enough measured capacity or retires LLEXT.
@@ -131,6 +159,8 @@ packet either recovers enough measured capacity or retires LLEXT.
   behavior, digest coverage, policy enforcement, and parser stack use.
 - Copy the candidate into one bounded staging buffer and validate that immutable
   snapshot. Do not validate one file view and execute another.
+- Refuse to overwrite an admitted staging owner. Reset it only after the Wasm
+  sandbox has terminated and every saved package view has been discarded.
 - Require exact read length and file size before parsing. Short reads, growth,
   replacement, padding, and concatenated packages fail the transaction.
 - Enable canonical zcbor support only with the reviewed production parser wiring

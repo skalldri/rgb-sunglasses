@@ -10,6 +10,7 @@ target_sources(app PRIVATE
   src/main.cpp
   ${FW_ROOT}/src/extensions/rgbx_package.cpp
   ${FW_ROOT}/src/extensions/rgbx_package_psa.cpp
+  ${FW_ROOT}/src/extensions/rgbx_staged_package.cpp
 )
 
 target_include_directories(app PRIVATE ${FW_ROOT}/src)
