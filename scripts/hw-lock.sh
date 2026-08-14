@@ -483,7 +483,13 @@ acquire_resources_blocking() {
 # hw-lock.sh invocation's --reason text causing a cross-match).
 kill_orphaned_metro() {
     local candidates pid cmdline pids=()
-    candidates="$( { pgrep -f 'expo run:android'; pgrep -f 'launch-app\.sh'; } 2>/dev/null | sort -u || true)"
+    # Both platforms' launch paths: the Android wrapper/CLI spellings AND the iOS
+    # ones (launch-app-ios.sh / `expo run:ios`, which also exec into Metro on the
+    # macOS host). Note `launch-app\.sh` does NOT match `launch-app-ios.sh` — the
+    # literal dot must follow "app" — so the iOS wrapper needs its own pattern or
+    # a dead session's iOS Metro would survive the sweep and stay bound to 8081 +
+    # the shared iPhone (found in #374 review).
+    candidates="$( { pgrep -f 'expo run:android'; pgrep -f 'expo run:ios'; pgrep -f 'launch-app\.sh'; pgrep -f 'launch-app-ios\.sh'; } 2>/dev/null | sort -u || true)"
     [ -n "$candidates" ] || return 0
 
     for pid in $candidates; do
