@@ -1,11 +1,13 @@
 import { AppButton } from "@/components/ui/app-button";
+import { IconSymbol } from "@/components/ui/icon-symbol";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useBleConnection } from "@/hooks/use-ble-connection";
 import { useThemeColors } from "@/hooks/use-theme-color";
+import { CONNECT_FAILED_HINT } from "@/services/ble-errors";
 import { useRouter } from "expo-router";
-import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, View } from "react-native";
 import { ThemedText } from "./themed-text";
 
 interface Props {
@@ -15,7 +17,7 @@ interface Props {
 
 export default function BluetoothDeviceListItem({ deviceName, macAddress }: Props) {
     const { selectedDevice, discoveryProgress, reconnectingDevice } = useBluetooth();
-    const { isConnecting, connect, disconnect, cancelReconnect } = useBleConnection(macAddress, deviceName);
+    const { isConnecting, lastConnectError, connect, disconnect, cancelReconnect } = useBleConnection(macAddress, deviceName);
     const router = useRouter();
     const c = useThemeColors();
 
@@ -85,6 +87,26 @@ export default function BluetoothDeviceListItem({ deviceName, macAddress }: Prop
                     />
                 </View>
             )}
+            {/* A failed connect used to be completely silent — connect() resolves false and the
+                onPress above just doesn't navigate, so the button appeared to do nothing at all.
+                Hidden while a new attempt is in flight so the retry doesn't show a stale failure
+                next to its own spinner. Tap for the underlying reason plus the forget-and-re-pair
+                recovery, which is the most common cause (see describeConnectError). */}
+            {lastConnectError && !isConnecting && !isReconnecting && (
+                <Pressable
+                    onPress={() => Alert.alert('Could not connect', `${lastConnectError}\n\n${CONNECT_FAILED_HINT}`)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Connection failed, tap for details"
+                    testID="connect-error"
+                    hitSlop={8}
+                    style={styles.errorRow}
+                >
+                    <IconSymbol name="exclamationmark.triangle.fill" size={16} color={c.danger} />
+                    <ThemedText type="caption" style={{ color: c.danger, flexShrink: 1 }}>
+                        Could not connect — tap for details
+                    </ThemedText>
+                </Pressable>
+            )}
         </View>
     );
 }
@@ -117,5 +139,10 @@ const styles = StyleSheet.create({
     },
     progressContainer: {
         gap: 2,
+    },
+    errorRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: Spacing.sm,
     },
 });

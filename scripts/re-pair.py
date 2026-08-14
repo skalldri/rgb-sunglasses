@@ -39,7 +39,14 @@ try:
 except ImportError:
     serial = None
 
-PKG = "com.autom8ed.rgbsunglassesapp.dev"
+# Default is the DEV variant: that is what an agent iterating on a local branch has installed, and
+# it stays the default so existing invocations are unchanged. Override with --package to drive the
+# RELEASE build (com.autom8ed.rgbsunglassesapp) — needed when reproducing a store-release bug, where
+# driving the dev variant instead silently proves nothing about the app under test. Rebound by
+# main() from --package; the three call sites below read it at call time, not import time.
+DEFAULT_PKG = "com.autom8ed.rgbsunglassesapp.dev"
+RELEASE_PKG = "com.autom8ed.rgbsunglassesapp"
+PKG = DEFAULT_PKG
 BOARD_VID, BOARD_PID, SHELL_IFACE = "2fe3", "0001", "00"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HW_LOCK = os.path.join(REPO_ROOT, "scripts", "hw-lock.sh")
@@ -305,6 +312,29 @@ class RePair:
                             f'    Monitor(command: "scripts/hw-lock.sh hold board app", persistent: true)')
         if self.a.state() != "device":
             die("no adb device (get-state != 'device'). Check `adb devices`.")
+        # Fail fast on a package that isn't there. Otherwise the pairing loop force-stops and
+        # `monkey`-launches nothing at all, then reports "board not listed / Connect not tappable"
+        # once per attempt — a message that points at the board or BLE rather than at the app.
+        # Filter on PKG itself, never a hardcoded product name: a hardcoded filter would
+        # return nothing for a renamed/forked/staging id that IS installed, and preflight
+        # would then die with a confidently wrong "not installed" — the exact class of
+        # misleading failure this check exists to remove. `pm list packages <filter>`
+        # substring-matches (so the dev variant satisfies a query for the release id),
+        # hence the comparison against exact "package:<name>" lines rather than the query.
+        installed = {line.strip().removeprefix("package:")
+                     for line in self.a.shell("pm", "list", "packages", PKG).stdout.splitlines()
+                     if line.strip()}
+        if PKG not in installed:
+            # Hint list derived from PKG's own vendor prefix (e.g. "com.autom8ed"), so a
+            # renamed package still gets useful candidates instead of an empty list.
+            prefix = ".".join(PKG.split(".")[:2])
+            siblings = sorted(
+                line.strip().removeprefix("package:")
+                for line in self.a.shell("pm", "list", "packages", prefix).stdout.splitlines()
+                if line.strip())
+            die(f"package '{PKG}' is not installed on this device.\n"
+                f"    Installed '{prefix}' packages: {', '.join(siblings) or '(none)'}\n"
+                f"    Use --package/--release to pick the right one.")
         if serial is None:
             die("pyserial not available (import serial failed).")
         self.screen_h = self.a.screen_h()
@@ -700,7 +730,20 @@ def main():
                    help="type the passkey as per-digit key events instead of input text")
     p.add_argument("--timeout-connect", type=int, default=60,
                    help="per-attempt pairing-dialog deadline (matches the app connect timeout)")
+    p.add_argument("--package", default=DEFAULT_PKG,
+                   help=f"Android package to drive (default: {DEFAULT_PKG}). Pass --release for "
+                        f"the store build.")
+    p.add_argument("--release", dest="package", action="store_const", const=RELEASE_PKG,
+                   help=f"shorthand for --package {RELEASE_PKG}")
     args = p.parse_args()
+
+    global PKG
+    PKG = args.package
+    # Say which app is being driven. Without this the failure mode is silent and very confusing:
+    # driving the wrong variant reports "board not listed / Connect not tappable" (i.e. it looks
+    # like a BLE or board problem) when the real answer is that this app is not the one under test.
+    log(f"driving package: {PKG}")
+
     sys.exit(RePair(args).run())
 
 

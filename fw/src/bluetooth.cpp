@@ -500,10 +500,21 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
+    // (int) casts are REQUIRED, not cosmetic: bt_security_t is `typedef enum __packed`
+    // (1 byte) and this is a C++ TU, so Zephyr's log-argument packing takes the generic
+    // template in cbprintf_cxx.h - which reserves MAX(sizeof(T), sizeof(int)) = 4 bytes
+    // but then memcpy's 4 bytes out of the 1-byte object, pulling 3 bytes of adjacent
+    // stack into the upper bits. Without the cast this printed "level 66701313 err
+    // 66701314" (0x03F9C801 / 0x03F9C802) instead of "level 1 err 2" - the true value
+    // survives in the low byte only. The explicit char/short overloads in that header
+    // promote via `int tmp = arg + 0;`; enums have no such overload, so the promotion
+    // has to happen here. Applies to EVERY enum logged from C++ in this codebase - see
+    // fw/CLAUDE.md, "Logging an enum from C++ prints garbage without an (int) cast".
+    // Cast type matches each specifier: (unsigned) for %u, (int) for %d.
     if (!err) {
-        LOG_INF("Security changed: %s level %u", addr, level);
+        LOG_INF("Security changed: %s level %u", addr, (unsigned)level);
     } else {
-        LOG_ERR("Security failed: %s level %u err %d", addr, level, err);
+        LOG_ERR("Security failed: %s level %u err %d", addr, (unsigned)level, (int)err);
     }
 
     BtThreadCommand cmd;
@@ -565,7 +576,12 @@ static void pairing_complete(struct bt_conn *conn, bool bonded) {
 
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-    LOG_INF("Pairing completed: %s, bonded: %d", addr, bonded);
+    // (int) for the same reason as the enum sites below: cbprintf_cxx.h has explicit
+    // promoting overloads for char/short/etc but none for `bool` either, so a bool is an
+    // EXACT match for the generic template (beating every conversion-requiring candidate)
+    // and takes the identical 4-bytes-out-of-a-1-byte-object path. Uncast, a successful
+    // pairing logged "bonded: 59609089" instead of "bonded: 1".
+    LOG_INF("Pairing completed: %s, bonded: %d", addr, (int)bonded);
 }
 
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason) {
@@ -573,7 +589,9 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason) {
 
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-    LOG_INF("Pairing failed conn: %s, reason %d", addr, reason);
+    // (int): enum bt_security_err is 1 byte under -fshort-enums - see the cast rationale
+    // in security_changed() above.
+    LOG_INF("Pairing failed conn: %s, reason %d", addr, (int)reason);
 }
 
 static void bond_deleted(uint8_t id, const bt_addr_le_t *peer) {
@@ -813,7 +831,8 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
 
         case BtThreadEvent::SECURITY_CHANGED:
             // What level of security did the peer upgrade to?
-            LOG_INF("Peer security level changed to %d", cmd->level);
+            // (int): bt_security_t is a 1-byte packed enum - see security_changed().
+            LOG_INF("Peer security level changed to %d", (int)cmd->level);
 
             if (cmd->level == REQUIRED_BT_SECURITY_LEVEL) {
                 LOG_DBG("Required security level achieved");
@@ -838,8 +857,11 @@ void bt_state_connecting_handle_command(BtThreadContext *ctx, const BtThreadComm
 
                 bt_state_change_to(ctx, BtThreadState::CONNECTED);
             } else {
+                // (int) on BOTH: REQUIRED_BT_SECURITY_LEVEL is BT_SECURITY_L4, which is
+                // itself a bt_security_t constant - so even the compile-time literal
+                // printed as 0x038D9004 instead of 4. See security_changed().
                 LOG_ERR("Failed to reach required security level %d, got %d instead",
-                        REQUIRED_BT_SECURITY_LEVEL, cmd->level);
+                        (int)REQUIRED_BT_SECURITY_LEVEL, (int)cmd->level);
 
                 // Disconnect from the peer (re-enabled for issue #232). With
                 // CONFIG_BT_SMP_SC_ONLY a below-L4 pairing can no longer *succeed*,
@@ -901,14 +923,15 @@ void bt_state_connected_handle_command(BtThreadContext *ctx, const BtThreadComma
 
         case BtThreadEvent::SECURITY_CHANGED:
             // What level of security did the peer upgrade to?
-            LOG_INF("Peer security level changed to %d", cmd->level);
+            // (int): bt_security_t is a 1-byte packed enum - see security_changed().
+            LOG_INF("Peer security level changed to %d", (int)cmd->level);
 
             if (cmd->level == REQUIRED_BT_SECURITY_LEVEL) {
                 LOG_DBG("Required security level achieved");
                 bt_state_change_to(ctx, BtThreadState::CONNECTED);
             } else {
-                LOG_WRN("Reached security %d, must reach %d to connect", cmd->level,
-                        REQUIRED_BT_SECURITY_LEVEL);
+                LOG_WRN("Reached security %d, must reach %d to connect", (int)cmd->level,
+                        (int)REQUIRED_BT_SECURITY_LEVEL);
                 // TODO: need to implement timeout to disconnect if we don't reach "CONNECTED" state
                 // within ~60s
             }
