@@ -38,7 +38,14 @@ BASH_BOARD_PATTERNS = [
     r"jlink-flash\.sh", r"mcumgr-flash\.sh", r"provision-device\.sh", r"JLinkExe",
     r"nrfutil\s+device", r"\bmcumgr\b", r"west\s+flash",
 ]
-BASH_APP_PATTERNS = [r"\badb\b", r"expo run:android", r"adb-connect\.sh", r"launch-app\.sh"]
+# NB: `launch-app\.sh` does NOT match `launch-app-ios.sh` (the literal dot must
+# follow "app"), and the iOS CLI spelling needs its own entry too — without both,
+# a bare `expo run:ios` on the Mac host bypassed the app lock, the prebuild sync
+# and the dev-variant assert entirely (the 2026-08-13 prod-app clobber; #374).
+BASH_APP_PATTERNS = [
+    r"\badb\b", r"expo run:android", r"adb-connect\.sh", r"launch-app\.sh",
+    r"expo run:ios", r"launch-app-ios\.sh",
+]
 
 resource = ""
 

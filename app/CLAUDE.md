@@ -253,7 +253,10 @@ task, same as the Android wrapper.
   -destination 'id=<UDID>' -allowProvisioningUpdates build` once — that creates the Apple Development
   cert + device-registered profile, after which `expo run:ios --device` works normally.
 - Expo's auto-launch after install can silently no-op on physical devices; launch explicitly with
-  `xcrun devicectl device process launch --device <UDID> com.autom8ed.rgbsunglassesapp`.
+  `xcrun devicectl device process launch --device <UDID> com.autom8ed.rgbsunglassesapp.dev` —
+  note the **`.dev`** suffix: the wrapper builds Debug, which installs under the dev-variant
+  bundle id. Launching the bare production id here either errors ("no such app") or launches a
+  leftover TestFlight install — and looks exactly like a failed deploy.
 - **Local Network permission**: the app can't reach Metro (LAN IP in the app's `ip.txt`) until the
   user accepts iOS's local-network prompt on first launch — the symptom is "app launches, Metro never
   receives a bundle request". Phone and Mac must share the Wi-Fi network.

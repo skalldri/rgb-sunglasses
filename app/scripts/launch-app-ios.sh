@@ -37,7 +37,15 @@
 # iPhone's TRADITIONAL hardware UDID from `xcrun xctrace list devices`
 # (00008120-…), not the CoreDevice UUID from `devicectl list devices`.
 #
+# This wrapper builds the DEBUG configuration, always: `--configuration Debug`
+# is appended unconditionally and a caller-supplied `--configuration` with any
+# other value is rejected — the Debug-scoped assert below can only vouch for
+# Debug, and a Release build through this script would install under the
+# PRODUCTION bundle id (the exact 2026-08-13 incident, via a different door).
+# Release/TestFlight builds belong to app-release.yml, not this script.
+#
 # Usage: app/scripts/launch-app-ios.sh --device <UDID> [extra expo run:ios args]
+#        app/scripts/launch-app-ios.sh --check-only   # prebuild + assert only, no build
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -69,27 +77,83 @@ fi
 
 cd "$REPO_ROOT/app"
 
+# Parse args: pin the configuration to Debug (reject anything else, strip a
+# redundant explicit Debug — it's re-appended below), and support --check-only
+# (stop after the assert; lets the guard rails be exercised without a build).
+# Array expansions use the ${arr[@]+...} guard throughout: this script runs on
+# stock macOS bash 3.2, where an empty "$@"/array under `set -u` is fatal
+# (bash < 4.4) — same idiom as fw/scripts/jlink-flash.sh.
+CHECK_ONLY=0
+PASS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --check-only)
+            CHECK_ONLY=1
+            ;;
+        --configuration)
+            if [ "${2:-}" != "Debug" ]; then
+                echo "[!] Refusing --configuration ${2:-<missing>}: this wrapper only builds Debug" >&2
+                echo "    (the dev-variant assert below can only vouch for the Debug configuration;" >&2
+                echo "    any other configuration installs under the PRODUCTION bundle id)." >&2
+                echo "    Release/TestFlight builds go through app-release.yml." >&2
+                exit 1
+            fi
+            shift # drop the value; --configuration Debug is re-appended below
+            ;;
+        --configuration=*)
+            if [ "${1#*=}" != "Debug" ]; then
+                echo "[!] Refusing ${1}: this wrapper only builds Debug (see --configuration note)." >&2
+                exit 1
+            fi
+            ;;
+        *)
+            PASS+=("$1")
+            ;;
+    esac
+    shift
+done
+
 # Defense 1: incremental prebuild sync so config-plugin output always lands,
 # no matter how old the checked-out ios/ is. Cheap when nothing changed.
 # --no-install skips pod install; `expo run:ios` runs it itself when needed.
 echo "[*] Syncing ios/ prebuild (config plugins re-applied)..."
 CI=1 npx expo prebuild --platform ios --no-install
 
-# Defense 2: refuse to build unless the dev-variant bundle id actually landed.
-# Glob the pbxproj — the project name varies with the tree's age (see header).
+# Defense 2: refuse to build unless the DEBUG configuration actually carries the
+# dev-variant bundle id. Glob the pbxproj — the project name varies with the
+# tree's age (see header) — and require exactly ONE match: with two projects
+# (e.g. a pre-rename one beside a regenerated one, or a copy parked during
+# recovery) we could assert one while xcodebuild builds the other.
 PBX=(ios/*.xcodeproj/project.pbxproj)
 if [ ! -f "${PBX[0]}" ]; then
     echo "[!] No ios/*.xcodeproj/project.pbxproj after prebuild — prebuild failed?" >&2
     exit 1
 fi
-if ! grep -q 'PRODUCT_BUNDLE_IDENTIFIER = "com.autom8ed.rgbsunglassesapp.dev"' "${PBX[0]}"; then
-    echo "[!] Refusing to build: ${PBX[0]} has no Debug-configuration" >&2
-    echo "    PRODUCT_BUNDLE_IDENTIFIER = com.autom8ed.rgbsunglassesapp.dev — the" >&2
-    echo "    withDevVariantIos plugin output is missing, so this build would install" >&2
-    echo "    over the PRODUCTION app (this exact incident happened 2026-08-13)." >&2
-    echo "    Try: rm -rf app/ios && re-run (full prebuild regenerate)." >&2
+if [ "${#PBX[@]}" -gt 1 ]; then
+    echo "[!] Refusing to build: multiple Xcode projects under ios/ (${PBX[*]}) — cannot" >&2
+    echo "    tell which one will be built. Try: rm -rf app/ios && re-run (full regenerate)." >&2
     exit 1
 fi
-echo "[*] Dev-variant bundle id verified in ${PBX[0]}"
+# Scope the check to the Debug build-configuration blocks (the awk range covers
+# each `/* Debug */ = { ... name = Debug; }` XCBuildConfiguration section), so a
+# .dev id somewhere else in the file can't satisfy it. Two conditions: Debug
+# MUST carry the .dev id, and Debug must NOT carry the bare production id.
+DEBUG_IDS="$(awk '/\/\* Debug \*\/ = \{/,/name = Debug;/' "${PBX[0]}" | grep 'PRODUCT_BUNDLE_IDENTIFIER' || true)"
+if ! printf '%s\n' "$DEBUG_IDS" | grep -q 'com\.autom8ed\.rgbsunglassesapp\.dev' \
+   || printf '%s\n' "$DEBUG_IDS" | grep 'PRODUCT_BUNDLE_IDENTIFIER' | grep -vq '\.dev'; then
+    echo "[!] Refusing to build: the Debug configuration in ${PBX[0]} does not carry" >&2
+    echo "    PRODUCT_BUNDLE_IDENTIFIER com.autom8ed.rgbsunglassesapp.dev (found:" >&2
+    printf '%s\n' "$DEBUG_IDS" | sed 's/^/      /' >&2
+    echo "    ) — the withDevVariantIos plugin output is missing or wrong, so this build" >&2
+    echo "    would install over the PRODUCTION app (this exact incident happened" >&2
+    echo "    2026-08-13). Try: rm -rf app/ios && re-run (full prebuild regenerate)." >&2
+    exit 1
+fi
+echo "[*] Dev-variant bundle id verified in the Debug configuration of ${PBX[0]}"
 
-exec npx expo run:ios "$@"
+if [ "$CHECK_ONLY" = 1 ]; then
+    echo "[*] --check-only: stopping before the build."
+    exit 0
+fi
+
+exec npx expo run:ios --configuration Debug ${PASS[@]+"${PASS[@]}"}
