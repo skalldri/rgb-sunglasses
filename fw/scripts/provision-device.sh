@@ -113,13 +113,17 @@ if [ -z "$DISK" ]; then
     echo "[!] Could not find the board's NAND USB mass-storage disk (vendor=RGB-SG, model=FlashDisk)." >&2
     echo "    Run /check-hardware and confirm the board is connected and enumerated." >&2
     if [ "$HOST_OS" = "Darwin" ]; then
-        # After any macOS-side eject (loginwindow does one whenever the disk
-        # appears while the screen is locked), Zephyr's MSC latches the LUN as
-        # MEDIUM NOT PRESENT until the board reboots — so "no disk" here usually
-        # just means the board hasn't been rebooted since the last eject.
-        echo "    The screen is unlocked but no disk was found — most likely the LUN is" >&2
-        echo "    still latched from an earlier macOS eject. Reboot the board" >&2
-        echo "    (mcumgr reset) and re-run. To see the SCSI state:" >&2
+        # Three distinct macOS-side causes, in likelihood order: (1) the display
+        # dimmed — loginwindow's eject shield arms on dim WITHOUT setting
+        # IOConsoleLocked, so the guard above can't catch it; (2) Zephyr's MSC is
+        # still latched MEDIUM NOT PRESENT from an earlier macOS eject (clears on
+        # board reboot); (3) a stale image that never publishes media at all.
+        echo "    IOConsoleLocked was false, but note a DIMMED display arms the same eject" >&2
+        echo "    shield without setting it (#367) — wake the display and retry first." >&2
+        echo "    Otherwise the LUN is most likely still latched MEDIUM NOT PRESENT from an" >&2
+        echo "    earlier macOS eject (reboot the board with mcumgr reset and re-run), or the" >&2
+        echo "    board is carrying a stale image that never publishes media (reflash it)." >&2
+        echo "    To see the SCSI state:" >&2
         echo "      /usr/bin/log show --last 5m --predicate 'eventMessage CONTAINS \"IOUSBMassStorageDriver\"'" >&2
     fi
     exit 1

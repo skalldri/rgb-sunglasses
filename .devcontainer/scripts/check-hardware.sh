@@ -90,7 +90,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ "$(ioreg -n Root -d1 -a 2>/dev/null | plutil -extract IOConsoleLocked raw - 2>/dev/null)" = "true" ]; then
         echo "Screen lock: LOCKED  [board's USB disk will be ejected by loginwindow — unlock before provisioning (#367)]"
     else
-        echo "Screen lock: unlocked  [board disk mounts normally]"
+        echo "Screen lock: not locked (IOConsoleLocked=false)  [NB: a dimmed display arms the same eject shield without setting this — see #367]"
     fi
 
     echo ""

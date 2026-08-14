@@ -322,7 +322,7 @@ else
         || warn "sudo declined — disks won't mount when no user is logged in."
 fi
 
-if pmset -g 2>/dev/null | grep -qE '^\s*displaysleep\s+0'; then
+if pmset -g 2>/dev/null | grep -qE '^[[:space:]]*displaysleep[[:space:]]+0([[:space:]]|$)'; then
     info "Display sleep already disabled"
 else
     info "Disabling display sleep (display dim re-arms the disk-eject shield — needs sudo)..."
