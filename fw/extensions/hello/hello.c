@@ -111,6 +111,27 @@ static void hello_log(const char *fmt, ...)
 
 void rgbx_tick(void)
 {
+	const uint32_t dt = rgbx_inputs.dt_ms;
+
+	/* One-shot, so the UART/log pane isn't spammed at 90 Hz. Covers a
+	 * width/zero-pad conversion and a %s alongside the plain integer one —
+	 * enough that a formatter regression shows up as a diff, not a silence.
+	 *
+	 * Deliberately ABOVE the Crash/Hang triggers below. With Crash set from
+	 * t=0 this makes tick 0 log and THEN trap, which is the one thing no
+	 * in-repo fixture could previously produce: a host that drops a faulted
+	 * tick's printk loses exactly the line that explains the trap, and
+	 * report.integration.test.ts now asserts that line survives. Ordering
+	 * only matters on the very first tick — by the time a timeline event
+	 * sets Crash mid-run (the `param-crash` scenario) this has long since
+	 * fired, so that scenario's output is byte-for-byte unchanged.
+	 */
+	if (!logged_first_tick) {
+		logged_first_tick = true;
+		hello_log("hello: tick1 dt=%u speed=%03u msg=%s\n", dt,
+			  rgbx_inputs.params[P_SPEED], "ok");
+	}
+
 	/* --- BOOL params: the deliberate sandbox-recovery triggers --------- */
 	if (rgbx_inputs.params[P_CRASH]) {
 		*(volatile uint32_t *)0x20000000 = 1; /* kernel SRAM -> MPU fault */
@@ -118,17 +139,6 @@ void rgbx_tick(void)
 	if (rgbx_inputs.params[P_HANG]) {
 		while (1) { /* deliberate tick-deadline overrun */
 		}
-	}
-
-	const uint32_t dt = rgbx_inputs.dt_ms;
-
-	/* One-shot, so the UART/log pane isn't spammed at 90 Hz. Covers a
-	 * width/zero-pad conversion and a %s alongside the plain integer one —
-	 * enough that a formatter regression shows up as a diff, not a silence. */
-	if (!logged_first_tick) {
-		logged_first_tick = true;
-		hello_log("hello: tick1 dt=%u speed=%03u msg=%s\n", dt,
-			  rgbx_inputs.params[P_SPEED], "ok");
 	}
 
 	pos_ms += dt * rgbx_inputs.params[P_SPEED] / 50u; /* 50 == 1x */

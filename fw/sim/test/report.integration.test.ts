@@ -35,7 +35,7 @@ const scenario: Scenario = {
   imu: { type: "static" },
 };
 
-function runOpts(ticks: number) {
+function runOpts(ticks: number, paramOverrides: Record<string, number | string> = {}) {
   return {
     wasmPath: helloPath,
     dspWasmPath: path.join(WASM_DIR, "audio_dsp.wasm"),
@@ -47,7 +47,7 @@ function runOpts(ticks: number) {
     dtMs: 11,
     budgetMs: 50,
     backstopMs: 500,
-    paramOverrides: {},
+    paramOverrides,
     outDir: null,
     asciiSamples: 0,
     pngEvery: 0,
@@ -91,4 +91,37 @@ test("RunStats drops empty logs and splits multi-line output", { skip: false }, 
   // Negative tick = the fault happened during warm-up, before the recorded
   // window; the report numbers those negatively elsewhere too.
   assert.deepEqual(stats.logLines, ["[tick -2] a", "[tick -2] b"]);
+});
+
+/*
+ * The faulted tick's printk, end to end.
+ *
+ * TickFault carries the log the worker drained on the way down — it captures
+ * it precisely because traps often follow logs — but scenarioRun's fault
+ * branch used to copy only `out.fault` and break, so the single line that
+ * explains a trap never reached report.json. That drain now exists, and this
+ * is what proves it is actually wired: the RunStats-level tests above would
+ * pass just as happily with the scenarioRun call deleted.
+ *
+ * Getting a genuine logs-then-traps tick is the whole difficulty. It needs
+ * hello's one-shot line to be emitted BEFORE its Crash trigger fires, which
+ * is why that ordering in hello.c is deliberate and commented — with Crash
+ * forced from t=0, tick 0 logs and then traps in the same call.
+ */
+test("report.printk keeps the log of the tick that trapped", { skip }, async () => {
+  const { report, exitCode } = await runScenario(runOpts(5, { Crash: "true" }));
+  const printk = report.printk as string[];
+  const result = report.result as { fault: { kind: string; tick: number } | null };
+
+  // The trap must land on tick 0 — the same tick that logged.
+  assert.notEqual(result.fault, null, JSON.stringify(result));
+  assert.equal(result.fault!.kind, "trap");
+  assert.equal(result.fault!.tick, 0);
+  assert.equal(exitCode, 2); // unexpected fault
+
+  // The line the extension printed on its way down survives into the report.
+  assert.deepEqual(printk, [
+    "[init] hello: rgbx_init running inside the sandbox",
+    "[tick 0] hello: tick1 dt=11 speed=050 msg=ok",
+  ]);
 });

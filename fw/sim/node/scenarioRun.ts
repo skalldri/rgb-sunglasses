@@ -297,7 +297,14 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
         // trap. The browser console already gets this right (stepOnce
         // appends outcome.log before handling the fault); only the report
         // dropped it.
-        stats.recordFaultLog(host.tickIndex - 1 - opts.warmupTicks, out.log);
+        // Tag from the fault's own tick, NOT `host.tickIndex - 1 - warmup`
+        // like the success path below: SimHost increments tickIndex only
+        // after a tick survives, so on a fault it still points at the tick
+        // that just died and the success-path arithmetic is one too low (a
+        // trap on tick 0 came out as `[tick -1]`). Sharing the expression
+        // with the `fault =` line means the log line and result.fault.tick
+        // cannot disagree.
+        stats.recordFaultLog(toRecordedTick(out.fault.tick), out.log);
         fault = { ...out.fault, tick: toRecordedTick(out.fault.tick) };
         break;
       }
