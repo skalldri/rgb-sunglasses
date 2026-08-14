@@ -246,6 +246,9 @@ void set_audio_source(AnimationAudioSource *source);
  *  unset). */
 void set_button_source(AnimationButtonSource *source);
 
+/** Lock-free exception-context ownership check for the shared fatal handler. */
+bool isCurrentSandboxThread();
+
 }  // namespace extension_host
 
 /** @brief Defined in src/imu/animation_adapters/imu_animations_imu.cpp

@@ -1,98 +1,26 @@
 #include <animations/wasm_mvp_animation.h>
 #include <animations/wasm_mvp_module.h>
-#include <wasm3.h>
+#include <extensions/wasm_mvp_runtime.h>
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(wasm_mvp_animation, LOG_LEVEL_INF);
 
-namespace {
-constexpr char kImportModule[] = "rgbx_mvp";
-constexpr char kFillImport[] = "fill";
-constexpr char kTickExport[] = "rgbx_tick";
-
-const char* errorText(M3Result result) {
-    return result != nullptr ? result : "unknown Wasm3 error";
-}
-}  // namespace
-
 void WasmMvpAnimation::init() {
     elapsedMs_ = 0;
-
-    if (!initializationAttempted_) {
-        initializationAttempted_ = true;
-        ready_ = initializeRuntime();
-    }
 }
 
-bool WasmMvpAnimation::initializeRuntime() {
-    environment_ = m3_NewEnvironment();
-    if (environment_ == nullptr) {
-        LOG_ERR("Wasm3 environment allocation failed");
-        return false;
+void WasmMvpAnimation::setActive(bool active) {
+    BaseAnimationTemplate::setActive(active);
+    if (!active) {
+        wasm_mvp_runtime::stop();
+        activationPending_ = false;
+        ready_ = false;
+        return;
     }
 
-    runtime_ = m3_NewRuntime(environment_, CONFIG_APP_WASM3_MVP_VALUE_STACK_SIZE, this);
-    if (runtime_ == nullptr) {
-        LOG_ERR("Wasm3 runtime allocation failed");
-        return false;
-    }
-
-    IM3Module module = nullptr;
-    M3Result result = m3_ParseModule(environment_, &module, kWasmMvpModule, sizeof(kWasmMvpModule));
-    if (result != m3Err_none) {
-        LOG_ERR("Wasm3 parse failed: %s", errorText(result));
-        return false;
-    }
-
-    result = m3_LoadModule(runtime_, module);
-    if (result != m3Err_none) {
-        LOG_ERR("Wasm3 load failed: %s", errorText(result));
-        m3_FreeModule(module);
-        return false;
-    }
-
-    result = m3_LinkRawFunctionEx(module, kImportModule, kFillImport, "v(i)", fillHost, this);
-    if (result != m3Err_none) {
-        LOG_ERR("Wasm3 import link failed: %s", errorText(result));
-        return false;
-    }
-
-    // Force validation and compilation of every body before the first render
-    // tick. This keeps malformed bytecode out of the time-sensitive frame path.
-    result = m3_CompileModule(module);
-    if (result != m3Err_none) {
-        LOG_ERR("Wasm3 compile failed: %s", errorText(result));
-        return false;
-    }
-
-    result = m3_FindFunction(&tickFunction_, runtime_, kTickExport);
-    if (result != m3Err_none) {
-        LOG_ERR("Wasm3 export lookup failed: %s", errorText(result));
-        return false;
-    }
-
-    LOG_INF("Wasm3 MVP ready (%u-byte module, %u-byte arena)",
-            static_cast<unsigned int>(sizeof(kWasmMvpModule)),
-            static_cast<unsigned int>(CONFIG_APP_WASM3_MVP_HEAP_SIZE));
-    return true;
-}
-
-const void* WasmMvpAnimation::fillHost(IM3Runtime runtime, IM3ImportContext context,
-                                       uint64_t* stack, void* memory) {
-    uint64_t* _sp = stack;
-    void* _mem = memory;
-    IM3ImportContext _ctx = context;
-    m3ApiGetArg(uint32_t, color);
-    ARG_UNUSED(runtime);
-    ARG_UNUSED(_mem);
-
-    auto* animation = static_cast<WasmMvpAnimation*>(const_cast<void*>(_ctx->userdata));
-    if (animation == nullptr || animation->activeRenderer_ == nullptr) {
-        return m3Err_trapAbort;
-    }
-
-    animation->fill(*animation->activeRenderer_, color);
-    m3ApiSuccess();
+    elapsedMs_ = 0;
+    activationPending_ = true;
+    ready_ = false;
 }
 
 void WasmMvpAnimation::fill(AnimationRenderer& renderer, uint32_t color) {
@@ -108,19 +36,33 @@ void WasmMvpAnimation::fill(AnimationRenderer& renderer, uint32_t color) {
 }
 
 void WasmMvpAnimation::tick(AnimationRenderer& renderer, size_t timeSinceLastTickMs) {
+    // One wall deadline covers a lazy sandbox admission plus its first guest
+    // call. Two independent deadlines would double the advertised backstop.
+    const k_timepoint_t deadline =
+        sys_timepoint_calc(K_MSEC(CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS));
+
+    if (activationPending_) {
+        activationPending_ = false;
+        const auto result =
+            wasm_mvp_runtime::start(kWasmMvpModule, sizeof(kWasmMvpModule), deadline);
+        ready_ = result == wasm_mvp_runtime::Result::Completed;
+        if (!ready_) {
+            LOG_ERR("Wasm3 sandbox activation failed: %s", wasm_mvp_runtime::describe(result));
+        }
+    }
+
     if (!ready_) {
         fill(renderer, 0);
         return;
     }
-
     elapsedMs_ += static_cast<uint32_t>(timeSinceLastTickMs);
-    activeRenderer_ = &renderer;
-    const M3Result result = m3_CallV(tickFunction_, elapsedMs_);
-    activeRenderer_ = nullptr;
-
-    if (result != m3Err_none) {
-        LOG_ERR("Wasm3 tick trapped: %s", errorText(result));
+    wasm_mvp_runtime::TickOutput output;
+    const auto result = wasm_mvp_runtime::tick(elapsedMs_, deadline, output);
+    if (result != wasm_mvp_runtime::Result::Completed) {
+        LOG_ERR("Wasm3 sandbox tick failed: %s", wasm_mvp_runtime::describe(result));
         ready_ = false;
         fill(renderer, 0);
+        return;
     }
+    fill(renderer, output.color);
 }

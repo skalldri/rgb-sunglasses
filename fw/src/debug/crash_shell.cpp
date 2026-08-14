@@ -6,7 +6,7 @@
 /* Deliberate-crash shell commands (issue #80) for validating the coredump
  * pipeline end-to-end: fault → coredump captured to the internal flash
  * partition (z_fatal_error runs the coredump backend BEFORE the fatal error
- * handler) → reboot (k_sys_fatal_error_handler in extension_host.cpp, unless
+ * handler) → reboot (k_sys_fatal_error_handler in sandbox_fatal_handler.cpp, unless
  * a debugger is attached) → coredump_manager copies the dump to
  * /NAND:/coredump on the next boot. */
 

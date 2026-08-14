@@ -14,7 +14,13 @@ zephyr_library_sources(
   source/m3_validate.c
 )
 
-zephyr_library_include_directories(source)
+zephyr_library_include_directories(source ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Route every mutable interpreter global, including the fixed arena and parser
+# tables, into the one partition granted to the K_USER Wasm sandbox. This is an
+# automatic library partition so an upstream-added global cannot silently land
+# in kernel-owned application data during a future vendor update.
+zephyr_library_app_memory(rgbx_wasm3_partition)
 
 # This MVP runs one small, memoryless module. Keep Wasm3's arena and compiler
 # bounds explicit so enabling the experiment cannot consume the system heap or
@@ -28,6 +34,7 @@ zephyr_library_compile_definitions(
   d_m3HasFloat=0
   d_m3MaxLinearMemoryPages=1
   d_m3RecordBacktraces=0
+  RGBX_WASM3_ZEPHYR_PORT=1
 )
 
 # Keep upstream-only warning workarounds scoped to the vendored interpreter.

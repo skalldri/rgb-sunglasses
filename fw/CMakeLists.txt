@@ -78,6 +78,10 @@ target_sources_ifdef(CONFIG_APP_FACTORY_RESET app PRIVATE src/factory_reset/fact
 target_sources_ifdef(CONFIG_APP_FACTORY_RESET app PRIVATE src/factory_reset/factory_reset_core.cpp)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_exports.c)
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_host.cpp)
+target_sources_ifdef(CONFIG_APP_WASM3_MVP app PRIVATE src/extensions/wasm_mvp_runtime.cpp)
+if(CONFIG_APP_EXTENSION_HOST OR CONFIG_APP_WASM3_MVP)
+  target_sources(app PRIVATE src/extensions/sandbox_fatal_handler.cpp)
+endif()
 # The shared path fence — compiled with the host itself so neither consumer's
 # Kconfig (APP_EXT_FILE_TRANSFER, APP_EXT_FILE_MANAGEMENT) can drop it.
 target_sources_ifdef(CONFIG_APP_EXTENSION_HOST app PRIVATE src/extensions/extension_path.cpp)
@@ -165,7 +169,9 @@ target_include_directories(
     src/
 )
 
-target_include_directories_ifdef(CONFIG_APP_WASM3_MVP app PRIVATE third_party/wasm3/source)
+target_include_directories_ifdef(CONFIG_APP_WASM3_MVP app PRIVATE
+                                 third_party/wasm3/source
+                                 third_party/wasm3)
 
 # Needs to be accessible to drivers so that the TPS25750 can access the patch file
 zephyr_include_directories(misc)

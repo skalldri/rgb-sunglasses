@@ -71,6 +71,7 @@ Rows marked **app** are ours; the rest come from Zephyr/NCS and are tuned from `
 | 8 | **app** `status_led_thread` | preempt | `CONFIG_APP_STATUS_LED_THREAD_PRIORITY` |
 | 8 | **app** `charger_status_thread` | preempt | `CONFIG_APP_CHARGER_STATUS_THREAD_PRIORITY` |
 | 9 | **app** extension sandbox thread | preempt | `CONFIG_APP_EXT_HOST_THREAD_PRIORITY` |
+| 9 | **app** `wasm_sandbox` | preempt | `CONFIG_APP_WASM3_MVP_THREAD_PRIORITY` |
 | 10 | **app** `tps25750_wq` (PD/charger driver) | preempt | `CONFIG_TPS25750_WORKQ_PRIORITY` |
 | 10 | `BT LW WQ` (ECDH / pairing crypto) | preempt | `CONFIG_BT_LONG_WQ_PRIO` |
 | 14 | **app** `persist_wq` | preempt | `CONFIG_APP_PERSIST_WORKQ_PRIORITY` |
@@ -123,6 +124,7 @@ pattern controller bumps below are this cost landing.
 | `imu_thread` | `CONFIG_IMU_THREAD_STACK_SIZE` | 1024 |
 | `charger_status_thread` | `CONFIG_APP_CHARGER_STATUS_THREAD_STACK_SIZE` | 2048 |
 | extension sandbox | `CONFIG_APP_EXT_HOST_STACK_SIZE` | 2048 |
+| `wasm_sandbox` | `CONFIG_APP_WASM3_MVP_THREAD_STACK_SIZE` | 4096 |
 | persistent-value-store wq | `CONFIG_APP_PERSIST_WORKQ_STACK_SIZE` | 2048 |
 | `mcumgr smp` workqueue | `CONFIG_MCUMGR_TRANSPORT_WORKQUEUE_STACK_SIZE` | **4096 on proto0** (Zephyr default 2048) |
 
@@ -220,6 +222,8 @@ Each of these is enforced by a `BUILD_ASSERT` next to the thread it constrains, 
 | `APP_PATTERN_CONTROLLER_THREAD_PRIORITY >= 0` | `src/pattern_controller.cpp` | It does FAT/QSPI I/O (GLIM assets, `.llext` loads) and settings persistence. |
 | `APP_EXT_HOST_THREAD_PRIORITY > APP_PATTERN_CONTROLLER_THREAD_PRIORITY` | `src/extensions/extension_host.cpp` | The pattern controller enforces the extension's per-tick budget; it must be able to preempt a runaway sandbox. |
 | `APP_EXT_TICK_WALL_BACKSTOP_MS > APP_EXT_TICK_CPU_BUDGET_MS` | `src/extensions/extension_host.cpp` | A tick cannot consume more CPU than wall time, so an inverted pair would make the backstop fire first and reintroduce the issue #276 false positives. |
+| `APP_WASM3_MVP_THREAD_PRIORITY > APP_PATTERN_CONTROLLER_THREAD_PRIORITY` | `src/extensions/wasm_mvp_runtime.cpp` | The supervisor must preempt an infinite Wasm loop to sample CPU use and abort it. |
+| `APP_WASM3_MVP_WALL_BACKSTOP_MS > APP_WASM3_MVP_CPU_BUDGET_MS` | `src/extensions/wasm_mvp_runtime.cpp` | Spinning guests are charged CPU while blocked guests are contained by the larger wall backstop. |
 | `IMU_THREAD_PRIORITY > APP_PATTERN_CONTROLLER_THREAD_PRIORITY` | `src/imu/imu.cpp` | The animation tick must preempt the sensor reader. |
 | The three flash/FS workqueue priorities are valid preemptible values | their respective `.cpp` files | They do the longest blocking I/O in the system and must stay at the bottom. |
 
