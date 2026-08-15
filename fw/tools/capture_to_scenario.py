@@ -223,9 +223,16 @@ def main(argv=None):
     if imu_csv.is_file():
         samples = parse_imu_csv(imu_csv.read_text(errors="replace"))
         samples = decimate(samples, args.hz)
-    elif imu_csv.is_file():
-        print(f"warning: {imu_csv} has no I, rows — scenario will have no IMU track "
-              "(CONFIG_IMU disabled, or the IMU failed to init on that capture)",
+        # Keyed on the parse result, not on a second existence test: the file is
+        # present in this branch by definition, so an emptiness check is the only
+        # thing that can distinguish "has motion" from "has none".
+        if not samples:
+            print(f"warning: {imu_csv} has no I, rows — scenario will have no IMU track "
+                  "(CONFIG_IMU disabled, or the IMU failed to init on that capture)",
+                  file=sys.stderr)
+    elif args.imu_csv is not None:
+        # Explicit override: name only what was actually consulted.
+        print(f"warning: {imu_csv} not found — scenario will have no IMU track",
               file=sys.stderr)
     else:
         print(f"warning: no sidecar beside {args.wav} — looked for {combined.name} and "

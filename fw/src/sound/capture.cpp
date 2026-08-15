@@ -39,9 +39,10 @@ constexpr const char *kSuffix = ".wav";
  * the CSV's padded #PARAMS/#IMU block) on top of the 64 KiB of slack, which
  * the pre-flight also counts. */
 constexpr uint32_t kBytesPerFrame =
-    1024u + (IS_ENABLED(CONFIG_IMU) ? 56u : 0u) +
-    (IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) ? 360u : 0u);
-constexpr uint32_t kBytesPerSecond = kBytesPerFrame * 1000u / 32u;
+    CAPTURE_WAV_BYTES_PER_FRAME + (IS_ENABLED(CONFIG_IMU) ? CAPTURE_IMU_BYTES_PER_FRAME : 0u) +
+    (IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) ? CAPTURE_ANALYSIS_BYTES_PER_FRAME : 0u);
+constexpr uint32_t kBytesPerSecond =
+    kBytesPerFrame * MSEC_PER_SEC / CAPTURE_BLOCK_TIME_MS;
 
 /* 64 KiB of slack, plus the WAV prologue, plus the CSV header sector. */
 constexpr uint32_t kReserveBytes = 64u * 1024u + 4096u + 4096u;

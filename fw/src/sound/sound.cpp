@@ -1206,11 +1206,14 @@ static int audio_sidecar_open(struct audio_sidecar *sc, const char *wav_path, in
         fs_close(&sc->file);
         sc->open = false;
         /* fs_open() already created and truncated the file, so failing here
-         * leaves a headerless orphan on the volume — no #PARAMS, no rows, no
-         * #DONE, and frames.py yields empty arrays rather than an error. That
-         * is the "exists but cannot be trusted" case `retired` exists for,
-         * reached before a single row was written. */
-        sc->retired = true;
+         * would leave a headerless orphan — no #PARAMS, no rows, no #DONE, and
+         * frames.py yields empty arrays rather than an error. Remove it rather
+         * than arming `retired`: the caller reports every open failure as
+         * "recording audio only" and carries on, so a sticky flag would have
+         * close() contradict that ~20 s later and fail a perfectly good WAV.
+         * No file on the volume is the honest outcome, and it matches the
+         * sibling fs_open() failure exactly. */
+        (void)fs_unlink(sc->path);
         return -EIO;
     }
     sc->pos = AUDIO_CSV_CHUNK;
@@ -1943,6 +1946,13 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
  * alignment the analysis CSV needs, reached here by arithmetic instead of by
  * padding, because with no CSV competing for the FatFS window the WAV header can
  * stay the canonical 44 bytes. */
+/* The budget in sound.h mirrors these; drift here is what makes the clamp and
+ * the pre-flight disagree, so it fails the build instead. */
+BUILD_ASSERT(CAPTURE_BLOCK_TIME_MS == BLOCK_CAPTURE_TIME_MS,
+             "capture budget block time must track BLOCK_CAPTURE_TIME_MS");
+BUILD_ASSERT(CAPTURE_WAV_BYTES_PER_FRAME == BLOCK_SIZE,
+             "capture budget WAV bytes/frame must track BLOCK_SIZE");
+
 #define CAPTURE_BATCH_BLOCKS 4
 static int16_t s_capture_batch[CAPTURE_BATCH_BLOCKS * AUDIO_FFT_SIZE];
 
@@ -2000,13 +2010,13 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
     if (fs_statvfs("/NAND:", &vfs) == 0) {
         /* One CSV carries both streams now, so there is one padded header
          * sector to account for, not two. */
-        uint64_t per_frame = BLOCK_SIZE;
+        uint64_t per_frame = CAPTURE_WAV_BYTES_PER_FRAME;
         uint64_t overhead = WAV_DATA_OFFSET + 64 * 1024;
 #if defined(CONFIG_IMU)
-        per_frame += 56; /* ~56 B/frame of I-rows at 25 Hz against 31.25 fps */
+        per_frame += CAPTURE_IMU_BYTES_PER_FRAME;
 #endif
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
-        per_frame += 360; /* one 41-field D-line per block */
+        per_frame += CAPTURE_ANALYSIS_BYTES_PER_FRAME;
         overhead += AUDIO_CSV_CHUNK;
 #elif defined(CONFIG_IMU)
         overhead += IMU_CSV_CHUNK;

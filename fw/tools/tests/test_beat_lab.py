@@ -343,3 +343,38 @@ class TestWithLibrosa:
         # (_score_greedy directly — score() routes to mir_eval when installed)
         p_f, r_f, f_f = evaluate._score_greedy(det, ref, 0.05)
         assert abs(f_m - f_f) < 0.1
+
+
+class TestScenarioSidecarWarnings:
+    """The three sidecar states must each say something true.
+
+    Added after the "no I, rows" warning shipped behind an `elif` repeating the
+    `if`'s own condition — unreachable, so the case the code documented was the
+    one it silently mishandled.
+    """
+
+    def _wav(self, tmp_path):
+        p = tmp_path / "cap_0001.wav"
+        frames.write_wav(str(p), frames.synth_click_track(1.0, 120)[0])
+        return p
+
+    def test_warns_when_the_combined_file_has_no_imu_rows(self, tmp_path, capsys):
+        wav = self._wav(tmp_path)
+        _write_capture_sidecar(Path(str(wav) + ".csv"),
+                               _make_dump_lines(n=5, buckets=True), imu_rows=False)
+        capture_to_scenario.main([str(wav), "--scenarios-dir", str(tmp_path / "out")])
+        err = capsys.readouterr().err
+        assert "has no I, rows" in err
+        assert ".imu.csv" not in err, "must not name a file this layout never writes"
+
+    def test_warns_naming_both_candidates_when_nothing_is_there(self, tmp_path, capsys):
+        wav = self._wav(tmp_path)
+        capture_to_scenario.main([str(wav), "--scenarios-dir", str(tmp_path / "out")])
+        err = capsys.readouterr().err
+        assert "no sidecar beside" in err and "cap_0001.wav.csv" in err
+
+    def test_no_warning_when_the_combined_file_has_motion(self, tmp_path, capsys):
+        wav = self._wav(tmp_path)
+        _write_capture_sidecar(Path(str(wav) + ".csv"), _make_dump_lines(n=20, buckets=True))
+        capture_to_scenario.main([str(wav), "--scenarios-dir", str(tmp_path / "out")])
+        assert "warning:" not in capsys.readouterr().err

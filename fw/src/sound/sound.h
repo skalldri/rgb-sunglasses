@@ -11,6 +11,22 @@
 #include "agc_controller.h"
 #include "audio_dsp.h"
 
+/* Capture space budget — the ONE definition of what a capture costs.
+ *
+ * capture.cpp turns free space into the recordable-seconds figure the app
+ * shows and the clamp capture_start() applies; record_wav_capture()'s
+ * pre-flight then re-checks the clamped length. If the two disagree and this
+ * side is the more generous, the clamp advertises lengths the pre-flight
+ * rejects with -ENOSPC — which is not an edge case but every capture at the
+ * advertised maximum. They were literals in two files agreeing by hand until
+ * exactly that shipped; both now derive from here, and BUILD_ASSERTs in
+ * sound.cpp tie these to the values they mirror. */
+#define CAPTURE_BLOCK_TIME_MS 32u
+#define CAPTURE_WAV_BYTES_PER_FRAME 1024u
+#define CAPTURE_IMU_BYTES_PER_FRAME 56u      /* 25 Hz of I-rows, charged per audio frame */
+#define CAPTURE_ANALYSIS_BYTES_PER_FRAME 360u /* one 41-field D-line per block */
+#define CAPTURE_OVERHEAD_SLACK_BYTES (64u * 1024u)
+
 extern struct k_msgq audio_result_q;
 
 /**

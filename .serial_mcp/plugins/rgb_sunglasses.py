@@ -422,7 +422,7 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
     #   "Capture CSV could not be opened; recording audio only"
     #   "Capture CSV write failed - the file is incomplete"
     #   "Capture CSV MISALIGNED: ..."
-    #   "Capture CSV ABANDONED after N rows ..."
+    #   "Capture CSV ABANDONED - N rows formatted, only M bytes written ..."
     #   "Capture CSV lost its #DONE trailer - row count unverifiable"
     # They cannot
     # match here, because a hit makes every downstream consumer
