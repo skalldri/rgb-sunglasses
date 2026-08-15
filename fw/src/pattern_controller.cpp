@@ -290,6 +290,8 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     // Overrun logging is rate-limited (see the overrun branch at the bottom of the loop).
     int64_t lastRenderOverrunLogMs = 0;
     uint32_t renderOverrunsSinceLog = 0;
+    int64_t lastWaitTimeoutLogMs = 0;
+    uint32_t waitTimeoutsSinceLog = 0;
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -298,7 +300,26 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // pattern_controller_tick_epoch().
         atomic_inc(&sTickEpoch);
 
-        float kTargetRenderIntervalMs = getPatternConfig().getRenderRateMs();
+        // Producer-gated pacing (issue #379): this thread no longer runs its own
+        // free-running sleep clock — it renders once per N consumed display
+        // frames (see the wait at the bottom of the loop), so its cadence is
+        // slaved to the display thread's clock and every display push samples
+        // exactly one fresh frame. core/render_thread_rate_ms therefore acts as
+        // a DIVIDER: N = round(render / display), and getRenderRateMs()'s floor
+        // at the display interval guarantees N >= 1. The dt handed to the
+        // animations below is the true nominal inter-render interval,
+        // N * display interval — at the defaults N == 1 and dt is 33.3 ms,
+        // exactly as before.
+        const float displayIntervalMs = getPatternConfig().getDisplayRateMs();
+        uint32_t framesPerRender = 1;
+        if (displayIntervalMs > 0.0f) {
+            framesPerRender =
+                (uint32_t)((getPatternConfig().getRenderRateMs() / displayIntervalMs) + 0.5f);
+            if (framesPerRender < 1) {
+                framesPerRender = 1;
+            }
+        }
+        const float kTargetRenderIntervalMs = framesPerRender * displayIntervalMs;
 
         size_t bufferId = 0;
         ret = claimBufferForRender(bufferId);
@@ -383,13 +404,33 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
                 lastRenderOverrunLogMs = nowMs;
                 renderOverrunsSinceLog = 0;
             }
-            // Always yield, even after blowing the budget. This thread is preemptible so a
-            // spin here is survivable, but an unconditional yield costs nothing and removes
-            // a latent trap identical to the one fixed in led_controller.cpp (issue #267).
-            k_msleep(1);
-        } else {
-            // Sleep for however much time is left
-            k_msleep(kTargetRenderIntervalMs - updateTimeMs);
+            // No extra sleep on overrun: the wait below is the yield point. If the
+            // display consumed our frame while we were still rendering, the take
+            // returns immediately and the loop catches up — which is correct, the
+            // display is about to want a fresh frame. Consecutive immediate takes
+            // are impossible faster than the display's own gives (max-count-1).
+        }
+
+        // Pace off the display clock (issue #379): wait until the display thread
+        // has consumed N frames, then render the next one. Bounded timeout, never
+        // K_FOREVER — the display thread exits at boot when the LED strip devices
+        // are not ready, and this thread must keep ticking (shuffle, indicators,
+        // extension activation) rather than wedge; on timeout the loop proceeds,
+        // effectively self-paced at ~2 display periods.
+        const int32_t waitTimeoutMs = (int32_t)(2.0f * displayIntervalMs) + 5;
+        for (uint32_t consumed = 0; consumed < framesPerRender; consumed++) {
+            if (led_controller_wait_frame_consumed(K_MSEC(waitTimeoutMs)) != 0) {
+                waitTimeoutsSinceLog++;
+                const int64_t nowMs = k_uptime_get();
+                if (nowMs - lastWaitTimeoutLogMs >= 5000) {
+                    LOG_WRN("Display consumed no frame within %d ms (%u time(s) in the last "
+                            "%lld ms) — render self-pacing until it recovers",
+                            waitTimeoutMs, waitTimeoutsSinceLog, nowMs - lastWaitTimeoutLogMs);
+                    lastWaitTimeoutLogMs = nowMs;
+                    waitTimeoutsSinceLog = 0;
+                }
+                break;  // don't stack N timeouts on a stopped display thread
+            }
         }
     }
 }
