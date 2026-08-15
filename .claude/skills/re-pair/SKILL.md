@@ -107,6 +107,24 @@ before falling back to manual. If you're forgetting the bond by hand instead: ki
 app first, and if the bond survives an Unpair, toggle Bluetooth off/on and try again —
 don't keep tapping Unpair, it will never take while the pending connect exists.
 
+**When even the BT-cycle retry fails, stop the BOARD advertising instead of reaching for
+the manual fallback.** Observed 2026-08-15 (same phone): the script's full ladder —
+force-stop the app, tap Unpair on the verified details page, cycle Bluetooth, retry —
+left the bond in place through both attempts and timed out in the manual prompt. Android
+was re-arming the pending connection from the board's advertisements between every step.
+One shell command on the board fixes it:
+
+```
+bt_adv off                                   # on the board's shell (test aid, not persisted)
+scripts/re-pair.sh --device-name "..." --forget-only   # bond clears first try
+bt_adv on                                    # restore before pairing
+```
+
+`bt_adv` is a runtime-only toggle and the board always boots back into advertising, so
+this is safe to leave half-done — but re-enable it before the pairing phase or the board
+will not be listed. Pair afterwards with `--no-forget`. Worth trying **before** the
+manual prompt, since the manual path needs a human at the phone.
+
 ## Success
 
 The script drives `bt_state` over the UART and requires `CONNECTED` + `Security level: L4`

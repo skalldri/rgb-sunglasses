@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tools import capture_to_scenario  # noqa: E402
 from tools.beat_lab import compare, evaluate, frames  # noqa: E402
 
 
@@ -89,6 +90,98 @@ class TestCodec:
         frames.write_wav(p, samples)
         back = frames.read_wav(p)
         assert np.array_equal(back, samples)
+
+
+IMU_SCALE = 1000
+
+
+def _write_capture_sidecar(path, lines, imu_rows=True):
+    """Write a byte-exact replica of the firmware's combined <wav>.csv.
+
+    Byte-exact matters: audio_sidecar_open() packs BOTH header lines into one
+    4096-byte FAT sector — "#PARAMS ...\n#IMU ...<spaces>\n" — so the padding
+    sits on the #IMU line, not the #PARAMS one, and the sector boundary is what
+    makes every later chunk write aligned (a misaligned flush stalls the drain
+    loop long enough to drop audio frames). Rows are then interleaved: one D-row
+    per WAV block, with the 25 Hz I-rows falling between them.
+
+    Nothing else in this suite exercises that shape, and the single-file layout
+    rests on two parsers each tolerating the other's rows.
+    """
+    params, *rest = lines
+    imu_hdr = (f"#IMU scale={IMU_SCALE} "
+               "cols=ms,seq,ax,ay,az,gx,gy,gz units=mm/s2,mrad/s")
+    header = params + "\n" + imu_hdr
+    assert len(header) < 4095, "header must fit one sector"
+    header = header.ljust(4095) + "\n"
+
+    body = []
+    for i, row in enumerate(rest[:-1]):
+        body.append(row)
+        # ~25 Hz IMU against ~31.25 fps audio: an I-row after most D-rows.
+        if imu_rows and i % 5 != 4:
+            ms = int(i * 32)
+            body.append(f"I,{ms},{i},{100 + i},{-200},{981},{1},{-2},{3}")
+    with open(path, "w") as f:
+        f.write(header)
+        f.write("".join(line + "\n" for line in body))
+        f.write(rest[-1] + "\n")
+
+
+class TestCaptureSidecar:
+    """The combined <wav>.csv written beside every capture on a stock build."""
+
+    def test_beat_lab_ignores_interleaved_imu_rows(self, tmp_path):
+        p = tmp_path / "cap_0001.wav.csv"
+        _write_capture_sidecar(p, _make_dump_lines(n=30, buckets=True))
+        d = frames.parse_dump(str(p))
+
+        # The I-rows and the #IMU header must be invisible here.
+        assert len(d.seq) == 30
+        assert d.frames_reported == 30 and d.dropped == 0
+        assert d.buckets is not None and d.buckets.shape == (30, frames.NUM_BUCKETS)
+        assert d.params["gain"] == 0x28
+        assert d.params["attack"] == 3 and d.params["release"] == 15
+
+    def test_imu_parser_ignores_interleaved_analysis_rows(self, tmp_path):
+        # The other half of the contract, and the half nothing covered before:
+        # capture_to_scenario.py must find the I-rows among the D-rows AND read
+        # scale= off an #IMU line that is space-padded out to the sector.
+        p = tmp_path / "cap_0002.wav.csv"
+        _write_capture_sidecar(p, _make_dump_lines(n=30, buckets=True))
+        samples = capture_to_scenario.parse_imu_csv(p.read_text())
+
+        assert len(samples) == 24, "one I-row after four of every five D-rows"
+        ms, accel, gyro = samples[0]
+        assert ms == 0
+        # 100 / 1000 -> 0.1 proves the padded #IMU header's scale= was read;
+        # a missed header would fall back to DEFAULT_SCALE and still give 0.1,
+        # so check a value the fallback cannot produce by coincidence.
+        assert accel == [pytest.approx(0.1), pytest.approx(-0.2), pytest.approx(0.981)]
+        assert gyro == [pytest.approx(0.001), pytest.approx(-0.002), pytest.approx(0.003)]
+
+    def test_scale_is_read_from_the_padded_header(self, tmp_path):
+        # Same file shape, non-default scale: the only way this passes is by
+        # parsing the #IMU line that sits mid-sector behind the #PARAMS line.
+        p = tmp_path / "cap_0003.wav.csv"
+        _write_capture_sidecar(p, _make_dump_lines(n=10, buckets=True))
+        text = p.read_text().replace(f"#IMU scale={IMU_SCALE} ", "#IMU scale=10 ")
+        samples = capture_to_scenario.parse_imu_csv(text)
+        assert samples[0][1][0] == pytest.approx(10.0)  # 100 / 10, not 100 / 1000
+
+    def test_gain_column_tracks_a_live_agc(self, tmp_path):
+        # The reason the D-rows exist. A capture started from the phone runs
+        # with the AGC live, so the gain steps mid-recording and the recorded
+        # samples already contain those steps — the per-frame gain column is
+        # the only record of them.
+        lines = _make_dump_lines(n=6, buckets=True)
+        gains = [0x28, 0x28, 0x2A, 0x2A, 0x2C, 0x26]
+        rows = [row.replace(f",{0x28:02x},", f",{g:02x},", 1)
+                for row, g in zip(lines[1:-1], gains)]
+        _write_capture_sidecar(tmp_path / "c.csv", [lines[0], *rows, lines[-1]])
+
+        d = frames.parse_dump(str(tmp_path / "c.csv"))
+        assert list(d.gain) == gains
 
 
 class TestEvaluate:
@@ -250,3 +343,108 @@ class TestWithLibrosa:
         # (_score_greedy directly — score() routes to mir_eval when installed)
         p_f, r_f, f_f = evaluate._score_greedy(det, ref, 0.05)
         assert abs(f_m - f_f) < 0.1
+
+
+class TestScenarioSidecarWarnings:
+    """The three sidecar states must each say something true.
+
+    Added after the "no I, rows" warning shipped behind an `elif` repeating the
+    `if`'s own condition — unreachable, so the case the code documented was the
+    one it silently mishandled.
+    """
+
+    def _wav(self, tmp_path):
+        p = tmp_path / "cap_0001.wav"
+        frames.write_wav(str(p), frames.synth_click_track(1.0, 120)[0])
+        return p
+
+    def test_warns_when_the_combined_file_has_no_imu_rows(self, tmp_path, capsys):
+        wav = self._wav(tmp_path)
+        _write_capture_sidecar(Path(str(wav) + ".csv"),
+                               _make_dump_lines(n=5, buckets=True), imu_rows=False)
+        capture_to_scenario.main([str(wav), "--scenarios-dir", str(tmp_path / "out")])
+        err = capsys.readouterr().err
+        assert "has no I, rows" in err
+        assert ".imu.csv" not in err, "must not name a file this layout never writes"
+
+    def test_warns_naming_both_candidates_when_nothing_is_there(self, tmp_path, capsys):
+        wav = self._wav(tmp_path)
+        capture_to_scenario.main([str(wav), "--scenarios-dir", str(tmp_path / "out")])
+        err = capsys.readouterr().err
+        assert "no sidecar beside" in err and "cap_0001.wav.csv" in err
+
+    def test_no_warning_when_the_combined_file_has_motion(self, tmp_path, capsys):
+        wav = self._wav(tmp_path)
+        _write_capture_sidecar(Path(str(wav) + ".csv"), _make_dump_lines(n=20, buckets=True))
+        capture_to_scenario.main([str(wav), "--scenarios-dir", str(tmp_path / "out")])
+        assert "warning:" not in capsys.readouterr().err
+
+
+# --- #MISALIGNED marker: the device's verdict has to survive the trip off-device ---
+
+_ALIGNED = (
+    "#PARAMS gamma=3f800000 alpha=3f800000 floor=00000000 refractory=4 agc_frozen=0\n"
+    "D,0,54,0,3f800000," + ",".join(["3f800000"] * 16) + "\n"
+    "#DONE frames=1 dropped=0 blocks=1 lost=0\n"
+)
+_MISALIGNED = _ALIGNED.replace(
+    "#DONE frames=1 dropped=0 blocks=1 lost=0",
+    "#MISALIGNED do NOT pair this file with the WAV\n#DONE frames=2 dropped=0 blocks=1 lost=0",
+)
+
+
+def test_done_trailer_carries_blocks_and_lost():
+    """Extra #DONE fields parse; older trailers without them still load."""
+    d = frames.parse_dump(_ALIGNED.splitlines())
+    assert (d.frames_reported, d.blocks_reported, d.rows_lost) == (1, 1, 0)
+    assert d.misaligned is False
+
+    legacy = frames.parse_dump(
+        _ALIGNED.replace(" blocks=1 lost=0", "").splitlines()
+    )
+    assert legacy.frames_reported == 1
+    assert legacy.blocks_reported is None and legacy.misaligned is False
+    frames.require_wav_aligned(legacy)  # unknowable, not assumed bad
+
+
+def test_misaligned_marker_is_parsed_and_rejected():
+    d = frames.parse_dump(_MISALIGNED.splitlines())
+    assert d.misaligned is True
+    with pytest.raises(ValueError, match="MISALIGNED"):
+        frames.require_wav_aligned(d)
+    # ...and the rows still parse, so inspecting a known-bad capture stays possible
+    assert len(d.seq) == 1
+
+
+def test_row_block_drift_is_caught_without_the_marker():
+    """A file predating the marker is still caught from the trailer alone."""
+    d = frames.parse_dump(
+        _ALIGNED.replace("frames=1 dropped=0 blocks=1", "frames=1 dropped=0 blocks=7").splitlines()
+    )
+    assert d.misaligned is False
+    with pytest.raises(ValueError, match="do not pair"):
+        frames.require_wav_aligned(d)
+
+
+def test_capture_to_scenario_refuses_a_misaligned_capture(tmp_path):
+    """The converter is the path a misaligned capture would become tuning truth."""
+    import subprocess, sys, wave, struct
+
+    wav = tmp_path / "cap_0001.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(struct.pack("<512h", *([0] * 512)))
+    (tmp_path / "cap_0001.wav.csv").write_text(
+        _MISALIGNED + "I,0,0,1,2,3,4,5,6\n"
+    )
+    r = subprocess.run(
+        [sys.executable, str(Path(capture_to_scenario.__file__)),
+         str(wav), "--scenarios-dir", str(tmp_path / "out")],
+        capture_output=True, text=True,
+    )
+    assert r.returncode != 0, r.stdout + r.stderr
+    # Assert on the message, not just the exit code: an argparse usage error
+    # also exits non-zero, which is how the first version of this test "passed"
+    # while never reaching the guard.
+    assert "MISALIGNED" in r.stderr, r.stderr
+    assert "unrecognized arguments" not in r.stderr

@@ -1,4 +1,6 @@
 #pragma once
+
+#include <zephyr/sys/util.h>
 #include <zephyr/kernel.h>
 
 #include <cstdint>
@@ -10,6 +12,38 @@
  * getters and setters for the "sound agc" shell commands) is documented there. */
 #include "agc_controller.h"
 #include "audio_dsp.h"
+
+/* Capture space budget — the ONE definition of what a capture costs.
+ *
+ * capture.cpp turns free space into the recordable-seconds figure the app
+ * shows and the clamp capture_start() applies; record_wav_capture()'s
+ * pre-flight then re-checks the clamped length. If the two disagree and this
+ * side is the more generous, the clamp advertises lengths the pre-flight
+ * rejects with -ENOSPC — which is not an edge case but every capture at the
+ * advertised maximum. They were literals in two files agreeing by hand until
+ * exactly that shipped; both now derive from here, and BUILD_ASSERTs in
+ * sound.cpp tie these to the values they mirror. */
+#define CAPTURE_BLOCK_TIME_MS 32u
+#define CAPTURE_WAV_BYTES_PER_FRAME 1024u
+#define CAPTURE_IMU_BYTES_PER_FRAME 56u      /* 25 Hz of I-rows, charged per audio frame */
+#define CAPTURE_ANALYSIS_BYTES_PER_FRAME 360u /* one 41-field D-line per block */
+/* record_wav_tap()'s D-line allowance. Its pre-flight charges BLOCK_SIZE + 175
+ * per frame, NOT the 360 above: it writes a 21-field line (no display buckets).
+ * Kept here rather than in capture.cpp because on a CONFIG_APP_AUDIO_DEBUG
+ * build sound_record_wav() routes an app-started capture to THAT function, so
+ * this is the cost the recordable-seconds clamp has to be measured against. */
+#define CAPTURE_TAP_ANALYSIS_BYTES_PER_FRAME 175u
+#define CAPTURE_OVERHEAD_SLACK_BYTES (64u * 1024u)
+#define CAPTURE_SECTOR_BYTES 4096u
+/* Fixed cost: FAT slack, the sector-padded WAV prologue, and the CSV's
+ * sector-padded header when any CSV is written. Both the clamp and the
+ * pre-flight use THIS — leaving the reserve as two literals is what left the
+ * half that actually differed between the files unchecked. */
+#define CAPTURE_OVERHEAD_BYTES                                                  \
+    (CAPTURE_OVERHEAD_SLACK_BYTES + CAPTURE_SECTOR_BYTES +                      \
+     ((IS_ENABLED(CONFIG_IMU) || IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR))  \
+          ? CAPTURE_SECTOR_BYTES                                                \
+          : 0u))
 
 extern struct k_msgq audio_result_q;
 

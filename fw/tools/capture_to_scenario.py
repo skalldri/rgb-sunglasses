@@ -12,7 +12,10 @@ stimulus is whatever actually happened on a head.
 Input is what `sound mic record_wav <secs> <path>` leaves on /NAND::
 
     <path>            16 kHz mono WAV
-    <path>.imu.csv    "#IMU scale=..." header, then I,<ms>,<seq>,ax,ay,az,gx,gy,gz
+    <path>.csv        combined capture CSV: "#PARAMS"/"#IMU" headers, then interleaved
+                      I,<ms>,<seq>,ax,ay,az,gx,gy,gz and D,... analysis rows. Only the
+                      I-rows are read here; beat_lab reads the D-rows from the same file.
+                      (<path>.imu.csv, the older split layout, is still accepted.)
 
 Output is a scenario plus its audio asset:
 
@@ -36,6 +39,19 @@ from pathlib import Path
 # (CONFIG_CBPRINTF_FP_SUPPORT is off). The header states the scale; this is only
 # the fallback for a header-less file.
 DEFAULT_SCALE = 1000
+
+
+def _has_imu_rows(path):
+    """True if `path` exists and actually contains at least one I-row.
+
+    Cheap and streaming: a capture CSV is a few hundred KB and the first I-row
+    lands within the first couple of rows, so this stops almost immediately.
+    """
+    try:
+        with open(path, "r", errors="replace") as handle:
+            return any(line.startswith("I,") for line in handle)
+    except OSError:
+        return False
 
 
 def parse_imu_csv(text):
@@ -146,11 +162,11 @@ def build_scenario(name, description, duration_ms, frames, beat_response):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("wav", type=Path, help="captured WAV (the .imu.csv sits beside it)")
+    parser.add_argument("wav", type=Path, help="captured WAV (the .csv sidecar sits beside it)")
     parser.add_argument("--name", help="scenario name (default: the WAV's stem)")
     parser.add_argument("--description", help="scenario description — say what was ACTUALLY done")
     parser.add_argument(
-        "--imu-csv", type=Path, help="override the sidecar path (default: <wav>.imu.csv)"
+        "--imu-csv", type=Path, help="override the sidecar path (default: <wav>.csv, else <wav>.imu.csv)"
     )
     parser.add_argument(
         "--hz", type=float, default=12.5, help="IMU keyframe rate after decimation (0 = keep all)"
@@ -170,7 +186,47 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     name = args.name or args.wav.stem
-    imu_csv = args.imu_csv or Path(str(args.wav) + ".imu.csv")
+    # "<wav>.csv" is the current layout: one file carrying the I-rows this
+    # parser wants interleaved with the D-rows beat_lab wants, because the
+    # capture can only hold two FatFs handles (see the sidecar comment in
+    # fw/src/sound/sound.cpp). "<wav>.imu.csv" is the older split layout and is
+    # still accepted so previously-collected captures keep converting.
+    # Chosen by CONTENT, not existence. On a CONFIG_APP_AUDIO_DEBUG build BOTH
+    # files exist and they are not interchangeable: record_wav_tap() writes
+    # "<wav>.csv" with D-rows ONLY and puts the I-rows in "<wav>.imu.csv".
+    # Picking the combined file on name alone would hand this parser a
+    # D-row-only file, yielding zero keyframes — and because the file exists,
+    # the not-found warning below would not fire either, so the scenario would
+    # come out silently audio-only.
+    # Three states, not two. "Combined file has no I-rows" is NOT the same as
+    # "this is the old split layout": a CONFIG_IMU=n image (or one whose IMU
+    # failed to init) writes a complete <wav>.csv with every D-row and no I-row
+    # at all. Collapsing those made the warning below name <wav>.imu.csv, a file
+    # that cannot exist on such an image, while the real sidecar sat beside it.
+    imu_csv = args.imu_csv
+    combined = Path(str(args.wav) + ".csv")
+    # A capture the device marked misaligned must not become a scenario: the
+    # I-rows are timestamped and would look fine, but the D-rows and the WAV
+    # they are interleaved with are off by the drift, and this scenario is what
+    # later tuning is measured against. Cheap textual check - this parser
+    # deliberately does not import beat_lab (scipy/librosa are not installed
+    # everywhere it runs), so it re-reads the one marker rather than calling
+    # frames.require_wav_aligned(); both sides are pinned by the tests.
+    if combined.is_file():
+        with combined.open() as handle:
+            if any(line.startswith("#MISALIGNED") for line in handle):
+                parser.error(
+                    f"{combined} is marked #MISALIGNED by the device: its analysis rows "
+                    f"do not pair with {args.wav}. Re-record; do not tune against it."
+                )
+    legacy = Path(str(args.wav) + ".imu.csv")
+    if imu_csv is None:
+        if _has_imu_rows(combined):
+            imu_csv = combined          # current layout, with motion
+        elif legacy.is_file():
+            imu_csv = legacy            # older split layout
+        else:
+            imu_csv = combined          # nothing to read; warn about what IS there
 
     if not args.wav.is_file():
         parser.error(f"{args.wav} not found")
@@ -181,8 +237,20 @@ def main(argv=None):
     if imu_csv.is_file():
         samples = parse_imu_csv(imu_csv.read_text(errors="replace"))
         samples = decimate(samples, args.hz)
+        # Keyed on the parse result, not on a second existence test: the file is
+        # present in this branch by definition, so an emptiness check is the only
+        # thing that can distinguish "has motion" from "has none".
+        if not samples:
+            print(f"warning: {imu_csv} has no I, rows — scenario will have no IMU track "
+                  "(CONFIG_IMU disabled, or the IMU failed to init on that capture)",
+                  file=sys.stderr)
+    elif args.imu_csv is not None:
+        # Explicit override: name only what was actually consulted.
+        print(f"warning: {imu_csv} not found — scenario will have no IMU track",
+              file=sys.stderr)
     else:
-        print(f"warning: {imu_csv} not found — scenario will have no IMU track", file=sys.stderr)
+        print(f"warning: no sidecar beside {args.wav} — looked for {combined.name} and "
+              f"{legacy.name}; scenario will have no IMU track", file=sys.stderr)
 
     description = args.description or (
         f"Recorded on-device capture ({duration_ms / 1000:.1f} s, "

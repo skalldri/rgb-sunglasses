@@ -118,6 +118,40 @@ config APP_CAPTURE_QUEUE_FRAMES
 	  sound.cpp). That contention wants fixing at the source — batching, the
 	  post-#377 sync-cadence work — not buffering.
 
+config APP_CAPTURE_AUDIO_SIDECAR
+	bool "Write a per-frame audio-analysis sidecar next to each capture"
+	default y
+	depends on APP_CAPTURE && !APP_AUDIO_DEBUG
+	help
+	  Writes "<wav>.csv" alongside the WAV, holding both the IMU rows and
+	  the analysis the DSP thread computed for the very samples being
+	  recorded: the AGC gain in force per frame, the per-band beat mask, RMS,
+	  band energy/flux/mean/sigma, and the 20-bucket spectrogram, under a
+	  #PARAMS header snapshotting every AGC and detector tunable. Same wire
+	  format as "sound dump" (src/sound/audio_tap_format.h), so
+	  fw/tools/beat_lab and the simulator decode it unchanged.
+
+	  ONE file, not two, because FF_FS_TINY makes every open FIL share a
+	  single sector window: a capture holds two FatFs handles this way rather
+	  than three.
+
+	  Unavailable with APP_AUDIO_DEBUG, and that is not an arbitrary
+	  exclusion: sound_record_wav() routes a debug build to record_wav_tap()
+	  or record_wav_direct(), so record_wav_capture() never runs and the
+	  ~6 KB of buffers here would be linked in dead — on the build that is
+	  already 33 KB of RAM heavier than stock.
+
+	  This exists because the BLE/app capture path does NOT freeze the AGC:
+	  its gain steps mid-recording, and the recorded samples already contain
+	  those steps, so without a per-frame gain log a field capture cannot be
+	  replayed against the host harness at all.
+
+	  Costs roughly 6 KB of RAM (the analysis tap queue plus a sector-sized
+	  write buffer) and ~11 KB/s of volume space on top of the WAV's 32 KB/s
+	  and the IMU sidecar's 1.4 KB/s, which lowers the longest capture the
+	  6.9 MiB volume can hold from ~180 s to ~160 s. Turn it off to get that
+	  back; nothing else depends on the file.
+
 config APP_CAPTURE_THREAD_STACK_SIZE
 	int "Capture worker stack size"
 	default 5120

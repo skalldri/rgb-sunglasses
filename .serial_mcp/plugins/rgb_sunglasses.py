@@ -164,10 +164,11 @@ TOOLS = [
         description=(
             "Record a REAL audio + IMU capture for use as a simulator scenario "
             "(`sound mic record_wav`, which also writes a synchronised .imu.csv "
-            "sidecar). Both streams are timestamped from the same t0 by the one "
+            "sidecar, plus a .csv of the per-frame analysis the DSP computed for "
+            "those samples). All streams are timestamped from the same t0 by the one "
             "capture loop, so they need no host-side alignment. Freezes AGC gain "
             "during the capture so the stimulus is reproducible. Afterwards, pull "
-            "the .wav and .imu.csv off the USB mass-storage disk and run "
+            "the .wav and its sidecars off the USB mass-storage disk and run "
             "fw/tools/capture_to_scenario.py to emit the scenario JSON. Full "
             "procedure: the /capture-scenario skill."
         ),
@@ -178,7 +179,13 @@ TOOLS = [
                 "duration_s": {"type": "integer", "minimum": 1, "maximum": 120},
                 "name": {
                     "type": "string",
-                    "description": "capture name; files land at /NAND:/<name>.wav(+.imu.csv)",
+                    "description": (
+                        "capture name; files land at /NAND:/<name>.wav, "
+                        "<name>.wav.csv (analysis) and <name>.wav.imu.csv (motion) - "
+                        "this tool requires CONFIG_APP_AUDIO_DEBUG, which is the split "
+                        "layout; the combined single-CSV layout belongs to the "
+                        "app/shell capture path, which this tool cannot reach"
+                    ),
                 },
                 "gain": {
                     "type": "string",
@@ -403,13 +410,67 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
                     + f" (agc_restored={restored})")
 
     imu = re.search(r"IMU sidecar: (\d+) samples", output)
+    # This is a SUCCESS-only signal, and it is a `search`, so it matches a prefix
+    # anywhere in the output. audio_sidecar_close() in fw/src/sound/sound.cpp
+    # relies on that: every "Capture CSV ..." failure wording is deliberately
+    # chosen so it cannot match. There are five, and this list has fallen
+    # behind twice. fw/tools/tests/test_capture_csv_contract.py now checks
+    # these mechanically, but it is NOT yet a substitute for reading this list:
+    # it harvests failure wordings by the literal "Capture CSV prefix, so a
+    # wording reworded to start with "Audio sidecar:" — the one regression
+    # shape that has actually occurred — is invisible to it, and its success
+    # side is still hardcoded. See that file's KNOWN GAPS. Until those close,
+    # this list and that test are both necessary and neither is sufficient:
+    #   "Capture CSV could not be opened; recording audio only"
+    #   "Capture CSV write failed - the file is incomplete"
+    #   "Capture CSV MISALIGNED: ..."
+    #   "Capture CSV ABANDONED - N rows formatted, only M bytes written ..."
+    #   "Capture CSV lost its #DONE trailer - row count unverifiable"
+    # They cannot
+    # match here, because a hit makes every downstream consumer
+    # (capture_to_scenario.py, beat_lab) ingest the file. If you loosen this
+    # pattern — e.g. to `Audio sidecar[: ]+(\d+)` — re-check those strings first.
+    # Two firmware paths write the analysis CSV, and they announce it
+    # differently, so both signals are needed:
+    #   record_wav_capture()  -> "Audio sidecar: N frames[, M IMU samples]"
+    #   record_wav_tap()      -> "Wrote ... (N frames, D dropped, R io retries)"
+    # The second is the one that matters here: this handler hard-fails unless
+    # `sound agc gain` answers, so it only ever runs against a
+    # CONFIG_APP_AUDIO_DEBUG build, where APP_CAPTURE_AUDIO_SIDECAR is
+    # unavailable (it depends on !APP_AUDIO_DEBUG) and record_wav_tap() runs.
+    # Note "frames" vs "blocks" is the discriminator against the capture path's
+    # summary line; record_wav_direct() prints no parenthetical at all and
+    # writes no analysis file, so it is correctly excluded by both.
+    audio = re.search(r"Audio sidecar: (\d+) frames", output)
+    tap = re.search(r"Wrote \d+ bytes of PCM to \S+ \((\d+) frames,", output)
     result = {
         "wav_path": path,
+        # ".imu.csv", NOT the combined ".csv". This handler can only ever run
+        # against a CONFIG_APP_AUDIO_DEBUG build — it hard-fails above unless
+        # `sound agc gain` answers, and that subcommand exists only under that
+        # symbol. On such a build sound_record_wav() routes to record_wav_tap(),
+        # which writes "<wav>.csv" with D-rows ONLY and puts the I-rows here.
+        # The combined layout belongs to record_wav_capture(), which a debug
+        # build never reaches.
         "imu_csv_path": path + ".imu.csv",
-        "analysis_csv_path": path + ".csv",
         "imu_samples": int(imu.group(1)) if imu else 0,
         "agc_restored": restored,
     }
+    # Reported ONLY on a positive success signal from one of those two lines.
+    # Keying on the summary line's "io retries" text instead would advertise a
+    # file for captures that never wrote one — the sidecar failing to open
+    # (FatFs is already at CONFIG_FS_FATFS_NUM_FILES=4), being retired
+    # mid-capture, or coming out misaligned. audio_sidecar_close() words those
+    # ("Capture CSV could not be opened", "Capture CSV write failed",
+    # "Capture CSV MISALIGNED") precisely so neither regex matches them.
+    #
+    # Both paths put the analysis in "<wav>.csv"; only the announcement and the
+    # rest of the layout differ (the tap path also writes the separate
+    # "<wav>.imu.csv" that imu_csv_path points at).
+    success = audio or tap
+    if success:
+        result["analysis_csv_path"] = path + ".csv"
+        result["analysis_frames"] = int(success.group(1))
     if not imu:
         # CONFIG_IMU off, or the sidecar could not be opened. The WAV is still
         # usable; the scenario just has no IMU track.
