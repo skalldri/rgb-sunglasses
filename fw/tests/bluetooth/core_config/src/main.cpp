@@ -199,6 +199,27 @@ ZTEST(core_config_service, test_render_rate_migrates_old_default) {
     zassert_equal(read_u32(find_value_attr(1)), 33300, "the display rate must be untouched");
 }
 
+ZTEST(core_config_service, test_render_rate_11100_kept_when_display_matches) {
+    const struct bt_gatt_attr *display = find_value_attr(1);
+    const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(display);
+    zassert_not_null(render);
+
+    /* A deliberate ~90 Hz setup (display = render = 11100) is NOT the stale
+     * default: the migration only fires when 11100 sits below the display
+     * interval (PR #378 review — an unconditional exact-match rewrite stole
+     * this configuration and made 11100 permanently unsettable). */
+    gatt_write_u32(display, 11100);
+    gatt_write_u32(render, 11100);
+
+    float rateMs = CoreConfig::getInstance().getRenderRateMs();
+    zassert_within(rateMs, 11.1f, 0.001f, "a deliberate 90 Hz setup must be honored");
+    zassert_equal(read_u32(render), 11100, "the 90 Hz render setting must not be rewritten");
+
+    gatt_write_u32(display, sDefaultDisplayRate);  // restore for order-independence
+    gatt_write_u32(render, sDefaultRenderRate);
+}
+
 ZTEST(core_config_service, test_render_rate_floor_preserves_user_value) {
     const struct bt_gatt_attr *render = find_value_attr(2);
     zassert_not_null(render);

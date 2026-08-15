@@ -135,9 +135,12 @@ float CoreConfig::getRenderRateMs() {
     // Migration only: correct the exact pre-#376 default in RAM (operator= does
     // not persist — see persistent_characteristic.h; the AudioConfig::
     // getTargetHigh() idiom) so boards that persisted 11100 read back the new
-    // default. Deliberately an exact match, not a range: any other value is a
-    // user's own setting and must survive (PR #378 review).
-    if (renderRateUint == 11100) {
+    // default. Two guards keep it from stealing anything a user meant
+    // (PR #378 review): exact match — any other value is a user's own setting —
+    // AND only when 11100 sits below the display interval, i.e. it is actually
+    // the stale faster-than-display default. A deliberate 90 Hz setup
+    // (display = render = 11100) is left exactly as configured.
+    if (renderRateUint == 11100 && renderRateUint < displayRateUint) {
         renderRateUint = kDefaultThreadRateMsX1000;
         coreRenderThreadRateMs = renderRateUint;
     }

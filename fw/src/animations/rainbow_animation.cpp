@@ -71,12 +71,11 @@ void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    // A step time of 0 means "fastest": treat it as 1 ms so it is wall-clock
-    // defined at any render tick rate — the old "one step per tick" reading made
-    // the fastest setting 3x slower when the tick rate dropped (PR #378 review).
+    // A step time of 0 means "fastest" = the historical ~90 steps/s wall-clock
+    // rate, independent of the render tick rate (kFastestStepTimeMs rationale).
     uint32_t stepTimeMs = deps_->stepTimeMs.get();
     if (stepTimeMs == 0) {
-        stepTimeMs = 1;
+        stepTimeMs = kFastestStepTimeMs;
     }
 
     // Carry the remainder instead of resetting to 0 so the scroll rate stays

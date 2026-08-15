@@ -121,9 +121,11 @@ ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indic
     zassert_equal(sCapture.y, 0, "Expected lit pixel at y=0 after wrapping");
 }
 
-// PR #378 review: a step time of 0 means "fastest" = a 1 ms step, wall-clock
-// defined at any tick rate — NOT "one step per tick", which would slow 3x when
-// the tick rate drops. One 33 ms tick = floor((33-1)/1) = 32 steps → 32 % 8 = 0.
+// PR #378 review: a step time of 0 means "fastest" = the HISTORICAL fastest,
+// kFastestStepTimeMs (11 ms/step, one step per tick at the old 90 Hz render
+// rate) — wall-clock defined at any tick rate, and the same speed users have
+// always had. NOT "one step per tick" (3x slower at a 33 ms tick) and NOT
+// 1 ms (11-33x faster than any previous firmware).
 ZTEST(zigzag_animation_di_tests, test_zero_step_time_is_wall_clock_fastest) {
     MutableUint32Source stepTimeMs(0);
     MutableUint32Source color(0xFF0000);
@@ -135,12 +137,13 @@ ZTEST(zigzag_animation_di_tests, test_zero_step_time_is_wall_clock_fastest) {
 
     WideTestRenderer renderer;
     reset_capture();
+    // 33 ms at 11 ms/step: 33 → 22 → 11 (11 > 11 is false), exactly 2 steps.
     animation->tick(renderer, 33);
-    zassert_equal(sCapture.x, 0, "Expected 32 1-ms steps (32 %% 8 = 0) from one 33 ms tick");
+    zassert_equal(sCapture.x, 2, "Expected 2 11-ms steps from one 33 ms tick");
 
     reset_capture();
-    animation->tick(renderer, 12);  // 1 carried + 12 = 13 → 12 more steps → 44 % 8 = 4
-    zassert_equal(sCapture.x, 4, "Expected 12 further steps from a 12 ms tick");
+    animation->tick(renderer, 12);  // 11 carried + 12 = 23 → 2 more steps → x=4
+    zassert_equal(sCapture.x, 4, "Expected 2 further steps from a 12 ms tick");
 }
 
 // Issue #376: a step time shorter than the tick interval must take several steps in

@@ -16,6 +16,16 @@
 // the figure can't drift between them if the pool budget ever changes.
 inline constexpr size_t kMinSlotDwellMs = 500;
 
+// What a remotely-writable step/scroll time of 0 means: "fastest", defined in
+// wall-clock terms as the HISTORICAL fastest — one step per render tick at the
+// pre-issue-#376 90 Hz render rate, i.e. ~11 ms/step. Mapping 0 to a smaller
+// value (e.g. 1 ms) would speed those animations up 11-33x versus every
+// firmware users have run, making text unreadable (PR #378 review); mapping it
+// per-tick would tie the speed to the render rate, the coupling issue #376
+// removed. Shared by every step-time-driven animation (Rainbow, ZigZag, Text)
+// so the figure cannot drift between them.
+inline constexpr uint32_t kFastestStepTimeMs = 11;
+
 // Per-slot dwell timing for a slot-cycling animation whose boundary IS dwell expiry
 // (My Eyes; a future animation with the same shape reuses this rather than hand-rolling
 // the accumulate/clamp/boundary logic again). Text does NOT use this: its boundary is

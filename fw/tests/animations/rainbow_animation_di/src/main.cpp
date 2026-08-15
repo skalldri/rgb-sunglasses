@@ -72,14 +72,14 @@ ZTEST(rainbow_animation_di_tests, test_injected_step_time_controls_animation_adv
     zassert_equal(firstTickX0.blue, secondTickX0.blue,
                   "Expected same x0 blue channel without advancing");
 
-    stepTimeMs.set(0);
+    stepTimeMs.set(0);  // "fastest" = kFastestStepTimeMs (11 ms/step)
 
     reset_capture();
-    animation->tick(renderer, 1);
+    animation->tick(renderer, 12);  // renders the old step, then advances (12 > 11)
     PixelColor thirdTickX0 = sPixelColors[0];
 
     reset_capture();
-    animation->tick(renderer, 1);
+    animation->tick(renderer, 12);
     PixelColor fourthTickX0 = sPixelColors[0];
 
     zassert_true(
