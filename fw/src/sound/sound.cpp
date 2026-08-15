@@ -1117,8 +1117,15 @@ BUILD_ASSERT(AUDIO_CSV_LINE_MAX >= CAPTURE_D_LINE_MAX_CHARS + 2,
  * single FAT copy and no mirror to recover from. Folding the two CSVs into one
  * file puts the capture back at two open handles — exactly what it used before
  * the analysis sidecar existed, which is the configuration this path has always
- * been proven at. It also hands back ~4.2 KB of RAM, since the two 4 KB batch
- * buffers become one.
+ * been proven at.
+ *
+ * It does NOT hand back the two-buffers-become-one RAM saving an earlier
+ * version of this comment claimed. Verified on the map for the shipping
+ * config: s_imu_batch (4,192 B) and s_audio_batch (4,608 B) are BOTH linked,
+ * because s_imu_batch is guarded by CONFIG_IMU alone and record_wav_direct()
+ * still uses it for the DSP-not-streaming fallback. The two are never live at
+ * once, so sharing one buffer between them would genuinely recover ~4.2 KB —
+ * that is unclaimed work, not something this change did.
  *
  * The combined stream needs no new host parser: fw/tools/beat_lab/frames.py
  * consumes only `D,`/`#PARAMS`/`#DONE` and skips everything else, and
