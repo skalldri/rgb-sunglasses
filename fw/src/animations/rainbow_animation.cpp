@@ -2,6 +2,7 @@
 #include <zephyr/drivers/led_strip.h>
 #include <zephyr/sys/__assert.h>
 
+#include <algorithm>
 #include <cstddef>
 
 #if defined(CONFIG_LED_STRIP_RGB_SCRATCH)
@@ -40,8 +41,14 @@ void RainbowAnimation::init() {
 void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
     __ASSERT(deps_, "RainbowAnimation::tick before setDependencies");
 
-    // Read BT variables
-    const uint32_t rainbowColorWidth = deps_->rainbowWidthPix.get();
+    // Read BT variables. Width is a DIVISOR below and shares step_time_ms's
+    // exposure (remotely writable with no range validation, persists): an
+    // accepted 0 would make every subsequent tick divide by zero — SIGFPE on
+    // native_sim, while Cortex-M's UDIV quietly yields 0 and the resulting
+    // inf/NaN float blend narrows to uint8_t as UB — wrecking Rainbow until
+    // the value is rewritten (PR #378 review round 8). Floor at 1: a 1 px
+    // band is a valid (busy) rendering, so no wider floor is warranted.
+    const uint32_t rainbowColorWidth = std::max(1u, deps_->rainbowWidthPix.get());
 
     // Turn off all LEDs
     for (size_t x = 0; x < renderer.displayWidth(); x++) {
@@ -71,8 +78,27 @@ void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > deps_->stepTimeMs.get()) {
-        currentCycleTimeMs = 0;
-        currentRainbowStep++;  // Move text one pixel to the left
+    // Floor at the historical ~90 steps/s wall-clock fastest — every value in
+    // 0..11 behaved identically before issue #376 (kFastestStepTimeMs rationale).
+    uint32_t stepTimeMs = deps_->stepTimeMs.get();
+    if (stepTimeMs < kFastestStepTimeMs) {
+        stepTimeMs = kFastestStepTimeMs;
+    }
+
+    // Bound the accumulator against parameter-history abuse: a huge remotely
+    // written step time lets it grow for hours without wrapping, and a later
+    // small step time would then run accumulated/step iterations in one tick
+    // (PR #378 review). Clamping to one step plus this tick keeps the loop
+    // O(dt/step); in steady state the accumulator never exceeds this anyway.
+    if (currentCycleTimeMs > stepTimeMs + timeSinceLastTickMs) {
+        currentCycleTimeMs = stepTimeMs + timeSinceLastTickMs;
+    }
+
+    // Carry the remainder instead of resetting to 0 so the scroll rate stays
+    // wall-clock correct at any render tick rate, including step times shorter
+    // than the tick interval (issue #376).
+    while (currentCycleTimeMs > stepTimeMs) {
+        currentCycleTimeMs -= stepTimeMs;
+        currentRainbowStep++;  // Move the rainbow one pixel to the left
     }
 }

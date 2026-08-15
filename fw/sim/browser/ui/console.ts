@@ -3,7 +3,7 @@
  * once per tick by the sandbox worker and appended here.
  *
  * Scrollback is capped so a chatty per-tick log can't grow the DOM without
- * bound at 90 ticks/second, and auto-scroll sticks to the bottom only while
+ * bound at ~30 ticks/second, and auto-scroll sticks to the bottom only while
  * the user is already there.
  */
 

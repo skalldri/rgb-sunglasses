@@ -181,7 +181,7 @@ selecting only ever shows the fast phase. While you hold the lock:
    `ext stats` — don't switch animations in between, or you have zeroed it.
 2. Watch the console for `Render overran the tick interval ...`. That is the direct
    symptom and it appears long before anything approaches the CPU budget, which sits
-   ~4.5x above the render interval and will not catch this.
+   ~1.5x above the 33.3 ms render interval and will not catch this.
 3. To compress the timeline, raise the speed parameter — cost that depends on elapsed
    animation-time arrives proportionally sooner.
 

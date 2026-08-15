@@ -140,11 +140,15 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // the getter has no access to. Without it, shuffle hard-cuts a long message the way it
     // used to cut a long GLIM clip.
     //
-    // A pixel step costs at least one render tick (currentCycleTimeMs only advances by
-    // timeSinceLastTickMs) and about one step-time, so max() of the two tracks the real
-    // scroll rate — including a step time of 0, which steps every tick.
-    const size_t stepMs = deps_->stepTimeMs.get();
-    const size_t msPerPixel = (stepMs > timeSinceLastTickMs) ? stepMs : timeSinceLastTickMs;
+    // A pixel step costs about one step-time regardless of the render tick rate (the
+    // carry-remainder accumulator below can take several steps in one tick), floored
+    // at the historical ~90 px/s wall-clock fastest — every value in 0..11 behaved
+    // identically before issue #376 (kFastestStepTimeMs rationale).
+    size_t stepMs = deps_->stepTimeMs.get();
+    if (stepMs < kFastestStepTimeMs) {
+        stepMs = kFastestStepTimeMs;
+    }
+    const size_t msPerPixel = stepMs;
     if (firstChar >= currentMessageLen) {
         // Done scrolling; only the kMinSlotDwellMs floor below is left to wait out.
         remainingScrollMs_ = (currentMessageDwellMs >= kMinSlotDwellMs)
@@ -232,8 +236,18 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > deps_->stepTimeMs.get()) {
-        currentCycleTimeMs = 0;
+    // Bound the accumulator against parameter-history abuse (PR #378 review;
+    // rationale in rainbow_animation.cpp — a huge-then-small remotely written
+    // step time would otherwise run accumulated/step iterations in one tick).
+    if (currentCycleTimeMs > stepMs + timeSinceLastTickMs) {
+        currentCycleTimeMs = stepMs + timeSinceLastTickMs;
+    }
+
+    // Carry the remainder instead of resetting to 0 so the scroll rate stays
+    // wall-clock correct at any render tick rate, including step times shorter
+    // than the tick interval (issue #376). stepMs >= 1 (0 mapped above).
+    while (currentCycleTimeMs > stepMs) {
+        currentCycleTimeMs -= stepMs;
         currentTextOffset--;  // Move text one pixel to the left
     }
 }

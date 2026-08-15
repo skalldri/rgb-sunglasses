@@ -37,9 +37,15 @@ interface GoldenFile {
   samples: { tick: number; digest: string; ascii: string }[];
 }
 
-function goldenTicks(totalTicks: number): number[] {
+// Sample stride is WALL-CLOCK based (one digest per ~550 ms of sim time, the
+// original 50-tick stride at dt=11), not a fixed tick count: a tick-count
+// stride silently thins the regression net whenever dtMs grows — the #376
+// dt 11 -> 33 move would have cut every golden to a third of its samples
+// (PR #378 review).
+function goldenTicks(totalTicks: number, dtMs: number): number[] {
+  const stride = Math.max(1, Math.round(550 / dtMs));
   const ticks: number[] = [];
-  for (let t = 10; t < totalTicks; t += 50) {
+  for (let t = 10; t < totalTicks; t += stride) {
     ticks.push(t);
   }
   ticks.push(totalTicks - 1);
@@ -49,7 +55,7 @@ function goldenTicks(totalTicks: number): number[] {
 async function runForGolden(spec: { ext: string; scenario: string }): Promise<GoldenFile> {
   const scenarioPath = path.join(SCENARIO_DIR, `${spec.scenario}.json`);
   const scenario: Scenario = parseScenario(JSON.parse(fs.readFileSync(scenarioPath, "utf8")));
-  const dtMs = 11;
+  const dtMs = 33;
   const ticks = Math.round(scenario.durationMs / dtMs);
   const seed = scenario.seed ?? 0;
   const wasmPath = path.join(WASM_DIR, `${spec.ext}.wasm`);
@@ -73,7 +79,7 @@ async function runForGolden(spec: { ext: string; scenario: string }): Promise<Go
     paramOverrides: {},
     outDir: null,
     asciiSamples: 0,
-    sampleTicksOverride: goldenTicks(ticks),
+    sampleTicksOverride: goldenTicks(ticks, dtMs),
     pngEvery: 0,
     dumpFrames: 0,
     ansiEvery: 0,

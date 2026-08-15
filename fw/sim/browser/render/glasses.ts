@@ -36,9 +36,10 @@
  * ONE disc pass into the tight buffer, one small downscale blit, two
  * upscale drawImages, and 1-2 arc fills per lit LED. Measured on the
  * shared Pixel 9 Pro (Chrome, dev server) BEFORE the single-pass
- * optimization: full-field plasma (all 432 LEDs lit, white-hot on) with
- * display decimation OFF sustained 89 fps against the ~91 fps pacing
- * target; the current path does strictly less work per frame.
+ * optimization: full-field plasma (all 432 LEDs lit, white-hot on),
+ * painting every tick, sustained 89 fps against the then-91 fps pacing
+ * target (dt=11 pre-issue-#376); the current path does strictly less
+ * work per frame, and the ~30 Hz tick rate asks for a third of that.
  */
 
 import { DISPLAY_HEIGHT, DISPLAY_WIDTH, LEDS_ON_ROW, LIVE_MASK } from "../../core/display";

@@ -45,12 +45,18 @@ class CapturingTestRenderer : public AnimationRenderer {
 void reset_capture() {
     sCapture = {};
 }
+
+// 8x1 display so multi-step advances are distinguishable without wrapping.
+class WideTestRenderer : public CapturingTestRenderer {
+   public:
+    size_t displayWidth() const override { return 8; }
+};
 }  // namespace
 
 ZTEST_SUITE(zigzag_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 
 ZTEST(zigzag_animation_di_tests, test_injected_step_time_advances_pixel) {
-    MutableUint32Source stepTimeMs(1);
+    MutableUint32Source stepTimeMs(1);  // floored to kFastestStepTimeMs = 11
     MutableUint32Source color(0x112233);
     ZigZagAnimationDependencies deps(stepTimeMs, color);
 
@@ -60,7 +66,7 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_advances_pixel) {
 
     CapturingTestRenderer renderer;
     reset_capture();
-    animation->tick(renderer, 2);
+    animation->tick(renderer, 12);  // 12 > 11: exactly one step
 
     zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write");
     zassert_equal(sCapture.x, 1, "Expected lit pixel to advance to x=1");
@@ -91,9 +97,10 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_holds_pixel_when_not_el
 }
 
 ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indices) {
-    // 2x1 display → 2 total indices. With stepTimeMs=0 every positive tick advances.
+    // 2x1 display → 2 total indices. A 16 ms tick at a 15 ms step advances one
+    // index per tick (16 > 15, remainder 1; 17 > 15, remainder 2).
     // init: index=0; tick 1 → index=1; tick 2 → index=2 wraps to 0.
-    MutableUint32Source stepTimeMs(0);
+    MutableUint32Source stepTimeMs(15);
     MutableUint32Source color(0xFF0000);
     ZigZagAnimationDependencies deps(stepTimeMs, color);
 
@@ -104,12 +111,118 @@ ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indic
     CapturingTestRenderer renderer;
 
     reset_capture();
-    animation->tick(renderer, 1);  // advances to index 1
+    animation->tick(renderer, 16);  // advances to index 1
 
     reset_capture();
-    animation->tick(renderer, 1);  // advances to index 2 → wraps to 0
+    animation->tick(renderer, 16);  // advances to index 2 → wraps to 0
 
     zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write after wrap");
     zassert_equal(sCapture.x, 0, "Expected lit pixel at x=0 after wrapping");
     zassert_equal(sCapture.y, 0, "Expected lit pixel at y=0 after wrapping");
+}
+
+// PR #378 review: a step time of 0 means "fastest" = the HISTORICAL fastest,
+// kFastestStepTimeMs (11 ms/step, one step per tick at the old 90 Hz render
+// rate) — wall-clock defined at any tick rate, and the same speed users have
+// always had. NOT "one step per tick" (3x slower at a 33 ms tick) and NOT
+// 1 ms (11-33x faster than any previous firmware).
+ZTEST(zigzag_animation_di_tests, test_zero_step_time_is_wall_clock_fastest) {
+    MutableUint32Source stepTimeMs(0);
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    WideTestRenderer renderer;
+    reset_capture();
+    // 33 ms at 11 ms/step: 33 → 22 → 11 (11 > 11 is false), exactly 2 steps.
+    animation->tick(renderer, 33);
+    zassert_equal(sCapture.x, 2, "Expected 2 11-ms steps from one 33 ms tick");
+
+    reset_capture();
+    animation->tick(renderer, 12);  // 11 carried + 12 = 23 → 2 more steps → x=4
+    zassert_equal(sCapture.x, 4, "Expected 2 further steps from a 12 ms tick");
+}
+
+// Issue #376: a step time shorter than the tick interval must take several steps in
+// one tick (carry-remainder accumulator), not be floored to one step per tick.
+ZTEST(zigzag_animation_di_tests, test_step_time_below_tick_advances_multiple_steps) {
+    MutableUint32Source stepTimeMs(10);
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    WideTestRenderer renderer;
+    reset_capture();
+    // The 10 ms step is floored to kFastestStepTimeMs = 11; one 33 ms tick:
+    // 33 → 22 → 11 (11 > 11 is false), i.e. exactly 2 steps.
+    animation->tick(renderer, 33);
+
+    zassert_equal(sCapture.x, 2, "Expected 2 steps from one 33 ms tick at the 11 ms floor");
+}
+
+// PR #378 review: the accumulator is clamped to one step plus one tick, so a
+// huge-then-small remotely written step time cannot run accumulated/step loop
+// iterations (nor take a burst of steps) in a single tick. Same clamp in
+// rainbow and text; zigzag is the representative test.
+ZTEST(zigzag_animation_di_tests, test_step_time_change_does_not_burst) {
+    MutableUint32Source stepTimeMs(1000000);  // effectively "never step"
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    WideTestRenderer renderer;
+    for (int i = 0; i < 5; i++) {
+        animation->tick(renderer, 200);  // accumulate 1000 ms with no steps
+    }
+
+    // Drop to a 10 ms step (floored to 11): the clamp caps the accumulator at
+    // step + dt = 44, so this tick takes exactly floor((44-1)/11) = 3 steps —
+    // not the ~90 the stale 1000 ms accumulator would otherwise pay for.
+    stepTimeMs.set(10);
+    reset_capture();
+    animation->tick(renderer, 33);
+    zassert_equal(sCapture.x, 3, "Expected 3 steps after the step-time change, not a burst");
+}
+
+// Issue #376: total displacement must depend only on total elapsed time, not on how
+// that time is partitioned into ticks (90 Hz and 30 Hz must render the same motion).
+ZTEST(zigzag_animation_di_tests, test_equal_displacement_across_tick_rates) {
+    MutableUint32Source stepTimeMs(45);  // divides neither 11 nor 33 evenly
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    WideTestRenderer renderer;
+
+    // 990 ms as 90 ticks of 11 ms (the old ~90 Hz render rate)...
+    animation->init();
+    for (int i = 0; i < 90; i++) {
+        animation->tick(renderer, 11);
+    }
+    reset_capture();
+    animation->tick(renderer, 0);  // render-only tick to observe the final position
+    const size_t xAt90Hz = sCapture.x;
+
+    // ...and as 30 ticks of 33 ms (the ~30 Hz render rate).
+    animation->init();
+    for (int i = 0; i < 30; i++) {
+        animation->tick(renderer, 33);
+    }
+    reset_capture();
+    animation->tick(renderer, 0);
+    const size_t xAt30Hz = sCapture.x;
+
+    // floor((990-1)/45) = 21 steps either way; 21 % 8 = index 5.
+    zassert_equal(xAt90Hz, xAt30Hz, "Displacement must not depend on tick partitioning");
+    zassert_equal(xAt90Hz, 5, "Expected exactly 21 steps in 990 ms at a 45 ms step time");
 }

@@ -64,8 +64,9 @@ verification needs a build/profiling/hardware).
    rules; pattern: `tps25750_i2cm_read_reg_locked`, `fw/drivers/tps25750/tps25750.c`).
 7. **No flash/filesystem I/O from a cooperative-priority thread** — use a
    low-priority workqueue (PR #51; fw/CLAUDE.md Coding rules).
-8. **Tick-path cost must be profiled in µs against the 11.1 ms frame budget**
-   (`core/render_thread_rate_ms`, default `11100` = ms×1000, `fw/src/core_config.cpp`;
+8. **Tick-path cost must be profiled in µs against the 33.3 ms frame budget**
+   (`core/render_thread_rate_ms`, default `33300` = ms×1000 — floored at the display
+   rate since issue #376 — `fw/src/core_config.cpp`;
    extensions also have `CONFIG_APP_EXT_TICK_CPU_BUDGET_MS`). New `tick()`/render-path
    work (per-pixel loops, float math, trig, large copies) with no measured µs cost
    stated in comments or commit messages → *plausible*; require the number pre-merge.

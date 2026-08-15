@@ -1,0 +1,6 @@
+tests:
+  sound.audio_frame_fold:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

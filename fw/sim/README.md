@@ -3,7 +3,7 @@
 Runs `.llext`-style animation extensions **without hardware**: the same
 single translation unit that builds to an ARM `.llext` is compiled to
 WebAssembly and driven by a TypeScript harness that replicates the
-firmware's `extension_host::tick()` semantics — nominal 11 ms ticks, 25 Hz
+firmware's `extension_host::tick()` semantics — nominal 33 ms ticks, 25 Hz
 IMU / 31.25 Hz audio sample-and-hold, host-side COLOR-mode resolution,
 brightness truncation, dead-pixel masking, and the fault/params-reset
 rules. Audio features come from the **real** `audio_dsp.cpp` + CMSIS-DSP

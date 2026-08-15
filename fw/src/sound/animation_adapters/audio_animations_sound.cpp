@@ -1,7 +1,10 @@
 #include <animations/animation_audio_source.h>
 #include <animations/color_mode_source.h>
+#include <pattern_controller.h>
+#include <sound/animation_adapters/audio_frame_fold.h>
 #include <sound/audio_dsp.h>
 #include <sound/sound.h>
+#include <zephyr/sys/atomic.h>
 
 #if defined(CONFIG_ANIMATION_BEAT)
 #include <animations/beat_animation.h>
@@ -26,24 +29,50 @@ constexpr size_t kColorBeatBand = 0;
  * so a single drain-and-cache source serves both without double-reads. */
 class SoundAnimationAudioSource : public AnimationAudioSource {
    public:
-    /* Drain the message queue and cache the most recent frame.
-     * Called once per animation tick so the animation sees a consistent snapshot.
+    /* Drain the message queue and cache the newest frame, OR-folding beat flags
+     * across every frame the current render tick drains (audio_frame_fold): at a
+     * ~33 ms render tick two ~32 ms analysis frames can arrive in one drain, and
+     * plain last-frame-wins dropped the older frame's beat (issue #376).
+     *
+     * The batch boundary is the render TICK, not one update() call: several
+     * update() calls happen per tick (the active animation's own, plus the
+     * beat/color sources'), and resetting per call would let a frame that lands
+     * between two same-tick drains clear a beat the first drain had just folded
+     * in, before its consumer read it (PR #378 review). The tick is identified
+     * EXACTLY via pattern_controller_tick_epoch() — a wall-clock window was
+     * tried first and rejected in review: the gap between two same-tick
+     * update() calls is unbounded (a cooperative-band preemption stretches it
+     * past any fixed window), so inference could split a tick and re-drop the
+     * beat. The epoch costs this module its render-loop ignorance, but buys an
+     * invariant instead of a guess.
+     *
      * Beats for the edge-triggered consumers are COUNTED here, at drain time (once
      * per drained frame), not read from cache_.beat[] — so it doesn't matter which
-     * of the potentially-several update() calls in a tick (the Beat animation's own,
-     * or the beat source below) drains a beat-carrying frame, and a beat flag
-     * persisting in cache_ across ticks can't cause repeated re-rolls. */
+     * of the potentially-several update() calls in a tick drains a beat-carrying
+     * frame, and a beat flag persisting in cache_ across ticks can't cause
+     * repeated re-rolls. */
     void update() override {
         audio_analysis_result tmp;
+        const uint32_t epoch = pattern_controller_tick_epoch();
         while (k_msgq_get(&audio_result_q, &tmp, K_NO_WAIT) == 0) {
-            cache_ = tmp;
+            const bool firstInBatch = (epoch != lastBatchEpoch_);
+            lastBatchEpoch_ = epoch;
+            audio_frame_fold(cache_, tmp, firstInBatch);
             if (tmp.beat[kColorBeatBand]) {
                 beatCount_++;
             }
+            atomic_inc(&frameCount_);
         }
     }
 
     uint32_t beatCount() const { return beatCount_; }
+
+    /* atomic_t, not a plain uint32_t: incremented on the render thread, but
+     * FftBarsAnimation::init() reads it from whatever thread called
+     * pattern_controller_change_to_animation() (BT RX, shell, SMP workqueue —
+     * see pattern_controller.h) — same cross-thread class the tick epoch is
+     * atomic for (PR #378 review). */
+    uint32_t frameCount() const override { return (uint32_t)atomic_get(&frameCount_); }
 
     size_t numBands() const override { return AUDIO_NUM_BANDS; }
 
@@ -64,6 +93,12 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
    private:
     audio_analysis_result cache_ = {};
     uint32_t beatCount_ = 0;
+    atomic_t frameCount_ = ATOMIC_INIT(0);
+    /* Tick epoch of the last frame-carrying drain; frames drained in the same
+     * epoch OR into one batch. Initialized off any real epoch value's phase is
+     * irrelevant — only equality matters, and epoch 0 vs UINT32_MAX simply makes
+     * the first-ever drain start a fresh batch, which is correct. */
+    uint32_t lastBatchEpoch_ = UINT32_MAX;
 };
 
 SoundAnimationAudioSource sSoundSource;
@@ -108,6 +143,21 @@ void beat_animation_bind_default_sound_dependencies() {
 #endif
 
 #if defined(CONFIG_ANIMATION_FFT_BARS)
+/* The FFT bars proration is only correct while its mirrors of the sound
+ * pipeline's numbers stay exact — a drifted kAudioFrameMs silently reverts the
+ * fast-render path to the burst-all-owed-steps behavior the proration removed
+ * (only test_frame_steps_prorate_across_fast_ticks guards it, and it pins the
+ * animation-side constant, not the pipeline's), and a drifted kMaxCatchupFrames
+ * mis-sizes the wrap/stall cap. This adapter is the one TU that sees both
+ * headers, so the coupling is asserted here (PR #378 review round 9); the
+ * animation header stays sound-free for the DI suite. */
+BUILD_ASSERT(FftBarsAnimation::kAudioFrameMs == BLOCK_CAPTURE_TIME_MS,
+             "FFT bars prorates EMA steps at the analysis cadence — update its "
+             "kAudioFrameMs alongside BLOCK_CAPTURE_TIME_MS");
+BUILD_ASSERT(FftBarsAnimation::kMaxCatchupFrames == AUDIO_RESULT_QUEUE_DEPTH,
+             "FFT bars caps frame-count deltas at the result queue depth — update its "
+             "kMaxCatchupFrames alongside AUDIO_RESULT_QUEUE_DEPTH");
+
 void fft_bars_animation_bind_default_sound_dependencies() {
     FftBarsAnimation::getInstance()->setAudioSource(sSoundSource);
 }

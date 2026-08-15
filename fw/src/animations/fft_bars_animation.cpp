@@ -77,14 +77,26 @@ void FftBarsAnimation::setConfigSource(FftVisualizationConfigSource &source) {
     configSource_ = &source;
 }
 
+/* kEmaStepsPerFrame / kAudioFrameMs / kMaxCatchupFrames moved to the class
+ * (fft_bars_animation.h) so the audio adapter can BUILD_ASSERT them against the
+ * sound pipeline's exported constants (PR #378 review round 9). */
+
+/* Bound on the owed-steps pool, sized to the msgq depth. Worst-case tick cost:
+ * 12 steps x 24 buckets = 288 float multiply-adds, ~2-3 us on this M33+FPU at
+ * 128 MHz — noise against the 33.3 ms frame budget. */
+static constexpr uint32_t kMaxPendingEmaSteps =
+    FftBarsAnimation::kMaxCatchupFrames * FftBarsAnimation::kEmaStepsPerFrame;
+
 void FftBarsAnimation::init() {
     for (size_t b = 0; b < kMaxDisplayBuckets; b++) {
         smoothed_[b] = 0.0f;
     }
+    lastFrameCount_ = audioSource_ ? audioSource_->frameCount() : 0;
+    pendingEmaSteps_ = 0;
+    prorateRemainderMs_ = 0;
 }
 
 void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
-    ARG_UNUSED(timeSinceLastTickMs);
 
     size_t W = renderer.displayWidth();
     size_t H = renderer.displayHeight();
@@ -109,10 +121,38 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
         numBuckets = kMaxDisplayBuckets;
     }
 
-    /* Update smoothed energies with exponential moving average. */
+    /* Update smoothed energies with an exponential moving average driven by
+     * NEWLY-ARRIVED analysis frames (no frames -> no movement), prorated over
+     * wall time: arriving frames deposit kEmaStepsPerFrame steps into a pool,
+     * and each tick withdraws up to dt's worth (carry-remainder). At the 30 Hz
+     * default that is ~3 steps on the tick the frame arrives — unchanged — but
+     * at a render rate faster than the analysis cadence (the still-supported
+     * 90 Hz display=render=11100 setup) the frame's steps spread across the
+     * ticks it spans instead of bursting on one and freezing on the rest
+     * (PR #378 review). */
+    const uint32_t frameCount = audioSource_->frameCount();
+    uint32_t newFrames = frameCount - lastFrameCount_;
+    lastFrameCount_ = frameCount;
+    if (newFrames > kMaxCatchupFrames) {
+        newFrames = kMaxCatchupFrames;  /* delta capped BEFORE the multiply */
+    }
+    pendingEmaSteps_ += newFrames * kEmaStepsPerFrame;
+    if (pendingEmaSteps_ > kMaxPendingEmaSteps) {
+        pendingEmaSteps_ = kMaxPendingEmaSteps;
+    }
+
+    prorateRemainderMs_ += kEmaStepsPerFrame * (uint32_t)timeSinceLastTickMs;
+    const uint32_t allowance = prorateRemainderMs_ / kAudioFrameMs;
+    prorateRemainderMs_ -= allowance * kAudioFrameMs;
+    const uint32_t emaSteps = (pendingEmaSteps_ < allowance) ? pendingEmaSteps_ : allowance;
+    pendingEmaSteps_ -= emaSteps;
+
     for (size_t bucket = 0; bucket < numBuckets; bucket++) {
         float energy = audioSource_->getDisplayBucketEnergy(bucket);
-        smoothed_[bucket] = smoothingCoeff * energy + (1.0f - smoothingCoeff) * smoothed_[bucket];
+        for (uint32_t s = 0; s < emaSteps; s++) {
+            smoothed_[bucket] =
+                smoothingCoeff * energy + (1.0f - smoothingCoeff) * smoothed_[bucket];
+        }
     }
 
     /* Mirrored layout: the left half of the display shows buckets low→high

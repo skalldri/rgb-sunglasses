@@ -133,10 +133,12 @@ test("hello: buttons are edge-latched for exactly one tick", { skip }, async () 
   }
 });
 
-test("hello: audio beat flags stay sticky across ~3 ticks (32ms vs 11ms)", { skip }, async () => {
-  // One beat frame at audio frame 3, then silence. hello lights the top
-  // row segment for band b while inputs.audio_beat[b] is set — ticks 9,10
-  // (simTime 99, 110) fall inside frame 3's window [96, 128).
+test("hello: audio beat flag lands on exactly the tick that crosses its frame", { skip }, async () => {
+  // One beat frame at audio frame 3, then silence. hello lights the top row
+  // segment for band b while inputs.audio_beat[b] is set. At dt=33 the ~32 ms
+  // audio frames and ticks are nearly 1:1 — frame 3 (window [96, 128)) is
+  // delivered by tick 3 (simTime 99) and replaced by frame 4 at tick 4
+  // (simTime 132), so exactly one tick shows the beat.
   const frames = Array.from({ length: 32 }, () => zeroAudioFeatures());
   frames[3].beat[0] = 1;
   const host = makeHost(helloBytes!, { audioProvider: new FeatureReplayProvider(frames) });
@@ -154,8 +156,32 @@ test("hello: audio beat flags stay sticky across ~3 ticks (32ms vs 11ms)", { ski
         }
       }
     }
-    assert.ok(litTicks.length >= 2, `beat visible on ${litTicks.length} ticks (${litTicks})`);
-    assert.ok(litTicks.length <= 4, `beat sticky too long: ${litTicks.length} ticks`);
+    assert.deepEqual(litTicks, [3], `beat must land on tick 3 only (got ${litTicks})`);
+  } finally {
+    await host.terminate();
+  }
+});
+
+test("hello: a beat survives a two-frame catch-up tick (audio_frame_fold parity)", { skip }, async () => {
+  // 33 ms ticks against 32 ms frames: tick 32 (simTime 1056) crosses TWO frame
+  // boundaries (32*32=1024 and 33*32=1056) and delivers frames 32 and 33 in one
+  // batch. A beat in the OLDER frame 32 must OR through the beat-less frame 33 —
+  // last-frame-wins would silently drop it (issue #376), the same bug the
+  // device's audio_frame_fold fixes.
+  const frames = Array.from({ length: 40 }, () => zeroAudioFeatures());
+  frames[32].beat[0] = 1;
+  const host = makeHost(helloBytes!, { audioProvider: new FeatureReplayProvider(frames) });
+  try {
+    assert.equal(await host.activate(), null);
+    const litTicks: number[] = [];
+    for (let t = 0; t < 34; t++) {
+      const out = await host.tick();
+      assert.equal(out.status, "ok");
+      if (out.status === "ok" && out.framebuffer[0] === 255) {
+        litTicks.push(t);
+      }
+    }
+    assert.deepEqual(litTicks, [32], `frame 32's beat must survive the batch (got ${litTicks})`);
   } finally {
     await host.terminate();
   }
@@ -223,7 +249,7 @@ test("hello: vprintk formats the first-tick line, once", { skip }, async () => {
 
     const first = await host.tick();
     assert.equal(first.status, "ok", JSON.stringify(first));
-    assert.equal(first.log, "hello: tick1 dt=11 speed=050 msg=ok\n");
+    assert.equal(first.log, "hello: tick1 dt=33 speed=050 msg=ok\n");
 
     // One-shot: the guard must hold for every subsequent tick.
     for (let t = 0; t < 5; t++) {
@@ -254,7 +280,7 @@ test("hello: rgbx_init's printk is surfaced, not dropped", { skip }, async () =>
     // into it: tick 0 carries hello's own first-tick line and nothing else.
     const first = await host.tick();
     assert.equal(first.status, "ok");
-    assert.equal(first.log, "hello: tick1 dt=11 speed=050 msg=ok\n");
+    assert.equal(first.log, "hello: tick1 dt=33 speed=050 msg=ok\n");
   } finally {
     await host.terminate();
   }

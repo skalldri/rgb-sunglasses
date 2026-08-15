@@ -34,7 +34,7 @@ function usage(): never {
 
 run flags:
   --scenario <name|file.json>  stimulus (default: silence)
-  --seconds N | --ticks N      duration (default: 5 s ~ 454 ticks at dt=11)
+  --seconds N | --ticks N      duration (default: 5 s ~ 152 ticks at dt=33)
   --start-time-ms N            warm-up: advance N ms of animation time BEFORE
                                recording starts, so a scenario can be replayed
                                from a non-zero animation time (default 0).
@@ -173,7 +173,7 @@ async function cmdRun(argv: string[]): Promise<void> {
   const wasmPath = resolveWasm(flags.positional[0], flags.bools.has("no-build"));
   const { scenario, dir } = loadScenario(one(flags, "scenario") ?? "silence");
 
-  const dtMs = 11;
+  const dtMs = 33;
   const seconds = num(flags, "seconds", scenario.durationMs / 1000);
   const ticks = Math.round(num(flags, "ticks", (seconds * 1000) / dtMs));
   // Warm-up ticks are not part of the recorded run: a defect whose cost grows with

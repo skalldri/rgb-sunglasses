@@ -45,6 +45,16 @@
           ? CAPTURE_SECTOR_BYTES                                                \
           : 0u))
 
+/* One analysis frame's capture window (ms) and audio_result_q's depth. Exported
+ * because the FFT bars proration depends on both numerically (its withdrawal
+ * rate assumes this cadence; its catch-up cap mirrors this depth), and a silent
+ * drift would revert the fast-render path to the pre-round-6 burst behavior
+ * with no test failing — the audio adapter BUILD_ASSERTs them against the
+ * animation's mirrors (PR #378 review round 9). sound.cpp derives its capture
+ * block size and the msgq definition from these same macros. */
+#define BLOCK_CAPTURE_TIME_MS 32
+#define AUDIO_RESULT_QUEUE_DEPTH 4
+
 extern struct k_msgq audio_result_q;
 
 /**

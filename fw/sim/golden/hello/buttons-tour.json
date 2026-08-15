@@ -3,55 +3,55 @@
   "extension": "hello",
   "scenario": "buttons-tour",
   "seed": 0,
-  "ticks": 455,
+  "ticks": 152,
   "samples": [
     {
       "tick": 10,
-      "digest": "sha256:8c420f1da32c385f78af284b46bda3f1",
-      "ascii": ""
-    },
-    {
-      "tick": 60,
-      "digest": "sha256:76f1bb16aeee4c0987a96007e98e12d6",
-      "ascii": ""
-    },
-    {
-      "tick": 110,
-      "digest": "sha256:d2e620a901568057c28b51ed3737d89c",
-      "ascii": ""
-    },
-    {
-      "tick": 160,
-      "digest": "sha256:cc7504c36193ad2418c8fdfc17528048",
-      "ascii": ""
-    },
-    {
-      "tick": 210,
-      "digest": "sha256:3e9d4e13e26575c5549a25645b36cb97",
-      "ascii": ""
-    },
-    {
-      "tick": 260,
-      "digest": "sha256:9dc82bac5513c361373e25f07ba6b9e1",
-      "ascii": ""
-    },
-    {
-      "tick": 310,
-      "digest": "sha256:39c21b9e5a181fc6b1ef74bdf7a070de",
-      "ascii": ""
-    },
-    {
-      "tick": 360,
       "digest": "sha256:fb22ad087201217086df8dafa4809f94",
       "ascii": ""
     },
     {
-      "tick": 410,
-      "digest": "sha256:8c420f1da32c385f78af284b46bda3f1",
+      "tick": 27,
+      "digest": "sha256:cdd0e16376c5d5eeb6973473c7474d5c",
       "ascii": ""
     },
     {
-      "tick": 454,
+      "tick": 44,
+      "digest": "sha256:e23c0f5b8b125d2e53ae50cefaf595db",
+      "ascii": ""
+    },
+    {
+      "tick": 61,
+      "digest": "sha256:67aaed4f8e0d0b7dc5198c4309c14efc",
+      "ascii": ""
+    },
+    {
+      "tick": 78,
+      "digest": "sha256:e19c3e3ca60176679280c3987a23fc9a",
+      "ascii": ""
+    },
+    {
+      "tick": 95,
+      "digest": "sha256:fb22ad087201217086df8dafa4809f94",
+      "ascii": ""
+    },
+    {
+      "tick": 112,
+      "digest": "sha256:abbcb657e4d1d476b634e114494915ff",
+      "ascii": ""
+    },
+    {
+      "tick": 129,
+      "digest": "sha256:76f1bb16aeee4c0987a96007e98e12d6",
+      "ascii": ""
+    },
+    {
+      "tick": 146,
+      "digest": "sha256:7e198c4d19a9fd094583b6b42b5db521",
+      "ascii": ""
+    },
+    {
+      "tick": 151,
       "digest": "sha256:e19c3e3ca60176679280c3987a23fc9a",
       "ascii": "                                        \n    :       :       :       :       :   \n    :       :       :       :       :   \n    :       :       :       :       :   \n    :       :       :       :       :   \n    :       :       :       :       :   \n    +       +               +       +   \n    :       :               :       :   \n    :       :               :       :   \n    :       :               :       :   \n    :       :               :       :   \n                                        "
     }

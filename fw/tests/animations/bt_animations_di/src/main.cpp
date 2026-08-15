@@ -180,3 +180,33 @@ ZTEST(bt_animations_di_tests, test_pairing_offset_does_not_advance_before_step_t
     zassert_equal(anim->currentTextOffset, 0,
                   "Expected offset unchanged at exactly kStepTimeMs (condition is >)");
 }
+
+// Issue #376: one tick spanning several flash periods must toggle once per period
+// (carry-remainder accumulator), not once per tick.
+ZTEST(bt_animations_di_tests, test_connecting_flash_toggles_multiple_times_in_one_tick) {
+    BtConnectingAnimation *anim = BtConnectingAnimation::getInstance();
+    anim->init();
+
+    CapturingRenderer renderer;
+    // 950 ms with kFlashSpeedMs=300: floor((950-1)/300) = 3 toggles → bright.
+    anim->tick(renderer, 950);
+    reset_pixels();
+    anim->tick(renderer, 0);
+
+    zassert_equal(blue_at(0, 0), BtConnectingAnimation::kMaxFlash,
+                  "Expected 3 toggles (dim→bright→dim→bright) from one 950 ms tick");
+}
+
+// Issue #376: same for the pairing-code scroll — several 100 ms steps in one tick.
+ZTEST(bt_animations_di_tests, test_pairing_offset_advances_multiple_steps_in_one_tick) {
+    BtPairingAnimation *anim = BtPairingAnimation::getInstance();
+    anim->setPairingCode(123456);
+    anim->init();
+
+    CapturingRenderer renderer;
+    // 350 ms with kStepTimeMs=100: floor((350-1)/100) = 3 steps.
+    anim->tick(renderer, 350);
+
+    zassert_equal(anim->currentTextOffset, -3,
+                  "Expected 3 pixel steps from one 350 ms tick at a 100 ms step time");
+}

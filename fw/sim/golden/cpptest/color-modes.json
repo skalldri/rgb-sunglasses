@@ -3,102 +3,102 @@
   "extension": "cpptest",
   "scenario": "color-modes",
   "seed": 42,
-  "ticks": 909,
+  "ticks": 303,
   "samples": [
     {
       "tick": 10,
-      "digest": "sha256:c6a4a4daf8a0885f98e4f2276d8a2f4a",
+      "digest": "sha256:8359f1ffc3b60819d8d3ee4a65b97573",
       "ascii": ""
     },
     {
-      "tick": 60,
-      "digest": "sha256:d2bef9e901c908069dcc1eff34bdc897",
+      "tick": 27,
+      "digest": "sha256:9f2e1720629fd1d6cd8c13bd02d3adb8",
       "ascii": ""
     },
     {
-      "tick": 110,
-      "digest": "sha256:8208d8a3c3fc4276b24661e2a1f45d69",
+      "tick": 44,
+      "digest": "sha256:6ca820c6223473569b40a8919fa2c918",
       "ascii": ""
     },
     {
-      "tick": 160,
-      "digest": "sha256:a729f77db5c20006ff8e77e887b4df3a",
+      "tick": 61,
+      "digest": "sha256:bd91f71f421a1f947750e99ad354c2b2",
       "ascii": ""
     },
     {
-      "tick": 210,
-      "digest": "sha256:a270fd697d53116fe2158c7612ba5f9c",
+      "tick": 78,
+      "digest": "sha256:3c3f47f3419925cb7f49190acb360cb9",
       "ascii": ""
     },
     {
-      "tick": 260,
-      "digest": "sha256:77e1620946be0e703444f79ec693df0e",
+      "tick": 95,
+      "digest": "sha256:bf1426987673c41a83c0ec01178e4a5c",
       "ascii": ""
     },
     {
-      "tick": 310,
-      "digest": "sha256:af5f5bed04aa8d60c9f3da5196e20726",
+      "tick": 112,
+      "digest": "sha256:d754ea12961774486b30561d0c2cb946",
       "ascii": ""
     },
     {
-      "tick": 360,
-      "digest": "sha256:5c95467ad86d50264ac256481a083389",
+      "tick": 129,
+      "digest": "sha256:da0dec20717cad64fc8ef859d7885f22",
       "ascii": ""
     },
     {
-      "tick": 410,
-      "digest": "sha256:f75bd8943884cce91c3eb2bfdac4eacb",
+      "tick": 146,
+      "digest": "sha256:1840eeab6aa2c89287a2ecce544f7bdb",
       "ascii": ""
     },
     {
-      "tick": 460,
-      "digest": "sha256:ade1b85256ec1eb497312f773566d539",
+      "tick": 163,
+      "digest": "sha256:b5e14597fa6bf1ff30bc0c0197dcc2fe",
       "ascii": ""
     },
     {
-      "tick": 510,
-      "digest": "sha256:5dddb79f4dcdd640061fb071366ad91c",
+      "tick": 180,
+      "digest": "sha256:1f7089cbffb9bc3c8cb43b63ccb71ab4",
       "ascii": ""
     },
     {
-      "tick": 560,
-      "digest": "sha256:5c3b9c5c06a99d71d3eb5522402a7fdb",
+      "tick": 197,
+      "digest": "sha256:7f71be36c47d9d44ac1861800f6acd15",
       "ascii": ""
     },
     {
-      "tick": 610,
-      "digest": "sha256:7118ad69e31b54b93e67a03c73220238",
+      "tick": 214,
+      "digest": "sha256:26beb89bbceef4003a16054461a859c9",
       "ascii": ""
     },
     {
-      "tick": 660,
-      "digest": "sha256:80e82001d21530ab9b3246735d970d6b",
+      "tick": 231,
+      "digest": "sha256:4a6386c7c9a8b11cdda9cdcf020a4f09",
       "ascii": ""
     },
     {
-      "tick": 710,
-      "digest": "sha256:9c29a6d916a7c33e36a474bb1a34de3a",
+      "tick": 248,
+      "digest": "sha256:8877fb95612e84d4541f9214bd1705ea",
       "ascii": ""
     },
     {
-      "tick": 760,
-      "digest": "sha256:712703865bf528789abf0438c29e606a",
+      "tick": 265,
+      "digest": "sha256:a65e318ffb3063f51f3b4dd31356640b",
       "ascii": ""
     },
     {
-      "tick": 810,
-      "digest": "sha256:c253a94f1075032bba740f03abfb35fc",
+      "tick": 282,
+      "digest": "sha256:fc3a234e31030bba7ea6af2fdd5fefb6",
       "ascii": ""
     },
     {
-      "tick": 860,
-      "digest": "sha256:13a87a5bf4c991da9004d03249987b9b",
+      "tick": 299,
+      "digest": "sha256:9d11c42554d34ca6aaf5f93832be66fd",
       "ascii": ""
     },
     {
-      "tick": 908,
-      "digest": "sha256:fe4eec23cbade1780d90fd09be5bcb82",
-      "ascii": ":...       ...::----:::..        ..:::--\n:...      ...::-----:::..       ..::----\n::....  ...:::-------::..     ...::-----\n:::......:::---===---:::.......::---====\n-::::::::::---=====---::......::--======\n-:::::::::----====----:::...:::---======\n:::::::::------==      ::...:::---======\n:::::::::::------      :....:::----===--\n::::::::::::::::        .....::::------:\n:::::......:::::        ......::::::::::\n::::...........          ......::::::::.\n:::::..........          .......::::::.."
+      "tick": 302,
+      "digest": "sha256:6cf7cce231f7076d0e12e3c6a4dbb97e",
+      "ascii": "...         ...::::::...         ...::::\n...        ...:::::::...         ..:::::\n....     ....:::::::::...      ...::::::\n:..........::::----:::....   ...:::-----\n:::......:::::-----::::........:::------\n:::....::::::------::::.......:::-------\n::::..::::::::---      .......:::-------\n:::....::::::::::      .......::::-----:\n...........:::::        .......:::::::::\n................           ......:::::..\n...............            .............\n...............          ..............."
     }
   ]
 }

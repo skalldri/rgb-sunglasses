@@ -163,6 +163,58 @@ ZTEST(text_animation_di_tests, test_tick_does_not_advance_offset_before_step_tim
                   "Expected offset unchanged when step time has not elapsed");
 }
 
+// Issue #376: a step time shorter than the tick interval must take several steps in
+// one tick (carry-remainder accumulator), not be floored to one step per tick.
+ZTEST(text_animation_di_tests, test_step_time_below_tick_advances_multiple_steps) {
+    ConstUint32Source stepTimeMs(10);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 35);  // floor((35-1)/10) = 3 steps
+
+    zassert_equal(animation->currentTextOffset, -3,
+                  "Expected 3 pixel steps from one 35 ms tick at a 10 ms step time");
+}
+
+// Issue #376: total displacement must depend only on total elapsed time, not on how
+// that time is partitioned into ticks (90 Hz and 30 Hz must render the same motion).
+ZTEST(text_animation_di_tests, test_equal_displacement_across_tick_rates) {
+    ConstUint32Source stepTimeMs(45);  // divides neither 11 nor 33 evenly
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    NullTestRenderer renderer;
+
+    // 990 ms as 90 ticks of 11 ms (the old ~90 Hz render rate)...
+    animation->init();
+    for (int i = 0; i < 90; i++) {
+        animation->tick(renderer, 11);
+    }
+    const int32_t offsetAt90Hz = animation->currentTextOffset;
+
+    // ...and as 30 ticks of 33 ms (the ~30 Hz render rate).
+    animation->init();
+    for (int i = 0; i < 30; i++) {
+        animation->tick(renderer, 33);
+    }
+    const int32_t offsetAt30Hz = animation->currentTextOffset;
+
+    zassert_equal(offsetAt90Hz, offsetAt30Hz,
+                  "Displacement must not depend on tick partitioning");
+    zassert_equal(offsetAt90Hz, -21, "Expected exactly 21 steps in 990 ms");
+}
+
 // Regression (issue #188 follow-up): an empty slot satisfies "finished scrolling"
 // (firstChar >= currentMessageLen == 0) on every tick, so without a minimum-dwell floor
 // it advanced to the next slot - and fired GATT notifications via getUpNext() - at the
@@ -273,7 +325,8 @@ ZTEST(text_animation_di_tests, test_grace_request_tracks_remaining_scroll) {
     NullTestRenderer renderer;
     animation->tick(renderer, 1);  // dt below the step time: no pixel moves yet
 
-    const size_t expected = fullScrollPixels("HELLO", renderer.displayWidth()) * 10u;
+    // The 10 ms setting is floored to kFastestStepTimeMs = 11 (PR #378 review).
+    const size_t expected = fullScrollPixels("HELLO", renderer.displayWidth()) * 11u;
     zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)expected,
                   "must ask for the whole remaining scroll (%zu ms)", expected);
 
@@ -341,8 +394,10 @@ ZTEST(text_animation_di_tests, test_grace_request_floors_at_min_dwell) {
 }
 
 ZTEST(text_animation_di_tests, test_grace_request_zero_step_time) {
-    // A 0 step time scrolls one pixel per render tick, so the per-pixel cost is the frame
-    // interval, not 0 — the request must not collapse to nothing.
+    // A 0 step time means "fastest" = kFastestStepTimeMs (11 ms/step, the
+    // historical one-step-per-90Hz-tick speed; PR #378 review), so the
+    // per-pixel cost is 11 ms, not 0 — the request must not collapse to
+    // nothing.
     ConstUint32Source stepTimeMs(0);
     ConstUint32Source color(0xFFFFFF);
     FixedSlotSource slotSource;  // slot 0 -> "HELLO"
@@ -356,14 +411,15 @@ ZTEST(text_animation_di_tests, test_grace_request_zero_step_time) {
     NullTestRenderer renderer;
     const size_t full = fullScrollPixels("HELLO", renderer.displayWidth());
 
-    // The request is a snapshot taken at the top of tick(), before that frame's pixel
-    // step — so the first tick still reports the full scroll, priced at 20 ms/px.
+    // The request is a snapshot taken at the top of tick(), before that frame's
+    // pixel steps — so the first tick still reports the full scroll, at 11 ms/px.
     animation->tick(renderer, 20);
-    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)(full * 20u),
-                  "a 0 step time must price a pixel at one render tick, not 0 ms");
+    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)(full * 11u),
+                  "a 0 step time must price a pixel at kFastestStepTimeMs");
 
-    // The second tick sees the pixel the first one stepped: exactly one 20 ms frame less.
+    // The first tick's 20 ms stepped one 11 ms pixel (remainder 9 carried); the
+    // second snapshot is exactly one pixel less.
     animation->tick(renderer, 20);
-    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)((full - 1u) * 20u),
-                  "each scrolled pixel must retire one render tick's worth of the request");
+    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)((full - 1u) * 11u),
+                  "each scrolled pixel must retire one step time's worth of the request");
 }

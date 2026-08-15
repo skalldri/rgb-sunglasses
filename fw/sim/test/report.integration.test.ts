@@ -44,7 +44,7 @@ function runOpts(ticks: number, paramOverrides: Record<string, number | string> 
     seed: 0,
     ticks,
     warmupTicks: 0,
-    dtMs: 11,
+    dtMs: 33,
     budgetMs: 50,
     backstopMs: 500,
     paramOverrides,
@@ -66,7 +66,7 @@ test("report.printk carries init output, tagged and ordered", { skip }, async ()
 
   // ...and it is tagged distinctly from tick output, which README.md now
   // documents. Init precedes tick 0, so ordering is part of the contract.
-  assert.equal(printk[1], "[tick 0] hello: tick1 dt=11 speed=050 msg=ok");
+  assert.equal(printk[1], "[tick 0] hello: tick1 dt=33 speed=050 msg=ok");
   assert.equal(printk.length, 2, JSON.stringify(printk));
 });
 
@@ -122,6 +122,6 @@ test("report.printk keeps the log of the tick that trapped", { skip }, async () 
   // The line the extension printed on its way down survives into the report.
   assert.deepEqual(printk, [
     "[init] hello: rgbx_init running inside the sandbox",
-    "[tick 0] hello: tick1 dt=11 speed=050 msg=ok",
+    "[tick 0] hello: tick1 dt=33 speed=050 msg=ok",
   ]);
 });

@@ -43,9 +43,10 @@
  * `ext stats` on the shell shows the actual per-tick cost.
  *
  * CONFIG_APP_EXT_TICK_CPU_BUDGET_MS is NOT a backstop for that cost — it
- * only catches gross overruns. At its 50 ms default it sits ~4.5x above the
- * 11.1 ms render interval, so an extension can miss every single frame
- * without ever faulting. Issue #304 is the worked example: plasma peaked at
+ * only catches gross overruns. At its 50 ms default it still sits ~1.5x
+ * above the 33.3 ms render interval (issue #376 default), so an extension
+ * can miss every single frame without ever faulting. Issue #304 is the
+ * worked example (at the old 11.1 ms / ~90 Hz rate): plasma peaked at
  * 46.5 ms per tick, dropped the render rate from 90 Hz to 28 Hz, and never
  * tripped the budget. Judge transcendental cost against the render interval,
  * not the budget.

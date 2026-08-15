@@ -113,7 +113,7 @@ void rgbx_tick(void)
 {
 	const uint32_t dt = rgbx_inputs.dt_ms;
 
-	/* One-shot, so the UART/log pane isn't spammed at 90 Hz. Covers a
+	/* One-shot, so the UART/log pane isn't spammed at ~30 Hz. Covers a
 	 * width/zero-pad conversion and a %s alongside the plain integer one —
 	 * enough that a formatter regression shows up as a diff, not a silence.
 	 *
