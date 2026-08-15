@@ -199,7 +199,7 @@ trip the llext loader's region-overlap check.
 ## Simulating without hardware
 
 The WASM simulator runs an extension's actual source with the firmware's tick
-semantics (nominal 11 ms ticks, 25 Hz IMU / 31.25 Hz audio cadence, color-mode
+semantics (nominal 33 ms ticks, 25 Hz IMU / 31.25 Hz audio cadence, color-mode
 resolution, brightness truncation, dead-pixel mask, fault handling) and the
 **real** audio DSP compiled to WebAssembly. It needs no board — build a `.wasm`
 and drag it onto <https://rgb-sunglasses.autom8ed.com/sim/>, or run it from a
@@ -315,8 +315,9 @@ faults the extension.
   one uninterrupted activation and look for a trend.
 
 Note the CPU budget (`CONFIG_APP_EXT_TICK_CPU_BUDGET_MS`, 50 ms) will **not** catch
-this: it is ~4.5x the 11.1 ms render interval, so an extension can miss every frame
-without ever faulting. #304 peaked at 46.5 ms and never tripped it.
+this: it is still ~1.5x the 33.3 ms render interval (issue #376 default), so an
+extension can miss every frame without ever faulting. #304 peaked at 46.5 ms — against
+the 11.1 ms interval of its day — and never tripped it.
 
 `hello` doubles as the sandbox-recovery test: its `Crash` bool makes the next
 tick MPU-fault; `Hang` makes it spin until it exceeds its CPU budget. `Crash` is

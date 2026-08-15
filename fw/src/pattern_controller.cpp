@@ -360,8 +360,8 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
 
         if (updateTimeMs > kTargetRenderIntervalMs) {
             renderOverrunsSinceLog++;
-            // Rate-limited: at the 11.1 ms default this fired once per render tick under
-            // sustained load, which is the per-tick log spam PR #110 banned.
+            // Rate-limited: at the render-rate default this fired once per render tick
+            // under sustained load, which is the per-tick log spam PR #110 banned.
             const int64_t nowMs = k_uptime_get();
             if (nowMs - lastRenderOverrunLogMs >= 5000) {
                 LOG_WRN("Render overran the tick interval %u time(s) in the last %lld ms — "
