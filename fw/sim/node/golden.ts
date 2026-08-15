@@ -49,7 +49,7 @@ function goldenTicks(totalTicks: number): number[] {
 async function runForGolden(spec: { ext: string; scenario: string }): Promise<GoldenFile> {
   const scenarioPath = path.join(SCENARIO_DIR, `${spec.scenario}.json`);
   const scenario: Scenario = parseScenario(JSON.parse(fs.readFileSync(scenarioPath, "utf8")));
-  const dtMs = 11;
+  const dtMs = 33;
   const ticks = Math.round(scenario.durationMs / dtMs);
   const seed = scenario.seed ?? 0;
   const wasmPath = path.join(WASM_DIR, `${spec.ext}.wasm`);

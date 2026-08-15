@@ -31,10 +31,11 @@ import { ConsolePanel } from "./ui/console";
 import { ParamPanel } from "./ui/params";
 import { BrowserWorkerAdapter } from "./workerAdapter";
 
-/** kTargetRenderIntervalMs truncated — the device's nominal render period. */
-const DT_MS = 11;
-/** Repaint every Nth tick when display decimation is on (~30 Hz of 90 Hz). */
-const DECIMATION = 3;
+/** kTargetRenderIntervalMs truncated — the device's nominal render period.
+ * Since issue #376 the render rate equals the ~30 Hz display rate, so every
+ * tick reaches the strips and the old "30 Hz display" decimation toggle is
+ * gone: the render cadence IS the display cadence. */
+const DT_MS = 33;
 /** Device brightness is a x0.02 truncating scale; the boosted view undoes
  * the scale (but not the truncation) so the quantization stays visible. */
 const BOOST = Math.round(1 / DEFAULT_BRIGHTNESS_FACTOR);
@@ -68,7 +69,6 @@ const els = {
   play: must<HTMLButtonElement>("play"),
   step: must<HTMLButtonElement>("step"),
   brightness: must<HTMLSelectElement>("brightness"),
-  decimate: must<HTMLInputElement>("decimate"),
   whiteHot: must<HTMLInputElement>("white-hot"),
   stats: must<HTMLElement>("stats"),
   buttons: must<HTMLElement>("buttons"),
@@ -453,9 +453,7 @@ async function stepOnce(): Promise<void> {
   wall.count++;
   ticksSinceSample++;
 
-  if (!els.decimate.checked || h.tickIndex % DECIMATION === 0) {
-    paint();
-  }
+  paint();
 }
 
 function paint(): void {
@@ -891,7 +889,6 @@ async function boot(): Promise<void> {
     void stepOnce().then(paint);
   });
   els.brightness.addEventListener("change", paint);
-  els.decimate.addEventListener("change", paint);
   // Sync at boot too: browsers restore checkbox state on reload/bfcache
   // WITHOUT firing change, which would desync the renderer from the box.
   renderer.whiteHot = els.whiteHot.checked;

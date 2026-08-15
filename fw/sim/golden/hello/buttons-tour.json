@@ -3,55 +3,25 @@
   "extension": "hello",
   "scenario": "buttons-tour",
   "seed": 0,
-  "ticks": 455,
+  "ticks": 152,
   "samples": [
     {
       "tick": 10,
-      "digest": "sha256:8c420f1da32c385f78af284b46bda3f1",
-      "ascii": ""
-    },
-    {
-      "tick": 60,
-      "digest": "sha256:76f1bb16aeee4c0987a96007e98e12d6",
-      "ascii": ""
-    },
-    {
-      "tick": 110,
-      "digest": "sha256:d2e620a901568057c28b51ed3737d89c",
-      "ascii": ""
-    },
-    {
-      "tick": 160,
-      "digest": "sha256:cc7504c36193ad2418c8fdfc17528048",
-      "ascii": ""
-    },
-    {
-      "tick": 210,
-      "digest": "sha256:3e9d4e13e26575c5549a25645b36cb97",
-      "ascii": ""
-    },
-    {
-      "tick": 260,
-      "digest": "sha256:9dc82bac5513c361373e25f07ba6b9e1",
-      "ascii": ""
-    },
-    {
-      "tick": 310,
-      "digest": "sha256:39c21b9e5a181fc6b1ef74bdf7a070de",
-      "ascii": ""
-    },
-    {
-      "tick": 360,
       "digest": "sha256:fb22ad087201217086df8dafa4809f94",
       "ascii": ""
     },
     {
-      "tick": 410,
-      "digest": "sha256:8c420f1da32c385f78af284b46bda3f1",
+      "tick": 60,
+      "digest": "sha256:07929d0eb120a43081f8bcafa6a37555",
       "ascii": ""
     },
     {
-      "tick": 454,
+      "tick": 110,
+      "digest": "sha256:fa01bbd63fa9a6fa71e14c982d669936",
+      "ascii": ""
+    },
+    {
+      "tick": 151,
       "digest": "sha256:e19c3e3ca60176679280c3987a23fc9a",
       "ascii": "                                        \n    :       :       :       :       :   \n    :       :       :       :       :   \n    :       :       :       :       :   \n    :       :       :       :       :   \n    :       :       :       :       :   \n    +       +               +       +   \n    :       :               :       :   \n    :       :               :       :   \n    :       :               :       :   \n    :       :               :       :   \n                                        "
     }

@@ -3,7 +3,7 @@
  * (fw/src/extensions/extension_host.cpp:1125-1252) plus the activate /
  * fault / param lifecycle around it:
  *
- *  - dt_ms is a constant NOMINAL value (default 11 — ~90 Hz), never
+ *  - dt_ms is a constant NOMINAL value (default 33 — ~30 Hz), never
  *    measured time; the sim clock advances by exactly dtMs per tick.
  *  - paramValues stay RAW (mode-carrying for COLOR params) — authoritative
  *    for reads/UI — while the value written into rgbx_inputs.params[p] is
@@ -83,8 +83,9 @@ export interface TickOk {
   log: string;
   wallMs: number;
   manifestIntact: boolean;
-  /** Bitmask of audio bands whose beat flag was delivered this tick
-   * (sticky across the ~3 ticks an audio frame covers, like the device). */
+  /** Bitmask of audio bands whose beat flag was delivered this tick. Flags
+   * hold until the next tick that delivers a new audio frame, and OR across
+   * the frames one tick delivers — like the device's audio_frame_fold. */
   beatMask: number;
 }
 
@@ -99,7 +100,7 @@ export type TickOutcome = TickOk | TickFault;
 export interface SimHostOptions {
   wasmBytes: ArrayBuffer;
   adapterFactory: () => SandboxAdapter;
-  /** Nominal per-tick dt — kTargetRenderIntervalMs truncated (default 11). */
+  /** Nominal per-tick dt — kTargetRenderIntervalMs truncated (default 33). */
   dtMs?: number;
   /** CONFIG_APP_EXT_TICK_CPU_BUDGET_MS analog, checked against the tick's
    * in-worker wall time (see PARITY.md — a coarse stand-in). Default 50. */
@@ -174,7 +175,7 @@ export class SimHost {
   constructor(opts: SimHostOptions) {
     this.wasmBytes = opts.wasmBytes;
     this.adapterFactory = opts.adapterFactory;
-    this.dtMs = opts.dtMs ?? 11;
+    this.dtMs = opts.dtMs ?? 33;
     this.budgetMs = opts.budgetMs ?? 50;
     this.backstopMs = opts.backstopMs ?? 500;
     this.expectedWidth = opts.expectedWidth ?? 40;
@@ -347,12 +348,26 @@ export class SimHost {
     const inputs = makeZeroInputs(this.dtMs);
 
     // Audio: deliver every 32 ms frame boundary crossed so far; features
-    // (incl. beat flags) hold between deliveries.
+    // (incl. beat flags) hold between deliveries. When one tick crosses TWO
+    // frame boundaries (a ~33 ms tick regularly does), beat flags OR across
+    // the batch — latest frame wins for everything else — matching the
+    // device's audio_frame_fold (issue #376: last-frame-wins dropped the
+    // older frame's beat).
+    let framesThisTick = 0;
     while (this.audioFramesDelivered * AUDIO_FRAME_MS <= this.simTimeMs) {
       const frame = await this.audioProvider.nextFrame(this.audioFramesDelivered);
-      this.lastAudioFeatures = frame;
+      if (framesThisTick === 0) {
+        this.lastAudioFeatures = frame;
+      } else {
+        const beatOr = new Uint8Array(frame.beat.length);
+        for (let b = 0; b < beatOr.length; b++) {
+          beatOr[b] = frame.beat[b] || this.lastAudioFeatures.beat[b] ? 1 : 0;
+        }
+        this.lastAudioFeatures = { ...frame, beat: beatOr };
+      }
       this.beatCounter.onAudioFrame(frame);
       this.audioFramesDelivered++;
+      framesThisTick++;
     }
     inputs.audioBandEnergy.set(this.lastAudioFeatures.bandEnergy);
     inputs.audioBeat.set(this.lastAudioFeatures.beat);
