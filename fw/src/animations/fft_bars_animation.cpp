@@ -79,28 +79,36 @@ void FftBarsAnimation::setConfigSource(FftVisualizationConfigSource &source) {
 
 /* One ~32 ms analysis frame spanned ~3 render ticks at the pre-issue-#376 11.1 ms
  * render rate, and the per-tick EMA ran against a held energy value in between —
- * so the historical response was ~3 EMA steps toward each new frame. Advancing
- * exactly 3 steps per NEW frame reproduces that response at any render tick rate
- * and keeps the persisted smoothingCoeff tunable's meaning unchanged. */
+ * so the historical response was ~3 EMA steps toward each new frame. Running 3
+ * steps per NEW frame reproduces that response at any render tick rate and keeps
+ * the persisted smoothingCoeff tunable's meaning unchanged. */
 static constexpr uint32_t kEmaStepsPerFrame = 3;
 
-/* audio_result_q holds at most a few frames; bound the catch-up after a stall so a
- * wrapped/large frame-count delta cannot spin the EMA loop. Worst-case tick cost:
+/* The audio thread's analysis cadence (BLOCK_CAPTURE_TIME_MS in sound.cpp) —
+ * used only to prorate EMA steps over wall time, so a drift between the two
+ * constants costs smoothness, never correctness. */
+static constexpr uint32_t kAudioFrameMs = 32;
+
+/* audio_result_q holds at most 4 frames, so a larger frameCount() delta is a
+ * stall artifact or a counter wrap — cap the DELTA (before any multiply: a
+ * post-multiply cap is bypassed by uint32 wrap, PR #378 review). */
+static constexpr uint32_t kMaxCatchupFrames = 4;
+
+/* Bound on the owed-steps pool, sized to the msgq depth. Worst-case tick cost:
  * 12 steps x 24 buckets = 288 float multiply-adds, ~2-3 us on this M33+FPU at
- * 128 MHz — noise against the 33.3 ms frame budget (the steady state is 3 steps
- * x 20 buckets, comparable to the old 1-step-per-tick x 90 Hz total). */
-static constexpr uint32_t kMaxEmaStepsPerTick = 4 * kEmaStepsPerFrame;
+ * 128 MHz — noise against the 33.3 ms frame budget. */
+static constexpr uint32_t kMaxPendingEmaSteps = kMaxCatchupFrames * kEmaStepsPerFrame;
 
 void FftBarsAnimation::init() {
     for (size_t b = 0; b < kMaxDisplayBuckets; b++) {
         smoothed_[b] = 0.0f;
     }
     lastFrameCount_ = audioSource_ ? audioSource_->frameCount() : 0;
+    pendingEmaSteps_ = 0;
+    prorateRemainderMs_ = 0;
 }
 
 void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
-    /* Motion is driven by frameCount() deltas, not wall time — see kEmaStepsPerFrame. */
-    ARG_UNUSED(timeSinceLastTickMs);
 
     size_t W = renderer.displayWidth();
     size_t H = renderer.displayHeight();
@@ -125,15 +133,31 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
         numBuckets = kMaxDisplayBuckets;
     }
 
-    /* Update smoothed energies with an exponential moving average, one batch of
-     * EMA steps per NEWLY-ARRIVED analysis frame (none when no frame arrived), so
-     * the bars' responsiveness does not depend on the render tick rate. */
+    /* Update smoothed energies with an exponential moving average driven by
+     * NEWLY-ARRIVED analysis frames (no frames -> no movement), prorated over
+     * wall time: arriving frames deposit kEmaStepsPerFrame steps into a pool,
+     * and each tick withdraws up to dt's worth (carry-remainder). At the 30 Hz
+     * default that is ~3 steps on the tick the frame arrives — unchanged — but
+     * at a render rate faster than the analysis cadence (the still-supported
+     * 90 Hz display=render=11100 setup) the frame's steps spread across the
+     * ticks it spans instead of bursting on one and freezing on the rest
+     * (PR #378 review). */
     const uint32_t frameCount = audioSource_->frameCount();
-    uint32_t emaSteps = (frameCount - lastFrameCount_) * kEmaStepsPerFrame;
+    uint32_t newFrames = frameCount - lastFrameCount_;
     lastFrameCount_ = frameCount;
-    if (emaSteps > kMaxEmaStepsPerTick) {
-        emaSteps = kMaxEmaStepsPerTick;
+    if (newFrames > kMaxCatchupFrames) {
+        newFrames = kMaxCatchupFrames;  /* delta capped BEFORE the multiply */
     }
+    pendingEmaSteps_ += newFrames * kEmaStepsPerFrame;
+    if (pendingEmaSteps_ > kMaxPendingEmaSteps) {
+        pendingEmaSteps_ = kMaxPendingEmaSteps;
+    }
+
+    prorateRemainderMs_ += kEmaStepsPerFrame * (uint32_t)timeSinceLastTickMs;
+    const uint32_t allowance = prorateRemainderMs_ / kAudioFrameMs;
+    prorateRemainderMs_ -= allowance * kAudioFrameMs;
+    const uint32_t emaSteps = (pendingEmaSteps_ < allowance) ? pendingEmaSteps_ : allowance;
+    pendingEmaSteps_ -= emaSteps;
 
     for (size_t bucket = 0; bucket < numBuckets; bucket++) {
         float energy = audioSource_->getDisplayBucketEnergy(bucket);

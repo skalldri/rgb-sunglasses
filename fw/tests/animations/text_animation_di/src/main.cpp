@@ -325,7 +325,8 @@ ZTEST(text_animation_di_tests, test_grace_request_tracks_remaining_scroll) {
     NullTestRenderer renderer;
     animation->tick(renderer, 1);  // dt below the step time: no pixel moves yet
 
-    const size_t expected = fullScrollPixels("HELLO", renderer.displayWidth()) * 10u;
+    // The 10 ms setting is floored to kFastestStepTimeMs = 11 (PR #378 review).
+    const size_t expected = fullScrollPixels("HELLO", renderer.displayWidth()) * 11u;
     zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)expected,
                   "must ask for the whole remaining scroll (%zu ms)", expected);
 

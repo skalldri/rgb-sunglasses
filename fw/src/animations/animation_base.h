@@ -16,14 +16,17 @@
 // the figure can't drift between them if the pool budget ever changes.
 inline constexpr size_t kMinSlotDwellMs = 500;
 
-// What a remotely-writable step/scroll time of 0 means: "fastest", defined in
-// wall-clock terms as the HISTORICAL fastest — one step per render tick at the
-// pre-issue-#376 90 Hz render rate, i.e. ~11 ms/step. Mapping 0 to a smaller
-// value (e.g. 1 ms) would speed those animations up 11-33x versus every
-// firmware users have run, making text unreadable (PR #378 review); mapping it
-// per-tick would tie the speed to the render rate, the coupling issue #376
-// removed. Shared by every step-time-driven animation (Rainbow, ZigZag, Text)
-// so the figure cannot drift between them.
+// The fastest a remotely-writable step/scroll time can effectively be, in
+// wall-clock terms: the HISTORICAL fastest — one step per render tick at the
+// pre-issue-#376 90 Hz render rate, i.e. ~11 ms/step. Applied as a FLOOR
+// (max(stepTimeMs, kFastestStepTimeMs)), not an == 0 special case: before
+// issue #376 EVERY value in 0..11 stepped once per 11 ms tick, so remapping
+// only 0 would leave 1..10 running up to 11x faster than "fastest"
+// (PR #378 review). A smaller floor (e.g. 1 ms) would speed those animations
+// up 11-33x versus every firmware users have run, making text unreadable;
+// per-tick stepping would tie the speed to the render rate, the coupling
+// issue #376 removed. Shared by every step-time-driven animation (Rainbow,
+// ZigZag, Text) so the figure cannot drift between them.
 inline constexpr uint32_t kFastestStepTimeMs = 11;
 
 // Per-slot dwell timing for a slot-cycling animation whose boundary IS dwell expiry

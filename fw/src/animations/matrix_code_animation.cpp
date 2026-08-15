@@ -59,23 +59,25 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
             // post-stall catch-up spike; each iteration consumes >= 1 ms of
             // budget (dropSpeedMs is floored at 1 above).
             uint32_t budgetMs = timeSinceLastTickMs;
+            bool stepped = false;
             while (columns_[x].active && budgetMs >= columns_[x].dropTimerMs) {
                 budgetMs -= columns_[x].dropTimerMs;
 
                 // Time to step the head down one row
                 columns_[x].dropTimerMs = dropSpeedMs;
                 columns_[x].headY++;
+                stepped = true;
 
                 if (columns_[x].headY >= height) {
                     // Drop has exited the bottom; deactivate this column
                     columns_[x].active = false;
                 } else {
-                    // Light the new head position, aged by the time that has
-                    // already elapsed since this step within the tick (the
-                    // remaining budget): the tick-level decay pass above ran
-                    // BEFORE this loop, so without this a multi-row sweep would
-                    // paint every crossed row at a flat 255 and the trail would
-                    // lose its falling gradient (PR #378 review).
+                    // Light the row, aged by the time already elapsed since this
+                    // step within the tick (the remaining budget): the tick-level
+                    // decay pass above ran BEFORE this loop, so without this a
+                    // multi-row sweep would paint every crossed row at a flat 255
+                    // and the trail would lose its falling gradient (PR #378
+                    // review). The FINAL head position is re-lit at 255 below.
                     const uint32_t age = (budgetMs * 255) / fadeTimeMs;
                     brightness_[x][columns_[x].headY] =
                         (age < 255) ? (uint8_t)(255 - age) : 0;
@@ -83,6 +85,14 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
             }
             if (columns_[x].active) {
                 columns_[x].dropTimerMs -= budgetMs;
+                if (stepped) {
+                    // The head itself stays a steady 255, matching both the
+                    // spawn below and the pre-#376 per-step behavior — only the
+                    // INTERMEDIATE rows a multi-step sweep crossed keep their
+                    // in-tick age (PR #378 review: aging the head too made it
+                    // shimmer at ~70-95% and pop to 255 on every new spawn).
+                    brightness_[x][columns_[x].headY] = 255;
+                }
             }
         } else {
             // density (0-100) = % chance per second; scale to per-tick probability so

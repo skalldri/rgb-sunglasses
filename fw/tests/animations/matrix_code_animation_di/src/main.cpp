@@ -81,13 +81,15 @@ ZTEST(matrix_code_animation_di_tests, test_drop_advances_multiple_rows_in_one_ti
 
     reset_capture();
     // One 33 ms tick at a 10 ms drop speed: 33 → 23 → 13 → 3, exactly 3 rows.
-    // Each swept row is aged by its remaining in-tick budget (PR #378 review:
-    // a flat 255 sweep would lose the trail gradient): age = budget*255/600.
+    // Intermediate swept rows are aged by their remaining in-tick budget
+    // (age = budget*255/600 — a flat 255 sweep would lose the trail gradient),
+    // while the FINAL head stays a steady 255, matching the spawn (PR #378
+    // review: an aged head shimmered and popped on every new spawn).
     animation->tick(renderer, 33);
 
     zassert_equal(sColumnRed[1], 246, "Expected row 1 aged by 23 ms (255 - 9)");
     zassert_equal(sColumnRed[2], 250, "Expected row 2 aged by 13 ms (255 - 5)");
-    zassert_equal(sColumnRed[3], 254, "Expected row 3 aged by 3 ms (255 - 1)");
+    zassert_equal(sColumnRed[3], 255, "Expected the final head at a steady 255");
     zassert_equal(sColumnRed[4], 0, "Expected the head NOT to reach row 4 (3 steps only)");
     zassert_true(sColumnRed[1] < sColumnRed[2] && sColumnRed[2] < sColumnRed[3],
                  "Expected the falling gradient to brighten toward the head");

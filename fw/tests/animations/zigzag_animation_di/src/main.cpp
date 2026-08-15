@@ -56,7 +56,7 @@ class WideTestRenderer : public CapturingTestRenderer {
 ZTEST_SUITE(zigzag_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 
 ZTEST(zigzag_animation_di_tests, test_injected_step_time_advances_pixel) {
-    MutableUint32Source stepTimeMs(1);
+    MutableUint32Source stepTimeMs(1);  // floored to kFastestStepTimeMs = 11
     MutableUint32Source color(0x112233);
     ZigZagAnimationDependencies deps(stepTimeMs, color);
 
@@ -66,7 +66,7 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_advances_pixel) {
 
     CapturingTestRenderer renderer;
     reset_capture();
-    animation->tick(renderer, 2);
+    animation->tick(renderer, 12);  // 12 > 11: exactly one step
 
     zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write");
     zassert_equal(sCapture.x, 1, "Expected lit pixel to advance to x=1");
@@ -97,10 +97,10 @@ ZTEST(zigzag_animation_di_tests, test_injected_step_time_holds_pixel_when_not_el
 }
 
 ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indices) {
-    // 2x1 display → 2 total indices. An 11 ms tick at a 10 ms step advances one
-    // index per tick (11 > 10, remainder 1; 12 > 10, remainder 2).
+    // 2x1 display → 2 total indices. A 16 ms tick at a 15 ms step advances one
+    // index per tick (16 > 15, remainder 1; 17 > 15, remainder 2).
     // init: index=0; tick 1 → index=1; tick 2 → index=2 wraps to 0.
-    MutableUint32Source stepTimeMs(10);
+    MutableUint32Source stepTimeMs(15);
     MutableUint32Source color(0xFF0000);
     ZigZagAnimationDependencies deps(stepTimeMs, color);
 
@@ -111,10 +111,10 @@ ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indic
     CapturingTestRenderer renderer;
 
     reset_capture();
-    animation->tick(renderer, 11);  // advances to index 1
+    animation->tick(renderer, 16);  // advances to index 1
 
     reset_capture();
-    animation->tick(renderer, 11);  // advances to index 2 → wraps to 0
+    animation->tick(renderer, 16);  // advances to index 2 → wraps to 0
 
     zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write after wrap");
     zassert_equal(sCapture.x, 0, "Expected lit pixel at x=0 after wrapping");
@@ -159,10 +159,11 @@ ZTEST(zigzag_animation_di_tests, test_step_time_below_tick_advances_multiple_ste
 
     WideTestRenderer renderer;
     reset_capture();
-    // One 33 ms tick with a 10 ms step: 33 → 23 → 13 → 3, i.e. exactly 3 steps.
+    // The 10 ms step is floored to kFastestStepTimeMs = 11; one 33 ms tick:
+    // 33 → 22 → 11 (11 > 11 is false), i.e. exactly 2 steps.
     animation->tick(renderer, 33);
 
-    zassert_equal(sCapture.x, 3, "Expected 3 steps from one 33 ms tick at a 10 ms step time");
+    zassert_equal(sCapture.x, 2, "Expected 2 steps from one 33 ms tick at the 11 ms floor");
 }
 
 // PR #378 review: the accumulator is clamped to one step plus one tick, so a
@@ -183,13 +184,13 @@ ZTEST(zigzag_animation_di_tests, test_step_time_change_does_not_burst) {
         animation->tick(renderer, 200);  // accumulate 1000 ms with no steps
     }
 
-    // Drop to a 10 ms step: the clamp caps the accumulator at step + dt = 43,
-    // so this tick takes exactly floor((43-1)/10) = 4 steps — not the ~100 the
-    // stale 1000 ms accumulator would otherwise pay for in one tick.
+    // Drop to a 10 ms step (floored to 11): the clamp caps the accumulator at
+    // step + dt = 44, so this tick takes exactly floor((44-1)/11) = 3 steps —
+    // not the ~90 the stale 1000 ms accumulator would otherwise pay for.
     stepTimeMs.set(10);
     reset_capture();
     animation->tick(renderer, 33);
-    zassert_equal(sCapture.x, 4, "Expected 4 steps after the step-time change, not a burst");
+    zassert_equal(sCapture.x, 3, "Expected 3 steps after the step-time change, not a burst");
 }
 
 // Issue #376: total displacement must depend only on total elapsed time, not on how

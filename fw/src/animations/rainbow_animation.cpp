@@ -71,10 +71,10 @@ void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    // A step time of 0 means "fastest" = the historical ~90 steps/s wall-clock
-    // rate, independent of the render tick rate (kFastestStepTimeMs rationale).
+    // Floor at the historical ~90 steps/s wall-clock fastest — every value in
+    // 0..11 behaved identically before issue #376 (kFastestStepTimeMs rationale).
     uint32_t stepTimeMs = deps_->stepTimeMs.get();
-    if (stepTimeMs == 0) {
+    if (stepTimeMs < kFastestStepTimeMs) {
         stepTimeMs = kFastestStepTimeMs;
     }
 

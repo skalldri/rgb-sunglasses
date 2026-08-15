@@ -37,9 +37,15 @@ interface GoldenFile {
   samples: { tick: number; digest: string; ascii: string }[];
 }
 
-function goldenTicks(totalTicks: number): number[] {
+// Sample stride is WALL-CLOCK based (one digest per ~550 ms of sim time, the
+// original 50-tick stride at dt=11), not a fixed tick count: a tick-count
+// stride silently thins the regression net whenever dtMs grows — the #376
+// dt 11 -> 33 move would have cut every golden to a third of its samples
+// (PR #378 review).
+function goldenTicks(totalTicks: number, dtMs: number): number[] {
+  const stride = Math.max(1, Math.round(550 / dtMs));
   const ticks: number[] = [];
-  for (let t = 10; t < totalTicks; t += 50) {
+  for (let t = 10; t < totalTicks; t += stride) {
     ticks.push(t);
   }
   ticks.push(totalTicks - 1);
@@ -73,7 +79,7 @@ async function runForGolden(spec: { ext: string; scenario: string }): Promise<Go
     paramOverrides: {},
     outDir: null,
     asciiSamples: 0,
-    sampleTicksOverride: goldenTicks(ticks),
+    sampleTicksOverride: goldenTicks(ticks, dtMs),
     pngEvery: 0,
     dumpFrames: 0,
     ansiEvery: 0,

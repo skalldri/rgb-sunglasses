@@ -141,11 +141,11 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // used to cut a long GLIM clip.
     //
     // A pixel step costs about one step-time regardless of the render tick rate (the
-    // carry-remainder accumulator below can take several steps in one tick). A step
-    // time of 0 means "fastest" = the historical ~90 px/s wall-clock rate
-    // (kFastestStepTimeMs rationale).
+    // carry-remainder accumulator below can take several steps in one tick), floored
+    // at the historical ~90 px/s wall-clock fastest — every value in 0..11 behaved
+    // identically before issue #376 (kFastestStepTimeMs rationale).
     size_t stepMs = deps_->stepTimeMs.get();
-    if (stepMs == 0) {
+    if (stepMs < kFastestStepTimeMs) {
         stepMs = kFastestStepTimeMs;
     }
     const size_t msPerPixel = stepMs;

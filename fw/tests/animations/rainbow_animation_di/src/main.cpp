@@ -143,18 +143,19 @@ ZTEST(rainbow_animation_di_tests, test_step_time_below_tick_advances_multiple_st
     reset_capture();
     animation->tick(renderer, 33);
     PixelColor x1BeforeAdvance = sPixelColors[1];
-    PixelColor x3BeforeAdvance = sPixelColors[3];
+    PixelColor x2BeforeAdvance = sPixelColors[2];
 
-    // ...and one 33 ms tick at a 10 ms step advanced exactly 3 steps, so the next
-    // frame's x0 must show what x3 (not x1) showed before.
+    // ...and one 33 ms tick at the 11 ms floor (the 10 ms setting is floored to
+    // kFastestStepTimeMs) advanced exactly 2 steps, so the next frame's x0 must
+    // show what x2 (not x1) showed before.
     reset_capture();
-    animation->tick(renderer, 0);  // render-only: 33-30=3 ms remainder < step time
+    animation->tick(renderer, 0);  // render-only: 33-22=11 ms remainder, not > step
     PixelColor x0AfterAdvance = sPixelColors[0];
 
-    zassert_true(same_color(x0AfterAdvance, x3BeforeAdvance),
-                 "Expected 3 steps from one 33 ms tick at a 10 ms step time");
+    zassert_true(same_color(x0AfterAdvance, x2BeforeAdvance),
+                 "Expected 2 steps from one 33 ms tick at the 11 ms floor");
     zassert_false(same_color(x0AfterAdvance, x1BeforeAdvance),
-                  "Expected more than 1 step from one 33 ms tick at a 10 ms step time");
+                  "Expected more than 1 step from one 33 ms tick at the 11 ms floor");
 }
 
 // Issue #376: total displacement must depend only on total elapsed time, not on how

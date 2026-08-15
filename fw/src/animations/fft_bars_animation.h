@@ -45,6 +45,14 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
     /* audioSource_->frameCount() at the last tick — the EMA advances per NEW
      * analysis frame, not per render tick (issue #376). */
     uint32_t lastFrameCount_ = 0;
+
+    /* EMA steps owed but not yet run, and the wall-time proration remainder:
+     * arriving frames deposit steps into the pool; each tick withdraws up to
+     * dt's worth (kEmaStepsPerFrame per kAudioFrameMs, remainder carried), so
+     * a render rate faster than the analysis cadence spreads a frame's steps
+     * across the ticks it spans instead of bursting them (PR #378 review). */
+    uint32_t pendingEmaSteps_ = 0;
+    uint32_t prorateRemainderMs_ = 0;
 };
 
 void fft_bars_animation_bind_default_sound_dependencies();
