@@ -60,6 +60,15 @@
 				<NRF_PSEL(QSPI_IO2, 0, 15)>,
 				<NRF_PSEL(QSPI_IO3, 0, 16)>,
 				<NRF_PSEL(QSPI_CSN, 0, 18)>;
+			/* High drive on both rails, matching Nordic's own
+			 * nRF5340DK config for the same MX25R6435F on the same
+			 * pins — the DK sets it even at 8 MHz, and this board
+			 * had been running standard drive (review finding on
+			 * the 32 MHz bump). At 32 MHz the half-period is
+			 * ~15.6 ns against tCLQV of 10-12 ns (datasheet PDF
+			 * p.70) and the >= 0.1 V/ns clock-slew requirement, so
+			 * edge rate is where the read-setup margin comes from. */
+			nordic,drive-mode = <NRF_DRIVE_H0H1>;
 		};
 	};
 

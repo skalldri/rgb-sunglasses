@@ -330,7 +330,7 @@ led_strip_spi_1: &spi4 {
 	 *
 	 * Page citations below are PDF page numbers of
 	 * fw/docs/datasheets/MX25R6435F/mx25r6435f-datasheet.pdf (Rev 1.4);
-	 * the printed footer is offset by one (PDF p.77 carries footer "76").
+	 * they match the printed page footers.
 	 *
 	 * Power mode: the proto0 BOM part is MX25R6435FZAIH0 — the "H"
 	 * ordering option means it factory-defaults to HIGH PERFORMANCE mode
@@ -346,10 +346,15 @@ led_strip_spi_1: &spi4 {
 	 * (needs the 24-bit WRSR form, PDF p.32).
 	 *
 	 * The BOM is the SINGLE POINT OF TRUTH for the power mode: L and H
-	 * variants share jedec-id [c2 28 17] (PDF p.77), so the boot-time JEDEC
-	 * probe passing proves nothing about the variant, and CR2 cannot be
-	 * read back at runtime (no ex_op / custom-instruction path in
-	 * nordic,qspi-nor). An L-variant re-BOM must revisit sck-frequency.
+	 * variants share jedec-id [c2 28 17] — the ID identifies the device,
+	 * not the ordering option (PDF p.25 Table 6 "ID Definitions" gives one
+	 * ID for the part; p.77 shows L/H is only an ordering option of that
+	 * same device) — so the boot-time JEDEC probe passing proves nothing
+	 * about the variant. The nordic,qspi-nor driver exposes NO PUBLIC API
+	 * to read CR2 back (no ex_op, no custom-instruction hook), though a
+	 * hand-rolled boot-time RDCR (0x15) via nrfx_qspi_cinstr_xfer is
+	 * possible in ~10 lines if variant detection is ever wanted — tracked
+	 * as issue #387. An L-variant re-BOM must revisit sck-frequency.
 	 *
 	 * sck-frequency: HP mode allows 80 MHz for 4READ/PP4IO (PDF p.7
 	 * Table 1, p.70 Table 17). The previous 8 MHz value was the
