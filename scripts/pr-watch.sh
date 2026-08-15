@@ -170,6 +170,61 @@ should_trust_empty() { # should_trust_empty <count>  -> 0 = act on it
   [ "$1" -gt 0 ] || [ "$EMPTY_POLLS" -ge "$EMPTY_STREAK_LIMIT" ]
 }
 
+# One poll's worth of work: classify every record, emit the events, then decide
+# about pruning. Takes the tab-separated `gh pr list` output as a string so the
+# self-test can drive it with no network.
+#
+# The loop body lives here, not inline, for the same reason should_trust_empty()
+# does — and for a reason found the hard way. Extracting only the PREDICATE left
+# the DECISION untested: mutating the call site (`if should_trust_empty` ->
+# `if ! should_trust_empty`, or prune's argument -> "") passed all 49 assertions
+# while still emitting the full review storm. 12 of 13 call-site mutants
+# survived. Testing a rule is not testing the code that consults it.
+#
+# Call it directly, never through $( ): it updates EMPTY_POLLS, and a command
+# substitution would run it in a subshell where that counter never carries.
+# Redirect its stdout to a file if you need to inspect the events.
+poll_once() { # poll_once <tab-separated gh records>
+  local cur="$1" open_nums="" num sha draft author branch title verdict old d count
+  while IFS=$'\t' read -r num sha draft author branch title; do
+    # A newline inside a title splits one record in two. Skip the orphan
+    # rather than writing a key-less line into state that nothing can remove.
+    case "${num:-}" in ''|*[!0-9]*) continue ;; esac
+    open_nums="$open_nums $num"
+    verdict=$(classify "$num" "$sha" "$draft")
+    case "$verdict" in
+      NEW)
+        [ "$draft" = "true" ] && d=" (draft)" || d=""
+        echo "NEW PR #$num by $author [$branch]$d: $title" ;;
+      READY)
+        echo "READY PR #$num by $author [$branch]: $title (draft marked ready)" ;;
+      UPDATED*)
+        old="${verdict#UPDATED }"
+        echo "UPDATED PR #$num by $author [$branch]: $title (head ${old:0:8} -> ${sha:0:8})" ;;
+    esac
+  done <<< "$cur"
+
+  count=$(printf '%s\n' $open_nums | grep -c . || true)
+
+  if should_trust_empty "$count"; then
+    prune "${open_nums# }"
+  elif [ "$EMPTY_POLLS" = 1 ] && [ -s "$STATE" ]; then
+    echo "PR-WATCH: poll returned zero open PRs but state is non-empty — not pruning until it repeats"
+  fi
+
+  # A silent cap reads as "covered everything" when it isn't. Re-arm the notice
+  # when the count drops back under, so a repo that crosses the boundary
+  # repeatedly is not warned about exactly once, forever.
+  if [ "$count" -ge "$LIMIT" ]; then
+    if [ "$truncated_warned" = 0 ]; then
+      truncated_warned=1
+      echo "PR-WATCH WARNING: $count open PRs reached the --limit $LIMIT window — PRs outside it are not watched"
+    fi
+  else
+    truncated_warned=0
+  fi
+}
+
 # Forget PRs that are no longer open. Without this, a closed-then-reopened PR
 # whose head never moved matches its own stale entry and never fires again —
 # and state grows without bound.
@@ -286,6 +341,41 @@ if [ "$SELF_TEST" = 1 ]; then
   should_trust_empty 0 && prune ""
   check "3 empty polls do prune"         ""             "$(cat "$STATE")"
 
+  # --- poll_once: the DECISION, not just the rule -------------------------
+  # Every assertion below drives the real loop body. Mutating the call site
+  # (inverting the should_trust_empty test, blanking prune's argument, forcing
+  # count=0) used to survive the whole suite while still emitting the storm.
+  LIMIT=100; truncated_warned=0; EMPTY_POLLS=0
+  : > "$STATE"; : > "$PEND"
+  rec() { printf '%s\t%s\tfalse\talice\tbr\ttitle\n' "$1" "$2"; }
+  poll() { poll_once "$1" > "$STATE.events" 2>&1; }   # NOT $( ): EMPTY_POLLS must carry
+
+  poll "$(rec 1 aaaa; rec 2 bbbb)"
+  check "poll 1: two PRs settle silently"  ""    "$(cat "$STATE.events")"
+  poll "$(rec 1 aaaa; rec 2 bbbb)"
+  check "poll 2: both fire NEW"            "2"   "$(grep -c '^NEW PR' "$STATE.events")"
+  poll "$(rec 1 aaaa; rec 2 bbbb)"
+  check "poll 3: steady state is silent"   ""    "$(cat "$STATE.events")"
+
+  # The storm case: an exit-0-but-empty response must not wipe state, and must
+  # not re-announce anything on the following poll.
+  poll ""
+  check "empty poll: no NEW/UPDATED"       "0"   "$(grep -c '^NEW PR\|^UPDATED PR' "$STATE.events" || true)"
+  check "empty poll: state survives"       "2"   "$(grep -c . "$STATE")"
+  poll "$(rec 1 aaaa; rec 2 bbbb)"
+  check "recovery: nothing re-fires"       ""    "$(cat "$STATE.events")"
+
+  # Three consecutive empties are believed, and the state is then pruned.
+  poll ""; poll ""; poll ""
+  check "3 empty polls prune state"        "0"   "$(grep -c . "$STATE" || true)"
+
+  # A push still reports through the real loop body.
+  : > "$STATE"; : > "$PEND"; EMPTY_POLLS=0
+  poll "$(rec 5 aaaa)"; poll "$(rec 5 aaaa)"
+  poll "$(rec 5 cccc)"; poll "$(rec 5 cccc)"
+  check "push emits one UPDATED"           "1"   "$(grep -c '^UPDATED PR #5' "$STATE.events")"
+  rm -f "$STATE.events"
+
   [ "$fail" = 0 ] && echo "self-test: PASS" || echo "self-test: FAIL"
   exit "$fail"
 fi
@@ -315,12 +405,34 @@ GHERR="$STATE_DIR/gh.err"
 # pid: two watchers starting together both find the same dead pid, and if the
 # reclaim path simply falls through, BOTH believe they own it.
 LOCK="$STATE_DIR/lock"
+#
+# Reclaiming a DEAD pid must be atomic too. `rm -rf` then `mkdir` is not: two
+# watchers that read the same dead pid both remove and both recreate, and both
+# end up armed. `mv` is the atomic primitive — exactly one process can rename a
+# given directory — so the loser's rename fails and it re-contends instead.
+# The moved directory is then checked to confirm it is the one judged dead,
+# rather than a fresh lock a third watcher created in the gap.
+steal_dead_lock() { # steal_dead_lock <pid we judged dead>
+  local dead="$1" tmp="$LOCK.stale.$$" moved
+  mv "$LOCK" "$tmp" 2>/dev/null || return 1
+  moved=$(cat "$tmp/pid" 2>/dev/null)
+  if [ "${moved:-}" != "$dead" ]; then
+    mv "$tmp" "$LOCK" 2>/dev/null || rm -rf "$tmp"   # not ours to take
+    return 1
+  fi
+  rm -rf "$tmp"
+}
 acquire_lock() {
   local attempt other
   for attempt in 1 2; do
     if mkdir "$LOCK" 2>/dev/null; then
       echo $$ > "$LOCK/pid"
-      return 0
+      # Confirm we still own what we just created: a racing watcher may have
+      # stolen and recreated it between the mkdir and this write.
+      sleep 0.2
+      [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && return 0
+      echo "PR-WATCH ERROR: lock was taken from under us during acquisition — exiting"
+      return 1
     fi
     other=$(cat "$LOCK/pid" 2>/dev/null)
     # An unreadable or empty pid file usually means a watcher died between
@@ -338,7 +450,7 @@ acquire_lock() {
     fi
     [ "$attempt" = 1 ] || break
     echo "PR-WATCH: reclaiming stale lock from pid ${other:-<unknown>}"
-    rm -rf "$LOCK"   # loser of this race fails the next mkdir and exits
+    steal_dead_lock "${other:-}" || break   # someone else won the steal
   done
   echo "PR-WATCH ERROR: lost the race to reclaim $LOCK — another watcher won; exiting"
   return 1
@@ -403,44 +515,7 @@ while true; do
     [ "$fails" -ge 5 ] && echo "PR-WATCH: recovered, polling again"
     fails=0
 
-    open_nums=""
-    while IFS=$'\t' read -r num sha draft author branch title; do
-      # A newline inside a title splits one record in two. Skip the orphan
-      # rather than writing a key-less line into state that nothing can remove.
-      case "${num:-}" in ''|*[!0-9]*) continue ;; esac
-      open_nums="$open_nums $num"
-      verdict=$(classify "$num" "$sha" "$draft")
-      case "$verdict" in
-        NEW)
-          [ "$draft" = "true" ] && d=" (draft)" || d=""
-          echo "NEW PR #$num by $author [$branch]$d: $title" ;;
-        READY)
-          echo "READY PR #$num by $author [$branch]: $title (draft marked ready)" ;;
-        UPDATED*)
-          old="${verdict#UPDATED }"
-          echo "UPDATED PR #$num by $author [$branch]: $title (head ${old:0:8} -> ${sha:0:8})" ;;
-      esac
-    done <<< "$cur"
-
-    count=$(printf '%s\n' $open_nums | grep -c . || true)
-
-    if should_trust_empty "$count"; then
-      prune "${open_nums# }"
-    elif [ "$EMPTY_POLLS" = 1 ] && [ -s "$STATE" ]; then
-      echo "PR-WATCH: poll returned zero open PRs but state is non-empty — not pruning until it repeats"
-    fi
-
-    # A silent cap reads as "covered everything" when it isn't. Re-arm the
-    # notice when the count drops back under, so a repo that crosses the
-    # boundary repeatedly is not warned about exactly once, forever.
-    if [ "$count" -ge "$LIMIT" ]; then
-      if [ "$truncated_warned" = 0 ]; then
-        truncated_warned=1
-        echo "PR-WATCH WARNING: $count open PRs reached the --limit $LIMIT window — PRs outside it are not watched"
-      fi
-    else
-      truncated_warned=0
-    fi
+    poll_once "$cur"
   else
     fails=$((fails + 1))
     # Re-warn periodically: a watcher that warned once an hour ago and has been
