@@ -35,9 +35,10 @@ constexpr const char *kSuffix = ".wav";
  *   WAV      1024 B/frame  -> 32,000 B/s
  *   IMU rows   56 B/frame  ->  1,750 B/s   (25 Hz of samples, charged per frame)
  *   D-rows    360 B/frame  -> 11,250 B/s
- * and the reserve carries the two sector-sized prologues (the WAV header and
- * the CSV's padded #PARAMS/#IMU block) on top of the 64 KiB of slack, which
- * the pre-flight also counts. */
+ * and the reserve comes from CAPTURE_OVERHEAD_BYTES, which the pre-flight also
+ * uses: 64 KiB of slack, the sector-padded WAV prologue, and one more sector
+ * for the CSV header when any CSV is written at all — conditional, not the
+ * flat two sectors an earlier revision of this comment described. */
 constexpr uint32_t kBytesPerFrame =
     CAPTURE_WAV_BYTES_PER_FRAME + (IS_ENABLED(CONFIG_IMU) ? CAPTURE_IMU_BYTES_PER_FRAME : 0u) +
     (IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) ? CAPTURE_ANALYSIS_BYTES_PER_FRAME : 0u);

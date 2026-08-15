@@ -1980,6 +1980,11 @@ BUILD_ASSERT(CAPTURE_SECTOR_BYTES == WAV_DATA_OFFSET,
 BUILD_ASSERT(CAPTURE_SECTOR_BYTES == AUDIO_CSV_CHUNK,
              "capture budget sector size must track the CSV header sector");
 #endif
+#if defined(CONFIG_IMU)
+BUILD_ASSERT(CAPTURE_SECTOR_BYTES == IMU_CSV_CHUNK,
+             "capture budget sector size must track the IMU sidecar header sector - "
+             "CAPTURE_OVERHEAD_BYTES charges one sector whenever CONFIG_IMU is set");
+#endif
 
 #define CAPTURE_BATCH_BLOCKS 4
 static int16_t s_capture_batch[CAPTURE_BATCH_BLOCKS * AUDIO_FFT_SIZE];
@@ -2256,11 +2261,14 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
      * below the loop is skipped — so the sidecar overruns the audio and
      * blocks_captured would report them equal. On a clean capture the two are
      * identical, so this costs nothing there. */
-    if (audio_sidecar_close(&audio_sc, shell, total_bytes / BLOCK_SIZE, dropped) != 0) {
-        /* The console line is invisible to anyone on a phone; this is what
-         * turns it into CAPTURE_FAILED instead of a clean CAPTURE_IDLE. */
-        io_error = true;
-    }
+    /* Tracked apart from io_error on purpose. The verdict still has to reach
+     * the app — a console line is invisible on a phone — but folding it into
+     * io_error made the operator see "ABORTED: 625 of 625 blocks saved" for a
+     * WAV that is complete and playable, contradicting the invariant this
+     * design rests on (audio_sidecar_flush(): "the WAV is the primary
+     * artifact"). Same non-zero return, honest message. */
+    bool sidecar_unusable =
+        audio_sidecar_close(&audio_sc, shell, total_bytes / BLOCK_SIZE, dropped) != 0;
 #endif
 
     if (io_error) {
@@ -2268,6 +2276,15 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
                     blocks_captured, total_blocks, path, io_retries);
         return -EIO;
     }
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+    if (sidecar_unusable) {
+        shell_error(shell,
+                    "Capture CSV unusable - the WAV is COMPLETE (%u blocks, %u dropped) but "
+                    "its sidecar is not; keep %s, discard the .csv (see the warning above)",
+                    blocks_captured, dropped, path);
+        return -EIO;
+    }
+#endif
     if (stopped_early) {
         shell_print(shell, "Stopped early at %u of %u blocks", blocks_captured, total_blocks);
     }
