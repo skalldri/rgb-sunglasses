@@ -326,14 +326,38 @@ led_strip_spi_1: &spi4 {
 	pinctrl-1 = <&qspi_sleep>;
 	pinctrl-names = "default", "sleep";
 
-	/* MX25R6435F 64 Mbit QSPI NOR flash */
+	/* MX25R6435F 64 Mbit QSPI NOR flash.
+	 *
+	 * Power mode: the BOM part is MX25R6435FZAIH0 — the "H" ordering option
+	 * means it factory-defaults to HIGH PERFORMANCE mode (datasheet p.77
+	 * "Ordering Information", p.78 part-name decode; the datasheet lives at
+	 * fw/docs/datasheets/MX25R6435F/mx25r6435f-datasheet.pdf). The L/H
+	 * switch bit (Configuration Register-2 bit 1, p.31) is VOLATILE and
+	 * reverts to that HP default on every power-on/reset, so the chip is in
+	 * HP mode at every boot with zero software involvement. Do NOT add
+	 * mxicy,mx25r-power-mode here expecting an effect: the binding accepts
+	 * it, but the nordic,qspi-nor driver ignores it (only spi_nor.c
+	 * implements it), and the driver's WRSR helper cannot reach CR2 anyway
+	 * (needs the 24-bit WRSR form, p.32). Only relevant if the BOM ever
+	 * moves to an L-variant part, which defaults to ultra-low-power mode.
+	 *
+	 * sck-frequency: HP mode allows 80 MHz for 4READ/PP4IO (p.7 Table 1,
+	 * p.70 Table 17). The previous 8 MHz value was the ULTRA-LOW-POWER-mode
+	 * 4READ ceiling — provisioned for the mode the chip is not in — and
+	 * left ~4x bus throughput unused. 32 MHz = 96 MHz QSPI base / 3,
+	 * comfortably inside HP limits (issue #380 follow-up; hardware-verified
+	 * — see the PR for the soak + OTA evidence). This DTS is shared with
+	 * the MCUboot image, so DFU staging reads/swaps also run at 32 MHz;
+	 * worst case on a hypothetical L-variant board is a failed-signature
+	 * DFU (recoverable — the app slot is internal flash), never a brick.
+	 */
 	mx25r64: mx25r6435f@0 {
 		compatible = "nordic,qspi-nor";
 		reg = <0>;
 		/* proto0 has all 4 IO lines: use 4-bit read/write */
 		writeoc = "pp4io";
 		readoc = "read4io";
-		sck-frequency = <8000000>;
+		sck-frequency = <32000000>;
 		jedec-id = [c2 28 17];
 		sfdp-bfp = [
 			e5 20 f1 ff  ff ff ff 03  44 eb 08 6b  08 3b 04 bb
