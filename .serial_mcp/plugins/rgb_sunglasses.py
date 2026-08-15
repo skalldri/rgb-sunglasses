@@ -164,9 +164,8 @@ TOOLS = [
         description=(
             "Record a REAL audio + IMU capture for use as a simulator scenario "
             "(`sound mic record_wav`, which also writes a synchronised .imu.csv "
-            "sidecar; on a build with CONFIG_APP_CAPTURE_AUDIO_SIDECAR the same file also "
-            "carries a per-frame D-row of the analysis the DSP computed for those "
-            "samples). All streams are timestamped from the same t0 by the one "
+            "sidecar, plus a .csv of the per-frame analysis the DSP computed for "
+            "those samples). All streams are timestamped from the same t0 by the one "
             "capture loop, so they need no host-side alignment. Freezes AGC gain "
             "during the capture so the stimulus is reproducible. Afterwards, pull "
             "the .wav and its sidecars off the USB mass-storage disk and run "
@@ -181,8 +180,11 @@ TOOLS = [
                 "name": {
                     "type": "string",
                     "description": (
-                        "capture name; files land at "
-                        "/NAND:/<name>.wav (+ a combined .csv sidecar)"
+                        "capture name; files land at /NAND:/<name>.wav, "
+                        "<name>.wav.csv (analysis) and <name>.wav.imu.csv (motion) - "
+                        "this tool requires CONFIG_APP_AUDIO_DEBUG, which is the split "
+                        "layout; the combined single-CSV layout belongs to the "
+                        "app/shell capture path, which this tool cannot reach"
                     ),
                 },
                 "gain": {

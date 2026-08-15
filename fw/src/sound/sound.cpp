@@ -1095,6 +1095,15 @@ static char s_audio_batch[AUDIO_CSV_CHUNK + AUDIO_CSV_LINE_MAX];
  * row silently lost its last character. */
 #define CAPTURE_D_LINE_MAX_CHARS \
     (2 + 10 + 3 + 2 + 9 * (1 + 4 * AUDIO_NUM_BANDS + AUDIO_NUM_DISPLAY_BUCKETS))
+#if defined(CONFIG_IMU)
+/* The I-rows share s_audio_batch with the D-rows but are bounded by a constant
+ * defined ~440 lines away for a DIFFERENT buffer (s_imu_batch). 96 <= 512
+ * today, so nothing overruns — but the coupling is invisible from either end,
+ * and the D-row path right below is asserted for exactly this reason. */
+BUILD_ASSERT(IMU_CSV_LINE_MAX <= AUDIO_CSV_LINE_MAX,
+             "I-rows are written into s_audio_batch, so their line bound cannot exceed the "
+             "headroom that buffer is sized with");
+#endif
 BUILD_ASSERT(AUDIO_CSV_LINE_MAX >= CAPTURE_D_LINE_MAX_CHARS + 2,
              "AUDIO_CSV_LINE_MAX too small for one D-line with buckets (needs the NUL and "
              "the -1 the drain call site passes as cap)");
@@ -1331,9 +1340,11 @@ static void audio_sidecar_drain(struct audio_sidecar *sc) {
 }
 
 /* Returns 0 only if the file on the volume is one a consumer may trust; the
- * caller folds that into io_error. Without it these warnings reach the UART
- * alone — and a phone-triggered capture has no UART, so capture.cpp would
- * publish CAPTURE_IDLE with last_error=0 for a truncated or misaligned CSV.
+ * caller reports it separately from io_error, so the capture fails with a
+ * DISTINCT errno rather than being indistinguishable from a short WAV.
+ * Without a non-zero return at all these warnings reach the UART alone — and a
+ * phone-triggered capture has no UART, so capture.cpp would publish
+ * CAPTURE_IDLE with last_error=0 for a truncated or misaligned CSV.
  * A sidecar that never opened is NOT a failure: nothing was promised, the
  * warning at open time said so, and the WAV stands on its own. A file that
  * exists but cannot be trusted is the case worth failing. */
@@ -2282,7 +2293,13 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
                     "Capture CSV unusable - the WAV is COMPLETE (%u blocks, %u dropped) but "
                     "its sidecar is not; keep %s, discard the .csv (see the warning above)",
                     blocks_captured, dropped, path);
-        return -EIO;
+        /* NOT -EIO. capture.cpp publishes this verbatim as last_error, and a
+         * phone has only that to go on — returning the same code as a
+         * genuinely truncated WAV would make the two byte-identical to the app,
+         * which is the distinction this whole split exists to preserve.
+         * -EBADMSG reads correctly too: the recording is intact, its
+         * accompanying message is not. */
+        return -EBADMSG;
     }
 #endif
     if (stopped_early) {
