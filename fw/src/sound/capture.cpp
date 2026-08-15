@@ -44,8 +44,7 @@ constexpr uint32_t kBytesPerFrame =
 constexpr uint32_t kBytesPerSecond =
     kBytesPerFrame * MSEC_PER_SEC / CAPTURE_BLOCK_TIME_MS;
 
-/* 64 KiB of slack, plus the WAV prologue, plus the CSV header sector. */
-constexpr uint32_t kReserveBytes = 64u * 1024u + 4096u + 4096u;
+constexpr uint32_t kReserveBytes = CAPTURE_OVERHEAD_BYTES;
 
 /* A capture nobody stops is the normal field case, so the cap is not optional.
  * No longer the binding limit, though: with the analysis rows the volume holds

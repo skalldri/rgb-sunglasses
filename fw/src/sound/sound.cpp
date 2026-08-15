@@ -1083,9 +1083,17 @@ static char s_audio_batch[AUDIO_CSV_CHUNK + AUDIO_CSV_LINE_MAX];
  * statistics, and every display bucket), plus the newline. Tied to the field
  * counts rather than to a measured number so adding a band or a bucket fails
  * the build here instead of silently truncating rows on the device. */
-BUILD_ASSERT(AUDIO_CSV_LINE_MAX >=
-                 2 + 10 + 3 + 2 + 9 * (1 + 4 * AUDIO_NUM_BANDS + AUDIO_NUM_DISPLAY_BUCKETS) + 1,
-             "AUDIO_CSV_LINE_MAX too small for one D-line with buckets");
+/* Derivation, since an off-by-one here defeats the whole point: the widest
+ * line is CAPTURE_D_LINE_MAX_CHARS characters; snprintf needs one more for its
+ * NUL; and audio_sidecar_drain() hands it AUDIO_CSV_LINE_MAX - 1 as the cap,
+ * so the buffer must carry two beyond the characters themselves. Asserting
+ * only chars+1 would let a future trim to exactly that bound pass while every
+ * row silently lost its last character. */
+#define CAPTURE_D_LINE_MAX_CHARS \
+    (2 + 10 + 3 + 2 + 9 * (1 + 4 * AUDIO_NUM_BANDS + AUDIO_NUM_DISPLAY_BUCKETS))
+BUILD_ASSERT(AUDIO_CSV_LINE_MAX >= CAPTURE_D_LINE_MAX_CHARS + 2,
+             "AUDIO_CSV_LINE_MAX too small for one D-line with buckets (needs the NUL and "
+             "the -1 the drain call site passes as cap)");
 
 /* ONE file for both streams, not one per stream — this is a correctness
  * constraint, not tidiness. Zephyr hardcodes `FF_FS_TINY 1` in
@@ -1941,17 +1949,26 @@ static int record_wav_direct(const struct shell *shell, uint32_t duration_s, con
  * Clearing the stop flag HERE rather than in the worker means a stop requested
  * while idle cannot leak into the next capture and end it instantly. */
 #if defined(CONFIG_APP_CAPTURE)
-/* Batched straight into one FAT sector. 4 blocks x 1024 B is exactly 4096, so
- * every write lands sector-aligned without a JUNK-padded prologue — the same
- * alignment the analysis CSV needs, reached here by arithmetic instead of by
- * padding, because with no CSV competing for the FatFS window the WAV header can
- * stay the canonical 44 bytes. */
+/* Batched straight into one FAT sector: 4 blocks x 1024 B is exactly 4096, so
+ * every PCM write lands sector-aligned by arithmetic.
+ *
+ * (The alignment still needs the JUNK-padded prologue below — this path writes
+ * a full WAV_DATA_OFFSET header, not the canonical 44 bytes — and a CSV does
+ * share the FF_FS_TINY window for the whole recording. An earlier version of
+ * this comment claimed both the opposite; it described a design that predates
+ * the prologue and the sidecar alike.) */
 /* The budget in sound.h mirrors these; drift here is what makes the clamp and
  * the pre-flight disagree, so it fails the build instead. */
 BUILD_ASSERT(CAPTURE_BLOCK_TIME_MS == BLOCK_CAPTURE_TIME_MS,
              "capture budget block time must track BLOCK_CAPTURE_TIME_MS");
 BUILD_ASSERT(CAPTURE_WAV_BYTES_PER_FRAME == BLOCK_SIZE,
              "capture budget WAV bytes/frame must track BLOCK_SIZE");
+BUILD_ASSERT(CAPTURE_SECTOR_BYTES == WAV_DATA_OFFSET,
+             "capture budget sector size must track the WAV prologue");
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+BUILD_ASSERT(CAPTURE_SECTOR_BYTES == AUDIO_CSV_CHUNK,
+             "capture budget sector size must track the CSV header sector");
+#endif
 
 #define CAPTURE_BATCH_BLOCKS 4
 static int16_t s_capture_batch[CAPTURE_BATCH_BLOCKS * AUDIO_FFT_SIZE];
@@ -2011,15 +2028,12 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
         /* One CSV carries both streams now, so there is one padded header
          * sector to account for, not two. */
         uint64_t per_frame = CAPTURE_WAV_BYTES_PER_FRAME;
-        uint64_t overhead = WAV_DATA_OFFSET + 64 * 1024;
+        uint64_t overhead = CAPTURE_OVERHEAD_BYTES;
 #if defined(CONFIG_IMU)
         per_frame += CAPTURE_IMU_BYTES_PER_FRAME;
 #endif
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
         per_frame += CAPTURE_ANALYSIS_BYTES_PER_FRAME;
-        overhead += AUDIO_CSV_CHUNK;
-#elif defined(CONFIG_IMU)
-        overhead += IMU_CSV_CHUNK;
 #endif
         uint64_t free_bytes = (uint64_t)vfs.f_bfree * vfs.f_frsize;
         uint64_t needed = (uint64_t)total_blocks * per_frame + overhead;

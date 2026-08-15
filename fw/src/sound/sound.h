@@ -1,4 +1,6 @@
 #pragma once
+
+#include <zephyr/sys/util.h>
 #include <zephyr/kernel.h>
 
 #include <cstdint>
@@ -26,6 +28,16 @@
 #define CAPTURE_IMU_BYTES_PER_FRAME 56u      /* 25 Hz of I-rows, charged per audio frame */
 #define CAPTURE_ANALYSIS_BYTES_PER_FRAME 360u /* one 41-field D-line per block */
 #define CAPTURE_OVERHEAD_SLACK_BYTES (64u * 1024u)
+#define CAPTURE_SECTOR_BYTES 4096u
+/* Fixed cost: FAT slack, the sector-padded WAV prologue, and the CSV's
+ * sector-padded header when any CSV is written. Both the clamp and the
+ * pre-flight use THIS — leaving the reserve as two literals is what left the
+ * half that actually differed between the files unchecked. */
+#define CAPTURE_OVERHEAD_BYTES                                                  \
+    (CAPTURE_OVERHEAD_SLACK_BYTES + CAPTURE_SECTOR_BYTES +                      \
+     ((IS_ENABLED(CONFIG_IMU) || IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR))  \
+          ? CAPTURE_SECTOR_BYTES                                                \
+          : 0u))
 
 extern struct k_msgq audio_result_q;
 
