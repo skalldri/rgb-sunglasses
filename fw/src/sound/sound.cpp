@@ -312,14 +312,44 @@ static atomic_t s_capture_dropped;
  *
  * The two queues stay index-aligned because the producer only publishes here
  * after the PCM put succeeded, so a queue-full drop drops both halves of a
- * frame. Rows still carry the DSP's seq, so a host can see the gap regardless. */
+ * frame. Rows still carry the DSP's seq, so a host can see the gap regardless.
+ *
+ * ONE DEEPER THAN THE PCM QUEUE, and that is not slack — it is what makes the
+ * pairing hold. The consumer takes the PCM block first and its analysis last,
+ * with imu_sidecar_drain() in between, so between those two gets it holds a
+ * PCM slot free while still holding the analysis one: a == p + 1. That gap is
+ * not brief — the IMU drain can flush a 4096 B chunk to FatFs there, which is
+ * the multi-hundred-ms stall this buffering exists for in the first place, and
+ * the DSP thread (higher priority) publishes right through it. At equal depths
+ * the producer's PCM put would then succeed into the freed slot while the
+ * analysis put found its queue still full, dropping one row for a block that
+ * IS in the WAV — after which row k describes block k+1 for the rest of the
+ * recording, with sc->frames still equal to blocks_captured so the close-time
+ * cross-check never fires. One extra slot makes "analysis full while PCM had
+ * room" unreachable. */
 struct capture_analysis_block {
     struct audio_analysis_result result;
     float rms;
     uint8_t gain; /* pre-step: the gain this block was captured at */
 };
+#define CAPTURE_ANALYSIS_QUEUE_FRAMES (CONFIG_APP_CAPTURE_QUEUE_FRAMES + 1)
 K_MSGQ_DEFINE(capture_analysis_q, sizeof(struct capture_analysis_block),
-              CONFIG_APP_CAPTURE_QUEUE_FRAMES, 4);
+              CAPTURE_ANALYSIS_QUEUE_FRAMES, 4);
+
+/* The invariant the comment above spells out, in a form the compiler enforces:
+ * trimming this back to the PCM depth to "save" 160 B reintroduces a
+ * silently misaligned sidecar that no runtime check can catch. */
+BUILD_ASSERT(CAPTURE_ANALYSIS_QUEUE_FRAMES > CONFIG_APP_CAPTURE_QUEUE_FRAMES,
+             "analysis queue must outrun the PCM queue by at least one slot - the consumer "
+             "holds an analysis entry across imu_sidecar_drain() while the PCM slot is free");
+
+/* Analysis rows lost, counted apart from s_capture_dropped because they mean
+ * something completely different: a dropped PCM block is a gap in the audio and
+ * the operator's fix is a deeper tap, while a lost row means the sidecar no
+ * longer lines up with a WAV that is otherwise perfect. Should be unreachable
+ * given the depth above; kept so that if it ever isn't, the capture says so
+ * instead of shipping a quietly misaligned file. */
+static atomic_t s_capture_analysis_dropped;
 #endif /* CONFIG_APP_CAPTURE_AUDIO_SIDECAR */
 #endif /* CONFIG_APP_CAPTURE */
 
@@ -607,10 +637,12 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
             }
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
             else {
-                /* Only after the PCM landed — see the queue's comment. Both
-                 * queues are the same depth and are drained one entry each per
-                 * iteration, so this cannot fail while the PCM put succeeded;
-                 * the drop counter covers it if that ever stops being true.
+                /* Only after the PCM landed — see the queue's comment. The
+                 * analysis queue is one deeper than the PCM one precisely so
+                 * this put cannot fail while the PCM put succeeded; the
+                 * separate counter exists to catch it if that ever stops
+                 * holding, and is deliberately NOT s_capture_dropped, which
+                 * means "audio blocks lost".
                  *
                  * Static, not stack, for the same reason as the rich tap's
                  * frame above: this thread runs on 2 KB and the neighbouring
@@ -621,7 +653,7 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
                 a.rms = rms;
                 a.gain = s_agc_gain;
                 if (k_msgq_put(&capture_analysis_q, &a, K_NO_WAIT) != 0) {
-                    atomic_inc(&s_capture_dropped);
+                    atomic_inc(&s_capture_analysis_dropped);
                 }
             }
 #endif
@@ -1099,11 +1131,21 @@ static int audio_sidecar_open(struct audio_sidecar *sc, const char *wav_path) {
  * audio_sidecar_close() re-checks the count against the block count rather than
  * trusting that argument. */
 static void audio_sidecar_drain(struct audio_sidecar *sc) {
-    if (!sc->open) {
-        return;
-    }
+    /* Consume BEFORE the open check, not after. This is the queue's only
+     * reader, while the producer gates on s_capture_armed alone and keeps
+     * publishing whether or not the sidecar survived — so returning early on a
+     * retired sidecar leaves the queue permanently full, and from the ninth
+     * frame on every analysis put fails. Those failures used to land on
+     * s_capture_dropped, which reports as lost AUDIO: a capture whose WAV is
+     * perfect would print "625 blocks, 617 dropped" and send the operator off
+     * to raise CONFIG_APP_CAPTURE_QUEUE_FRAMES over a sidecar that simply
+     * could not be opened (FatFs at its four-file limit, say). Draining and
+     * discarding keeps the drop counter meaning only what it says. */
     struct capture_analysis_block a;
     if (k_msgq_get(&capture_analysis_q, &a, K_NO_WAIT) != 0) {
+        return;
+    }
+    if (!sc->open) {
         return;
     }
     size_t n = audio_tap_format_frame(&a.result, a.rms, a.gain, /*buckets=*/true,
@@ -1138,14 +1180,24 @@ static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *sh
     }
     fs_close(&sc->file);
     sc->open = false;
-    /* Row count MUST equal the block count — the two files are paired by
-     * position, so any drift makes every row after the drift point describe the
-     * wrong audio. Nothing downstream can detect that on its own (a D-line's
-     * seq counts produced frames, not written ones), so say it here rather than
-     * let a quietly misaligned capture be tuned against. */
-    if (sc->frames != blocks) {
-        shell_warn(shell, "Audio sidecar: %u frames for %u blocks - rows are NOT aligned to the WAV",
-                   sc->frames, blocks);
+    /* Row count MUST equal the number of blocks that reached the WAV — the two
+     * files are paired by position, so any drift makes every row after the
+     * drift point describe the wrong audio. Nothing downstream can detect that
+     * on its own (a D-line's seq counts produced frames, not written ones), so
+     * say it here rather than let a quietly misaligned capture be tuned
+     * against. A lost analysis row misaligns the file just as surely without
+     * changing the count, so it fails the same check.
+     *
+     * Must NOT lead with "Audio sidecar: <n> frames": the MCP plugin decides
+     * the file is worth parsing with a re.search for exactly that prefix, so
+     * wording this like the success line would hand every downstream consumer
+     * the file this branch exists to reject. */
+    uint32_t lost = (uint32_t)atomic_get(&s_capture_analysis_dropped);
+    if (sc->frames != blocks || lost != 0) {
+        shell_warn(shell,
+                   "Audio sidecar MISALIGNED: %u rows for %u blocks written (%u rows lost) - "
+                   "do NOT pair with the WAV",
+                   sc->frames, blocks, lost);
         return;
     }
     shell_print(shell, "Audio sidecar: %u frames", sc->frames);
@@ -1838,6 +1890,9 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
      * created predates t=0 and would desynchronise the WAV from the sidecar. */
     capture_taps_purge();
     atomic_set(&s_capture_dropped, 0);
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+    atomic_set(&s_capture_analysis_dropped, 0);
+#endif
     shell_print(shell, "Recording %u s (%u blocks) to %s ...", duration_s, total_blocks, path);
 
     uint32_t blocks_captured = 0;
@@ -1917,8 +1972,16 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
     /* Whatever is still queued stays there: those blocks were produced after
      * the last one this loop consumed, so they are not in the WAV and their
-     * rows would run past the end of the audio. */
-    audio_sidecar_close(&audio_sc, shell, blocks_captured, dropped);
+     * rows would run past the end of the audio.
+     *
+     * Checked against the blocks that actually REACHED the file, derived from
+     * total_bytes, not against blocks_captured. They diverge on the abort path:
+     * a failed batch write leaves up to CAPTURE_BATCH_BLOCKS blocks counted as
+     * captured, with their rows already written, while the partial-batch flush
+     * below the loop is skipped — so the sidecar overruns the audio and
+     * blocks_captured would report them equal. On a clean capture the two are
+     * identical, so this costs nothing there. */
+    audio_sidecar_close(&audio_sc, shell, total_bytes / BLOCK_SIZE, dropped);
 #endif
 
     if (io_error) {
