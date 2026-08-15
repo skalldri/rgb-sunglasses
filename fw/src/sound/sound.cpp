@@ -959,7 +959,10 @@ static void imu_sidecar_drain(struct imu_sidecar *sc) {
      * the free-space clamp cannot rule that out: it works from a cached figure,
      * and a host can add files over USB during a recording. */
     struct imu_tap_sample s;
-    while (sc->open && k_msgq_get(&imu_tap_q, &s, K_NO_WAIT) == 0) {
+    while (k_msgq_get(&imu_tap_q, &s, K_NO_WAIT) == 0) {
+        if (!sc->open) {
+            continue; /* drained to keep the tap moving; nowhere to write it */
+        }
         const struct imu_analysis_result r = s.result;
         int n = snprintf(&s_imu_batch[sc->len], IMU_CSV_LINE_MAX,
                          "I,%d,%u,%d,%d,%d,%d,%d,%d\n",
@@ -1070,10 +1073,11 @@ static int tap_write_at_retry(struct fs_file_t *f, const char *path, off_t pos,
  * Batched in sector-aligned 4096-byte chunks for the hardware-measured reason
  * given for s_csv_batch below: a misaligned flush pays the FF_FS_TINY shared-
  * window RMW penalty and stalls the drain loop long enough to DROP AUDIO
- * FRAMES. Unlike that one, this path writes sequentially with plain fs_write
- * and no reopen-and-retry — matching the WAV and IMU writers it runs beside,
- * where a write failure retires the sidecar and lets the primary artifact
- * continue rather than pausing the drain loop to recover a diagnostic file. */
+ * FRAMES. Writes go through tap_write_at_retry() like the WAV's, so a
+ * transient QSPI -EIO is ridden out rather than retiring the file; only a
+ * failure that survives close + reopen + reseek gives up. (This comment used
+ * to say the opposite — the sidecar predated the retry being hoisted out of
+ * CONFIG_APP_AUDIO_DEBUG.) */
 #define AUDIO_CSV_CHUNK 4096
 #define AUDIO_CSV_LINE_MAX 512
 static char s_audio_batch[AUDIO_CSV_CHUNK + AUDIO_CSV_LINE_MAX];
@@ -1178,6 +1182,8 @@ static int audio_sidecar_open(struct audio_sidecar *sc, const char *wav_path, in
         return ret;
     }
     sc->open = true;
+    sc->retired = false; /* every field reset here, so a reused struct cannot
+                          * inherit a previous capture's verdict */
     sc->len = 0;
     sc->frames = 0;
     sc->pos = 0;
@@ -1270,19 +1276,21 @@ static void audio_sidecar_drain(struct audio_sidecar *sc) {
      * could not be opened (FatFs at its four-file limit, say). Draining and
      * discarding keeps the drop counter meaning only what it says. */
     struct capture_analysis_block a;
-    if (k_msgq_get(&capture_analysis_q, &a, K_NO_WAIT) != 0) {
-        return;
-    }
-    if (!sc->open) {
-        return;
-    }
-    size_t n = audio_tap_format_frame(&a.result, a.rms, a.gain, /*buckets=*/true,
-                                      &s_audio_batch[sc->len], AUDIO_CSV_LINE_MAX - 1);
-    s_audio_batch[sc->len + n] = '\n';
-    sc->len += n + 1;
-    sc->frames++;
-    if (sc->len >= AUDIO_CSV_CHUNK) {
-        audio_sidecar_flush(sc, false);
+    bool have_row = k_msgq_get(&capture_analysis_q, &a, K_NO_WAIT) == 0;
+    /* Falls through to the IMU drain either way. Since the two sidecars merged
+     * this is imu_tap_q's ONLY reader on this path, so returning early here —
+     * on a missing analysis entry or a retired sidecar — left that 8-deep tap
+     * to fill and the IMU thread dropping samples for the rest of the
+     * recording. */
+    if (have_row && sc->open) {
+        size_t n = audio_tap_format_frame(&a.result, a.rms, a.gain, /*buckets=*/true,
+                                          &s_audio_batch[sc->len], AUDIO_CSV_LINE_MAX - 1);
+        s_audio_batch[sc->len + n] = '\n';
+        sc->len += n + 1;
+        sc->frames++;
+        if (sc->len >= AUDIO_CSV_CHUNK) {
+            audio_sidecar_flush(sc, false);
+        }
     }
 
 #if defined(CONFIG_IMU)
@@ -1295,7 +1303,10 @@ static void audio_sidecar_drain(struct audio_sidecar *sc) {
      * would be formatted past the end of a buffer only one line longer than the
      * chunk. */
     struct imu_tap_sample s;
-    while (sc->open && k_msgq_get(&imu_tap_q, &s, K_NO_WAIT) == 0) {
+    while (k_msgq_get(&imu_tap_q, &s, K_NO_WAIT) == 0) {
+        if (!sc->open) {
+            continue; /* drained to keep the tap moving; nowhere to write it */
+        }
         const struct imu_analysis_result r = s.result;
         int len = snprintf(&s_audio_batch[sc->len], IMU_CSV_LINE_MAX,
                            "I,%d,%u,%d,%d,%d,%d,%d,%d\n",
