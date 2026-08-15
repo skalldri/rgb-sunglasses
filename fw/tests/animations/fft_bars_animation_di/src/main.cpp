@@ -274,3 +274,23 @@ ZTEST(fft_bars_animation_di_tests, test_one_frame_advances_three_ema_steps) {
     zassert_true(sPixels[0][bottomRow - 1].isBlack(),
                  "Bar must be exactly one pixel tall after one 0.01-energy frame");
 }
+
+/* A huge frame-count jump (e.g. after a stall) is bounded by the catch-up cap —
+ * the tick must complete with a sane render, not spin the EMA loop. */
+ZTEST(fft_bars_animation_di_tests, test_frame_catchup_is_bounded) {
+    MutableAudioSource audio;
+    audio.resetAll();
+    audio.setEnergy(0, 1.0f);
+    audio.setFramesPerUpdate(1000);
+
+    FftBarsAnimation *anim = FftBarsAnimation::getInstance();
+    anim->setAudioSource(audio);
+    anim->init();
+
+    CapturingTestRenderer renderer;
+    resetCapture();
+    anim->tick(renderer, 16);  // 1000 new frames -> capped to kMaxEmaStepsPerTick
+
+    /* 12 capped steps at coeff 0.3 converge to >0.98 of target: full-height bar. */
+    zassert_false(sPixels[0][0].isBlack(), "Capped catch-up must still converge the bar");
+}
