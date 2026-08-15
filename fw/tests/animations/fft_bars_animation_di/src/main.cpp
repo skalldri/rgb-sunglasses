@@ -281,12 +281,75 @@ ZTEST(fft_bars_animation_di_tests, test_one_frame_advances_three_ema_steps) {
                  "Bar must be exactly one pixel tall after one 0.01-energy frame");
 }
 
-/* COVERAGE-ONLY (PR #378 review, stated plainly): this executes the
- * catch-up-cap path with a huge frame delta, but the cap's EFFECT is not
- * observable through the render — 12 capped steps at coeff 0.3 are already
- * >98% converged, indistinguishable from 3000. The wrap-safety property is
- * carried by the cap's placement (the delta is clamped BEFORE the multiply,
- * fft_bars_animation.cpp), not by this assertion. */
+/* PR #378 review round 6 (reviewer-authored, adopted verbatim): at the
+ * still-supported 90 Hz render rate (dt=11) a frame's 3 EMA steps must spread
+ * across the ~3 ticks the 32 ms frame spans, not burst on the arrival tick and
+ * freeze on the other two. Energy 0.01 straddles the 1-pixel threshold:
+ * 1 step -> 0.06 of the panel (dark), 3 steps -> 0.13 (one pixel). This is the
+ * ONLY test in the suite that fails if the proration is reverted to the
+ * burst-all-owed-steps behavior it replaced (mutation-verified by the
+ * reviewer: 10 of 10 -> 9 of 10 with exactly this test red). */
+ZTEST(fft_bars_animation_di_tests, test_frame_steps_prorate_across_fast_ticks) {
+    MutableAudioSource audio;
+    audio.resetAll();
+    audio.setEnergy(0, 0.01f);
+    audio.setFramesPerUpdate(1);
+
+    FftBarsAnimation *anim = FftBarsAnimation::getInstance();
+    anim->setAudioSource(audio);
+    anim->init();
+
+    CapturingTestRenderer renderer;
+    resetCapture();
+    anim->tick(renderer, 11);  // one frame arrives; only ~1 step is due yet
+    audio.setFramesPerUpdate(0);
+
+    zassert_true(sPixels[0][kTestHeight - 1].isBlack(),
+                 "Arrival tick must run ~1 step, not burst all 3");
+
+    resetCapture();
+    anim->tick(renderer, 11);
+    resetCapture();
+    anim->tick(renderer, 11);
+
+    zassert_false(sPixels[0][kTestHeight - 1].isBlack(),
+                  "The frame's remaining owed steps must drain on the ticks it spans");
+}
+
+/* PR #378 review round 6 (reviewer-authored, adopted verbatim): a wrapping
+ * frame-count delta (0x55555556 * kEmaStepsPerFrame wraps uint32 to 2) must
+ * still run the capped steps — this pins the cap's PLACEMENT before the
+ * multiply. A post-multiply cap yields 2 EMA steps where the pre-multiply cap
+ * yields the allowance-limited 3, and at energy 0.01 the two straddle the
+ * 1-pixel bar threshold (mutation-verified by the reviewer: only this test
+ * fails with the cap moved after the multiply). */
+ZTEST(fft_bars_animation_di_tests, test_frame_delta_wrap_does_not_starve_ema) {
+    MutableAudioSource audio;
+    audio.resetAll();
+    audio.setEnergy(0, 0.01f);
+    audio.setFramesPerUpdate(0x55555556u);
+
+    FftBarsAnimation *anim = FftBarsAnimation::getInstance();
+    anim->setAudioSource(audio);
+    anim->init();
+
+    CapturingTestRenderer renderer;
+    resetCapture();
+    anim->tick(renderer, 33);
+
+    zassert_false(sPixels[0][kTestHeight - 1].isBlack(),
+                  "A wrapping frame-count delta must still run the capped steps");
+}
+
+/* COVERAGE-ONLY (PR #378 review; arithmetic corrected round 6): this executes
+ * the catch-up-cap path with a huge frame delta, but the cap's EFFECT is not
+ * observable through the render. With proration, this tick deposits 12 steps
+ * (delta 1000 capped at kMaxCatchupFrames=4 frames x 3) yet WITHDRAWS only the
+ * dt=33 allowance of 3, leaving 9 owed — and at kEnergyScale=20 even a single
+ * step toward energy 1.0 renders a full-height bar, so the assertion cannot
+ * distinguish step counts or cap placements. The wrap-safety property is
+ * pinned by test_frame_delta_wrap_does_not_starve_ema above, not by this
+ * assertion. */
 ZTEST(fft_bars_animation_di_tests, test_frame_catchup_is_bounded) {
     MutableAudioSource audio;
     audio.resetAll();

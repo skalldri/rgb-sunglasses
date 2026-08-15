@@ -66,7 +66,7 @@ ZTEST_SUITE(matrix_code_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
 // several rows in one tick (budget-with-carry), lighting every intermediate row —
 // not be floored to one row per tick.
 ZTEST(matrix_code_animation_di_tests, test_drop_advances_multiple_rows_in_one_tick) {
-    MutableUint32Source dropSpeedMs(10);
+    MutableUint32Source dropSpeedMs(11);  // the fastest honored speed (kFastestStepTimeMs)
     MutableUint32Source fadeTimeMs(600);
     MutableUint32Source density(0);
     MutableUint32Source color(0xFF0000);
@@ -77,18 +77,18 @@ ZTEST(matrix_code_animation_di_tests, test_drop_advances_multiple_rows_in_one_ti
     animation->init();
 
     ColumnCaptureRenderer renderer;
-    spawn_drop(animation, renderer, density);  // head at row 0, timer = 10 ms
+    spawn_drop(animation, renderer, density);  // head at row 0, timer = 11 ms
 
     reset_capture();
-    // One 33 ms tick at a 10 ms drop speed: 33 → 23 → 13 → 3, exactly 3 rows.
+    // One 33 ms tick at an 11 ms drop speed: 33 → 22 → 11 → 0, exactly 3 rows.
     // Intermediate swept rows are aged by their remaining in-tick budget
     // (age = budget*255/600 — a flat 255 sweep would lose the trail gradient),
     // while the FINAL head stays a steady 255, matching the spawn (PR #378
     // review: an aged head shimmered and popped on every new spawn).
     animation->tick(renderer, 33);
 
-    zassert_equal(sColumnRed[1], 246, "Expected row 1 aged by 23 ms (255 - 9)");
-    zassert_equal(sColumnRed[2], 250, "Expected row 2 aged by 13 ms (255 - 5)");
+    zassert_equal(sColumnRed[1], 246, "Expected row 1 aged by 22 ms (255 - 9)");
+    zassert_equal(sColumnRed[2], 251, "Expected row 2 aged by 11 ms (255 - 4)");
     zassert_equal(sColumnRed[3], 255, "Expected the final head at a steady 255");
     zassert_equal(sColumnRed[4], 0, "Expected the head NOT to reach row 4 (3 steps only)");
     zassert_true(sColumnRed[1] < sColumnRed[2] && sColumnRed[2] < sColumnRed[3],
@@ -132,8 +132,51 @@ ZTEST(matrix_code_animation_di_tests, test_equal_displacement_across_tick_rates)
 }
 
 // The multi-step loop must deactivate cleanly when the head runs off the bottom
-// mid-tick, without touching rows beyond the display.
+// mid-tick, without touching rows beyond the display. dt = 99 is a realistic
+// nominal interval (render_thread_rate_ms = 99900, an N = 3 divider at the
+// default display rate); the fade is long (2000 ms) so the swept trail stays
+// bright enough for the >= 240 gate.
 ZTEST(matrix_code_animation_di_tests, test_drop_exits_bottom_within_one_tick) {
+    MutableUint32Source dropSpeedMs(11);
+    MutableUint32Source fadeTimeMs(2000);
+    MutableUint32Source density(0);
+    MutableUint32Source color(0xFF0000);
+    MatrixCodeAnimationDependencies deps(dropSpeedMs, fadeTimeMs, density, color);
+
+    MatrixCodeAnimation *animation = MatrixCodeAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    ColumnCaptureRenderer renderer;
+    spawn_drop(animation, renderer, density);
+
+    reset_capture();
+    // 99 ms at 11 ms/row: the head sweeps rows 1..7 (each aged by its remaining
+    // in-tick budget, so the trail keeps its gradient), then exits and deactivates
+    // with 11 ms of budget left unconsumed.
+    animation->tick(renderer, 99);
+    for (size_t y = 1; y < kTestHeight; y++) {
+        zassert_true(sColumnRed[y] >= 240, "Expected row %zu lit by the sweeping head", y);
+        if (y + 1 < kTestHeight) {
+            zassert_true(sColumnRed[y] <= sColumnRed[y + 1],
+                         "Expected brightness to rise toward the head at row %zu", y);
+        }
+    }
+    const uint8_t bottomAfterSweep = sColumnRed[kTestHeight - 1];
+
+    // The column is now inactive: the next tick only decays (33*255/2000 = 4).
+    reset_capture();
+    animation->tick(renderer, 33);
+    zassert_equal(sColumnRed[kTestHeight - 1], bottomAfterSweep - 4,
+                  "Expected pure decay (no new head) after the drop exited the bottom");
+}
+
+// PR #378 review round 6: matrix_code/drop_speed_ms is remotely writable with no
+// range validation and persists — a persisted 1 ms value must behave exactly like
+// kFastestStepTimeMs (11 ms), the fastest rate any deployed firmware ever produced
+// (pre-#376, every value in 0..11 stepped one row per 11 ms tick). Without the
+// floor, one 33 ms tick sweeps spawn-to-exit and the column is never visibly lit.
+ZTEST(matrix_code_animation_di_tests, test_drop_speed_floored_at_fastest_step) {
     MutableUint32Source dropSpeedMs(1);
     MutableUint32Source fadeTimeMs(600);
     MutableUint32Source density(0);
@@ -148,21 +191,9 @@ ZTEST(matrix_code_animation_di_tests, test_drop_exits_bottom_within_one_tick) {
     spawn_drop(animation, renderer, density);
 
     reset_capture();
-    // 33 ms at 1 ms/row: the head sweeps rows 1..7 (each aged by its remaining
-    // in-tick budget, so the trail keeps its gradient), then exits and deactivates.
-    animation->tick(renderer, 33);
-    for (size_t y = 1; y < kTestHeight; y++) {
-        zassert_true(sColumnRed[y] >= 240, "Expected row %zu lit by the sweeping head", y);
-        if (y + 1 < kTestHeight) {
-            zassert_true(sColumnRed[y] <= sColumnRed[y + 1],
-                         "Expected brightness to rise toward the head at row %zu", y);
-        }
-    }
-    const uint8_t bottomAfterSweep = sColumnRed[kTestHeight - 1];
+    animation->tick(renderer, 33);  // floored: exactly 3 rows, identical to 11 ms
 
-    // The column is now inactive: the next tick only decays (33*255/600 = 14).
-    reset_capture();
-    animation->tick(renderer, 33);
-    zassert_equal(sColumnRed[kTestHeight - 1], bottomAfterSweep - 14,
-                  "Expected pure decay (no new head) after the drop exited the bottom");
+    zassert_equal(sColumnRed[3], 255, "Expected the head on row 3 (33 ms / 11 ms floor)");
+    zassert_equal(sColumnRed[4], 0,
+                  "Expected the head NOT to pass row 3 — 1 ms must be floored, not honored");
 }

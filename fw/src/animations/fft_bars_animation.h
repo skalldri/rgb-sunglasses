@@ -43,7 +43,23 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
     float smoothed_[kMaxDisplayBuckets] = {};
 
     /* audioSource_->frameCount() at the last tick — the EMA advances per NEW
-     * analysis frame, not per render tick (issue #376). */
+     * analysis frame, not per render tick (issue #376).
+     *
+     * Concurrency (PR #378 review round 6): init() resets this, pendingEmaSteps_,
+     * prorateRemainderMs_ and smoothed_[] on whatever thread called
+     * pattern_controller_change_to_animation() (BT RX, shell, SMP workqueue),
+     * while tick() read-modify-writes them on the render thread. Normally that's
+     * sequenced — init() runs before currentAnimation flips, so the render thread
+     * is still ticking the OLD animation — but re-activating the animation that
+     * is already current (an Is Active re-write, a shuffle hop re-picking it)
+     * runs init() concurrently with a possible in-flight tick() of the SAME
+     * instance. That overlap is accepted unsynchronized: every field is an
+     * aligned 32-bit word (no tearing on the M33 or native_sim), so the worst
+     * case is a lost frame-count snapshot — a delta capped at kMaxCatchupFrames,
+     * a few extra EMA steps — or one tick rendering from a half-reset
+     * smoothed_[]. The adapter's atomic frameCount_
+     * (audio_animations_sound.cpp) addresses this same window for the
+     * cross-thread COUNTER read; it is not evidence the rest is synchronized. */
     uint32_t lastFrameCount_ = 0;
 
     /* EMA steps owed but not yet run, and the wall-time proration remainder:

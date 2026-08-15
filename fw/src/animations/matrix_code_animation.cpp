@@ -22,7 +22,14 @@ void MatrixCodeAnimation::init() {
 void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
     __ASSERT(deps_, "MatrixCodeAnimation::tick before setDependencies");
 
-    const uint32_t dropSpeedMs = std::max(1u, deps_->dropSpeedMs.get());
+    // Same kFastestStepTimeMs floor as Rainbow/ZigZag/Text (PR #378 review round 6):
+    // drop_speed_ms is remotely writable with no range validation and persists, and
+    // before #376 every value in 0..11 stepped one row per 11 ms tick — without the
+    // floor, a persisted 1 ms drop speed would sweep the whole panel inside a single
+    // 33 ms tick (spawn to bottom-exit, column never visibly lit) instead of the
+    // ~90 rows/s every deployed firmware produced. The floor also guarantees the
+    // carry loop below consumes >= kFastestStepTimeMs of budget per iteration.
+    const uint32_t dropSpeedMs = std::max(kFastestStepTimeMs, deps_->dropSpeedMs.get());
     const uint32_t fadeTimeMs = std::max(1u, deps_->fadeTimeMs.get());
     const uint32_t density = std::min(100u, deps_->density.get());
     const uint32_t color = deps_->color.get();

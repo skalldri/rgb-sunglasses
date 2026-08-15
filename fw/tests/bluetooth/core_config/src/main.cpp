@@ -183,21 +183,51 @@ ZTEST(core_config_service, test_render_rate_default_matches_display_rate) {
                    "getRenderRateMs must decode the default as 33.3 ms");
 }
 
-ZTEST(core_config_service, test_render_rate_stale_default_floored_not_rewritten) {
+ZTEST(core_config_service, test_render_rate_below_display_write_rejected) {
     const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(render);
+
+    /* PR #378 review round 6: a remote render-rate write below the current
+     * display rate used to be a silent no-op — accepted, persisted, read back
+     * as stored (so the app UI showed it applied) while getRenderRateMs()
+     * floored it with no notify and no error. It is now rejected with an ATT
+     * error, so the app's read-back-after-write snaps the UI back — the
+     * standard feedback channel for these non-notifiable tunables. */
+    ssize_t ret = gatt_write_u32(render, 20000);
+    zassert_true(ret < 0, "a below-display render write must be ATT-rejected, got %zd", ret);
+    zassert_equal(read_u32(render), sDefaultRenderRate,
+                  "a rejected write must roll the stored value back");
+    zassert_within(CoreConfig::getInstance().getRenderRateMs(), 33.3f, 0.001f,
+                   "a rejected write must leave the effective rate untouched");
+
+    /* Boundary: exactly the display rate is allowed (1:1 is the default). */
+    zassert_equal(gatt_write_u32(render, 33300), (ssize_t)sizeof(uint32_t),
+                  "a render write EQUAL to the display rate must be accepted");
+}
+
+ZTEST(core_config_service, test_render_rate_stale_default_floored_not_rewritten) {
+    const struct bt_gatt_attr *display = find_value_attr(1);
+    const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(display);
     zassert_not_null(render);
 
     /* The old pre-#376 default, as persisted on already-deployed boards: the
      * effective rate is floored at the display interval, and the stored value
      * is deliberately NOT rewritten — no migration exists (PR #378 review:
      * every write-back variant re-armed later and destroyed a deliberate
-     * 90 Hz setup, which holds exactly this value). */
+     * 90 Hz setup, which holds exactly this value). A below-display GATT write
+     * is rejected now (round 6), so stage the stored-below-display state the
+     * way it arises legally at runtime: set 11100/11100, then raise the
+     * display back — the settings-load path (doLoad) reaches the same state on
+     * real upgraded boards and equally bypasses the write-time gate. */
+    gatt_write_u32(display, 11100);
     gatt_write_u32(render, 11100);
+    gatt_write_u32(display, 33300);
 
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
     zassert_within(rateMs, 33.3f, 0.001f, "a stale 11100 must be floored at the display rate");
     zassert_equal(read_u32(render), 11100, "the stored value must not be rewritten");
-    zassert_equal(read_u32(find_value_attr(1)), 33300, "the display rate must be untouched");
+    zassert_equal(read_u32(display), 33300, "the display rate must be untouched");
 
     gatt_write_u32(render, sDefaultRenderRate);  // restore for order-independence
 }
@@ -209,11 +239,17 @@ ZTEST(core_config_service, test_render_rate_11100_kept_when_display_matches) {
     zassert_not_null(render);
 
     /* A deliberate ~90 Hz setup (display = render = 11100) must be honored in
-     * full — the value is stored, effective, and never rewritten, in either
-     * write order (PR #378 review: a migration write-back stole this
-     * configuration and made 11100 permanently unsettable). */
-    gatt_write_u32(render, 11100);  // render FIRST — order must not matter
+     * full — the value is stored, effective, and never rewritten (PR #378
+     * review: a migration write-back stole this configuration and made 11100
+     * permanently unsettable). Since round 6 the order is display-FIRST: the
+     * render-first order is ATT-rejected (see
+     * test_render_rate_below_display_write_rejected), which is the app's cue
+     * to lower the display rate before the render rate. */
+    zassert_true(gatt_write_u32(render, 11100) < 0,
+                 "render-first must be rejected while the display rate is 33300");
     gatt_write_u32(display, 11100);
+    zassert_equal(gatt_write_u32(render, 11100), (ssize_t)sizeof(uint32_t),
+                  "the same write must succeed once the display rate matches");
 
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
     zassert_within(rateMs, 11.1f, 0.001f, "a deliberate 90 Hz setup must be honored");
@@ -224,22 +260,30 @@ ZTEST(core_config_service, test_render_rate_11100_kept_when_display_matches) {
 }
 
 ZTEST(core_config_service, test_render_rate_floor_preserves_user_value) {
+    const struct bt_gatt_attr *display = find_value_attr(1);
     const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(display);
     zassert_not_null(render);
 
-    /* A user's own too-fast value (NOT the 11100 migration sentinel) is floored
-     * at point of use but never rewritten — the setting survives. */
+    /* A user's own legally-written value becomes below-display when the
+     * display rate is later raised; it is floored at point of use but never
+     * rewritten — the setting survives. (Direct below-display writes are
+     * rejected since round 6, so the raise-the-display-later path is the one
+     * way this state still arises over BLE.) */
+    gatt_write_u32(display, 15000);
     gatt_write_u32(render, 20000);
+    gatt_write_u32(display, sDefaultDisplayRate);  // raise back above the render rate
+
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
     zassert_within(rateMs, 33.3f, 0.001f, "render interval must be floored at the display's");
     zassert_equal(read_u32(render), 20000, "the floor must not destroy the user's setting");
 
     /* ...and becomes effective again once the display rate drops below it. */
-    gatt_write_u32(find_value_attr(1), 15000);
+    gatt_write_u32(display, 15000);
     rateMs = CoreConfig::getInstance().getRenderRateMs();
     zassert_within(rateMs, 20.0f, 0.001f, "the preserved value must apply when legal again");
 
-    gatt_write_u32(find_value_attr(1), sDefaultDisplayRate);  // restore
+    gatt_write_u32(display, sDefaultDisplayRate);  // restore
     gatt_write_u32(render, sDefaultRenderRate);
 }
 
@@ -262,9 +306,12 @@ ZTEST(core_config_service, test_render_rate_follows_raised_display_rate_reversib
     zassert_not_null(render);
 
     /* Slowing the display below the render rate must floor the effective render
-     * rate — the invariant holds whichever knob moved... */
-    gatt_write_u32(display, 50000);
+     * rate — the render knob itself never moved (writing it below the raised
+     * display would be rejected now, see the round-6 rejection test; the stored
+     * 33300 predates the display change, which is exactly the divergence this
+     * pins as reversible)... */
     gatt_write_u32(render, 33300);
+    gatt_write_u32(display, 50000);
 
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
     zassert_within(rateMs, 50.0f, 0.001f, "raising the display interval must floor the render");
