@@ -421,14 +421,17 @@ STUB
   wpid=$!
   sleep 2                                                    # let it arm
   stub_gh '1\taaaa\tfalse\talice\tbr\tt\n2\tbbbb\tfalse\tbob\tbr2\tt2\n'
-  sleep 4                                                    # appear + settle + fire
+  sleep 8                                                    # appear + settle + fire
+  # 8s, not 4: the event needs two 1s poll cycles and was measured firing at
+  # 1.05-2.06s. 4s left only ~2x headroom, the tightest margin in this suite
+  # and the one a loaded CI runner could plausibly eat.
   kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
   check "integration: loop emits NEW"     "1"  "$(grep -c 'NEW PR #2' "$ITROOT/s2.log" || true)"
 
   # Two watchers on one state dir: exactly one arms, the other exits.
   stub_gh '1\taaaa\tfalse\talice\tbr\tt\n'
-  ( PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s3" --poll 30 > "$ITROOT/a.log" 2>&1 ) &
-  ( PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s3" --poll 30 > "$ITROOT/b.log" 2>&1 ) &
+  ( PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s3" --poll 1 > "$ITROOT/a.log" 2>&1 ) &
+  ( PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s3" --poll 1 > "$ITROOT/b.log" 2>&1 ) &
   sleep 3
   check "integration: one watcher arms"   "1"  "$(cat "$ITROOT/a.log" "$ITROOT/b.log" | grep -c 'armed on' || true)"
   check "integration: the other exits"    "1"  "$(cat "$ITROOT/a.log" "$ITROOT/b.log" | grep -c 'already owns\|lost the race' || true)"
@@ -438,9 +441,12 @@ STUB
   # A watcher releases ITS OWN lock on the way out — and only its own. Without
   # this, inverting release_lock's ownership check (release what you do not
   # own, keep what you do) passes every other assertion here.
-  # NOTE: no `( ... ) &` wrapper here. That makes $! the SUBSHELL, so the TERM
-  # never reaches the script whose trap is under test and the assertion passes
-  # regardless — which is exactly how an inverted release_lock survived.
+  # NOTE: launched without a `( ... ) &` wrapper so $! is unambiguously this
+  # script. (Bash 5.1 forks-and-execs in place for a single-command subshell, so
+  # the wrapper would usually work too — the earlier claim that it swallowed the
+  # TERM was wrong. The real reason the inverted release_lock survived was the
+  # `-e` test below, not the launch form. Kept explicit rather than relying on
+  # an optimisation.)
   stub_gh '1\taaaa\tfalse\talice\tbr\tt\n'
   PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s5" --poll 1 \
       > "$ITROOT/s5.log" 2>&1 &
@@ -506,18 +512,34 @@ lock_owner() { readlink "$LOCK" 2>/dev/null; }
 acquire_lock() {
   local attempt owner
   for attempt in 1 2 3; do
-    ln -s "$$" "$LOCK" 2>/dev/null && return 0
+    # `ln -s X dir` does NOT fail when dir is a directory — it creates the link
+    # INSIDE it and returns 0, so every watcher "succeeds" and none of them own
+    # anything. That is a live upgrade path: the previous revision of this
+    # script used `mkdir "$LOCK"` + a pid file. Clear a non-symlink first.
+    if [ -e "$LOCK" ] && [ ! -L "$LOCK" ]; then
+      echo "PR-WATCH: clearing a non-symlink lock left by an older watcher layout"
+      rm -rf "$LOCK"
+    fi
+    if ln -s "$$" "$LOCK" 2>/dev/null; then
+      # Settle, then confirm the link still names US. A watcher that started at
+      # the same instant may have judged the pre-existing lock dead and removed
+      # ours between our create and now. Whoever the link names at the end is
+      # the single owner; everyone else exits here.
+      sleep 0.3
+      [ "$(lock_owner)" = "$$" ] && return 0
+      echo "PR-WATCH ERROR: another watcher took the lock during acquisition — exiting"
+      return 1
+    fi
     owner=$(lock_owner)
     if [ -n "${owner:-}" ] && kill -0 "$owner" 2>/dev/null; then
       echo "PR-WATCH ERROR: another watcher (pid $owner) already owns $STATE_DIR — exiting"
       return 1
     fi
-    # Dead owner, or a leftover from an older layout that is not a symlink at
-    # all. Remove and re-contend: whoever wins the next `ln -s` owns it, and
-    # every loser then reads a LIVE owner and exits. No watcher can conclude
-    # it owns a lock it did not create.
+    # Dead owner. Remove ONLY if the link still names the pid we judged dead —
+    # an unconditional `rm` here is what let a loser delete a fresh winner's
+    # link and leave several watchers each believing they had armed.
     echo "PR-WATCH: reclaiming stale lock from pid ${owner:-<unknown>}"
-    rm -rf "$LOCK"
+    [ "$(lock_owner)" = "${owner:-}" ] && rm -f "$LOCK"
   done
   echo "PR-WATCH ERROR: lost the race to reclaim $LOCK — another watcher won; exiting"
   return 1
