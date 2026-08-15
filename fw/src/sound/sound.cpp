@@ -1346,15 +1346,15 @@ static void audio_sidecar_drain(struct audio_sidecar *sc) {
 #endif
 }
 
-/* Returns 0 only if the file on the volume is one a consumer may trust; the
- * caller reports it separately from io_error, so the capture fails with a
- * DISTINCT errno rather than being indistinguishable from a short WAV.
- * Without a non-zero return at all these warnings reach the UART alone — and a
- * phone-triggered capture has no UART, so capture.cpp would publish
- * CAPTURE_IDLE with last_error=0 for a truncated or misaligned CSV.
- * A sidecar that never opened is NOT a failure: nothing was promised, the
- * warning at open time said so, and the WAV stands on its own. A file that
- * exists but cannot be trusted is the case worth failing. */
+/* Returns 0 only if the file on the volume is one a consumer may trust. The
+ * caller keeps this apart from io_error and prints its own verdict, but does
+ * NOT fail the capture on it: a damaged sidecar leaves the WAV whole, and the
+ * only app-visible consequence of a non-zero return would be a "Failed" badge
+ * that a complete recording does not deserve (last_error never leaves the
+ * UART — see the sidecar_unusable comment in record_wav_capture()).
+ * A sidecar that never opened is NOT a failure either: nothing was promised,
+ * the warning at open time said so, and the WAV stands on its own. A file that
+ * exists but cannot be trusted is the case worth reporting. */
 static int audio_sidecar_close(struct audio_sidecar *sc, const struct shell *shell,
                                uint32_t blocks, uint32_t dropped) {
     if (!sc->open) {
@@ -1490,10 +1490,17 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
         uint64_t needed = (uint64_t)total_frames * (BLOCK_SIZE + 175) + WAV_DATA_OFFSET +
                           TAP_CSV_CHUNK + 64 * 1024;
         if (needed > free_bytes) {
+            /* Multiply by the block time rather than dividing by a frame rate,
+             * for the reason record_wav_capture()'s pre-flight spells out:
+             * MSEC_PER_SEC / BLOCK_CAPTURE_TIME_MS truncates 31.25 to 31, which
+             * understates the per-second cost and so overstates this advice by
+             * ~0.8% — enough that re-running at exactly the printed figure fails
+             * again with -ENOSPC and the operator has to guess downward. */
             uint32_t max_s =
                 (uint32_t)((free_bytes > WAV_DATA_OFFSET + TAP_CSV_CHUNK + 64 * 1024)
-                               ? (free_bytes - WAV_DATA_OFFSET - TAP_CSV_CHUNK - 64 * 1024) /
-                                     ((BLOCK_SIZE + 175) * (MSEC_PER_SEC / BLOCK_CAPTURE_TIME_MS))
+                               ? ((free_bytes - WAV_DATA_OFFSET - TAP_CSV_CHUNK - 64 * 1024) *
+                                  BLOCK_CAPTURE_TIME_MS) /
+                                     ((uint64_t)(BLOCK_SIZE + 175) * MSEC_PER_SEC)
                                : 0);
             shell_error(shell, "Not enough free space for %u s (max ~%u s free)", duration_s,
                         max_s);
@@ -1617,6 +1624,20 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
     size_t csv_pos = 0;                /* bytes accumulated in s_csv_batch */
     uint32_t consecutive_timeouts = 0; /* tap-empty polls in a row */
     bool io_error = false;
+    /* CSV faults that happen AFTER the capture loop has run to completion, so
+     * the WAV is whole and only its sidecar is damaged. Kept apart from
+     * io_error so the abort line below cannot claim "capture incomplete - 937
+     * of 937 frames". Not the same call as record_wav_capture()'s, which
+     * reports the equivalent and returns 0: there the consumer is the phone,
+     * which never sees an errno and cannot act on a sidecar. Here the consumer
+     * is the MCP capture_scenario handler, which keys on this path's
+     * "Wrote ... (N frames, ...)" line as proof the CSV is worth parsing and
+     * would hand a damaged one straight to beat_lab — so this still has to
+     * fail, just honestly.
+     *
+     * Mid-loop CSV failures stay io_error: they break out of the capture, so
+     * the WAV is truncated too and the abort line is accurate. */
+    bool csv_unusable = false;
 
     bool stopped_early = false;
     while (frames_captured < total_frames) {
@@ -1707,7 +1728,7 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
         if (tap_write_at_retry(&fcsv, csv_path, csv_file_pos, s_csv_batch, csv_pos,
                                &io_retries) != 0) {
             shell_error(shell, "CSV write failed on final flush");
-            io_error = true; /* loses up to a chunk of trailing D-rows */
+            csv_unusable = true; /* loses up to a chunk of trailing D-rows */
         } else {
             csv_file_pos += (off_t)csv_pos;
         }
@@ -1748,7 +1769,7 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
     if (len == 0 ||
         tap_write_at_retry(&fcsv, csv_path, csv_file_pos, s_tap_line, len, &io_retries) != 0) {
         shell_error(shell, "CSV #DONE trailer write failed");
-        io_error = true;
+        csv_unusable = true;
     }
     fs_close(&fcsv);
 #if defined(CONFIG_IMU)
@@ -1765,6 +1786,18 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
                     "(%u dropped, %u io retries)",
                     frames_captured, total_frames, path, dropped, io_retries);
         return -EIO;
+    }
+    if (csv_unusable) {
+        /* Must return before the "Wrote ..." line below: that is the string the
+         * MCP handler treats as proof the analysis CSV is parseable. Wording
+         * chosen so neither success gate can match it, same rule as
+         * audio_sidecar_close()'s failures (pinned by
+         * fw/tools/tests/test_capture_csv_contract.py). */
+        shell_error(shell,
+                    "Analysis CSV unusable - the WAV is COMPLETE (%u of %u frames, %u dropped) "
+                    "but its sidecar is not; keep %s, discard %s",
+                    frames_captured, total_frames, dropped, path, csv_path);
+        return -EBADMSG;
     }
     if (stopped_early) {
         shell_print(shell, "Stopped early at %u of %u frames", frames_captured, total_frames);
@@ -2279,12 +2312,24 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
      * below the loop is skipped — so the sidecar overruns the audio and
      * blocks_captured would report them equal. On a clean capture the two are
      * identical, so this costs nothing there. */
-    /* Tracked apart from io_error on purpose. The verdict still has to reach
-     * the app — a console line is invisible on a phone — but folding it into
-     * io_error made the operator see "ABORTED: 625 of 625 blocks saved" for a
-     * WAV that is complete and playable, contradicting the invariant this
-     * design rests on (audio_sidecar_flush(): "the WAV is the primary
-     * artifact"). Same non-zero return, honest message. */
+    /* Tracked apart from io_error on purpose: folding it in made the operator
+     * see "ABORTED: 625 of 625 blocks saved" for a WAV that is complete and
+     * playable, contradicting the invariant this design rests on
+     * (audio_sidecar_flush(): "the WAV is the primary artifact").
+     *
+     * It does NOT change the return value. An earlier version of this returned
+     * -EBADMSG "so the app can tell the two apart", which was wrong on its own
+     * premise: last_error is never published over BLE. capture_service.cpp
+     * exposes six characteristics and on_capture_state() copies only state,
+     * elapsed_s, remaining_s and captures — last_error reaches the UART
+     * (`capture status`) and the log, nowhere else. So the ONLY app-visible
+     * effect of any non-zero return here is capture.cpp's
+     * `state = CAPTURE_FAILED`, which renders as a "Failed" badge that is
+     * indistinguishable from a truncated WAV — the exact confusion the split
+     * was meant to remove, made worse: a field user would see a good 60 s
+     * recording reported as failed while the capture count bumped anyway.
+     * Returning 0 also restores what shipped before this PR, when
+     * imu_sidecar_close() was void and a CSV fault never touched the return. */
     bool sidecar_unusable =
         audio_sidecar_close(&audio_sc, shell, total_bytes / BLOCK_SIZE, dropped) != 0;
 #endif
@@ -2296,17 +2341,23 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
     }
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
     if (sidecar_unusable) {
+        /* Reported, not returned — see the comment on sidecar_unusable above.
+         * The console is the only surface that can distinguish this, and it is
+         * also the only one whose audience can act on it: nothing a phone user
+         * can do fixes a sidecar, and the WAV they came for is intact.
+         *
+         * Unlike record_wav_tap()'s equivalent, this cannot feed a bad CSV to
+         * an automated consumer: that path's success line is what the MCP
+         * capture_scenario handler keys on, whereas this one says "blocks"
+         * rather than "frames" and is matched by neither gate (pinned by
+         * test_capture_path_summary_is_not_read_as_an_analysis_file). The
+         * handler cannot reach this function anyway — it requires
+         * APP_AUDIO_DEBUG, which APP_CAPTURE_AUDIO_SIDECAR depends on being
+         * off. */
         shell_error(shell,
                     "Capture CSV unusable - the WAV is COMPLETE (%u blocks, %u dropped) but "
                     "its sidecar is not; keep %s, discard the .csv (see the warning above)",
                     blocks_captured, dropped, path);
-        /* NOT -EIO. capture.cpp publishes this verbatim as last_error, and a
-         * phone has only that to go on — returning the same code as a
-         * genuinely truncated WAV would make the two byte-identical to the app,
-         * which is the distinction this whole split exists to preserve.
-         * -EBADMSG reads correctly too: the recording is intact, its
-         * accompanying message is not. */
-        return -EBADMSG;
     }
 #endif
     if (stopped_early) {

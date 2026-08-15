@@ -19,14 +19,16 @@ test runnable wherever pytest is.
 
 KNOWN GAPS — this pins less than it looks like it does (review round 8):
 
-1. `failure_strings` anchors on the literal prefix `"Capture CSV`, which
-   structurally cannot see the one regression shape that has actually
-   happened here: a failure line reworded to start with `Audio sidecar:`
-   simply is not harvested, so the no-false-success assertion never sees it.
-   Sabotaging exactly that only tripped the fixture's own `>= 5` count check,
-   which is luck, not coverage. It should anchor on the emitting functions
-   (`audio_sidecar_close`, and `record_wav_capture`'s sidecar paths) and take
-   every shell_warn/shell_error string in them.
+1. `failure_strings` anchors on literal prefixes (`"Capture CSV`,
+   `"Analysis CSV`), which structurally cannot see the one regression shape
+   that has actually happened here: a failure line reworded to start with
+   `Audio sidecar:` simply is not harvested, so the no-false-success assertion
+   never sees it. Sabotaging exactly that only tripped the fixture's own count
+   check, which is luck, not coverage. Adding a prefix each time a new one
+   appears is not a fix — it is the same gap re-opened at a new name, and it
+   has already been hit once. It should anchor on the emitting functions
+   (`audio_sidecar_close`, and `record_wav_capture`/`record_wav_tap`'s sidecar
+   paths) and take every shell_warn/shell_error string in them.
 2. `test_success_lines_are_still_recognised` hardcodes its three lines while
    the failure side is derived — and the success side is the half that broke
    (gating solely on "Audio sidecar: N frames" once dropped the key on the
@@ -69,14 +71,28 @@ def gate_patterns():
 
 @pytest.fixture(scope="module")
 def failure_strings():
-    """Every "Capture CSV ..." wording the firmware can print.
+    """Every sidecar-failure wording the firmware can print.
 
     Adjacent C string literals are captured as separate fragments, which is
     fine and conservative: each fragment is checked, so a wording that becomes
     matchable in any part still fails the test.
+
+    Both prefixes are harvested. `record_wav_capture()` says "Capture CSV";
+    `record_wav_tap()`'s equivalent says "Analysis CSV" — added while fixing the
+    self-contradictory "ABORTED: capture incomplete - 937 of 937 frames" that
+    path printed for a WAV-complete/CSV-damaged capture. That second prefix is
+    exactly the blind spot KNOWN GAP 1 predicted, hit on the first new string
+    written after it was documented, so it is closed here rather than noted
+    again. The gap is only NARROWED, not fixed: a third prefix would still slip
+    through, which is why the note below stands.
     """
-    frags = re.findall(r'"(Capture CSV[^"]*)"', SOUND.read_text())
-    assert len(frags) >= 5, f"expected at least five failure wordings, found {frags}"
+    text = SOUND.read_text()
+    frags = re.findall(r'"((?:Capture|Analysis) CSV[^"]*)"', text)
+    assert len(frags) >= 6, f"expected at least six failure wordings, found {frags}"
+    assert any(f.startswith("Analysis CSV") for f in frags), (
+        "record_wav_tap()'s CSV-unusable wording is missing — if it was renamed, "
+        "this harvester needs to learn the new prefix or it silently checks nothing"
+    )
     return frags
 
 
