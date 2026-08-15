@@ -114,11 +114,12 @@ config APP_CAPTURE_QUEUE_FRAMES
 
 config APP_CAPTURE_THREAD_STACK_SIZE
 	int "Capture worker stack size"
-	default 4096
+	default 5120
 	depends on APP_CAPTURE
 	help
 	  Sized for FATFS writes on the capture path, matching the SMP workqueue
-	  which was raised to 4096 for the same reason.
+	  which was raised to 4096 for the same reason; +1 KB on top of that for
+	  FS_FATFS_LFN_MODE_STACK's ~512 B per-call LFN buffer (issue #380).
 
 config APP_CAPTURE_THREAD_PRIORITY
 	int "Capture worker thread priority"
@@ -740,12 +741,14 @@ config APP_COREDUMP_MANAGER_INIT_PRIORITY
 
 config APP_COREDUMP_WORKQ_STACK_SIZE
 	int "Stack size for the coredump manager workqueue"
-	default 3072
+	default 4096
 	depends on APP_COREDUMP_MANAGER
 	help
 	  The coredump manager does FAT filesystem I/O (fs_opendir/fs_write)
 	  from its own workqueue; FATFS calls are stack-hungry (fatfs reformat
 	  was measured at ~5 KB), so the 2 KB system workqueue is not used.
+	  Raised 3072 -> 4096 for FS_FATFS_LFN_MODE_STACK's ~512 B per-call LFN
+	  buffer (issue #380).
 
 config APP_COREDUMP_MAX_FILES
 	int "Maximum core_NNNN.bin files kept on /NAND:/coredump"
