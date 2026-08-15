@@ -117,6 +117,13 @@ classify() { # classify <num> <sha> <draft>
   # would otherwise re-fire READY at a byte-identical head on every toggle —
   # the same no-diff retrigger this script rejects `updatedAt` for.
   if [ "$SKIP_DRAFTS" = 1 ] && [ "$known_draft" = "true" ] && [ "$draft" != "true" ]; then
+    # Settle like every other event. Under --skip-drafts, READY *is* the open
+    # event, and mark-ready-then-fixup is as common as open-then-fixup — firing
+    # immediately reviews a SHA the author is about to replace.
+    if [ "$(lookup "$num" "$PEND")" != "$sha" ]; then
+      upsert "$PEND" "$num" "$sha"
+      return
+    fi
     upsert "$STATE" "$num" "$sha" "false"
     drop "$num" "$PEND"
     echo "READY"
@@ -141,6 +148,26 @@ classify() { # classify <num> <sha> <draft>
   else
     drop "$num" "$PEND"   # pushed then reverted inside one cycle
   fi
+}
+
+# An exit-0 response listing zero PRs is ambiguous: either the repo really has
+# none open, or the API hiccuped. Acting on the second reading wipes state, and
+# then EVERY open PR re-fires as NEW — a full review storm from one blip. A
+# genuinely empty repo stays empty, so require the reading to repeat.
+#
+# This is a function, not an inline condition, because the self-test MUST drive
+# the same code the loop runs. An earlier revision re-implemented the rule in
+# the test; mutation testing showed 5 of 5 mutants — including the one that
+# restores the storm — passing the whole suite.
+EMPTY_POLLS=0
+EMPTY_STREAK_LIMIT=3
+should_trust_empty() { # should_trust_empty <count>  -> 0 = act on it
+  if [ "$1" = 0 ]; then
+    EMPTY_POLLS=$((EMPTY_POLLS + 1))
+  else
+    EMPTY_POLLS=0
+  fi
+  [ "$1" -gt 0 ] || [ "$EMPTY_POLLS" -ge "$EMPTY_STREAK_LIMIT" ]
 }
 
 # Forget PRs that are no longer open. Without this, a closed-then-reopened PR
@@ -187,6 +214,7 @@ if [ "$SELF_TEST" = 1 ]; then
   SKIP_DRAFTS=1
   check "draft settles"                  ""             "$(classify 20 dr01 true)"
   check "draft is not reported"          ""             "$(classify 20 dr01 true)"
+  check "draft->ready settles first"     ""             "$(classify 20 dr01 false)"
   check "draft->ready fires READY"       "READY"        "$(classify 20 dr01 false)"
   check "ready then silent"              ""             "$(classify 20 dr01 false)"
   # A ready PR converted back to draft and out again moves no SHA. Re-firing
@@ -199,8 +227,15 @@ if [ "$SELF_TEST" = 1 ]; then
   check "push while draft is deferred"   ""             "$(classify 21 dr10 true)"
   check "  (pushed again, still draft)"  ""             "$(classify 21 dr11 true)"
   check "  (still silent)"               ""             "$(classify 21 dr11 true)"
+  check "  (un-drafted, settles)"        ""             "$(classify 21 dr11 false)"
   check "  (READY at the NEW head)"      "READY"        "$(classify 21 dr11 false)"
   check "  (state holds the new head)"   "dr11"         "$(lookup 21 "$STATE")"
+  # mark-ready then immediately push: one READY, at the settled SHA.
+  check "ready+fixup: settles"           ""             "$(classify 22 aa00 true)"
+  check "  (deferred as draft)"          ""             "$(classify 22 aa00 true)"
+  check "  (un-drafted, settling)"       ""             "$(classify 22 aa00 false)"
+  check "  (fixup lands mid-settle)"     ""             "$(classify 22 bb00 false)"
+  check "  (one READY, final sha)"       "READY"        "$(classify 22 bb00 false)"
   SKIP_DRAFTS=0
 
   # Closed-then-reopened at an unchanged head must still fire.
@@ -221,18 +256,34 @@ if [ "$SELF_TEST" = 1 ]; then
   printf '50 f00d false\n\n51 baad true\n' > "$STATE"
   check "prune skips blank lines"        "50 f00d false" "$(prune "50"; cat "$STATE")"
 
-  # The main loop must not treat "zero open PRs" as authoritative on the first
-  # reading: pruning there wipes state and re-fires NEW for every PR.
+  # The empty-poll guard. These drive should_trust_empty() ITSELF — an earlier
+  # revision re-implemented the rule here, and mutation testing showed every
+  # mutant of the real rule (including -ge 3 -> -ge 1, which restores the
+  # review storm) passing the whole suite.
+  # NOT via $( ): should_trust_empty updates EMPTY_POLLS, and a command
+  # substitution would run it in a subshell where the counter never carries
+  # forward — the assertions would then pass against a rule that never counts.
+  check_verdict() { # check_verdict <label> <expected> <count>
+    local got
+    if should_trust_empty "$3"; then got=trust; else got=hold; fi
+    check "$1" "$2" "$got"
+  }
+  EMPTY_POLLS=0
+  check_verdict "empty poll 1 is not trusted" "hold"  0
+  check_verdict "empty poll 2 is not trusted" "hold"  0
+  check_verdict "empty poll 3 is trusted"     "trust" 0
+  check_verdict "non-empty is always trusted" "trust" 4
+  check_verdict "  (and resets the streak)"   "hold"  0
+  check_verdict "  (streak really restarted)" "hold"  0
+  check_verdict "  (third again trusts)"      "trust" 0
+  # And the state consequence the rule exists to protect.
   printf '60 aaaa false\n61 bbbb false\n' > "$STATE"; : > "$PEND"
-  empty_polls=0; count=0
-  for _ in 1 2; do
-    if [ "$count" = 0 ]; then empty_polls=$((empty_polls + 1)); else empty_polls=0; fi
-    [ "$count" -gt 0 ] || [ "$empty_polls" -ge 3 ] && prune ""
-  done
+  EMPTY_POLLS=0
+  should_trust_empty 0 && prune ""
   check "1 empty poll does not wipe"     "60 aaaa false
 61 bbbb false" "$(cat "$STATE")"
-  empty_polls=3
-  { [ "$count" -gt 0 ] || [ "$empty_polls" -ge 3 ]; } && prune ""
+  should_trust_empty 0 && prune ""
+  should_trust_empty 0 && prune ""
   check "3 empty polls do prune"         ""             "$(cat "$STATE")"
 
   [ "$fail" = 0 ] && echo "self-test: PASS" || echo "self-test: FAIL"
@@ -252,8 +303,10 @@ if [ -z "$STATE_DIR" ]; then
   STATE_DIR="${TMPDIR:-/tmp}/pr-watch-$(echo "$REPO" | tr '/' '-')"
 fi
 mkdir -p "$STATE_DIR" || { echo "PR-WATCH ERROR: cannot create $STATE_DIR"; exit 1; }
+chmod 700 "$STATE_DIR" 2>/dev/null || true   # state dir lives under a shared /tmp
 STATE="$STATE_DIR/state"
 PEND="$STATE_DIR/pending"
+GHERR="$STATE_DIR/gh.err"
 
 # The state files are read-modify-written non-atomically, so two watchers on
 # one repo would interleave and lose events. mkdir is the atomic primitive.
@@ -270,8 +323,15 @@ acquire_lock() {
       return 0
     fi
     other=$(cat "$LOCK/pid" 2>/dev/null)
-    # An unreadable or empty pid file means a watcher died between mkdir and
-    # the write. Treat it as stale rather than deadlocking on it forever.
+    # An unreadable or empty pid file usually means a watcher died between
+    # mkdir and the write — but it is ALSO the microsecond window a live
+    # winner passes through. Robbing it there leaves two owners and, once the
+    # winner's late write clobbers the pid, a lock nobody can release. Give it
+    # a grace period and re-read before declaring it stale.
+    if [ -z "${other:-}" ]; then
+      sleep 1
+      other=$(cat "$LOCK/pid" 2>/dev/null)
+    fi
     if [ -n "${other:-}" ] && kill -0 "$other" 2>/dev/null; then
       echo "PR-WATCH ERROR: another watcher (pid $other) already owns $STATE_DIR — exiting"
       return 1
@@ -296,10 +356,13 @@ release_lock() {
 # loop by default, which would leave a watcher polling on with no lock — a
 # ghost that keeps consuming API calls and emitting events nobody owns.
 #
-# Two accepted caveats: bash defers the handler until the in-flight `sleep`
-# returns, so a stop takes up to POLL seconds to land; and SIGKILL runs no
-# handler at all, leaking the lock dir until the next watcher's stale-pid
-# reclaim clears it.
+# Three accepted caveats. Bash defers the handler until the in-flight `sleep`
+# returns, so a stop takes up to POLL seconds to land. SIGKILL runs no handler
+# at all, leaking the lock dir until the next watcher's stale-pid reclaim
+# clears it. And in the documented launch mode — a background job of a
+# non-interactive shell — SIGINT is inherited ignored and bash will not install
+# a handler for it, so the INT trap is inert there; TERM is the operative
+# signal, and it is what the Monitor tool sends.
 trap 'release_lock' EXIT
 trap 'release_lock; exit 130' INT
 trap 'release_lock; exit 143' TERM
@@ -309,18 +372,31 @@ QUERY='.[] | "\(.number)\t\(.headRefOid)\t\(.isDraft)\t\(.author.login)\t\(.head
 # Baseline: every currently-open PR at its current head, so nothing already
 # open fires until it changes. Re-arming re-baselines — a push that landed
 # while the monitor was down is absorbed, not reported.
-if ! gh pr list --repo "$REPO" --state open --limit "$LIMIT" --json number,headRefOid,isDraft \
-      -q '.[] | "\(.number) \(.headRefOid) \(.isDraft)"' > "$STATE" 2>/dev/null; then
-  echo "PR-WATCH ERROR: baseline query failed (gh auth?) — monitor exiting"
-  exit 1
-fi
+#
+# The empty-response hazard is WORSE here than in the poll loop: an exit-0 blip
+# during arming produces an empty baseline, and then every open PR fires as NEW
+# on the first poll. One blip, not three. So confirm an empty baseline by
+# repeating the query before believing the repo really has no open PRs.
+baseline=""
+for attempt in 1 2 3; do
+  if ! baseline=$(gh pr list --repo "$REPO" --state open --limit "$LIMIT" \
+                    --json number,headRefOid,isDraft \
+                    -q '.[] | "\(.number) \(.headRefOid) \(.isDraft)"' 2>"$GHERR"); then
+    echo "PR-WATCH ERROR: baseline query failed (gh auth?) — monitor exiting$(
+      why=$(head -1 "$GHERR" 2>/dev/null); [ -n "${why:-}" ] && echo " — $why")"
+    exit 1
+  fi
+  [ -n "$baseline" ] && break
+  [ "$attempt" = 3 ] && break
+  echo "PR-WATCH: baseline came back empty (attempt $attempt) — retrying before arming"
+  sleep 2
+done
+printf '%s' "${baseline:+$baseline$'\n'}" > "$STATE"
 : > "$PEND"
 echo "PR-WATCH: armed on $REPO — new PRs + pushes to $(wc -l < "$STATE" | tr -d ' ') open PR(s), ${POLL}s poll, 1-cycle debounce$([ "$SKIP_DRAFTS" = 1 ] && echo ', drafts deferred')"
 
 fails=0
 truncated_warned=0
-empty_polls=0
-GHERR="$STATE_DIR/gh.err"
 while true; do
   if cur=$(gh pr list --repo "$REPO" --state open --limit "$LIMIT" \
              --json number,headRefOid,isDraft,author,headRefName,title -q "$QUERY" 2>"$GHERR"); then
@@ -348,27 +424,22 @@ while true; do
 
     count=$(printf '%s\n' $open_nums | grep -c . || true)
 
-    # An exit-0 response listing zero PRs is ambiguous: either the repo really
-    # has none open, or the API hiccuped. Pruning on the second reading wipes
-    # state, and then EVERY open PR re-fires as NEW next cycle — a full review
-    # storm from one blip. A genuinely empty repo stays empty, so require the
-    # reading to repeat before believing it.
-    if [ "$count" = 0 ]; then
-      empty_polls=$((empty_polls + 1))
-      if [ "$empty_polls" = 1 ] && [ -s "$STATE" ]; then
-        echo "PR-WATCH: poll returned zero open PRs but state is non-empty — not pruning until it repeats"
-      fi
-    else
-      empty_polls=0
-    fi
-    if [ "$count" -gt 0 ] || [ "$empty_polls" -ge 3 ]; then
+    if should_trust_empty "$count"; then
       prune "${open_nums# }"
+    elif [ "$EMPTY_POLLS" = 1 ] && [ -s "$STATE" ]; then
+      echo "PR-WATCH: poll returned zero open PRs but state is non-empty — not pruning until it repeats"
     fi
 
-    # A silent cap reads as "covered everything" when it isn't.
-    if [ "$count" -ge "$LIMIT" ] && [ "$truncated_warned" = 0 ]; then
-      truncated_warned=1
-      echo "PR-WATCH WARNING: $count open PRs hit the --limit $LIMIT window — PRs outside it are not watched"
+    # A silent cap reads as "covered everything" when it isn't. Re-arm the
+    # notice when the count drops back under, so a repo that crosses the
+    # boundary repeatedly is not warned about exactly once, forever.
+    if [ "$count" -ge "$LIMIT" ]; then
+      if [ "$truncated_warned" = 0 ]; then
+        truncated_warned=1
+        echo "PR-WATCH WARNING: $count open PRs reached the --limit $LIMIT window — PRs outside it are not watched"
+      fi
+    else
+      truncated_warned=0
     fi
   else
     fails=$((fails + 1))

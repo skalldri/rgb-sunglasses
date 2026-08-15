@@ -87,8 +87,18 @@ Review GitHub PR #<N> in <owner>/<repo> and post the findings to the PR.
    Any output means a comment body was posted as a literal @path — repair it
    with PATCH (see root CLAUDE.md § "GitHub PR review comments via gh api").
    Note --paginate: these endpoints cut off at 30 comments.
+   To POST, prefer `gh pr comment --body-file` or `gh api --input <json>`. The
+   `-f body="$(cat ...)"` form is correct but is sometimes refused by the
+   PreToolUse guard, and `-f body=@file` posts the literal string.
 3. If the review found nothing, post a short summary with `gh pr comment <N>`
    so the PR still carries a record of the pass.
+4. Every agent AND the PR author post under the SAME GitHub account, so `user`
+   identifies nobody. Before treating a comment as a duplicate of your own,
+   check `in_reply_to_id` — if it is set, it is a reply to an earlier finding,
+   usually the author's. Delete nothing without that check.
+5. If this push adds or changes any test, state explicitly whether that test
+   would FAIL if the behaviour it claims to pin were reverted, and how you
+   determined it. Do not accept "a test was added" as coverage.
 <prior-round context — see § 3>
 
 Constraints: do NOT modify the working tree, commit, or push. Do NOT touch
@@ -178,7 +188,24 @@ few minutes. Offer these rather than silently burning the budget:
   reviewed if that gap matters.
 - **Deleting a posted comment is a real, visible action.** If an agent decides
   a finding is out of scope after posting, have it say so — do not let comment
-  deletions happen silently.
+  deletions happen silently. And never instruct a delete unconditionally: say
+  "if X, delete it", because your premise about what a comment is may be wrong.
+  Twice in one session a comment that looked like a duplicated finding was the
+  author's reply; only the conditional phrasing stopped it being destroyed.
+- **`isolation: "worktree"` does not survive a resume.** An agent resumed with
+  `SendMessage` after dying can come back in the PARENT checkout rather than
+  its own worktree. That makes the prompt's "do not modify the working tree,
+  restore any checkout" constraint load-bearing rather than belt-and-braces.
+  Tell agents that if they find themselves on someone else's branch they
+  should LEAVE IT — a well-meaning "restore" yanks an active branch out from
+  under whoever is working there.
+- **Ask for the test-revert verdict every round** (step 5 of the template).
+  Across one session it found four tests that accompanied a fix and would have
+  passed with that fix reverted — a soak gate, a suite whose subject was not
+  compiled into the binary, vacuous counter asserts, and a clamp test whose
+  assertion could not distinguish 1 step from 3000. In the last case the blind
+  spot demonstrably let a real bug survive several rounds. It is the highest
+  yield question in the template.
 - **Hardware stays out of it.** Reviews are read-only by construction. If a
   finding genuinely needs on-device confirmation, that is a separate task under
   the `board`/`app` locks (`/flash-and-verify`, `/e2e-test`) — never something
