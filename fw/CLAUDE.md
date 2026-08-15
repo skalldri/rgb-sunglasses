@@ -602,6 +602,22 @@ still present and will fail when that day comes; don't "fix" that scenario, act 
 it. Keep the copy byte-diffable against upstream: no changes beyond the marked
 `/* PATCHED */` blocks.
 
+**The proto0 BOM part is MX25R6435FZA`IH0`, and its `-H-` ordering option
+makes High Performance mode the factory default** — the MX25R6435F *family*
+default is Ultra Low Power (5 of the 8 orderable variants are L-parts), so an
+L-variant re-BOM would invalidate the 32 MHz QSPI SCK and must revisit it. The
+volatile L/H bit reverts to the ordering default at every power-on (datasheet
+PDF p.77/p.31, checked in at `fw/docs/datasheets/MX25R6435F/`), and the BOM is
+the single point of truth: L and H variants share the same JEDEC ID, and the
+`nordic,qspi-nor` driver exposes no public API to read CR2 back (a ~10-line
+hand-rolled boot-time RDCR via `nrfx_qspi_cinstr_xfer` is possible if variant
+detection is ever wanted — issue #387). No software mode switch is
+needed on this board, and none is possible through this driver (it ignores
+`mxicy,mx25r-power-mode`; its WRSR helper can't reach CR2) — don't reintroduce
+the "stuck in low-power mode" theory that issue #380 briefly carried. QSPI SCK
+runs at 32 MHz (HP mode allows 80; the old 8 MHz was the ULP-mode ceiling, see
+the mx25r64 DTS node comment).
+
 The dev board exposes a ~6.9 MiB FAT filesystem over USB Mass Storage (SCSI Bulk-Only,
 interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts at
 `/NAND:` (`src/storage/storage.cpp`; LUN registered in `src/usb/usb_init.c` as
