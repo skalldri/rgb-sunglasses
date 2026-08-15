@@ -9,7 +9,13 @@ namespace {
  * Right (mirror): bucket 3 → x=4, bucket 2 → x=5, bucket 1 → x=6, bucket 0 → x=7 */
 class MutableAudioSource : public AnimationAudioSource {
    public:
-    void update() override {}
+    /* One new analysis frame per tick by default (the ~30 Hz reality); tests can
+     * freeze the stream (0) or batch frames to exercise frame-count-driven EMA. */
+    void update() override { frameCount_ += framesPerUpdate_; }
+
+    uint32_t frameCount() const override { return frameCount_; }
+
+    void setFramesPerUpdate(uint32_t frames) { framesPerUpdate_ = frames; }
 
     /* Beat bands — not used by FftBarsAnimation, return stubs. */
     size_t numBands() const override { return 0; }
@@ -37,6 +43,8 @@ class MutableAudioSource : public AnimationAudioSource {
 
    private:
     float energy_[kTestBuckets] = {};
+    uint32_t frameCount_ = 0;
+    uint32_t framesPerUpdate_ = 1;
 };
 
 /* 8 × 4 display. */
@@ -210,4 +218,59 @@ ZTEST(fft_bars_animation_di_tests, test_init_resets_smoothed_energy) {
     anim->tick(renderer, 16);
     zassert_true(allPixelsDark(),
                  "Display should be dark immediately after init() with zero energy");
+}
+
+/* Issue #376: the EMA advances per NEW analysis frame, not per render tick — with
+ * no new frame the bars must hold perfectly still no matter how many ticks pass. */
+ZTEST(fft_bars_animation_di_tests, test_bars_freeze_without_new_frames) {
+    MutableAudioSource audio;
+    audio.resetAll();
+    audio.setEnergy(0, 0.1f);
+
+    FftBarsAnimation *anim = FftBarsAnimation::getInstance();
+    anim->setAudioSource(audio);
+    anim->init();
+
+    CapturingTestRenderer renderer;
+    for (int i = 0; i < 10; i++) {
+        resetCapture();
+        anim->tick(renderer, 16);
+    }
+    size_t bottomRow = kTestHeight - 1;
+    zassert_false(sPixels[0][bottomRow].isBlack(), "Bottom pixel lit after energy builds up");
+
+    /* Freeze the analysis stream and drop the target energy to zero: without new
+     * frames the smoothed value — and the rendered bar — must not move. */
+    audio.setFramesPerUpdate(0);
+    audio.setEnergy(0, 0.0f);
+    for (int i = 0; i < 10; i++) {
+        resetCapture();
+        anim->tick(renderer, 16);
+    }
+    zassert_false(sPixels[0][bottomRow].isBlack(),
+                  "Bars must hold still across ticks that deliver no new frame");
+}
+
+/* Issue #376: one new frame advances the EMA by kEmaStepsPerFrame=3 steps (the
+ * historical ~3-ticks-per-frame response at 90 Hz). With energy 0.01 and the
+ * default 0.3 coefficient, 3 steps give (1-0.7^3)*0.01 = 0.0066 → bar height 1;
+ * a single step (the old per-tick EMA at 30 Hz) would give 0.003 → height 0. */
+ZTEST(fft_bars_animation_di_tests, test_one_frame_advances_three_ema_steps) {
+    MutableAudioSource audio;
+    audio.resetAll();
+    audio.setEnergy(0, 0.01f);
+
+    FftBarsAnimation *anim = FftBarsAnimation::getInstance();
+    anim->setAudioSource(audio);
+    anim->init();
+
+    CapturingTestRenderer renderer;
+    resetCapture();
+    anim->tick(renderer, 16);  // exactly one new frame
+
+    size_t bottomRow = kTestHeight - 1;
+    zassert_false(sPixels[0][bottomRow].isBlack(),
+                  "3 EMA steps per frame must light the bottom pixel in one tick");
+    zassert_true(sPixels[0][bottomRow - 1].isBlack(),
+                 "Bar must be exactly one pixel tall after one 0.01-energy frame");
 }

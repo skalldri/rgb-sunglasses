@@ -6,10 +6,9 @@
 /**
  * @brief Runtime-tunable spectrogram visualization parameters.
  *
- * Decouples fft_bars_animation.cpp from any concrete BT/Settings-backed implementation
- * so the existing native_sim ztest suite (fw/tests/animations/fft_bars_animation_di/)
- * keeps working with zero changes: it never calls setConfigSource(), so tick() always
- * falls back to the historical constexpr defaults.
+ * Decouples fft_bars_animation.cpp from any concrete BT/Settings-backed implementation:
+ * the native_sim ztest suite (fw/tests/animations/fft_bars_animation_di/) never calls
+ * setConfigSource(), so tick() always falls back to the historical constexpr defaults.
  */
 class FftVisualizationConfigSource {
    public:
@@ -42,6 +41,10 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
      * Sized to hold the maximum number of display buckets we ever expect. */
     static constexpr size_t kMaxDisplayBuckets = 24;
     float smoothed_[kMaxDisplayBuckets] = {};
+
+    /* audioSource_->frameCount() at the last tick — the EMA advances per NEW
+     * analysis frame, not per render tick (issue #376). */
+    uint32_t lastFrameCount_ = 0;
 };
 
 void fft_bars_animation_bind_default_sound_dependencies();

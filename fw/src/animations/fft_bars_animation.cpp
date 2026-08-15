@@ -77,13 +77,26 @@ void FftBarsAnimation::setConfigSource(FftVisualizationConfigSource &source) {
     configSource_ = &source;
 }
 
+/* One ~32 ms analysis frame spanned ~3 render ticks at the pre-issue-#376 11.1 ms
+ * render rate, and the per-tick EMA ran against a held energy value in between —
+ * so the historical response was ~3 EMA steps toward each new frame. Advancing
+ * exactly 3 steps per NEW frame reproduces that response at any render tick rate
+ * and keeps the persisted smoothingCoeff tunable's meaning unchanged. */
+static constexpr uint32_t kEmaStepsPerFrame = 3;
+
+/* audio_result_q holds at most a few frames; bound the catch-up after a stall so a
+ * wrapped/large frame-count delta cannot spin the EMA loop. */
+static constexpr uint32_t kMaxEmaStepsPerTick = 4 * kEmaStepsPerFrame;
+
 void FftBarsAnimation::init() {
     for (size_t b = 0; b < kMaxDisplayBuckets; b++) {
         smoothed_[b] = 0.0f;
     }
+    lastFrameCount_ = audioSource_ ? audioSource_->frameCount() : 0;
 }
 
 void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
+    /* Motion is driven by frameCount() deltas, not wall time — see kEmaStepsPerFrame. */
     ARG_UNUSED(timeSinceLastTickMs);
 
     size_t W = renderer.displayWidth();
@@ -109,10 +122,22 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
         numBuckets = kMaxDisplayBuckets;
     }
 
-    /* Update smoothed energies with exponential moving average. */
+    /* Update smoothed energies with an exponential moving average, one batch of
+     * EMA steps per NEWLY-ARRIVED analysis frame (none when no frame arrived), so
+     * the bars' responsiveness does not depend on the render tick rate. */
+    const uint32_t frameCount = audioSource_->frameCount();
+    uint32_t emaSteps = (frameCount - lastFrameCount_) * kEmaStepsPerFrame;
+    lastFrameCount_ = frameCount;
+    if (emaSteps > kMaxEmaStepsPerTick) {
+        emaSteps = kMaxEmaStepsPerTick;
+    }
+
     for (size_t bucket = 0; bucket < numBuckets; bucket++) {
         float energy = audioSource_->getDisplayBucketEnergy(bucket);
-        smoothed_[bucket] = smoothingCoeff * energy + (1.0f - smoothingCoeff) * smoothed_[bucket];
+        for (uint32_t s = 0; s < emaSteps; s++) {
+            smoothed_[bucket] =
+                smoothingCoeff * energy + (1.0f - smoothingCoeff) * smoothed_[bucket];
+        }
     }
 
     /* Mirrored layout: the left half of the display shows buckets low→high

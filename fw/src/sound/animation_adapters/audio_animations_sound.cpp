@@ -1,5 +1,6 @@
 #include <animations/animation_audio_source.h>
 #include <animations/color_mode_source.h>
+#include <sound/animation_adapters/audio_frame_fold.h>
 #include <sound/audio_dsp.h>
 #include <sound/sound.h>
 
@@ -26,7 +27,10 @@ constexpr size_t kColorBeatBand = 0;
  * so a single drain-and-cache source serves both without double-reads. */
 class SoundAnimationAudioSource : public AnimationAudioSource {
    public:
-    /* Drain the message queue and cache the most recent frame.
+    /* Drain the message queue and cache the newest frame, OR-folding beat flags
+     * across every frame drained in this tick (audio_frame_fold): at a ~33 ms
+     * render tick two ~32 ms analysis frames can arrive in one drain, and plain
+     * last-frame-wins dropped the older frame's beat (issue #376).
      * Called once per animation tick so the animation sees a consistent snapshot.
      * Beats for the edge-triggered consumers are COUNTED here, at drain time (once
      * per drained frame), not read from cache_.beat[] — so it doesn't matter which
@@ -35,15 +39,20 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
      * persisting in cache_ across ticks can't cause repeated re-rolls. */
     void update() override {
         audio_analysis_result tmp;
+        bool firstInBatch = true;
         while (k_msgq_get(&audio_result_q, &tmp, K_NO_WAIT) == 0) {
-            cache_ = tmp;
+            audio_frame_fold(cache_, tmp, firstInBatch);
+            firstInBatch = false;
             if (tmp.beat[kColorBeatBand]) {
                 beatCount_++;
             }
+            frameCount_++;
         }
     }
 
     uint32_t beatCount() const { return beatCount_; }
+
+    uint32_t frameCount() const override { return frameCount_; }
 
     size_t numBands() const override { return AUDIO_NUM_BANDS; }
 
@@ -64,6 +73,7 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
    private:
     audio_analysis_result cache_ = {};
     uint32_t beatCount_ = 0;
+    uint32_t frameCount_ = 0;
 };
 
 SoundAnimationAudioSource sSoundSource;

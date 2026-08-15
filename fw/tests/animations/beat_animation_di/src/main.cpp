@@ -15,7 +15,9 @@ class MutableUint32Source : public AnimationUint32ParameterSource {
 
 class MutableAudioSource : public AnimationAudioSource {
    public:
-    void update() override {}
+    void update() override { frameCount_++; }
+
+    uint32_t frameCount() const override { return frameCount_; }
 
     float getBandEnergy(size_t band) const override {
         return (band < kTestBands) ? energy_[band] : 0.0f;
@@ -39,6 +41,7 @@ class MutableAudioSource : public AnimationAudioSource {
             energy_[b] = 0.0f;
             beat_[b] = false;
         }
+        frameCount_ = 0;
     }
 
     static constexpr size_t kTestBands = 4;
@@ -46,6 +49,7 @@ class MutableAudioSource : public AnimationAudioSource {
    private:
     float energy_[kTestBands] = {};
     bool beat_[kTestBands] = {};
+    uint32_t frameCount_ = 0;
 };
 
 static constexpr size_t kTestWidth = 8;
