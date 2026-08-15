@@ -77,27 +77,15 @@ void FftBarsAnimation::setConfigSource(FftVisualizationConfigSource &source) {
     configSource_ = &source;
 }
 
-/* One ~32 ms analysis frame spanned ~3 render ticks at the pre-issue-#376 11.1 ms
- * render rate, and the per-tick EMA ran against a held energy value in between —
- * so the historical response was ~3 EMA steps toward each new frame. Running 3
- * steps per NEW frame reproduces that response at any render tick rate and keeps
- * the persisted smoothingCoeff tunable's meaning unchanged. */
-static constexpr uint32_t kEmaStepsPerFrame = 3;
-
-/* The audio thread's analysis cadence (BLOCK_CAPTURE_TIME_MS in sound.cpp) —
- * used only to prorate EMA steps over wall time, so a drift between the two
- * constants costs smoothness, never correctness. */
-static constexpr uint32_t kAudioFrameMs = 32;
-
-/* audio_result_q holds at most 4 frames, so a larger frameCount() delta is a
- * stall artifact or a counter wrap — cap the DELTA (before any multiply: a
- * post-multiply cap is bypassed by uint32 wrap, PR #378 review). */
-static constexpr uint32_t kMaxCatchupFrames = 4;
+/* kEmaStepsPerFrame / kAudioFrameMs / kMaxCatchupFrames moved to the class
+ * (fft_bars_animation.h) so the audio adapter can BUILD_ASSERT them against the
+ * sound pipeline's exported constants (PR #378 review round 9). */
 
 /* Bound on the owed-steps pool, sized to the msgq depth. Worst-case tick cost:
  * 12 steps x 24 buckets = 288 float multiply-adds, ~2-3 us on this M33+FPU at
  * 128 MHz — noise against the 33.3 ms frame budget. */
-static constexpr uint32_t kMaxPendingEmaSteps = kMaxCatchupFrames * kEmaStepsPerFrame;
+static constexpr uint32_t kMaxPendingEmaSteps =
+    FftBarsAnimation::kMaxCatchupFrames * FftBarsAnimation::kEmaStepsPerFrame;
 
 void FftBarsAnimation::init() {
     for (size_t b = 0; b < kMaxDisplayBuckets; b++) {

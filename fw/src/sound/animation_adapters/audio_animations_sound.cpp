@@ -143,6 +143,21 @@ void beat_animation_bind_default_sound_dependencies() {
 #endif
 
 #if defined(CONFIG_ANIMATION_FFT_BARS)
+/* The FFT bars proration is only correct while its mirrors of the sound
+ * pipeline's numbers stay exact — a drifted kAudioFrameMs silently reverts the
+ * fast-render path to the burst-all-owed-steps behavior the proration removed
+ * (only test_frame_steps_prorate_across_fast_ticks guards it, and it pins the
+ * animation-side constant, not the pipeline's), and a drifted kMaxCatchupFrames
+ * mis-sizes the wrap/stall cap. This adapter is the one TU that sees both
+ * headers, so the coupling is asserted here (PR #378 review round 9); the
+ * animation header stays sound-free for the DI suite. */
+BUILD_ASSERT(FftBarsAnimation::kAudioFrameMs == BLOCK_CAPTURE_TIME_MS,
+             "FFT bars prorates EMA steps at the analysis cadence — update its "
+             "kAudioFrameMs alongside BLOCK_CAPTURE_TIME_MS");
+BUILD_ASSERT(FftBarsAnimation::kMaxCatchupFrames == AUDIO_RESULT_QUEUE_DEPTH,
+             "FFT bars caps frame-count deltas at the result queue depth — update its "
+             "kMaxCatchupFrames alongside AUDIO_RESULT_QUEUE_DEPTH");
+
 void fft_bars_animation_bind_default_sound_dependencies() {
     FftBarsAnimation::getInstance()->setAudioSource(sSoundSource);
 }

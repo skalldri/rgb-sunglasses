@@ -206,6 +206,65 @@ ZTEST(core_config_service, test_render_rate_below_display_write_rejected) {
                   "a render write EQUAL to the display rate must be accepted");
 }
 
+ZTEST(core_config_service, test_render_rate_noop_rewrite_accepted_below_display) {
+    const struct bt_gatt_attr *display = find_value_attr(1);
+    const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(display);
+    zassert_not_null(render);
+
+    /* PR #378 review round 9: on an upgraded board the stored render rate is the
+     * legacy 11100 under a 33300 display — the Core Config screen shows 11100,
+     * and the user re-committing that visible value (or an app-side replay
+     * pushing back what it just read) must NOT be rejected: it asks the device
+     * to keep exactly what it already stores. Stage the stored-below-display
+     * state via the legal display-lower/raise dance, then rewrite it. */
+    gatt_write_u32(display, 11100);
+    gatt_write_u32(render, 11100);
+    gatt_write_u32(display, 33300);
+
+    zassert_equal(gatt_write_u32(render, 11100), (ssize_t)sizeof(uint32_t),
+                  "rewriting the stored value must be accepted even below the display rate");
+    zassert_equal(read_u32(render), 11100, "the no-op rewrite must keep the stored value");
+    zassert_within(CoreConfig::getInstance().getRenderRateMs(), 33.3f, 0.001f,
+                   "the effective rate must stay floored at the display rate");
+
+    /* A DIFFERENT below-display value must still be rejected — the no-op
+     * exception must not weaken the new-divergence guard. */
+    zassert_true(gatt_write_u32(render, 12000) < 0,
+                 "a CHANGED below-display value must still be rejected");
+    zassert_equal(read_u32(render), 11100, "the rejected change must roll back");
+
+    gatt_write_u32(display, 11100);  // restore for order-independence (legal order)
+    gatt_write_u32(render, sDefaultRenderRate);
+    gatt_write_u32(display, sDefaultDisplayRate);
+}
+
+ZTEST(core_config_service, test_display_rate_out_of_range_write_rejected) {
+    const struct bt_gatt_attr *display = find_value_attr(1);
+    zassert_not_null(display);
+
+    /* PR #378 review round 9: the display rate was remotely writable with NO
+     * range validation while every render-side clock is now floored at it — one
+     * bad write (0 = spinner; 0xFFFFFFFF = ~71 min/frame) stalled BOTH threads
+     * and persisted. Out-of-range writes are rejected at the GATT layer. */
+    zassert_true(gatt_write_u32(display, 0) < 0, "display rate 0 must be rejected");
+    zassert_true(gatt_write_u32(display, 999) < 0, "a sub-ms display rate must be rejected");
+    zassert_true(gatt_write_u32(display, 1000001) < 0,
+                 "a display rate above 1 s/frame must be rejected");
+    zassert_true(gatt_write_u32(display, 0xFFFFFFFFu) < 0,
+                 "a ~71 min/frame display rate must be rejected");
+    zassert_equal(read_u32(display), sDefaultDisplayRate,
+                  "rejected writes must leave the stored display rate untouched");
+
+    /* Boundaries are inclusive. */
+    zassert_equal(gatt_write_u32(display, 1000), (ssize_t)sizeof(uint32_t),
+                  "the 1 ms floor boundary must be accepted");
+    zassert_equal(gatt_write_u32(display, 1000000), (ssize_t)sizeof(uint32_t),
+                  "the 1 s ceiling boundary must be accepted");
+
+    gatt_write_u32(display, sDefaultDisplayRate);  // restore for order-independence
+}
+
 ZTEST(core_config_service, test_render_rate_stale_default_floored_not_rewritten) {
     const struct bt_gatt_attr *display = find_value_attr(1);
     const struct bt_gatt_attr *render = find_value_attr(2);

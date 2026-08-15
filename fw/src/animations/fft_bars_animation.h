@@ -33,6 +33,43 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
 
+    /* One ~32 ms analysis frame spanned ~3 render ticks at the pre-issue-#376
+     * 11.1 ms render rate, and the per-tick EMA ran against a held energy value
+     * in between — so the historical response was ~3 EMA steps toward each new
+     * frame. Running 3 steps per NEW frame reproduces that response at any
+     * render tick rate and keeps the persisted smoothingCoeff tunable's meaning
+     * unchanged.
+     *
+     * Known approximation (PR #378 review round 9): the audio source is
+     * last-frame-wins for bucket energies, so when one tick observes MULTIPLE
+     * new frames, all of their deposited steps run toward the NEWEST frame's
+     * energy — 2 frames give 6 steps toward E2 (a 0.88 weight at coeff 0.3)
+     * instead of 3 toward E1 then 3 toward E2 (0.66), and E1 is discarded. At
+     * 33 ms ticks against 32 ms frames roughly 1 tick in 32 (~1 Hz) delivers
+     * two frames, so the bars get a slightly sharper snap on that cadence.
+     * Accepted: the older energy is genuinely unrecoverable without per-frame
+     * buffering, and capping the deposit at one frame per tick would starve
+     * the pool during real catch-up. */
+    static constexpr uint32_t kEmaStepsPerFrame = 3;
+
+    /* The audio thread's analysis cadence. A hand copy of sound.cpp's
+     * BLOCK_CAPTURE_TIME_MS — but NOT an approximation-tolerant one: the
+     * proration only works because the withdrawal rate (kEmaStepsPerFrame per
+     * kAudioFrameMs of wall time) matches the deposit rate (kEmaStepsPerFrame
+     * per real frame). If the capture time changed without this, the pool
+     * would drain fully on every arrival tick — silently reverting to the
+     * exact burst behavior the proration exists to remove. The audio adapter
+     * BUILD_ASSERTs the two equal (audio_animations_sound.cpp, PR #378 review
+     * round 9); this header stays sound-free so the DI suite compiles without
+     * the audio stack. */
+    static constexpr uint32_t kAudioFrameMs = 32;
+
+    /* audio_result_q holds at most this many frames, so a larger frameCount()
+     * delta is a stall artifact or a counter wrap — cap the DELTA (before any
+     * multiply: a post-multiply cap is bypassed by uint32 wrap, PR #378
+     * review). Mirrors the msgq depth; BUILD_ASSERTed by the adapter too. */
+    static constexpr uint32_t kMaxCatchupFrames = 4;
+
    private:
     AnimationAudioSource *audioSource_ = nullptr;
     FftVisualizationConfigSource *configSource_ = nullptr;

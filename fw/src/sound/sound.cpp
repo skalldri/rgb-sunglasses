@@ -237,7 +237,7 @@ static float agc_compute_rms(const int16_t *pcm, uint32_t n) {
 
 LOG_MODULE_REGISTER(sound);
 
-K_MSGQ_DEFINE(audio_result_q, sizeof(struct audio_analysis_result), 4, 4);
+K_MSGQ_DEFINE(audio_result_q, sizeof(struct audio_analysis_result), AUDIO_RESULT_QUEUE_DEPTH, 4);
 
 #if defined(CONFIG_APP_AUDIO_DEBUG)
 /* ── Audio tap (issue #264 debugging environment) ────────────────────────────
@@ -374,7 +374,9 @@ const struct device *pdm0 = DEVICE_DT_GET(DT_NODELABEL(pdm0));
 #define BYTES_PER_SAMPLE sizeof(int16_t)  // (SAMPLE_BIT_WIDTH / 8) would be better
 
 // How much time (in ms) is captured in each block?
-#define BLOCK_CAPTURE_TIME_MS 32
+// BLOCK_CAPTURE_TIME_MS now lives in sound.h (PR #378 review round 9): the FFT
+// bars proration depends on it numerically, so it is exported and
+// BUILD_ASSERTed against the animation's mirror in the audio adapter.
 
 // How many audio channels are we capturing? Nordic supports 1 or 2
 // We only have 1 mic, so 1
