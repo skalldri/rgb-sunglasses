@@ -12,7 +12,10 @@ stimulus is whatever actually happened on a head.
 Input is what `sound mic record_wav <secs> <path>` leaves on /NAND::
 
     <path>            16 kHz mono WAV
-    <path>.imu.csv    "#IMU scale=..." header, then I,<ms>,<seq>,ax,ay,az,gx,gy,gz
+    <path>.csv        combined capture CSV: "#PARAMS"/"#IMU" headers, then interleaved
+                      I,<ms>,<seq>,ax,ay,az,gx,gy,gz and D,... analysis rows. Only the
+                      I-rows are read here; beat_lab reads the D-rows from the same file.
+                      (<path>.imu.csv, the older split layout, is still accepted.)
 
 Output is a scenario plus its audio asset:
 
@@ -146,11 +149,11 @@ def build_scenario(name, description, duration_ms, frames, beat_response):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("wav", type=Path, help="captured WAV (the .imu.csv sits beside it)")
+    parser.add_argument("wav", type=Path, help="captured WAV (the .csv sidecar sits beside it)")
     parser.add_argument("--name", help="scenario name (default: the WAV's stem)")
     parser.add_argument("--description", help="scenario description — say what was ACTUALLY done")
     parser.add_argument(
-        "--imu-csv", type=Path, help="override the sidecar path (default: <wav>.imu.csv)"
+        "--imu-csv", type=Path, help="override the sidecar path (default: <wav>.csv, else <wav>.imu.csv)"
     )
     parser.add_argument(
         "--hz", type=float, default=12.5, help="IMU keyframe rate after decimation (0 = keep all)"
@@ -170,7 +173,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     name = args.name or args.wav.stem
-    imu_csv = args.imu_csv or Path(str(args.wav) + ".imu.csv")
+    # "<wav>.csv" is the current layout: one file carrying the I-rows this
+    # parser wants interleaved with the D-rows beat_lab wants, because the
+    # capture can only hold two FatFs handles (see the sidecar comment in
+    # fw/src/sound/sound.cpp). "<wav>.imu.csv" is the older split layout and is
+    # still accepted so previously-collected captures keep converting.
+    imu_csv = args.imu_csv
+    if imu_csv is None:
+        combined = Path(str(args.wav) + ".csv")
+        legacy = Path(str(args.wav) + ".imu.csv")
+        imu_csv = combined if combined.is_file() else legacy
 
     if not args.wav.is_file():
         parser.error(f"{args.wav} not found")

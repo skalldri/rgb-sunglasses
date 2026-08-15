@@ -164,8 +164,8 @@ TOOLS = [
         description=(
             "Record a REAL audio + IMU capture for use as a simulator scenario "
             "(`sound mic record_wav`, which also writes a synchronised .imu.csv "
-            "sidecar and, on a build with CONFIG_APP_CAPTURE_AUDIO_SIDECAR, a "
-            "per-frame .audio.csv of the analysis the DSP computed for those "
+            "sidecar; on a build with CONFIG_APP_CAPTURE_AUDIO_SIDECAR the same file also "
+            "carries a per-frame D-row of the analysis the DSP computed for those "
             "samples). All streams are timestamped from the same t0 by the one "
             "capture loop, so they need no host-side alignment. Freezes AGC gain "
             "during the capture so the stimulus is reproducible. Afterwards, pull "
@@ -182,7 +182,7 @@ TOOLS = [
                     "type": "string",
                     "description": (
                         "capture name; files land at "
-                        "/NAND:/<name>.wav (+.imu.csv, +.audio.csv)"
+                        "/NAND:/<name>.wav (+ a combined .csv sidecar)"
                     ),
                 },
                 "gain": {
@@ -418,7 +418,10 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
     audio = re.search(r"Audio sidecar: (\d+) frames", output)
     result = {
         "wav_path": path,
-        "imu_csv_path": path + ".imu.csv",
+        # One combined CSV now: the capture can hold only two FatFs handles, so
+        # the IMU and analysis rows share a file (see fw/src/sound/sound.cpp).
+        # Both host parsers skip the other's rows, so this one path serves both.
+        "imu_csv_path": path + ".csv",
         "imu_samples": int(imu.group(1)) if imu else 0,
         "agc_restored": restored,
     }
@@ -431,7 +434,7 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
     # never written — worse than reporting none, since every consumer
     # downstream then fails on a missing path.
     if audio:
-        result["analysis_csv_path"] = path + ".audio.csv"
+        result["analysis_csv_path"] = path + ".csv"
         result["analysis_frames"] = int(audio.group(1))
     elif "io retries" in output:
         result["analysis_csv_path"] = path + ".csv"

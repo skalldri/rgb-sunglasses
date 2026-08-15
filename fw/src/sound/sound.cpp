@@ -1016,6 +1016,38 @@ static size_t tap_params_format(char *buf, size_t cap) {
 }
 #endif /* APP_AUDIO_TAP_FORMAT_USED */
 
+#if defined(CONFIG_APP_CAPTURE) || defined(CONFIG_APP_AUDIO_DEBUG)
+/* Write len bytes at absolute offset `pos`, retrying across transient disk errors.
+ * Sustained recording occasionally hits a QSPI-level hiccup (hardware-observed:
+ * fs_write returns -EIO after 12-20 s of continuous writes; the nordic,qspi-nor
+ * driver maps an internal busy/timeout into a failed WREN → FatFS FR_DISK_ERR).
+ * FatFS then latches a sticky error flag on the FIL object, so every later
+ * fs_write/fs_seek fails instantly — the only way to continue is close + reopen
+ * (clears the flag) + seek back to the tracked offset. The tap queue holds ~512 ms
+ * of frames, so a brief retry pause need not drop anything. */
+static int tap_write_at_retry(struct fs_file_t *f, const char *path, off_t pos,
+                              const void *buf, size_t len, uint32_t *io_retries) {
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0 || fs_tell(f) != pos) {
+            if (fs_seek(f, pos, FS_SEEK_SET) < 0) {
+                goto reopen;
+            }
+        }
+        if (fs_write(f, buf, len) == (ssize_t)len) {
+            return 0;
+        }
+    reopen:
+        (*io_retries)++;
+        fs_close(f);
+        k_msleep(50);
+        if (fs_open(f, path, FS_O_WRITE) < 0) {
+            return -EIO;
+        }
+    }
+    return -EIO;
+}
+#endif /* CONFIG_APP_CAPTURE || CONFIG_APP_AUDIO_DEBUG */
+
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
 /* Audio-analysis sidecar: "<wav path>.audio.csv", written by the capture loop
  * from capture_analysis_q — the analysis the DSP thread computed for the very
@@ -1053,11 +1085,39 @@ BUILD_ASSERT(AUDIO_CSV_LINE_MAX >=
                  2 + 10 + 3 + 2 + 9 * (1 + 4 * AUDIO_NUM_BANDS + AUDIO_NUM_DISPLAY_BUCKETS) + 1,
              "AUDIO_CSV_LINE_MAX too small for one D-line with buckets");
 
+/* ONE file for both streams, not one per stream — this is a correctness
+ * constraint, not tidiness. Zephyr hardcodes `FF_FS_TINY 1` in
+ * zephyr_fatfs_config.h (in the block commented "no Kconfig options", and the
+ * NCS tree is off-limits per fw/CLAUDE.md), so every open FIL shares ONE sector
+ * window in the FATFS object instead of owning a buffer. Writing WAV + IMU +
+ * analysis meant three handles thrashing that single window on a volume with a
+ * single FAT copy and no mirror to recover from. Folding the two CSVs into one
+ * file puts the capture back at two open handles — exactly what it used before
+ * the analysis sidecar existed, which is the configuration this path has always
+ * been proven at. It also hands back ~4.2 KB of RAM, since the two 4 KB batch
+ * buffers become one.
+ *
+ * The combined stream needs no new host parser: fw/tools/beat_lab/frames.py
+ * consumes only `D,`/`#PARAMS`/`#DONE` and skips everything else, and
+ * capture_to_scenario.py's parse_imu_csv() consumes only `I,` (reading `scale=`
+ * off `#IMU`) and skips everything else. Both already tolerate a mixed stream
+ * on purpose, so each reads this file correctly while ignoring the other's
+ * rows. */
 struct audio_sidecar {
     struct fs_file_t file;
     bool open;
     size_t len;
-    uint32_t frames;
+    uint32_t frames;   /* analysis rows, one per WAV block */
+    /* Both needed to survive a transient QSPI write error: FatFS latches a
+     * sticky error on the FIL, so recovery means close + reopen (by path) and
+     * seek back to where we were (the handle's own position is lost). */
+    char path[96];
+    off_t pos;
+    uint32_t *io_retries;
+#if defined(CONFIG_IMU)
+    int64_t t0_ms;     /* same t0 the WAV starts at, so I-rows share its timebase */
+    uint32_t samples;  /* IMU rows */
+#endif
 };
 
 static void audio_sidecar_flush(struct audio_sidecar *sc, bool final) {
@@ -1067,13 +1127,21 @@ static void audio_sidecar_flush(struct audio_sidecar *sc, bool final) {
          * imu_sidecar_flush(): FatFs returns FR_OK with a short count on a
          * nearly full volume, and treating that as written would splice the
          * next row onto a truncated one. Give the handle back immediately; a
-         * capture holds three of the four FatFs slots and leaking one starves
+         * capture holds two of the four FatFs slots and leaking one starves
          * GLIM loads, extension loads and DFU staging until reboot. */
-        if (fs_write(&sc->file, s_audio_batch, take) != (ssize_t)take) {
+        /* Retry across a transient QSPI hiccup rather than retiring the file on
+         * the first -EIO. That error is a documented, recoverable fact of
+         * sustained recording on this flash (see tap_write_at_retry), and
+         * giving up on it is what left a capture with a CSV shorter than its
+         * own directory entry claims. Only a failure that survives close +
+         * reopen + reseek retires the sidecar. */
+        if (tap_write_at_retry(&sc->file, sc->path, sc->pos, s_audio_batch, take,
+                               sc->io_retries) != 0) {
             fs_close(&sc->file);
             sc->open = false; /* stop trying; the WAV is the primary artifact */
             return;
         }
+        sc->pos += (off_t)take;
         sc->len -= take;
         if (sc->len > 0) {
             memmove(s_audio_batch, &s_audio_batch[take], sc->len);
@@ -1081,32 +1149,67 @@ static void audio_sidecar_flush(struct audio_sidecar *sc, bool final) {
     }
 }
 
-static int audio_sidecar_open(struct audio_sidecar *sc, const char *wav_path) {
-    char path[96];
-    (void)snprintf(path, sizeof(path), "%s.audio.csv", wav_path);
+static int audio_sidecar_open(struct audio_sidecar *sc, const char *wav_path, int64_t t0_ms,
+                              uint32_t *io_retries) {
+    int path_len = snprintf(sc->path, sizeof(sc->path), "%s.csv", wav_path);
+    if (path_len < 0 || (size_t)path_len >= sizeof(sc->path)) {
+        return -EINVAL; /* truncated: reopen-on-retry would target the wrong file */
+    }
 
     fs_file_t_init(&sc->file);
-    int ret = fs_open(&sc->file, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
+    int ret = fs_open(&sc->file, sc->path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
     if (ret < 0) {
         return ret;
     }
     sc->open = true;
     sc->len = 0;
     sc->frames = 0;
+    sc->pos = 0;
+    sc->io_retries = io_retries;
+#if defined(CONFIG_IMU)
+    sc->t0_ms = t0_ms;
+    sc->samples = 0;
+#else
+    (void)t0_ms;
+#endif
 
-    /* The #PARAMS snapshot, space-padded to a full sector so every subsequent
-     * chunk lands aligned — same trick as the IMU sidecar's header line. */
+    /* Both header lines, then space padding out to a full sector so every
+     * subsequent chunk write lands aligned (a misaligned flush pays the
+     * FF_FS_TINY shared-window RMW penalty and stalls the drain loop long
+     * enough to drop audio frames). One '\n' separates them and one terminates
+     * the block, so each header is its own line to the parsers that want it. */
     memset(s_audio_batch, ' ', AUDIO_CSV_CHUNK);
     size_t n = tap_params_format(s_audio_batch, AUDIO_CSV_CHUNK - 1);
     if (n < AUDIO_CSV_CHUNK - 1) {
-        s_audio_batch[n] = ' '; /* overwrite the NUL snprintf left behind */
+        s_audio_batch[n] = '\n';
+        n++;
     }
+#if defined(CONFIG_IMU)
+    int m = snprintf(&s_audio_batch[n], AUDIO_CSV_CHUNK - 1 - n,
+                     "#IMU scale=%d cols=ms,seq,ax,ay,az,gx,gy,gz units=mm/s2,mrad/s",
+                     IMU_CSV_SCALE);
+    if (m > 0 && (size_t)m < AUDIO_CSV_CHUNK - 1 - n) {
+        s_audio_batch[n + m] = ' '; /* overwrite the NUL snprintf left behind */
+    }
+#endif
     s_audio_batch[AUDIO_CSV_CHUNK - 1] = '\n';
-    if (fs_write(&sc->file, s_audio_batch, AUDIO_CSV_CHUNK) != (ssize_t)AUDIO_CSV_CHUNK) {
+    if (tap_write_at_retry(&sc->file, sc->path, 0, s_audio_batch, AUDIO_CSV_CHUNK,
+                           sc->io_retries) != 0) {
         fs_close(&sc->file);
         sc->open = false;
         return -EIO;
     }
+    sc->pos = AUDIO_CSV_CHUNK;
+#if defined(CONFIG_IMU)
+    /* Drop whatever the 25 Hz IMU tap queued before this capture existed.
+     * Those samples predate t0, so without this they are written with NEGATIVE
+     * millisecond stamps and stretch the track back in time — measured before
+     * this line was restored: a 15 s capture spanned -10.71..15.22 s and its
+     * apparent rate read 14.7 Hz instead of 25. The analysis tap is purged by
+     * the caller instead (see capture_taps_purge); this one has no such
+     * pairing constraint, so it is purged here where t0 is set. */
+    k_msgq_purge(&imu_tap_q);
+#endif
     /* Deliberately does NOT purge capture_analysis_q — the caller purges it
      * together with capture_pcm_q, which is the only way to start the two
      * streams in step (see capture_taps_purge). */
@@ -1156,6 +1259,39 @@ static void audio_sidecar_drain(struct audio_sidecar *sc) {
     if (sc->len >= AUDIO_CSV_CHUNK) {
         audio_sidecar_flush(sc, false);
     }
+
+#if defined(CONFIG_IMU)
+    /* IMU rows go into the SAME file, interleaved between the analysis rows.
+     * Greedy here, unlike the analysis row above: I-rows carry their own
+     * millisecond stamp so they need no positional pairing, and draining
+     * whatever the 25 Hz producer has queued is what keeps its 8-deep tap from
+     * overflowing. `open` is re-checked every iteration because a flush failing
+     * mid-loop clears it WITHOUT consuming the buffer, after which the next row
+     * would be formatted past the end of a buffer only one line longer than the
+     * chunk. */
+    struct imu_tap_sample s;
+    while (sc->open && k_msgq_get(&imu_tap_q, &s, K_NO_WAIT) == 0) {
+        const struct imu_analysis_result r = s.result;
+        int len = snprintf(&s_audio_batch[sc->len], IMU_CSV_LINE_MAX,
+                           "I,%d,%u,%d,%d,%d,%d,%d,%d\n",
+                           (int)((int64_t)s.uptime_ms - sc->t0_ms), r.seq,
+                           (int)(r.accel_x * IMU_CSV_SCALE), (int)(r.accel_y * IMU_CSV_SCALE),
+                           (int)(r.accel_z * IMU_CSV_SCALE), (int)(r.gyro_x * IMU_CSV_SCALE),
+                           (int)(r.gyro_y * IMU_CSV_SCALE), (int)(r.gyro_z * IMU_CSV_SCALE));
+        /* snprintf returns what it WOULD have written, so a truncated line
+         * would advance len past the bytes actually stored and shift every
+         * following line — silently corrupting the file rather than
+         * overflowing. A sane sample cannot reach 96 bytes; a garbage one from
+         * a sensor glitch could, so drop it instead of writing a half-line. */
+        if (len > 0 && len < IMU_CSV_LINE_MAX) {
+            sc->len += (size_t)len;
+            sc->samples++;
+        }
+        if (sc->len >= AUDIO_CSV_CHUNK) {
+            audio_sidecar_flush(sc, false);
+        }
+    }
+#endif
 }
 
 static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *shell,
@@ -1170,13 +1306,14 @@ static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *sh
      * MCP plugin keys on "Audio sidecar: N frames" to decide the file is there
      * and worth parsing, so a truncated one must not produce it. */
     if (!sc->open) {
-        shell_warn(shell, "Audio sidecar write failed - analysis CSV is incomplete");
+        shell_warn(shell, "Capture CSV write failed - the file is incomplete");
         return;
     }
     char trailer[64];
     int n = snprintf(trailer, sizeof(trailer), "#DONE frames=%u dropped=%u\n", sc->frames, dropped);
-    if (n > 0) {
-        (void)fs_write(&sc->file, trailer, (size_t)n);
+    if (n > 0 &&
+        tap_write_at_retry(&sc->file, sc->path, sc->pos, trailer, (size_t)n, sc->io_retries) == 0) {
+        sc->pos += n;
     }
     fs_close(&sc->file);
     sc->open = false;
@@ -1195,12 +1332,16 @@ static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *sh
     uint32_t lost = (uint32_t)atomic_get(&s_capture_analysis_dropped);
     if (sc->frames != blocks || lost != 0) {
         shell_warn(shell,
-                   "Audio sidecar MISALIGNED: %u rows for %u blocks written (%u rows lost) - "
+                   "Capture CSV MISALIGNED: %u rows for %u blocks written (%u rows lost) - "
                    "do NOT pair with the WAV",
                    sc->frames, blocks, lost);
         return;
     }
+#if defined(CONFIG_IMU)
+    shell_print(shell, "Audio sidecar: %u frames, %u IMU samples", sc->frames, sc->samples);
+#else
     shell_print(shell, "Audio sidecar: %u frames", sc->frames);
+#endif
 }
 #endif /* CONFIG_APP_CAPTURE_AUDIO_SIDECAR */
 
@@ -1216,35 +1357,6 @@ static size_t tap_frame_format(const struct audio_tap_frame *f, bool buckets, ch
 static struct audio_tap_frame s_tap_drain;
 static char s_tap_line[512];
 
-/* Write len bytes at absolute offset `pos`, retrying across transient disk errors.
- * Sustained recording occasionally hits a QSPI-level hiccup (hardware-observed:
- * fs_write returns -EIO after 12-20 s of continuous writes; the nordic,qspi-nor
- * driver maps an internal busy/timeout into a failed WREN → FatFS FR_DISK_ERR).
- * FatFS then latches a sticky error flag on the FIL object, so every later
- * fs_write/fs_seek fails instantly — the only way to continue is close + reopen
- * (clears the flag) + seek back to the tracked offset. The tap queue holds ~512 ms
- * of frames, so a brief retry pause need not drop anything. */
-static int tap_write_at_retry(struct fs_file_t *f, const char *path, off_t pos,
-                              const void *buf, size_t len, uint32_t *io_retries) {
-    for (int attempt = 0; attempt < 3; attempt++) {
-        if (attempt > 0 || fs_tell(f) != pos) {
-            if (fs_seek(f, pos, FS_SEEK_SET) < 0) {
-                goto reopen;
-            }
-        }
-        if (fs_write(f, buf, len) == (ssize_t)len) {
-            return 0;
-        }
-    reopen:
-        (*io_retries)++;
-        fs_close(f);
-        k_msleep(50);
-        if (fs_open(f, path, FS_O_WRITE) < 0) {
-            return -EIO;
-        }
-    }
-    return -EIO;
-}
 
 /* record_wav write batching. The NAND FAT volume has 4096-byte sectors; writing one
  * 1024 B PCM block (and a ~170 B CSV line to a SECOND file) per 32 ms frame forces a
@@ -1802,16 +1914,18 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
      * what the app's Remaining S readout and the limit clamp are derived from. */
     struct fs_statvfs vfs;
     if (fs_statvfs("/NAND:", &vfs) == 0) {
-#if defined(CONFIG_IMU)
-        uint64_t per_frame = BLOCK_SIZE + 56;
-        uint64_t overhead = WAV_DATA_OFFSET + IMU_CSV_CHUNK + 64 * 1024;
-#else
-        uint64_t per_frame = BLOCK_SIZE; /* no IMU sidecar on this build */
+        /* One CSV carries both streams now, so there is one padded header
+         * sector to account for, not two. */
+        uint64_t per_frame = BLOCK_SIZE;
         uint64_t overhead = WAV_DATA_OFFSET + 64 * 1024;
+#if defined(CONFIG_IMU)
+        per_frame += 56; /* ~56 B/frame of I-rows at 25 Hz against 31.25 fps */
 #endif
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
-        per_frame += 360;
+        per_frame += 360; /* one 41-field D-line per block */
         overhead += AUDIO_CSV_CHUNK;
+#elif defined(CONFIG_IMU)
+        overhead += IMU_CSV_CHUNK;
 #endif
         uint64_t free_bytes = (uint64_t)vfs.f_bfree * vfs.f_frsize;
         uint64_t needed = (uint64_t)total_blocks * per_frame + overhead;
@@ -1827,6 +1941,10 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
             return -ENOSPC;
         }
     }
+
+    /* Shared by the WAV and the CSV so one figure reports how much transient
+     * flash trouble the whole capture rode out. */
+    uint32_t io_retries = 0;
 
     struct fs_file_t f;
     fs_file_t_init(&f);
@@ -1870,19 +1988,22 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
         return -EIO;
     }
 
-#if defined(CONFIG_IMU)
+#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
+    /* ONE sidecar carrying both the analysis and the IMU rows, so a capture
+     * holds two FatFs handles rather than three — see the struct's comment for
+     * why that matters under FF_FS_TINY. Non-fatal if it cannot be opened: the
+     * WAV is the primary artifact and a capture without it is still a capture.
+     * Opened before the purge so its #PARAMS header describes the parameters in
+     * force at t=0, and given the same t0 the WAV starts at so the I-rows share
+     * its timebase by construction. */
+    struct audio_sidecar audio_sc = {};
+    if (audio_sidecar_open(&audio_sc, path, k_uptime_get(), &io_retries) < 0) {
+        shell_warn(shell, "Capture CSV could not be opened; recording audio only");
+    }
+#elif defined(CONFIG_IMU)
     struct imu_sidecar imu_sc = {};
     if (imu_sidecar_open(&imu_sc, path, k_uptime_get()) < 0) {
         shell_warn(shell, "IMU sidecar could not be opened; recording audio only");
-    }
-#endif
-#if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
-    /* Non-fatal, like the IMU one: the WAV is the primary artifact and a
-     * capture without the analysis is still a capture. Opened before the purge
-     * so its #PARAMS header describes the parameters in force at t=0. */
-    struct audio_sidecar audio_sc = {};
-    if (audio_sidecar_open(&audio_sc, path) < 0) {
-        shell_warn(shell, "Audio sidecar could not be opened; recording without analysis");
     }
 #endif
 
@@ -1901,6 +2022,9 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
     uint32_t timeouts = 0;
     bool io_error = false;
     bool stopped_early = false;
+    /* Absolute offset, because recovering from a transient -EIO means closing
+     * and reopening the file, which loses the handle's own position. */
+    off_t wav_pos = WAV_DATA_OFFSET;
 
     while (blocks_captured < total_blocks) {
         if (record_stop_requested()) {
@@ -1925,21 +2049,26 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
         blocks_captured++;
         batched++;
 
-#if defined(CONFIG_IMU)
-        imu_sidecar_drain(&imu_sc);
-#endif
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
-        audio_sidecar_drain(&audio_sc);
+        audio_sidecar_drain(&audio_sc); /* drains the IMU tap too */
+#elif defined(CONFIG_IMU)
+        imu_sidecar_drain(&imu_sc);
 #endif
 
         if (batched == CAPTURE_BATCH_BLOCKS) {
-            ssize_t written = fs_write(&f, s_capture_batch, sizeof(s_capture_batch));
-            if (written != (ssize_t)sizeof(s_capture_batch)) {
-                shell_error(shell, "PCM write failed: %d", (int)written);
+            /* A single -EIO here used to abort the whole capture. It is a
+             * transient QSPI hiccup that close + reopen + reseek clears — the
+             * rich tap has ridden it out this way since it was first observed;
+             * this path simply never inherited the helper. */
+            if (tap_write_at_retry(&f, path, wav_pos, s_capture_batch, sizeof(s_capture_batch),
+                                   &io_retries) != 0) {
+                shell_error(shell, "PCM write failed at block %u (after retries)",
+                            blocks_captured);
                 io_error = true;
                 break;
             }
-            total_bytes += (uint32_t)written;
+            wav_pos += (off_t)sizeof(s_capture_batch);
+            total_bytes += (uint32_t)sizeof(s_capture_batch);
             batched = 0;
         }
     }
@@ -1947,9 +2076,11 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
     /* Flush the partial batch so an early stop keeps every block it captured. */
     if (batched > 0 && !io_error) {
         size_t tail = batched * AUDIO_FFT_SIZE * sizeof(int16_t);
-        ssize_t written = fs_write(&f, s_capture_batch, tail);
-        if (written == (ssize_t)tail) {
-            total_bytes += (uint32_t)written;
+        if (tap_write_at_retry(&f, path, wav_pos, s_capture_batch, tail, &io_retries) == 0) {
+            wav_pos += (off_t)tail;
+            total_bytes += (uint32_t)tail;
+        } else {
+            shell_error(shell, "PCM write failed on final flush");
         }
     }
 
@@ -1958,15 +2089,19 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
     /* Patch the two sizes in place rather than rewriting the sector: file_size at
      * offset 4, data_size in the data-chunk header at WAV_DATA_OFFSET - 4. */
     uint32_t file_size = total_bytes + WAV_DATA_OFFSET - 8;
-    fs_seek(&f, 4, FS_SEEK_SET);
-    fs_write(&f, &file_size, sizeof(file_size));
-    fs_seek(&f, WAV_DATA_OFFSET - 4, FS_SEEK_SET);
-    fs_write(&f, &total_bytes, sizeof(total_bytes));
+    bool patch_ok =
+        tap_write_at_retry(&f, path, 4, &file_size, sizeof(file_size), &io_retries) == 0;
+    patch_ok = tap_write_at_retry(&f, path, WAV_DATA_OFFSET - 4, &total_bytes,
+                                  sizeof(total_bytes), &io_retries) == 0 &&
+               patch_ok;
+    if (!patch_ok) {
+        shell_error(shell, "WAV header patch failed - the file will not parse as WAV");
+    }
     fs_close(&f);
 
     uint32_t dropped = (uint32_t)atomic_get(&s_capture_dropped);
 
-#if defined(CONFIG_IMU)
+#if !defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) && defined(CONFIG_IMU)
     imu_sidecar_close(&imu_sc, shell);
 #endif
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
@@ -1985,15 +2120,15 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
 #endif
 
     if (io_error) {
-        shell_error(shell, "ABORTED: %u of %u blocks saved to %s", blocks_captured, total_blocks,
-                    path);
+        shell_error(shell, "ABORTED: %u of %u blocks saved to %s (%u io retries)",
+                    blocks_captured, total_blocks, path, io_retries);
         return -EIO;
     }
     if (stopped_early) {
         shell_print(shell, "Stopped early at %u of %u blocks", blocks_captured, total_blocks);
     }
-    shell_print(shell, "Wrote %u bytes of PCM to %s (%u blocks, %u dropped)", total_bytes, path,
-                blocks_captured, dropped);
+    shell_print(shell, "Wrote %u bytes of PCM to %s (%u blocks, %u dropped, %u io retries)",
+                total_bytes, path, blocks_captured, dropped, io_retries);
     if (dropped > 0) {
         shell_warn(shell, "%u blocks dropped - raise CONFIG_APP_CAPTURE_QUEUE_FRAMES", dropped);
     }
