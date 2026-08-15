@@ -69,6 +69,8 @@ def _persisted_rate_ms_x1000(rgb: RgbShell, key: str, default: int = 33300) -> i
     precondition and surface as a misleading held-frames failure instead
     (PR #381 review)."""
     out = rgb.exec(f"settings read {key}", check=False)
+    hexdump_seen = False
+    error_seen = False
     for line in out:
         s = line.strip()
         m = re.match(r"^[0-9a-fA-F]+:\s+((?:[0-9a-fA-F]{2}\s+)+)", s)
@@ -76,13 +78,20 @@ def _persisted_rate_ms_x1000(rgb: RgbShell, key: str, default: int = 33300) -> i
             b = bytes(int(x, 16) for x in m.group(1).split())
             if len(b) >= 4:
                 return int.from_bytes(b[:4], "little")
+            hexdump_seen = True
         # Zephyr settings shell not-found/read-error shapes ("not found",
         # "Failed to read...", "err -2/-ENOENT") = genuinely not persisted.
+        # Only believed after scanning EVERY line and seeing no hexdump: an
+        # untagged printk from another subsystem containing "err"/"failed"
+        # must not short-circuit a real value into "not persisted"
+        # (PR #381 review).
         if re.search(r"not found|failed|err(or)?\b|-2\b|ENOENT", s, re.IGNORECASE):
-            return default
+            error_seen = True
+    if error_seen and not hexdump_seen:
+        return default
     pytest.fail(
-        f"unparseable `settings read {key}` output (neither a hex dump nor a "
-        f"not-found error) — cannot verify the divider precondition: {out!r}"
+        f"unparseable `settings read {key}` output (neither a 4-byte hex dump "
+        f"nor a not-found error) — cannot verify the divider precondition: {out!r}"
     )
 
 

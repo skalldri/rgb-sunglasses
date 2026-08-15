@@ -311,16 +311,24 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // frames (see the wait at the bottom of the loop), so its cadence is
         // slaved to the display thread's clock and every display push samples
         // exactly one fresh frame. core/render_thread_rate_ms therefore acts as
-        // a DIVIDER: N = round(render / display), and getRenderRateMs()'s floor
-        // at the display interval guarantees N >= 1. The dt handed to the
-        // animations below is the true nominal inter-render interval,
-        // N * display interval — at the defaults N == 1 and dt is 33.3 ms,
-        // exactly as before.
+        // a DIVIDER: N = CEIL(render / display), so the effective render
+        // interval is never SHORTER than requested — render_thread_rate_ms is
+        // the one knob trading frame rate against render/sandbox CPU, and
+        // rounding would silently snap any 1.0-1.5x setting back up to the full
+        // display rate (PR #381 review). getRenderRateMs()'s floor guarantees
+        // N >= 1. The dt handed to the animations below is the true nominal
+        // inter-render interval, N * display interval — at the defaults N == 1
+        // and dt is 33.3 ms, exactly as before.
         const float displayIntervalMs = getPatternConfig().getDisplayRateMs();
         uint32_t framesPerRender = 1;
         if (displayIntervalMs > 0.0f) {
-            framesPerRender =
-                (uint32_t)((getPatternConfig().getRenderRateMs() / displayIntervalMs) + 0.5f);
+            const float ratio = getPatternConfig().getRenderRateMs() / displayIntervalMs;
+            framesPerRender = (uint32_t)ratio;
+            // Ceiling with a small epsilon so exact multiples (ratio 2.0 stored
+            // as 1.999... or 2.000...1 in float) do not gain a spurious frame.
+            if ((float)framesPerRender < ratio - 0.001f) {
+                framesPerRender++;
+            }
             if (framesPerRender < 1) {
                 framesPerRender = 1;
             }
@@ -429,27 +437,39 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
                 lastRenderOverrunLogMs = nowMs;
                 renderOverrunsSinceLog = 0;
             }
-            // No extra sleep on overrun: the wait below is the yield point. If the
-            // display consumed our frame while we were still rendering, the take
-            // returns immediately and the loop catches up — which is correct, the
-            // display is about to want a fresh frame. Consecutive immediate takes
-            // are impossible faster than the display's own gives (max-count-1).
+            // No extra sleep on overrun: the wait below is the yield point. At
+            // N == 1, if the display consumed our frame while we were still
+            // rendering, the take returns immediately and the loop catches up —
+            // which is correct, the display is about to want a fresh frame.
+            // Consecutive immediate takes are impossible faster than the
+            // display's own gives (max-count-1). Known N > 1 caveat (PR #381
+            // review): gives that land DURING an overlong render coalesce into
+            // one credit, so a render that spans several display periods still
+            // waits N-1 more periods afterwards — the effective interval can
+            // stretch past N*display by the render's own overshoot. Accepted:
+            // the alternative (a count-N semaphore) would let the render burst
+            // to catch up after a stall, which is worse than briefly pacing
+            // slower than a non-default divider asked for.
         }
 
         // Pace off the display clock (issue #379): wait until the display thread
         // has consumed N frames, then render the next one. Bounded timeout, never
         // K_FOREVER — the display thread exits at boot when the LED strip devices
         // are not ready, and this thread must keep ticking (shuffle, indicators,
-        // extension activation) rather than wedge; on timeout the loop proceeds,
-        // effectively self-paced at ~2 display periods, and the NEXT iteration's
-        // dt tracks wall time (lastWaitTimedOut above). A timeout can also fire
-        // during a genuine multi-hundred-ms display stall (#312 measured ~1.5 s
-        // of cooperative-band starvation) — that is benign: dt stays truthful,
-        // the WARN is rate-limited, and the max-count-1 semaphore re-syncs the
-        // pacing on the display's next give.
+        // extension activation) rather than wedge; on timeout the loop breaks and
+        // proceeds, and the NEXT iteration's dt tracks wall time
+        // (lastWaitTimedOut above). The timeout is scaled by N so the degraded
+        // path self-paces at ~2x the CONFIGURED render interval — a per-display-
+        // period timeout with the break would render dividers' frames N times too
+        // fast, burning render/sandbox CPU on frames nobody pushes (PR #381
+        // review). A timeout can also fire during a genuine multi-hundred-ms
+        // display stall (#312 measured ~1.5 s of cooperative-band starvation) —
+        // that is benign: dt stays truthful, the WARN is rate-limited, and the
+        // max-count-1 semaphore re-syncs the pacing on the display's next give.
         const float timeoutBaseMs =
             (displayIntervalMs > 0.0f) ? displayIntervalMs : getPatternConfig().getRenderRateMs();
-        const int32_t waitTimeoutMs = (int32_t)(2.0f * timeoutBaseMs) + 5;
+        const int32_t waitTimeoutMs =
+            (int32_t)(2.0f * (float)framesPerRender * timeoutBaseMs) + 5;
         lastWaitTimedOut = false;
         for (uint32_t consumed = 0; consumed < framesPerRender; consumed++) {
             if (led_controller_wait_frame_consumed(K_MSEC(waitTimeoutMs)) != 0) {
