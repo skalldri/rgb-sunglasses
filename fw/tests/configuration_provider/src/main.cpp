@@ -9,7 +9,7 @@ class FakeConfigurationProvider : public ConfigurationProvider {
    public:
     float brightness = 1.0f;
     float displayRateMs = 33.0f;
-    float renderRateMs = 11.0f;
+    float renderRateMs = 33.0f;  // mirrors the issue-#376 default: render == display rate
 
     float getBrightnessFactor() override { return brightness; }
     float getDisplayRateMs() override { return displayRateMs; }

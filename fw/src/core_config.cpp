@@ -45,8 +45,10 @@ BtGattPersistentCharacteristic<"core/brightness", "Brightness (0-1000)", false, 
 BtGattPersistentCharacteristic<"core/display_thread_rate_ms", "Display Thread Rate * 1000 (ms)",
                                 false, uint32_t, 33300>
     coreDisplayThreadRateMs;
+// Default matches the display rate: rendering faster than the display push just
+// throws frames away (issue #376) — getRenderRateMs() enforces this as a floor.
 BtGattPersistentCharacteristic<"core/render_thread_rate_ms", "Render Thread Rate * 1000 (ms)",
-                                false, uint32_t, 11100>
+                                false, uint32_t, 33300>
     coreRenderThreadRateMs;
 BtGattPersistentCharacteristic<"core/status_led_brightness", "Status LED Brightness (0-1000)",
                                 false, uint32_t, 20>
@@ -115,6 +117,21 @@ float CoreConfig::getDisplayRateMs() {
 
 float CoreConfig::getRenderRateMs() {
     uint32_t renderRateUint = coreRenderThreadRateMs;
+    const uint32_t displayRateUint = coreDisplayThreadRateMs;
+
+    // A render interval shorter than the display interval produces frames the
+    // display thread never samples (issue #376), so floor it at the display
+    // interval. Rendering SLOWER than the display stays allowed. The write-back
+    // is RAM-only (operator= does not persist — see persistent_characteristic.h):
+    // deliberate settings migration in the AudioConfig::getTargetHigh() idiom, so
+    // boards that persisted the old 11100 default are floored on the first render
+    // tick of every boot, and the app sees the corrected value on its read-back
+    // (these characteristics are non-notifiable, see the comment above).
+    if (renderRateUint < displayRateUint) {
+        renderRateUint = displayRateUint;
+        coreRenderThreadRateMs = renderRateUint;
+    }
+
     return ((float)renderRateUint) / 1000.0f;
 }
 

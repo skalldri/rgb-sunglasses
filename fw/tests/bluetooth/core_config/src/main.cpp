@@ -83,14 +83,23 @@ static uint32_t read_u32(const struct bt_gatt_attr *attr) {
     return value;
 }
 
+static ssize_t gatt_write_u32(const struct bt_gatt_attr *attr, uint32_t value) {
+    zassert_not_null(attr->write, "attribute has no write handler");
+    return attr->write(NULL, attr, &value, sizeof(value), 0, 0);
+}
+
 /* Snapshot of the constructed default, taken once before any case runs (ztest runs
  * cases in name order; the suite-setup snapshot makes the defaults assertion
  * order-independent — same rationale as the shuffle_service suite). */
 static uint32_t sDefaultActiveAnimation;
+static uint32_t sDefaultDisplayRate;
+static uint32_t sDefaultRenderRate;
 
 static void *snapshot_defaults(void) {
     const struct bt_gatt_attr *attr = find_value_attr(4);
     sDefaultActiveAnimation = (attr != NULL) ? read_u32(attr) : 0xdead;
+    sDefaultDisplayRate = (find_value_attr(1) != NULL) ? read_u32(find_value_attr(1)) : 0xdead;
+    sDefaultRenderRate = (find_value_attr(2) != NULL) ? read_u32(find_value_attr(2)) : 0xdead;
     return NULL;
 }
 
@@ -151,4 +160,65 @@ ZTEST(core_config_service, test_active_animation_binding_round_trip) {
 
     ActiveAnimationBinding::setLocalActiveAnimation(Animation::None);
     zassert_equal(read_u32(active), static_cast<uint32_t>(Animation::None));
+}
+
+/* ---------------------------------------------------------------------------
+ * Issue #376: the render rate defaults to the display rate, and
+ * getRenderRateMs() floors the render interval at the display interval (a
+ * shorter render interval only produces frames the display never samples).
+ * The floor write-back is also the settings migration for boards that
+ * persisted the old 11100 default.
+ * ------------------------------------------------------------------------- */
+
+ZTEST(core_config_service, test_render_rate_default_matches_display_rate) {
+    zassert_equal(sDefaultDisplayRate, 33300, "Display Thread Rate must default to 33300");
+    zassert_equal(sDefaultRenderRate, 33300,
+                  "Render Thread Rate must default to the display rate (33300)");
+}
+
+ZTEST(core_config_service, test_render_rate_floored_at_display_rate) {
+    const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(render);
+
+    /* The old pre-#376 default, as persisted on already-deployed boards. */
+    gatt_write_u32(render, 11100);
+
+    float rateMs = CoreConfig::getInstance().getRenderRateMs();
+    zassert_within(rateMs, 33.3f, 0.001f, "render interval must be floored at the display's");
+
+    /* The write-back must be GATT-visible, so the app's read-back-after-write
+     * (these characteristics are non-notifiable) shows the corrected value. */
+    zassert_equal(read_u32(render), 33300, "the floor must write back to the characteristic");
+    zassert_equal(read_u32(find_value_attr(1)), 33300, "the display rate must be untouched");
+}
+
+ZTEST(core_config_service, test_render_rate_slower_than_display_allowed) {
+    const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(render);
+
+    gatt_write_u32(render, 50000);
+    float rateMs = CoreConfig::getInstance().getRenderRateMs();
+    zassert_within(rateMs, 50.0f, 0.001f, "rendering slower than the display must be allowed");
+    zassert_equal(read_u32(render), 50000, "a slower-than-display value must not be rewritten");
+
+    gatt_write_u32(render, sDefaultRenderRate);  // restore for order-independence
+}
+
+ZTEST(core_config_service, test_render_rate_follows_raised_display_rate) {
+    const struct bt_gatt_attr *display = find_value_attr(1);
+    const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(display);
+    zassert_not_null(render);
+
+    /* Slowing the display below the render rate must drag the render rate along
+     * on the next read — the invariant holds whichever knob moved. */
+    gatt_write_u32(display, 50000);
+    gatt_write_u32(render, 33300);
+
+    float rateMs = CoreConfig::getInstance().getRenderRateMs();
+    zassert_within(rateMs, 50.0f, 0.001f, "raising the display interval must floor the render");
+    zassert_equal(read_u32(render), 50000, "the floor must write back to the characteristic");
+
+    gatt_write_u32(display, sDefaultDisplayRate);  // restore for order-independence
+    gatt_write_u32(render, sDefaultRenderRate);
 }
