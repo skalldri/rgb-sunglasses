@@ -376,6 +376,90 @@ if [ "$SELF_TEST" = 1 ]; then
   check "push emits one UPDATED"           "1"   "$(grep -c '^UPDATED PR #5' "$STATE.events")"
   rm -f "$STATE.events"
 
+  # --- integration: run the REAL script, end to end -----------------------
+  # Everything below the self-test's own `exit` — the arming baseline, the
+  # lock, and the `while true` loop that calls poll_once — was unreachable
+  # from here, so `poll_once "$cur"` -> `:` (a watcher that never polls)
+  # passed the entire suite. These cases re-enter this same file as a child
+  # process with a stub `gh` ahead of it on PATH: no network, no token.
+  ITROOT=$(mktemp -d)
+  trap 'rm -rf "$STATE" "$PEND" "$STATE.tmp" "$PEND.tmp" "$STATE.events" "$ITROOT"' EXIT
+  mkdir -p "$ITROOT/bin"
+  # The stub reads its records from a file rather than embedding them, so the
+  # payload's tabs and quotes cannot break the generated script. (They did:
+  # an earlier version emitted `; exit 0 ;;` on its own line — a bash syntax
+  # error — so `gh` failed and every integration case reported 0.)
+  export PR_WATCH_TEST_RECORDS="$ITROOT/records"
+  cat > "$ITROOT/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  *"repo view"*) echo "owner/repo" ;;
+  *"pr list"*)   cat "$PR_WATCH_TEST_RECORDS" ;;
+esac
+exit 0
+STUB
+  chmod +x "$ITROOT/bin/gh"
+  stub_gh() { printf '%b' "$1" > "$ITROOT/records"; }   # one record set, both queries
+  run_watcher() { # run_watcher <state-dir> <seconds> ; echoes captured stdout
+    local sd="$1" secs="$2" log="$ITROOT/log.$RANDOM"
+    ( PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$sd" --poll 1 > "$log" 2>&1 ) &
+    local p=$!
+    sleep "$secs"; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null
+    cat "$log"
+  }
+
+  stub_gh '1\taaaa\tfalse\talice\tbr\ttitle one\n'
+  out=$(run_watcher "$ITROOT/s1" 4)
+  check "integration: watcher arms"       "1"  "$(printf '%s' "$out" | grep -c 'armed on' || true)"
+  # The decisive one: a PR that appears AFTER arming must be reported. This is
+  # what `poll_once "$cur"` -> `:` breaks and what nothing else here catches —
+  # a watcher that never polls is otherwise indistinguishable from a quiet one.
+  # Baseline on PR 1 only, then introduce PR 2 while the loop is running.
+  stub_gh '1\taaaa\tfalse\talice\tbr\tt\n'
+  ( PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s2" --poll 1 \
+      > "$ITROOT/s2.log" 2>&1 ) &
+  wpid=$!
+  sleep 2                                                    # let it arm
+  stub_gh '1\taaaa\tfalse\talice\tbr\tt\n2\tbbbb\tfalse\tbob\tbr2\tt2\n'
+  sleep 4                                                    # appear + settle + fire
+  kill "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
+  check "integration: loop emits NEW"     "1"  "$(grep -c 'NEW PR #2' "$ITROOT/s2.log" || true)"
+
+  # Two watchers on one state dir: exactly one arms, the other exits.
+  stub_gh '1\taaaa\tfalse\talice\tbr\tt\n'
+  ( PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s3" --poll 30 > "$ITROOT/a.log" 2>&1 ) &
+  ( PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s3" --poll 30 > "$ITROOT/b.log" 2>&1 ) &
+  sleep 3
+  check "integration: one watcher arms"   "1"  "$(cat "$ITROOT/a.log" "$ITROOT/b.log" | grep -c 'armed on' || true)"
+  check "integration: the other exits"    "1"  "$(cat "$ITROOT/a.log" "$ITROOT/b.log" | grep -c 'already owns\|lost the race' || true)"
+  for p in $(jobs -p); do kill "$p" 2>/dev/null; done
+  wait 2>/dev/null
+
+  # A watcher releases ITS OWN lock on the way out — and only its own. Without
+  # this, inverting release_lock's ownership check (release what you do not
+  # own, keep what you do) passes every other assertion here.
+  # NOTE: no `( ... ) &` wrapper here. That makes $! the SUBSHELL, so the TERM
+  # never reaches the script whose trap is under test and the assertion passes
+  # regardless — which is exactly how an inverted release_lock survived.
+  stub_gh '1\taaaa\tfalse\talice\tbr\tt\n'
+  PATH="$ITROOT/bin:$PATH" bash "$0" --repo owner/repo --state-dir "$ITROOT/s5" --poll 1 \
+      > "$ITROOT/s5.log" 2>&1 &
+  wpid=$!
+  sleep 2
+  check "integration: lock is held"       "1"  "$([ -L "$ITROOT/s5/lock" ] && echo 1 || echo 0)"
+  check "  (and names our watcher)"       "$wpid" "$(readlink "$ITROOT/s5/lock" 2>/dev/null)"
+  kill -TERM "$wpid" 2>/dev/null; wait "$wpid" 2>/dev/null
+  # -L, not -e: the lock is a symlink to a bare pid, so it is ALWAYS dangling
+  # and -e (which follows the link) reports false whether or not it exists.
+  # That made the first version of this assertion vacuous.
+  check "integration: lock released"      "0"  "$([ -L "$ITROOT/s5/lock" ] && echo 1 || echo 0)"
+
+  # A dead owner is reclaimed rather than deadlocked on.
+  mkdir -p "$ITROOT/s4"; ln -s 999999 "$ITROOT/s4/lock"
+  out=$(run_watcher "$ITROOT/s4" 4)
+  check "integration: reclaims dead lock" "1"  "$(printf '%s' "$out" | grep -c 'reclaiming stale lock' || true)"
+  check "integration: and then arms"      "1"  "$(printf '%s' "$out" | grep -c 'armed on' || true)"
+
   [ "$fail" = 0 ] && echo "self-test: PASS" || echo "self-test: FAIL"
   exit "$fail"
 fi
@@ -406,51 +490,34 @@ GHERR="$STATE_DIR/gh.err"
 # reclaim path simply falls through, BOTH believe they own it.
 LOCK="$STATE_DIR/lock"
 #
-# Reclaiming a DEAD pid must be atomic too. `rm -rf` then `mkdir` is not: two
-# watchers that read the same dead pid both remove and both recreate, and both
-# end up armed. `mv` is the atomic primitive — exactly one process can rename a
-# given directory — so the loser's rename fails and it re-contends instead.
-# The moved directory is then checked to confirm it is the one judged dead,
-# rather than a fresh lock a third watcher created in the gap.
-steal_dead_lock() { # steal_dead_lock <pid we judged dead>
-  local dead="$1" tmp="$LOCK.stale.$$" moved
-  mv "$LOCK" "$tmp" 2>/dev/null || return 1
-  moved=$(cat "$tmp/pid" 2>/dev/null)
-  if [ "${moved:-}" != "$dead" ]; then
-    mv "$tmp" "$LOCK" 2>/dev/null || rm -rf "$tmp"   # not ours to take
-    return 1
-  fi
-  rm -rf "$tmp"
-}
+# The lock is a SYMLINK whose target is the owner's pid. That is deliberate:
+# creating a symlink is a single atomic operation that carries the owner's
+# identity with it, so there is no window between "the lock exists" and "the
+# lock says who owns it".
+#
+# Two earlier designs failed exactly in that window. `mkdir` + write-a-pid-file
+# is two steps: a watcher reading between them sees an owner-less lock. Adding
+# a grace period only narrowed it — measured double-arms at a 1.5 s stall. And
+# reclaiming via `mv` is not atomic the way it looks: `mv` into an EXISTING
+# destination succeeds and moves the source INSIDE it, so the put-back path
+# nested the stale lock rather than restoring it, and the `|| rm -rf` fallback
+# never ran because `mv` returned 0.
+lock_owner() { readlink "$LOCK" 2>/dev/null; }
 acquire_lock() {
-  local attempt other
-  for attempt in 1 2; do
-    if mkdir "$LOCK" 2>/dev/null; then
-      echo $$ > "$LOCK/pid"
-      # Confirm we still own what we just created: a racing watcher may have
-      # stolen and recreated it between the mkdir and this write.
-      sleep 0.2
-      [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && return 0
-      echo "PR-WATCH ERROR: lock was taken from under us during acquisition — exiting"
+  local attempt owner
+  for attempt in 1 2 3; do
+    ln -s "$$" "$LOCK" 2>/dev/null && return 0
+    owner=$(lock_owner)
+    if [ -n "${owner:-}" ] && kill -0 "$owner" 2>/dev/null; then
+      echo "PR-WATCH ERROR: another watcher (pid $owner) already owns $STATE_DIR — exiting"
       return 1
     fi
-    other=$(cat "$LOCK/pid" 2>/dev/null)
-    # An unreadable or empty pid file usually means a watcher died between
-    # mkdir and the write — but it is ALSO the microsecond window a live
-    # winner passes through. Robbing it there leaves two owners and, once the
-    # winner's late write clobbers the pid, a lock nobody can release. Give it
-    # a grace period and re-read before declaring it stale.
-    if [ -z "${other:-}" ]; then
-      sleep 1
-      other=$(cat "$LOCK/pid" 2>/dev/null)
-    fi
-    if [ -n "${other:-}" ] && kill -0 "$other" 2>/dev/null; then
-      echo "PR-WATCH ERROR: another watcher (pid $other) already owns $STATE_DIR — exiting"
-      return 1
-    fi
-    [ "$attempt" = 1 ] || break
-    echo "PR-WATCH: reclaiming stale lock from pid ${other:-<unknown>}"
-    steal_dead_lock "${other:-}" || break   # someone else won the steal
+    # Dead owner, or a leftover from an older layout that is not a symlink at
+    # all. Remove and re-contend: whoever wins the next `ln -s` owns it, and
+    # every loser then reads a LIVE owner and exits. No watcher can conclude
+    # it owns a lock it did not create.
+    echo "PR-WATCH: reclaiming stale lock from pid ${owner:-<unknown>}"
+    rm -rf "$LOCK"
   done
   echo "PR-WATCH ERROR: lost the race to reclaim $LOCK — another watcher won; exiting"
   return 1
@@ -461,7 +528,7 @@ acquire_lock || exit 1
 # process reclaimed its lock would otherwise delete the NEW owner's lock on the
 # way out, and the damage compounds from there.
 release_lock() {
-  [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
+  [ "$(lock_owner)" = "$$" ] && rm -rf "$LOCK"
   return 0
 }
 # INT/TERM must EXIT, not just release. A bash signal handler returns to the
