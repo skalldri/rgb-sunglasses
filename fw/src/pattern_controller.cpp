@@ -437,19 +437,27 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
                 lastRenderOverrunLogMs = nowMs;
                 renderOverrunsSinceLog = 0;
             }
-            // No extra sleep on overrun: the wait below is the yield point. At
-            // N == 1, if the display consumed our frame while we were still
-            // rendering, the take returns immediately and the loop catches up —
-            // which is correct, the display is about to want a fresh frame.
-            // Consecutive immediate takes are impossible faster than the
-            // display's own gives (max-count-1). Known N > 1 caveat (PR #381
-            // review): gives that land DURING an overlong render coalesce into
-            // one credit, so a render that spans several display periods still
-            // waits N-1 more periods afterwards — the effective interval can
-            // stretch past N*display by the render's own overshoot. Accepted:
-            // the alternative (a count-N semaphore) would let the render burst
-            // to catch up after a stall, which is worse than briefly pacing
-            // slower than a non-default divider asked for.
+            // Yield unconditionally even after blowing the budget (PR #381
+            // review): during a SUSTAINED overrun the display's coalesced
+            // credit is already pending when the wait below runs, and
+            // k_sem_take on an available semaphore returns without
+            // rescheduling — so without this sleep the loop never yields and
+            // everything below priority 4 starves (the prio-14 persist and
+            // MCUboot-updater workqueues: OTA flash writes and debounced
+            // settings saves would stall for as long as the overrun lasts).
+            // Same latent trap as issue #267's in led_controller.cpp.
+            k_msleep(1);
+            // At N == 1 the immediate take after an overrun is the correct
+            // catch-up (the display is about to want a fresh frame), and
+            // consecutive immediate takes cannot outpace the display's
+            // max-count-1 gives. Known N > 1 caveat (PR #381 review): gives
+            // that land DURING an overlong render coalesce into one credit, so
+            // a render spanning several display periods still waits N-1 more
+            // periods afterwards — the effective interval can stretch past
+            // N*display by the render's own overshoot. Accepted: a count-N
+            // semaphore would let the render burst to catch up after a stall,
+            // which is worse than briefly pacing slower than a non-default
+            // divider asked for.
         }
 
         // Pace off the display clock (issue #379): wait until the display thread
@@ -466,10 +474,24 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // display stall (#312 measured ~1.5 s of cooperative-band starvation) —
         // that is benign: dt stays truthful, the WARN is rate-limited, and the
         // max-count-1 semaphore re-syncs the pacing on the display's next give.
-        const float timeoutBaseMs =
-            (displayIntervalMs > 0.0f) ? displayIntervalMs : getPatternConfig().getRenderRateMs();
+        if (displayIntervalMs <= 0.0f) {
+            // Display interval written to 0 (remotely writable, unclamped): the
+            // display thread's own trailing k_msleep(0 - work) makes it a
+            // spinner that gives a credit every iteration, so pacing off the
+            // semaphore would make THIS thread a second unpaced spinner and
+            // starve everything below priority 4 (PR #381 review). Self-pace
+            // exactly as the pre-handshake code did — dt above already fell
+            // back to getRenderRateMs() on this path.
+            float sleepMs = kTargetRenderIntervalMs - updateTimeMs;
+            if (sleepMs < 1.0f) {
+                sleepMs = 1.0f;
+            }
+            k_msleep((int32_t)sleepMs);
+            lastWaitTimedOut = false;
+            continue;
+        }
         const int32_t waitTimeoutMs =
-            (int32_t)(2.0f * (float)framesPerRender * timeoutBaseMs) + 5;
+            (int32_t)(2.0f * (float)framesPerRender * displayIntervalMs) + 5;
         lastWaitTimedOut = false;
         for (uint32_t consumed = 0; consumed < framesPerRender; consumed++) {
             if (led_controller_wait_frame_consumed(K_MSEC(waitTimeoutMs)) != 0) {

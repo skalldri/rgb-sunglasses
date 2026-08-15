@@ -79,13 +79,14 @@ def _persisted_rate_ms_x1000(rgb: RgbShell, key: str, default: int = 33300) -> i
             if len(b) >= 4:
                 return int.from_bytes(b[:4], "little")
             hexdump_seen = True
-        # Zephyr settings shell not-found/read-error shapes ("not found",
-        # "Failed to read...", "err -2/-ENOENT") = genuinely not persisted.
-        # Only believed after scanning EVERY line and seeing no hexdump: an
-        # untagged printk from another subsystem containing "err"/"failed"
-        # must not short-circuit a real value into "not persisted"
-        # (PR #381 review).
-        if re.search(r"not found|failed|err(or)?\b|-2\b|ENOENT", s, re.IGNORECASE):
+        # ONLY Zephyr's actual settings-miss string ("Setting not found",
+        # cmd_read() in subsys/settings/src/settings_shell.c) means genuinely
+        # not persisted. A broader match ("not found"/"failed"/"err") also
+        # swallowed `settings: command not found` from a build without
+        # CONFIG_SETTINGS_SHELL — turning this guard into a silent no-op, the
+        # opposite of its documented loud failure (PR #381 review). Believed
+        # only after scanning EVERY line and seeing no hexdump.
+        if "Setting not found" in s:
             error_seen = True
     if error_seen and not hexdump_seen:
         return default
@@ -102,7 +103,10 @@ def _require_default_divider(rgb: RgbShell) -> None:
     gate below would misfire on a correctly-behaving board."""
     render = _persisted_rate_ms_x1000(rgb, "appcfg/core/render_thread_rate_ms")
     display = _persisted_rate_ms_x1000(rgb, "appcfg/core/display_thread_rate_ms")
-    assert display > 0 and round(render / display) <= 1, (
+    # Mirrors the firmware's CEILING divider (pattern_controller.cpp): N == 1
+    # exactly when render <= display. round() here missed the (1.0, 1.5) ratio
+    # band where the firmware already picks N = 2 (PR #381 review).
+    assert display > 0 and render <= display, (
         f"persisted render/display rates {render}/{display} give a divider > 1 — "
         "delete appcfg/core/render_thread_rate_ms (settings delete) before the "
         "soak tier; the #379 held-frames gate assumes the default 1:1 pacing"
