@@ -20,6 +20,7 @@
 
 #include <zephyr/fs/fs.h>
 #include <zephyr/storage/disk_access.h>
+#include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/dlist.h>
 #include <zephyr/ztest.h>
 
@@ -156,9 +157,31 @@ void verify_file_fully_readable(const char *path, size_t expected_size, unsigned
                   expected_size);
 }
 
+/* fs_mount does NOT invalidate the flashdisk page cache: the CTRL_INIT path
+ * (disk_flash_access_init -> flashdisk_init_runtime) never touches
+ * cache_valid/cache_dirty/cached_addr, so the most recently written page —
+ * exactly the one carrying the last FAT/dir update after a fault-recovery
+ * episode — would be served back out of RAM and the "on media" verification
+ * below would prove nothing (review finding: a driver mutated to never flush
+ * on CTRL_SYNC/CTRL_DEINIT passed this suite). Evict explicitly: one raw
+ * write to the volume's last sector pulls that page into the cache instead,
+ * and the CTRL_SYNC commits it, leaving the cache clean and holding a page no
+ * verification path reads. All-zeros is NOR-legal (programming can only clear
+ * bits) and harmless to FatFS — the content of a free cluster is meaningless
+ * until allocated, at which point FatFS overwrites it. */
+void evict_flashdisk_page_cache(void) {
+    static uint8_t zeros[kChunk]; /* zero-initialized */
+    uint32_t sector_count = 0;
+
+    zassert_ok(disk_access_ioctl("NAND", DISK_IOCTL_GET_SECTOR_COUNT, &sector_count));
+    zassert_ok(disk_access_write("NAND", zeros, sector_count - 1, 1));
+    zassert_ok(disk_access_ioctl("NAND", DISK_IOCTL_CTRL_SYNC, NULL));
+}
+
 void remount(void) {
     zassert_ok(fs_unmount(&nand_mnt));
     zassert_ok(fs_mount(&nand_mnt));
+    evict_flashdisk_page_cache();
 }
 #endif /* CONFIG_DISK_DRIVER_FLASH_PATCHED */
 
@@ -420,5 +443,73 @@ ZTEST(fat_flashdisk_fault, test_sustained_faults_leave_volume_consistent) {
     zassert_ok(fs_sync(&g));
     zassert_ok(fs_close(&g));
     verify_file_fully_readable(after, kChunk, chunk_seed(100));
+}
+
+/* Scan the raw flash partition — below the flashdisk cache — for a byte
+ * pattern. This is the only honest way to assert durability: every FS-level
+ * read (and any disk_access read of the cached page) can be served from the
+ * driver's single-page RAM cache, and any subsequent WRITE commits a straggler
+ * page as a side effect of eviction, healing the very state a broken sync
+ * would have lost (review finding: a driver mutated to never flush on
+ * CTRL_SYNC/CTRL_DEINIT passed the whole suite). Returns the partition offset
+ * of the first match, or a negative value if absent. */
+off_t raw_media_find(const uint8_t *needle, size_t needle_len) {
+    const struct flash_area *fa = nullptr;
+    zassert_ok(flash_area_open(FIXED_PARTITION_ID(fat_storage), &fa));
+    off_t found = -1;
+    for (off_t off = 0; found < 0 && static_cast<size_t>(off) < fa->fa_size; off += kChunk) {
+        zassert_ok(flash_area_read(fa, off, read_buf, kChunk));
+        for (size_t i = 0; found < 0 && i + needle_len <= kChunk; i++) {
+            if (memcmp(&read_buf[i], needle, needle_len) == 0) {
+                found = off + static_cast<off_t>(i);
+            }
+        }
+    }
+    flash_area_close(fa);
+    return found;
+}
+
+/* fs_sync must put the directory metadata ON MEDIA before returning. The
+ * subtlety (which the first version of this test got wrong): the dir entry's
+ * NAME reaches media early — the dir sector gets evicted-and-committed as a
+ * side effect of the data/FAT writes — but with a STALE size of 0. Only the
+ * final dir page, carrying the updated DIR_FileSize, rides exclusively on
+ * fs_sync's CTRL_SYNC commit. So the discriminator is the size field of the
+ * on-media entry, not the entry's presence. */
+ZTEST(fat_flashdisk_fault, test_sync_reaches_raw_media) {
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, "/NAND:/syncprob.bin", FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    fill_pattern(chunk_buf, kChunk, chunk_seed(7));
+    zassert_equal(fs_write(&f, chunk_buf, kChunk), static_cast<ssize_t>(kChunk));
+    zassert_ok(fs_sync(&f));
+
+    /* No FS/disk op between the sync and the raw scans: an eviction would
+     * commit a lost page and mask the failure. */
+    fill_pattern(chunk_buf, kChunk, chunk_seed(7)); /* re-derive the needle */
+    zassert_true(raw_media_find(chunk_buf, 32) >= 0,
+                 "file data not on raw media after fs_sync");
+
+    /* 8.3 short-name field: "SYNCPROB" + "BIN", 11 bytes at entry offset 0;
+     * DIR_FileSize is the little-endian dword at entry offset 28. */
+    static const uint8_t dir_name[11] = {'S', 'Y', 'N', 'C', 'P', 'R', 'O', 'B', 'B', 'I', 'N'};
+    off_t entry_off = raw_media_find(dir_name, sizeof(dir_name));
+    zassert_true(entry_off >= 0, "directory entry not on raw media after fs_sync");
+
+    const struct flash_area *fa = nullptr;
+    zassert_ok(flash_area_open(FIXED_PARTITION_ID(fat_storage), &fa));
+    uint8_t size_le[4];
+    zassert_ok(flash_area_read(fa, entry_off + 28, size_le, sizeof(size_le)));
+    flash_area_close(fa);
+    uint32_t on_media_size = static_cast<uint32_t>(size_le[0]) |
+                             (static_cast<uint32_t>(size_le[1]) << 8) |
+                             (static_cast<uint32_t>(size_le[2]) << 16) |
+                             (static_cast<uint32_t>(size_le[3]) << 24);
+    zassert_equal(on_media_size, kChunk,
+                  "on-media DIR_FileSize is %u, expected %u — fs_sync's CTRL_SYNC "
+                  "did not commit the final dir page",
+                  on_media_size, static_cast<unsigned>(kChunk));
+
+    zassert_ok(fs_close(&f));
 }
 #endif /* CONFIG_DISK_DRIVER_FLASH_PATCHED */

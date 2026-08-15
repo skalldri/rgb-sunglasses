@@ -690,13 +690,17 @@ static struct flashdisk_data *flashdisk_find_by_name(const char *disk_name)
 }
 
 /* Deliberately LOCKLESS (review finding on the first revision): ctx->lock is
- * held across the underlying QSPI erase/program, up to the full
- * NORDIC_QSPI_NOR timeout when the part stalls — which is exactly when an
- * operator runs `flashdisk stats` to find out what is happening. A diagnostic
- * that blocks behind the fault it diagnoses is useless. The counters are
- * three independent naturally-aligned uint32_t with no cross-field invariant,
- * so unlocked reads cannot tear; the worst case is a snapshot one increment
- * stale, which is fine for a failure counter. */
+ * held across the underlying QSPI erase/program, and that wait is UNBOUNDED —
+ * qspi_wait_for_completion() blocks on k_sem_take(..., K_FOREVER) and
+ * qspi_wait_while_writing() polls RDSR with no deadline (nrf_qspi_nor.c).
+ * CONFIG_NORDIC_QSPI_NOR_TIMEOUT_MS does NOT bound it; it only feeds nrfx's
+ * qspi_ready_wait() busy-spin. A part stuck with WIP set holds ctx->lock
+ * forever — which is exactly when an operator runs `flashdisk stats` to find
+ * out what is happening. A diagnostic that blocks behind the fault it
+ * diagnoses is useless, and no finite K_MSEC() bound would be honest here.
+ * The counters are three independent naturally-aligned uint32_t with no
+ * cross-field invariant, so unlocked reads cannot tear; the worst case is a
+ * snapshot one increment stale, which is fine for a failure counter. */
 int flashdisk_patched_stats_get(const char *disk_name, struct flashdisk_patched_stats *out)
 {
 	struct flashdisk_data *ctx = flashdisk_find_by_name(disk_name);
@@ -715,9 +719,12 @@ int flashdisk_patched_stats_reset(const char *disk_name)
 	if (ctx == NULL) {
 		return -ENOENT;
 	}
-	/* Lockless for the same reason as _get(); a reset racing an in-flight
-	 * increment may lose that one count, which is acceptable for a
-	 * diagnostic counter and beats blocking behind a stalled flash op. */
+	/* Lockless for the same reason as _get(). The race is worse than
+	 * off-by-one: an increment is a read-modify-write, so one that reads
+	 * before this memset and writes after it restores the entire pre-reset
+	 * total — the reset silently does nothing. Acceptable because the only
+	 * caller is the test suite's before-each hook (no concurrent I/O), and
+	 * it still beats blocking behind a stalled flash op. */
 	memset(&ctx->stats, 0, sizeof(ctx->stats));
 	return 0;
 }
