@@ -1,6 +1,9 @@
 FROM ghcr.io/skalldri/nrf-connect-sdk-docker:3.1.1
 RUN /lib/systemd/systemd-udevd --daemon
-RUN apt-get update && apt-get install -y --no-install-recommends lcov ffmpeg qrencode dosfstools screen jq shellcheck && rm -rf /var/lib/apt/lists/*
+# poppler-utils: pdftotext/pdftoppm/pdfinfo, needed to read the checked-in part
+# datasheets under fw/docs/datasheets/ (several are encrypted PDFs that plain
+# stdlib tooling cannot open).
+RUN apt-get update && apt-get install -y --no-install-recommends lcov ffmpeg qrencode dosfstools screen jq shellcheck poppler-utils && rm -rf /var/lib/apt/lists/*
 
 # Doxygen — builds the rgbx extension API docs published at /api. Installed
 # from the upstream release tarball rather than apt (which ships 1.9.1 here)
