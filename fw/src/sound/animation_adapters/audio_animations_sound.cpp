@@ -1,5 +1,6 @@
 #include <animations/animation_audio_source.h>
 #include <animations/color_mode_source.h>
+#include <pattern_controller.h>
 #include <sound/animation_adapters/audio_frame_fold.h>
 #include <sound/audio_dsp.h>
 #include <sound/sound.h>
@@ -36,13 +37,13 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
      * update() calls happen per tick (the active animation's own, plus the
      * beat/color sources'), and resetting per call would let a frame that lands
      * between two same-tick drains clear a beat the first drain had just folded
-     * in, before its consumer read it (PR #378 review). This module stays
-     * deliberately ignorant of the render loop, so the tick is inferred by wall
-     * clock: analysis frames arrive ~32 ms apart, while frame-carrying drains
-     * within one tick are microseconds apart — any frame drained within
-     * kBatchWindowMs of the previous frame-carrying drain joins that batch.
-     * (This holds at ANY render rate, because the ~32 ms spacing is the audio
-     * thread's, not the render thread's.)
+     * in, before its consumer read it (PR #378 review). The tick is identified
+     * EXACTLY via pattern_controller_tick_epoch() — a wall-clock window was
+     * tried first and rejected in review: the gap between two same-tick
+     * update() calls is unbounded (a cooperative-band preemption stretches it
+     * past any fixed window), so inference could split a tick and re-drop the
+     * beat. The epoch costs this module its render-loop ignorance, but buys an
+     * invariant instead of a guess.
      *
      * Beats for the edge-triggered consumers are COUNTED here, at drain time (once
      * per drained frame), not read from cache_.beat[] — so it doesn't matter which
@@ -51,14 +52,11 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
      * repeated re-rolls. */
     void update() override {
         audio_analysis_result tmp;
-        bool drainedThisCall = false;
+        const uint32_t epoch = pattern_controller_tick_epoch();
         while (k_msgq_get(&audio_result_q, &tmp, K_NO_WAIT) == 0) {
-            const int64_t now = k_uptime_get();
-            const bool firstInBatch =
-                !drainedThisCall && (now - lastFrameDrainMs_) > kBatchWindowMs;
+            const bool firstInBatch = (epoch != lastBatchEpoch_);
+            lastBatchEpoch_ = epoch;
             audio_frame_fold(cache_, tmp, firstInBatch);
-            lastFrameDrainMs_ = now;
-            drainedThisCall = true;
             if (tmp.beat[kColorBeatBand]) {
                 beatCount_++;
             }
@@ -87,15 +85,14 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
     }
 
    private:
-    /* Same-tick frame-carrying drains are microseconds apart; distinct analysis
-     * frames arrive ~32 ms apart (audio thread cadence). 8 ms sits comfortably
-     * between, independent of the render rate. */
-    static constexpr int64_t kBatchWindowMs = 8;
-
     audio_analysis_result cache_ = {};
     uint32_t beatCount_ = 0;
     uint32_t frameCount_ = 0;
-    int64_t lastFrameDrainMs_ = 0;
+    /* Tick epoch of the last frame-carrying drain; frames drained in the same
+     * epoch OR into one batch. Initialized off any real epoch value's phase is
+     * irrelevant — only equality matters, and epoch 0 vs UINT32_MAX simply makes
+     * the first-ever drain start a fresh batch, which is correct. */
+    uint32_t lastBatchEpoch_ = UINT32_MAX;
 };
 
 SoundAnimationAudioSource sSoundSource;

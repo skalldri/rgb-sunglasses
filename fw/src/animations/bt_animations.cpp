@@ -12,9 +12,11 @@ void BtAdvertisingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceL
     // What should the current brightness be?
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    // Wrap around animation cycle
-    if (currentCycleTimeMs > kFadeTimeMs) {
-        currentCycleTimeMs = 0;
+    // Wrap around animation cycle. Carry the remainder instead of resetting to 0
+    // so the fade period stays wall-clock correct at any render tick rate
+    // (issue #376).
+    while (currentCycleTimeMs > kFadeTimeMs) {
+        currentCycleTimeMs -= kFadeTimeMs;
     }
 
     // Current brightness:
@@ -82,8 +84,9 @@ void BtExtensionsLoadingAnimation::tick(AnimationRenderer &renderer, size_t time
     // indicator (all blue) and from the power LED (never blue or violet).
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > kFadeTimeMs) {
-        currentCycleTimeMs = 0;
+    // Carry the remainder instead of resetting to 0 (issue #376), as above.
+    while (currentCycleTimeMs > kFadeTimeMs) {
+        currentCycleTimeMs -= kFadeTimeMs;
     }
 
     size_t currentBrightness = 0;

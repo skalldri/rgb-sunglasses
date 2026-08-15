@@ -43,13 +43,14 @@ BtGattPrimaryService<kCoreConfigServiceUuid> coreConfigPrimaryService;
 // also enforces this as a runtime floor, whatever the persisted values say.
 //
 // Known cosmetic cost of 1:1 (PR #378 review): the two loops free-run with no
-// buffer-swap handshake, and each paces itself with a whole-ms k_msleep, so
-// their ~33 ms periods differ slightly and the phase slips — roughly once per
-// tens of seconds the display samples the same framebuffer twice (or skips
-// one), visible as a single 2 px jump or held frame on a 1 px/step scroll.
-// The old 3:1 ratio hid this by always having a fresh frame ready, at 3x the
-// render cost. A producer/consumer handshake on the swap would remove it
-// entirely — tracked in issue #379.
+// buffer-swap handshake, and each paces itself with a whole-ms k_msleep whose
+// float argument TRUNCATES — so each period is work + trunc(33.3 - work), and
+// the two threads' different work times give systematically different periods.
+// The phase slip is therefore steady, not random: MEASURED on proto0 (PR #381's
+// held-frames counter, zigzag), 135 held/skipped frames in 275 s — one every
+// ~2 s, each a 2 px jump or held frame on a 1 px/step scroll. The old 3:1
+// ratio hid this by always having a fresh frame ready, at 3x the render cost.
+// A producer/consumer handshake on the swap removes it entirely — issue #379.
 constexpr uint32_t kDefaultThreadRateMsX1000 = 33300;
 
 // These four are app-written tunables with no device-side writer, so Notify=false
@@ -132,18 +133,14 @@ float CoreConfig::getRenderRateMs() {
     uint32_t renderRateUint = coreRenderThreadRateMs;
     const uint32_t displayRateUint = coreDisplayThreadRateMs;
 
-    // Migration only: correct the exact pre-#376 default in RAM (operator= does
-    // not persist — see persistent_characteristic.h; the AudioConfig::
-    // getTargetHigh() idiom) so boards that persisted 11100 read back the new
-    // default. Two guards keep it from stealing anything a user meant
-    // (PR #378 review): exact match — any other value is a user's own setting —
-    // AND only when 11100 sits below the display interval, i.e. it is actually
-    // the stale faster-than-display default. A deliberate 90 Hz setup
-    // (display = render = 11100) is left exactly as configured.
-    if (renderRateUint == 11100 && renderRateUint < displayRateUint) {
-        renderRateUint = kDefaultThreadRateMsX1000;
-        coreRenderThreadRateMs = renderRateUint;
-    }
+    // There is deliberately NO migration of the pre-#376 11100 default (PR #378
+    // review, three rounds): any write-back — unconditional, exact-match, or
+    // exact-match-below-display — re-arms on some later display-rate change and
+    // destroys a value the user may have meant (a deliberate 90 Hz setup holds
+    // exactly 11100). A board that persisted the old default simply keeps it
+    // stored and gets the floor below at point of use — the same
+    // stored-value-differs-from-effective-rate contract every other
+    // below-display value already has.
 
     // A render interval shorter than the display interval produces frames the
     // display thread never samples (issue #376), so floor it at the display

@@ -166,10 +166,11 @@ ZTEST(core_config_service, test_active_animation_binding_round_trip) {
  * Issue #376: the render rate defaults to the display rate, and
  * getRenderRateMs() floors the render interval at the display interval (a
  * shorter render interval only produces frames the display never samples).
- * The floor clamps the RETURNED value only; the sole write-back is the
- * exact-match migration of the pre-#376 default 11100 (PR #378 review: a
- * general write-back destroyed the user's setting when the display rate was
- * temporarily raised).
+ * The floor clamps the RETURNED value only — there is NO write-back and NO
+ * migration at all (PR #378 review, three rounds: every write-back variant
+ * re-armed on some later display-rate change and destroyed a value the user
+ * may have meant). A stale persisted 11100 stays stored and is floored at
+ * point of use like any other below-display value.
  * ------------------------------------------------------------------------- */
 
 ZTEST(core_config_service, test_render_rate_default_matches_display_rate) {
@@ -182,21 +183,23 @@ ZTEST(core_config_service, test_render_rate_default_matches_display_rate) {
                    "getRenderRateMs must decode the default as 33.3 ms");
 }
 
-ZTEST(core_config_service, test_render_rate_migrates_old_default) {
+ZTEST(core_config_service, test_render_rate_stale_default_floored_not_rewritten) {
     const struct bt_gatt_attr *render = find_value_attr(2);
     zassert_not_null(render);
 
-    /* The old pre-#376 default, as persisted on already-deployed boards. */
+    /* The old pre-#376 default, as persisted on already-deployed boards: the
+     * effective rate is floored at the display interval, and the stored value
+     * is deliberately NOT rewritten — no migration exists (PR #378 review:
+     * every write-back variant re-armed later and destroyed a deliberate
+     * 90 Hz setup, which holds exactly this value). */
     gatt_write_u32(render, 11100);
 
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
-    zassert_within(rateMs, 33.3f, 0.001f, "the old default must be migrated to the new one");
-
-    /* The migration write-back must be GATT-visible, so the app's
-     * read-back-after-write (these characteristics are non-notifiable) shows
-     * the corrected value. */
-    zassert_equal(read_u32(render), 33300, "the migration must write back to the characteristic");
+    zassert_within(rateMs, 33.3f, 0.001f, "a stale 11100 must be floored at the display rate");
+    zassert_equal(read_u32(render), 11100, "the stored value must not be rewritten");
     zassert_equal(read_u32(find_value_attr(1)), 33300, "the display rate must be untouched");
+
+    gatt_write_u32(render, sDefaultRenderRate);  // restore for order-independence
 }
 
 ZTEST(core_config_service, test_render_rate_11100_kept_when_display_matches) {
@@ -205,12 +208,12 @@ ZTEST(core_config_service, test_render_rate_11100_kept_when_display_matches) {
     zassert_not_null(display);
     zassert_not_null(render);
 
-    /* A deliberate ~90 Hz setup (display = render = 11100) is NOT the stale
-     * default: the migration only fires when 11100 sits below the display
-     * interval (PR #378 review — an unconditional exact-match rewrite stole
-     * this configuration and made 11100 permanently unsettable). */
+    /* A deliberate ~90 Hz setup (display = render = 11100) must be honored in
+     * full — the value is stored, effective, and never rewritten, in either
+     * write order (PR #378 review: a migration write-back stole this
+     * configuration and made 11100 permanently unsettable). */
+    gatt_write_u32(render, 11100);  // render FIRST — order must not matter
     gatt_write_u32(display, 11100);
-    gatt_write_u32(render, 11100);
 
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
     zassert_within(rateMs, 11.1f, 0.001f, "a deliberate 90 Hz setup must be honored");

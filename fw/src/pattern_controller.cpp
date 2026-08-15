@@ -27,12 +27,21 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
+#include <zephyr/sys/atomic.h>
 
 #include <cstring>
 
 LOG_MODULE_REGISTER(pattern_controller, LOG_LEVEL_INF);
 
 static ConfigurationProvider *sConfigProvider = nullptr;
+
+// Render-tick epoch (see pattern_controller.h): bumped once at the top of each
+// render tick; consumers compare for equality only.
+static atomic_t sTickEpoch = ATOMIC_INIT(0);
+
+uint32_t pattern_controller_tick_epoch(void) {
+    return (uint32_t)atomic_get(&sTickEpoch);
+}
 
 void pattern_controller_set_config_provider(ConfigurationProvider *provider) {
     sConfigProvider = provider;
@@ -284,6 +293,10 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
+        // New render tick: everything below (animation update() drains, color
+        // sources, extension inputs) belongs to this epoch — see
+        // pattern_controller_tick_epoch().
+        atomic_inc(&sTickEpoch);
 
         float kTargetRenderIntervalMs = getPatternConfig().getRenderRateMs();
 

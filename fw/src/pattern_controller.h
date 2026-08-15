@@ -60,6 +60,19 @@ int pattern_controller_set_pixel_in_framebuffer(const LedConfig* config, size_t 
                                                 uint8_t blue);
 
 /**
+ * @brief Render-tick epoch: increments once at the top of every render tick.
+ *
+ * Lets a per-tick consumer scope work to "this tick" exactly instead of
+ * inferring tick boundaries from wall clock — SoundAnimationAudioSource uses it
+ * to OR beat flags across every audio frame drained within one tick, however
+ * many update() calls that tick makes and however long preemption stretches the
+ * gaps between them (PR #378 review: an 8 ms wall-clock window could be split
+ * by a cooperative-band preemption, silently dropping a beat). Wraps at 2^32;
+ * only equality is ever meaningful. Safe from any thread.
+ */
+uint32_t pattern_controller_tick_epoch(void);
+
+/**
  * @brief Inject a ConfigurationProvider for the pattern controller thread.
  *
  * If not called before the thread reads configuration, CoreConfig::getInstance()
