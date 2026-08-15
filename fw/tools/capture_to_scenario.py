@@ -198,11 +198,21 @@ def main(argv=None):
     # D-row-only file, yielding zero keyframes — and because the file exists,
     # the not-found warning below would not fire either, so the scenario would
     # come out silently audio-only.
+    # Three states, not two. "Combined file has no I-rows" is NOT the same as
+    # "this is the old split layout": a CONFIG_IMU=n image (or one whose IMU
+    # failed to init) writes a complete <wav>.csv with every D-row and no I-row
+    # at all. Collapsing those made the warning below name <wav>.imu.csv, a file
+    # that cannot exist on such an image, while the real sidecar sat beside it.
     imu_csv = args.imu_csv
+    combined = Path(str(args.wav) + ".csv")
+    legacy = Path(str(args.wav) + ".imu.csv")
     if imu_csv is None:
-        combined = Path(str(args.wav) + ".csv")
-        legacy = Path(str(args.wav) + ".imu.csv")
-        imu_csv = combined if _has_imu_rows(combined) else legacy
+        if _has_imu_rows(combined):
+            imu_csv = combined          # current layout, with motion
+        elif legacy.is_file():
+            imu_csv = legacy            # older split layout
+        else:
+            imu_csv = combined          # nothing to read; warn about what IS there
 
     if not args.wav.is_file():
         parser.error(f"{args.wav} not found")
@@ -213,8 +223,13 @@ def main(argv=None):
     if imu_csv.is_file():
         samples = parse_imu_csv(imu_csv.read_text(errors="replace"))
         samples = decimate(samples, args.hz)
+    elif imu_csv.is_file():
+        print(f"warning: {imu_csv} has no I, rows — scenario will have no IMU track "
+              "(CONFIG_IMU disabled, or the IMU failed to init on that capture)",
+              file=sys.stderr)
     else:
-        print(f"warning: {imu_csv} not found — scenario will have no IMU track", file=sys.stderr)
+        print(f"warning: no sidecar beside {args.wav} — looked for {combined.name} and "
+              f"{legacy.name}; scenario will have no IMU track", file=sys.stderr)
 
     description = args.description or (
         f"Recorded on-device capture ({duration_ms / 1000:.1f} s, "

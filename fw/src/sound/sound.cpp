@@ -342,7 +342,8 @@ K_MSGQ_DEFINE(capture_analysis_q, sizeof(struct capture_analysis_block),
  * silently misaligned sidecar that no runtime check can catch. */
 BUILD_ASSERT(CAPTURE_ANALYSIS_QUEUE_FRAMES > CONFIG_APP_CAPTURE_QUEUE_FRAMES,
              "analysis queue must outrun the PCM queue by at least one slot - the consumer "
-             "holds an analysis entry across imu_sidecar_drain() while the PCM slot is free");
+             "takes the PCM block before its analysis, so the producer can refill the freed "
+             "PCM slot while the analysis entry is still in flight");
 
 /* Analysis rows lost, counted apart from s_capture_dropped because they mean
  * something completely different: a dropped PCM block is a gap in the audio and
@@ -1204,6 +1205,12 @@ static int audio_sidecar_open(struct audio_sidecar *sc, const char *wav_path, in
                            sc->io_retries) != 0) {
         fs_close(&sc->file);
         sc->open = false;
+        /* fs_open() already created and truncated the file, so failing here
+         * leaves a headerless orphan on the volume — no #PARAMS, no rows, no
+         * #DONE, and frames.py yields empty arrays rather than an error. That
+         * is the "exists but cannot be trusted" case `retired` exists for,
+         * reached before a single row was written. */
+        sc->retired = true;
         return -EIO;
     }
     sc->pos = AUDIO_CSV_CHUNK;
@@ -1320,10 +1327,15 @@ static int audio_sidecar_close(struct audio_sidecar *sc, const struct shell *she
          * regex cannot match it. */
         if (sc->retired) {
             uint32_t lost = (uint32_t)atomic_get(&s_capture_analysis_dropped);
+            /* Rows FORMATTED, which overstates what reached the file: a flush
+             * failure leaves sc->len bytes unwritten by design, up to a full
+             * chunk (~11 D-rows plus interleaved I-rows). sc->pos is exactly
+             * how many bytes made it, so report both rather than one number
+             * the operator would act on as if it were the file's length. */
             shell_warn(shell,
-                       "Capture CSV ABANDONED after %u rows (%u rows lost) - truncated, no "
-                       "#DONE trailer; do NOT pair with the WAV",
-                       sc->frames, lost);
+                       "Capture CSV ABANDONED - %u rows formatted, only %u bytes written "
+                       "(%u rows lost); truncated, no #DONE trailer, do NOT pair with the WAV",
+                       sc->frames, (uint32_t)sc->pos, lost);
             return -EIO;
         }
         return 0;

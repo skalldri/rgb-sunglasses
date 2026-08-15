@@ -412,9 +412,13 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
     # anywhere in the output. audio_sidecar_close() in fw/src/sound/sound.cpp
     # relies on that: every "Capture CSV ..." failure wording is deliberately
     # chosen so it cannot match. There are five, and this list has fallen
-    # behind twice — fw/tools/tests/test_capture_csv_contract.py now derives
-    # both sides from source and fails if a new one ever does match, so treat
-    # that test, not this comment, as the binding record:
+    # behind twice. fw/tools/tests/test_capture_csv_contract.py now checks
+    # these mechanically, but it is NOT yet a substitute for reading this list:
+    # it harvests failure wordings by the literal "Capture CSV prefix, so a
+    # wording reworded to start with "Audio sidecar:" — the one regression
+    # shape that has actually occurred — is invisible to it, and its success
+    # side is still hardcoded. See that file's KNOWN GAPS. Until those close,
+    # this list and that test are both necessary and neither is sufficient:
     #   "Capture CSV could not be opened; recording audio only"
     #   "Capture CSV write failed - the file is incomplete"
     #   "Capture CSV MISALIGNED: ..."

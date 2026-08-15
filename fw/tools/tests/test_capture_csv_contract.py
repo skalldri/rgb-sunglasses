@@ -16,6 +16,26 @@ wording to sound.cpp, or loosen a regex in the plugin, and this fails.
 Deliberately no import of the plugin module: it pulls in `mcp.types` and
 `serial_mcp_server`, which are not installed in CI. Text extraction keeps the
 test runnable wherever pytest is.
+
+KNOWN GAPS — this pins less than it looks like it does (review round 8):
+
+1. `failure_strings` anchors on the literal prefix `"Capture CSV`, which
+   structurally cannot see the one regression shape that has actually
+   happened here: a failure line reworded to start with `Audio sidecar:`
+   simply is not harvested, so the no-false-success assertion never sees it.
+   Sabotaging exactly that only tripped the fixture's own `>= 5` count check,
+   which is luck, not coverage. It should anchor on the emitting functions
+   (`audio_sidecar_close`, and `record_wav_capture`'s sidecar paths) and take
+   every shell_warn/shell_error string in them.
+2. `test_success_lines_are_still_recognised` hardcodes its three lines while
+   the failure side is derived — and the success side is the half that broke
+   (gating solely on "Audio sidecar: N frames" once dropped the key on the
+   only build the handler can reach). It should read the shell_print formats
+   out of sound.cpp the same way.
+
+Both need a small C-source extractor (function body + adjacent-literal
+joining). Until that exists, treat a green run here as necessary, not
+sufficient.
 """
 
 import re
