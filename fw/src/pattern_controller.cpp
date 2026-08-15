@@ -292,6 +292,11 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     uint32_t renderOverrunsSinceLog = 0;
     int64_t lastWaitTimeoutLogMs = 0;
     uint32_t waitTimeoutsSinceLog = 0;
+    // Set when the previous iteration's frame-consumed wait timed out (display
+    // clock unavailable): the next dt must track wall time, not the nominal
+    // display-derived interval (PR #381 review).
+    bool lastWaitTimedOut = false;
+    int64_t prevIterStartMs = k_uptime_get();
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -299,6 +304,7 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // sources, extension inputs) belongs to this epoch — see
         // pattern_controller_tick_epoch().
         atomic_inc(&sTickEpoch);
+        const int64_t iterStartMs = k_uptime_get();
 
         // Producer-gated pacing (issue #379): this thread no longer runs its own
         // free-running sleep clock — it renders once per N consumed display
@@ -319,7 +325,26 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
                 framesPerRender = 1;
             }
         }
-        const float kTargetRenderIntervalMs = framesPerRender * displayIntervalMs;
+        // An unusable display interval (0 is remotely writable and unclamped)
+        // must not collapse dt to 0 — animations would freeze and shuffle's
+        // dwell clock would stop. Fall back to the render rate, which is what
+        // dt was before the handshake (PR #381 review).
+        float kTargetRenderIntervalMs = (displayIntervalMs > 0.0f)
+                                            ? framesPerRender * displayIntervalMs
+                                            : getPatternConfig().getRenderRateMs();
+        if (lastWaitTimedOut) {
+            // The display clock was unavailable last iteration, so this
+            // iteration started on the timeout's schedule (~2 display periods),
+            // not the nominal one. Hand the animations the wall time actually
+            // elapsed or they run at ~half speed for the whole degraded period
+            // (PR #381 review). Nominal dt stays authoritative on the healthy
+            // path — this never fires while the handshake is being honored.
+            const int64_t elapsedMs = iterStartMs - prevIterStartMs;
+            if (elapsedMs > 0) {
+                kTargetRenderIntervalMs = (float)elapsedMs;
+            }
+        }
+        prevIterStartMs = iterStartMs;
 
         size_t bufferId = 0;
         ret = claimBufferForRender(bufferId);
@@ -416,10 +441,19 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // K_FOREVER — the display thread exits at boot when the LED strip devices
         // are not ready, and this thread must keep ticking (shuffle, indicators,
         // extension activation) rather than wedge; on timeout the loop proceeds,
-        // effectively self-paced at ~2 display periods.
-        const int32_t waitTimeoutMs = (int32_t)(2.0f * displayIntervalMs) + 5;
+        // effectively self-paced at ~2 display periods, and the NEXT iteration's
+        // dt tracks wall time (lastWaitTimedOut above). A timeout can also fire
+        // during a genuine multi-hundred-ms display stall (#312 measured ~1.5 s
+        // of cooperative-band starvation) — that is benign: dt stays truthful,
+        // the WARN is rate-limited, and the max-count-1 semaphore re-syncs the
+        // pacing on the display's next give.
+        const float timeoutBaseMs =
+            (displayIntervalMs > 0.0f) ? displayIntervalMs : getPatternConfig().getRenderRateMs();
+        const int32_t waitTimeoutMs = (int32_t)(2.0f * timeoutBaseMs) + 5;
+        lastWaitTimedOut = false;
         for (uint32_t consumed = 0; consumed < framesPerRender; consumed++) {
             if (led_controller_wait_frame_consumed(K_MSEC(waitTimeoutMs)) != 0) {
+                lastWaitTimedOut = true;
                 waitTimeoutsSinceLog++;
                 const int64_t nowMs = k_uptime_get();
                 if (nowMs - lastWaitTimeoutLogMs >= 5000) {

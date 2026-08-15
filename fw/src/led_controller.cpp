@@ -176,10 +176,12 @@ static struct led_rgb led_2[kNumDisplayBuffers][LED_STRIP_2_NUM_PIXELS];
 // Hold this lock for _very_ short periods of time!
 K_MUTEX_DEFINE(displayBufferMutex);
 
-// Frame-consumed handshake (issue #379): given once per display cycle, after the
-// display releases its buffer; the render thread takes it (bounded, via
-// led_controller_wait_frame_consumed) to pace itself off the display clock
-// instead of running a second free-running k_msleep clock that slips phase.
+// Frame-consumed handshake (issue #379): given once per display cycle, as soon
+// as the display has latched its buffer (right after claimBufferForDisplay, so
+// the producer gets the full display period, not period-minus-push-time); the
+// render thread takes it (bounded, via led_controller_wait_frame_consumed) to
+// pace itself off the display clock instead of running a second free-running
+// k_msleep clock that slips phase.
 // Initial count 1 so the boot-time first render does not wait for a display
 // cycle; max count 1 so multiple display cycles coalesce into one credit
 // (k_sem_give on a full semaphore is a no-op — the correct semantics when the
@@ -671,6 +673,16 @@ void led_display_thread_func(void *a, void *b, void *c) {
                 led_stats_core::recordHeldFrame(sStats);
             }
         }
+        // Frame consumed: the display has LATCHED its buffer for this cycle, so
+        // the render thread may build the next frame concurrently with the SPI
+        // pushes below — triple buffering guarantees claimBufferForRender finds
+        // a third buffer (it skips lastRenderedDisplayBuffer and the one inUse
+        // here). Giving after the pushes instead would shrink the producer's
+        // window to (display period - push time), coupling its deadline to
+        // display-side jitter (PR #381 review). Given in ALL panel output modes:
+        // claim/release run identically in the three modes (issue #172's
+        // requirement), so producer pacing must too.
+        k_sem_give(&frameConsumedSem);
         markSegment("claim");  // claim can block on displayBufferMutex
 
         switch (atomic_get(&panelOutputMode)) {
@@ -705,10 +717,6 @@ void led_display_thread_func(void *a, void *b, void *c) {
         if (ret) {
             LOG_ERR("Error releasing display buffer!");
         }
-        // Frame consumed: let the render thread build the next one (issue #379).
-        // Given in ALL panel output modes — claim/release run identically in the
-        // three modes (issue #172's requirement), so producer pacing must too.
-        k_sem_give(&frameConsumedSem);
         markSegment("release");
 
         int64_t endTicks = k_uptime_ticks();

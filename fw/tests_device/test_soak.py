@@ -60,16 +60,30 @@ def _require_shuffle_off(rgb: RgbShell) -> None:
 
 def _persisted_rate_ms_x1000(rgb: RgbShell, key: str, default: int = 33300) -> int:
     """Persisted uint32 rate (ms x 1000) from the settings partition, or the
-    firmware default when the key has never been written. `settings read`
-    prints a hex dump; the value is 4 bytes little-endian."""
+    firmware default when the key is not persisted. `settings read` prints a
+    hex dump (4 bytes little-endian); a missing key prints an error line.
+
+    Only those two outcomes are accepted — anything else (shell disabled,
+    hexdump format change, empty exchange) fails LOUDLY rather than reading as
+    "not persisted", which would let a real persisted divider slip past the
+    precondition and surface as a misleading held-frames failure instead
+    (PR #381 review)."""
     out = rgb.exec(f"settings read {key}", check=False)
     for line in out:
-        m = re.match(r"^[0-9a-fA-F]+:\s+((?:[0-9a-fA-F]{2}\s+)+)", line.strip())
+        s = line.strip()
+        m = re.match(r"^[0-9a-fA-F]+:\s+((?:[0-9a-fA-F]{2}\s+)+)", s)
         if m:
             b = bytes(int(x, 16) for x in m.group(1).split())
             if len(b) >= 4:
                 return int.from_bytes(b[:4], "little")
-    return default
+        # Zephyr settings shell not-found/read-error shapes ("not found",
+        # "Failed to read...", "err -2/-ENOENT") = genuinely not persisted.
+        if re.search(r"not found|failed|err(or)?\b|-2\b|ENOENT", s, re.IGNORECASE):
+            return default
+    pytest.fail(
+        f"unparseable `settings read {key}` output (neither a hex dump nor a "
+        f"not-found error) — cannot verify the divider precondition: {out!r}"
+    )
 
 
 def _require_default_divider(rgb: RgbShell) -> None:
@@ -181,10 +195,17 @@ def test_frame_pacing_soak(rgb: RgbShell):
         )
         assert s["overruns"] == 0, f"frame overruns during soak (#267): {s}"
         # The render thread is phase-locked to the display clock (#379), so at
-        # the default 1:1 divider no display cycle may re-show an unchanged
-        # frame. This is the assertion that would have caught the free-running
-        # phase slip from day one.
-        assert s["held_frames"] == 0, f"held frames during soak (#379): {s}"
+        # the default 1:1 divider a display cycle re-shows an unchanged frame
+        # only when a render genuinely overran its full display period. The
+        # pre-fix free-running slip measured ~1 held frame per 60 (135 in
+        # 8,243), so a 0.1% allowance still catches any regression by two
+        # orders of magnitude while tolerating the occasional LZ4/FAT render
+        # tick this gate has not yet been measured under (PR #381 review) —
+        # tighten to == 0 once a soak pass has demonstrated it.
+        held_budget = max(1, s["frames"] // 1000)
+        assert s["held_frames"] <= held_budget, (
+            f"held frames {s['held_frames']} > budget {held_budget} during soak (#379): {s}"
+        )
         assert s["work_max_us"] < s["target_us"], (
             f"work max {s['work_max_us']} µs exceeds the {s['target_us']} µs "
             f"frame budget (#267): {s}"
