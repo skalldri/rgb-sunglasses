@@ -1,0 +1,14 @@
+source "Kconfig.zephyr"
+
+rsource "../../../drivers/Kconfig"
+
+# The fault_flash test driver has no Kconfig of its own (it is an app source);
+# this promptless symbol supplies the flash-capability selects a driver
+# Kconfig would normally make, so flashdisk_with_erase() and the page-layout
+# verification see a real erase-required device.
+config TEST_FAULT_FLASH
+	bool
+	default y
+	select FLASH_HAS_EXPLICIT_ERASE
+	select FLASH_HAS_PAGE_LAYOUT
+	select FLASH_HAS_DRIVER_ENABLED

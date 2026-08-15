@@ -1,0 +1,22 @@
+tests:
+  storage.fat_flashdisk_fault:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: storage fat
+    filter: dt_label_with_parent_compat_enabled("fat_storage", "fixed-partitions")
+  # Builds the same tests against the UNPATCHED SDK driver and asserts its
+  # error-swallowing bug is still present. When an NCS upgrade ships upstream
+  # zephyr 81db3fff8f this scenario fails — the signal to delete
+  # fw/drivers/flashdisk/ and revert to CONFIG_DISK_DRIVER_FLASH=y.
+  storage.fat_flashdisk_fault.sdk_tripwire:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: storage fat
+    filter: dt_label_with_parent_compat_enabled("fat_storage", "fixed-partitions")
+    extra_configs:
+      - CONFIG_DISK_DRIVER_FLASH=y
+      - CONFIG_DISK_DRIVER_FLASH_PATCHED=n

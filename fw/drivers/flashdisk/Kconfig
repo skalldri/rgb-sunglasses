@@ -1,0 +1,40 @@
+# Patched copy of the SDK flashdisk driver — issue #380.
+# See the provenance header in flashdisk.c for what is patched and when this
+# whole directory can be deleted.
+
+menuconfig DISK_DRIVER_FLASH_PATCHED
+	bool "Patched Zephyr flashdisk driver (issue #380 backport of upstream 81db3fff8f)"
+	# Deliberately NOT mirroring the SDK's `depends on
+	# DT_HAS_ZEPHYR_FLASH_DISK_ENABLED`: on proto0 the disk is instantiated
+	# via the Partition Manager path (pm_static extra_params), which needs
+	# no zephyr,flash-disk DT node. Enabling this without either a PM disk
+	# partition or a DT node just compiles an empty flash_disks[] array.
+	depends on DISK_ACCESS
+	# The SDK driver must be off: both files define the same disk(s) and the
+	# second disk_access_register of "NAND" would fail at boot.
+	depends on !DISK_DRIVER_FLASH
+	select FLASH
+	select FLASH_MAP
+	help
+	  Compiles fw/drivers/flashdisk/flashdisk.c, a copy of the SDK's
+	  zephyr/drivers/disk/flashdisk.c carrying the upstream fix for
+	  disk_flash_access_write() returning 0 instead of its error code
+	  (silent FAT corruption, issue #380), plus flash-op failure
+	  instrumentation. Enable it wherever the SDK driver would have been
+	  used (proto0 board conf, FAT-on-flashdisk tests).
+
+if DISK_DRIVER_FLASH_PATCHED
+
+config DISK_DRIVER_FLASH_PATCHED_VERIFY_PAGE_LAYOUT
+	bool "Verify flashdisk partition layout"
+	default y
+	help
+	  Mirror of the SDK's FLASHDISK_VERIFY_PAGE_LAYOUT (that symbol only
+	  exists under DISK_DRIVER_FLASH): enable runtime flash-disk partition
+	  page layout constraints verification. Disable to reduce code size.
+
+module = DISK_DRIVER_FLASH_PATCHED
+module-str = flashdisk_patched
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # DISK_DRIVER_FLASH_PATCHED

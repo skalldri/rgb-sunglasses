@@ -1,0 +1,1 @@
+test	Test-only devicetree bindings (this suite; never used on real boards)

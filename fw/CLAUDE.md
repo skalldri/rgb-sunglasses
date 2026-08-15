@@ -586,6 +586,22 @@ BLE trace. The decisive tells:
 
 ## USB Flash Disk (`/NAND:` — GLIM/animation assets)
 
+**The flashdisk driver under `/NAND:` is a PATCHED IN-REPO COPY of the SDK's**
+(`fw/drivers/flashdisk/flashdisk.c`, enabled by `CONFIG_DISK_DRIVER_FLASH_PATCHED`
+with the SDK's `CONFIG_DISK_DRIVER_FLASH=n` — issue #380). NCS v3.1.1's copy
+swallows every disk-write error (`disk_flash_access_write()` computes `rc` and then
+`return 0;`), so a failed QSPI erase/program silently lost FatFS FAT/directory
+sectors — the root cause of the "file size exceeds cluster chain" fsck corruption.
+The copy carries upstream zephyr commit `81db3fff8f` (the one-line fix) plus
+failure instrumentation: per-disk error counters via the `flashdisk stats` shell
+command / `flashdisk_stats.h`, and a LOG_ERR with op/address/errno on every
+underlying flash-op failure. **Delete the whole directory and re-enable
+`CONFIG_DISK_DRIVER_FLASH` once NCS ships a Zephyr containing that commit** — the
+`storage.fat_flashdisk_fault.sdk_tripwire` twister scenario asserts the SDK bug is
+still present and will fail when that day comes; don't "fix" that scenario, act on
+it. Keep the copy byte-diffable against upstream: no changes beyond the marked
+`/* PATCHED */` blocks.
+
 The dev board exposes a ~6.9 MiB FAT filesystem over USB Mass Storage (SCSI Bulk-Only,
 interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts at
 `/NAND:` (`src/storage/storage.cpp`; LUN registered in `src/usb/usb_init.c` as

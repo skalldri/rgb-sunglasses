@@ -1,0 +1,25 @@
+# Test-only binding for the fat_flashdisk_fault suite. Lives inside the test
+# directory (DTS_ROOT appended in its CMakeLists.txt) so the compatible never
+# leaks into real board DTS.
+
+description: RAM-backed flash controller with injectable per-op failures (issue #380 suite)
+
+compatible: "test,fault-flash"
+
+include: base.yaml
+
+properties:
+  size:
+    type: int
+    required: true
+    description: Total backing-store size in bytes
+
+  erase-block-size:
+    type: int
+    required: true
+    description: Uniform erase page size in bytes
+
+  write-block-size:
+    type: int
+    required: true
+    description: Program alignment in bytes
