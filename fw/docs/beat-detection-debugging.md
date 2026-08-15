@@ -127,9 +127,22 @@ is not in it. Approximate it from the row's RMS against `gate=` in `#PARAMS`.
 freeze the AGC — a field recording has to take the room as it finds it — so its
 gain steps mid-capture, and the recorded samples already contain those steps.
 Re-deriving features on the host from the WAV alone therefore cannot reproduce
-what the device saw. `<wav>.csv`'s per-frame gain column is the missing
-piece; replay with `--params-from` and the gain column, not with a single
-`--gain`. `compare.py`'s notion of a PASS still assumes a constant gain, so a
+what the device saw, and `<wav>.csv`'s per-frame gain column is the record of
+what it did.
+
+**The replay side does not consume that column yet.** `replay.py` passes one
+scalar gain to the harness (`BEAT_GAIN`), and `--params-from` copies the single
+`gain=` out of `#PARAMS` into that same scalar — which for a live-AGC capture is
+the value at t=0, since the header is rendered before the drain loop starts. So
+`--params-from` on such a capture replays the whole recording at the *initial*
+gain, silently. `frames.py` exposes the per-frame array as `d.gain`, but nothing
+feeds it back into the harness.
+
+Until something does, the honest options for a live-AGC capture are: read the
+gain column to understand what the detector saw (plots, `report.py`), or replay
+with `BEAT_AGC=sim` so the harness runs the real `AgcController` rather than a
+pinned gain. A fixed-gain bench clip remains the only way to get an exact
+device-vs-host match. `compare.py`'s notion of a PASS still assumes a constant gain, so a
 live-AGC capture is for *reading* what the detector did, not for re-validating
 the harness — use a frozen-gain bench clip for that.
 

@@ -1332,12 +1332,26 @@ static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *sh
     }
     char trailer[64];
     int n = snprintf(trailer, sizeof(trailer), "#DONE frames=%u dropped=%u\n", sc->frames, dropped);
-    if (n > 0 &&
-        tap_write_at_retry(&sc->file, sc->path, sc->pos, trailer, (size_t)n, sc->io_retries) == 0) {
+    /* Bounded like every other snprintf-then-write in this file: the return is
+     * what it WOULD have written, so an outgrown format would hand a length
+     * past the end of the buffer to the writer. Unreachable at ~44 B today. */
+    bool trailer_ok = n > 0 && (size_t)n < sizeof(trailer) &&
+                      tap_write_at_retry(&sc->file, sc->path, sc->pos, trailer, (size_t)n,
+                                         sc->io_retries) == 0;
+    if (trailer_ok) {
         sc->pos += n;
     }
     fs_close(&sc->file);
     sc->open = false;
+    /* No trailer means frames.py leaves frames_reported/dropped unset, so the
+     * row-count cross-check the trailer exists for is silently unavailable.
+     * Must not fall through to the success line the MCP plugin keys on —
+     * record_wav_tap() fails its capture for exactly this, and the branches
+     * below are worded to dodge that regex for exactly this reason. */
+    if (!trailer_ok) {
+        shell_warn(shell, "Capture CSV lost its #DONE trailer - row count unverifiable");
+        return;
+    }
     /* Row count MUST equal the number of blocks that reached the WAV — the two
      * files are paired by position, so any drift makes every row after the
      * drift point describe the wrong audio. Nothing downstream can detect that
@@ -1623,7 +1637,12 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
             io_error = true;
         }
     }
-    if (!io_error && csv_pos > 0) {
+    /* Deliberately NOT gated on io_error: the two artifacts have independent
+     * failure paths, and a WAV tail failure says nothing about the CSV handle.
+     * Gating it discarded up to TAP_CSV_CHUNK of already-captured rows and then
+     * wrote #DONE at a stale offset — undercutting the promise a few lines
+     * below that what WAS captured stays parseable. */
+    if (csv_pos > 0) {
         if (tap_write_at_retry(&fcsv, csv_path, csv_file_pos, s_csv_batch, csv_pos,
                                &io_retries) != 0) {
             shell_error(shell, "CSV write failed on final flush");
