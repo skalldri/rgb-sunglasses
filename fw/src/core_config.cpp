@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <zephyr/logging/log.h>
 
+#include <cstdint>
 #include <cstring>
 
 LOG_MODULE_REGISTER(core_config, LOG_LEVEL_INF);
@@ -45,15 +46,21 @@ BtGattPrimaryService<kCoreConfigServiceUuid> coreConfigPrimaryService;
 // than the display push just throws frames away (issue #376) — getRenderRateMs()
 // also enforces this as a runtime floor, whatever the persisted values say.
 //
-// Known cosmetic cost of 1:1 (PR #378 review): the two loops free-run with no
-// buffer-swap handshake, and each paces itself with a whole-ms k_msleep whose
-// float argument TRUNCATES — so each period is work + trunc(33.3 - work), and
-// the two threads' different work times give systematically different periods.
-// The phase slip is therefore steady, not random: MEASURED on proto0 (PR #381's
-// held-frames counter, zigzag), 135 held/skipped frames in 275 s — one every
-// ~2 s, each a 2 px jump or held frame on a 1 px/step scroll. The old 3:1
-// ratio hid this by always having a fresh frame ready, at 3x the render cost.
-// A producer/consumer handshake on the swap removes it entirely — issue #379.
+// The two loops do NOT free-run at these rates independently — that
+// phase-slipped systematically (the whole-ms k_msleep truncation gave the two
+// threads different periods; measured pre-fix at one held/skipped frame per
+// ~2 s — issue #379): the display thread is the only clock, and the render
+// thread paces itself off its frame-consumed signal
+// (led_controller_wait_frame_consumed, pattern_controller.cpp). The render rate
+// therefore acts as a divider — render once per ceil(render/display) consumed
+// display frames, so the effective render interval is never SHORTER than
+// requested — which getRenderRateMs()'s floor keeps >= 1. Remote render-rate
+// writes are snapped UP to an exact multiple of the display rate at the GATT
+// layer (validate_render_rate below, PR #381 review round 9), so the stored
+// value IS the effective interval at write time; only legacy persisted values
+// and later display-rate changes can de-align the pair. led_stats'
+// "held frames" counts display cycles that re-showed an unchanged frame; ~0 in
+// steady state unless the divider is > 1 or a render genuinely overruns.
 constexpr uint32_t kDefaultThreadRateMsX1000 = 33300;
 
 // These four are app-written tunables with no device-side writer, so Notify=false
@@ -87,11 +94,16 @@ BtGattPersistentCharacteristic<"core/brightness", "Brightness (0-1000)", false, 
  * (settings replay, which deliberately bypasses validation — no migration), and
  * accepted remote writes; there is no other writer of these characteristics.
  *
+ * Validate takes the value by MUTABLE reference and may adjust it (PR #381 review):
+ * an adjusted value is stored and read back in place of what was written — the
+ * clamp-and-report contract the brightness getters already use, moved to write time
+ * so stored and effective can never diverge. See validate_render_rate's snapping.
+ *
  * Mirrors BtGattPersistentCharacteristic's persistence by hand (that mixin is
  * CRTP-closed and its onWrite is infallible; same reasoning as
  * ChargeEnableCharacteristic in battery_service.cpp).
  */
-template <StringLiteral Key, StringLiteral Description, int (*Validate)(uint32_t)>
+template <StringLiteral Key, StringLiteral Description, int (*Validate)(uint32_t &)>
 class CheckedRateCharacteristic
     : public BtGattAutoCharacteristicExt<CheckedRateCharacteristic<Key, Description, Validate>,
                                          Description,
@@ -117,11 +129,22 @@ class CheckedRateCharacteristic
         if (value == lastStored_) {
             return 0;  // no-op rewrite of the stored value: accept, skip the save
         }
-        int ret = Validate(value);
+        uint32_t adjusted = value;
+        int ret = Validate(adjusted);
         if (ret != 0) {
             return ret;
         }
-        lastStored_ = value;
+        if (adjusted != value) {
+            // Validate snapped the value: store the ADJUSTED one so the app's
+            // read-back-after-write reports what the device will actually do.
+            // operator= bypasses this hook by design (no recursion) and does
+            // not notify (Notify=false).
+            *this = adjusted;
+            if (adjusted == lastStored_) {
+                return 0;  // snapped onto what's already stored: no save needed
+            }
+        }
+        lastStored_ = adjusted;
         if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG)) {
             persistent_value_registry_mark_dirty(Key.value);
             persistent_value_store::request_save();
@@ -170,7 +193,7 @@ class CheckedRateCharacteristic
 constexpr uint32_t kMinDisplayRateMsX1000 = 1000;       // 1 ms/frame
 constexpr uint32_t kMaxDisplayRateMsX1000 = 1'000'000;  // 1 s/frame
 
-static int validate_display_rate(uint32_t value) {
+static int validate_display_rate(uint32_t &value) {
     if (value < kMinDisplayRateMsX1000 || value > kMaxDisplayRateMsX1000) {
         LOG_WRN("display rate %u outside [%u, %u] (ms x 1000); rejecting", value,
                 kMinDisplayRateMsX1000, kMaxDisplayRateMsX1000);
@@ -194,13 +217,32 @@ CheckedRateCharacteristic<"core/display_thread_rate_ms", "Display Thread Rate * 
 //    remains silently floored (reversibly) — that path is the documented,
 //    test-pinned reversibility contract, not a write that asked for something
 //    ignored.
-static int validate_render_rate(uint32_t value) {
+static int validate_render_rate(uint32_t &value) {
     const uint32_t displayRaw = coreDisplayThreadRateMs;
     if (value < displayRaw) {
         LOG_WRN("render rate %u < display rate %u would be ignored (floored); "
                 "rejecting — lower the display rate first",
                 value, displayRaw);
         return -EINVAL;
+    }
+    // The render thread renders once per ceil(render/display) consumed display
+    // frames (issue #379), so a value that is NOT an exact multiple of the
+    // display rate would be silently effective at N x display while reading
+    // back as written — 40000 under a 33300 display really runs at 66600, and
+    // 100000 at 133200. That is the same stored-vs-effective divergence class
+    // the below-display rejection above exists to prevent, for a much larger
+    // set of values (PR #381 review round 9). Snap UP to the next exact
+    // multiple (never faster than requested, matching the divider's ceiling)
+    // and store THAT: read-back reports the true rate, and stored == effective
+    // at write time. A later display-rate change can still de-align the pair —
+    // that is the documented reversible-floor path, unchanged.
+    if (displayRaw > 0 && value % displayRaw != 0) {
+        const uint64_t n = ((uint64_t)value + displayRaw - 1) / displayRaw;
+        uint64_t snapped = n * (uint64_t)displayRaw;
+        if (snapped > UINT32_MAX) {
+            snapped -= displayRaw;  // largest representable multiple instead
+        }
+        value = (uint32_t)snapped;
     }
     return 0;
 }

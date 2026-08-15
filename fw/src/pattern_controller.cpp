@@ -11,6 +11,7 @@
 #include <core_config.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
+#include <render_pacing.h>
 
 #if defined(CONFIG_FAT_FILESYSTEM_ELM)
 #include <storage/glim_registry.h>
@@ -290,6 +291,13 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     // Overrun logging is rate-limited (see the overrun branch at the bottom of the loop).
     int64_t lastRenderOverrunLogMs = 0;
     uint32_t renderOverrunsSinceLog = 0;
+    int64_t lastWaitTimeoutLogMs = 0;
+    uint32_t waitTimeoutsSinceLog = 0;
+    int64_t prevIterStartTicks = k_uptime_ticks();
+#if defined(CONFIG_APP_SHUFFLE)
+    // Fractional-ms carry for the shuffle dwell clock (see the onFrame call).
+    float shuffleDtRemainderMs = 0.0f;
+#endif
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -298,7 +306,60 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // pattern_controller_tick_epoch().
         atomic_inc(&sTickEpoch);
 
-        float kTargetRenderIntervalMs = getPatternConfig().getRenderRateMs();
+        // Producer-gated pacing (issue #379): this thread no longer runs its own
+        // free-running sleep clock — it renders once per N consumed display
+        // frames (see the wait at the bottom of the loop), so its cadence is
+        // slaved to the display thread's clock and every display push samples
+        // exactly one fresh frame. core/render_thread_rate_ms therefore acts as
+        // a DIVIDER — the arithmetic (ceiling semantics, unusable-display
+        // fallback) lives in the pure seam render_pacing.h so it is
+        // native_sim-testable (fw/tests/render_pacing/), since this loop itself
+        // is not compiled into any test binary (PR #381 review). At the
+        // defaults N == 1 and dt is 33.3 ms, exactly as before.
+        const float displayIntervalMs = getPatternConfig().getDisplayRateMs();
+        const float renderRateMs = getPatternConfig().getRenderRateMs();
+        const uint32_t framesPerRender =
+            render_pacing::framesPerRender(renderRateMs, displayIntervalMs);
+        // The NOMINAL interval: the overrun threshold at the bottom of the loop
+        // and the wait-timeout base. Deliberately never substituted with wall
+        // time — doing so would silently raise the overrun threshold to ~2x
+        // N x display for the whole degraded stretch, disabling the overrun
+        // telemetry exactly when someone is reading the log to find out why the
+        // system is degraded (PR #381 review).
+        const float kTargetRenderIntervalMs =
+            render_pacing::renderIntervalMs(renderRateMs, displayIntervalMs);
+        // The dt handed to the animations and shuffle: the wall time actually
+        // elapsed since the previous iteration, every iteration — not the
+        // nominal interval. The handshake makes this loop's real cadence a
+        // function of the display thread's ACTUAL period, and a chronic
+        // sub-timeout display slowdown (the display missing its budget under
+        // BT/flash load — exactly what #267/#312 measured) never trips the
+        // wait timeout below, so a nominal dt would run animation time slow
+        // for as long as the slowdown lasts with nothing logged (PR #381
+        // review round 6). Measured in kernel ticks, not k_uptime_get()'s
+        // whole-ms truncation: at the 33.3 ms default a ms-quantised delta
+        // alternates 33/34 — a ±2% per-frame velocity wobble in every
+        // dt-integrating animation, the same stepping-irregularity class this
+        // PR removes, re-injected at small amplitude (PR #381 review round 6;
+        // startTicks is already sampled above, so this costs nothing). Clamped
+        // to 4x nominal: the wait's shared deadline bounds a healthy iteration
+        // well inside that, and a multi-second display stall (#312 measured
+        // ~1.5 s) should not teleport animation clocks when it clears. A
+        // same-tick iteration (elapsed 0 — unreachable in practice at 32768 Hz
+        // resolution) keeps the nominal fallback, since dt 0 would stall
+        // animation and shuffle-dwell clocks; a genuinely tiny elapsed (an
+        // immediate take off a coalesced credit) is passed through truthfully.
+        float animationDtMs = kTargetRenderIntervalMs;
+        const int64_t elapsedTicks = startTicks - prevIterStartTicks;
+        if (elapsedTicks > 0) {
+            animationDtMs =
+                1000.0f * (float)elapsedTicks / (float)CONFIG_SYS_CLOCK_TICKS_PER_SEC;
+            const float maxDtMs = 4.0f * kTargetRenderIntervalMs;
+            if (animationDtMs > maxDtMs) {
+                animationDtMs = maxDtMs;
+            }
+        }
+        prevIterStartTicks = startTicks;
 
         size_t bufferId = 0;
         ret = claimBufferForRender(bufferId);
@@ -326,12 +387,12 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
             PatternControllerRenderer renderer(get_current_led_config(), bufferId);
 
             if (anim) {
-                anim->tick(renderer, kTargetRenderIntervalMs);
+                anim->tick(renderer, animationDtMs);
             } else {
                 // No animation: default to all LEDs off to save power
                 BaseAnimation *nullAnimation = animation_registry_get(Animation::None);
                 if (nullAnimation) {
-                    nullAnimation->tick(renderer, kTargetRenderIntervalMs);
+                    nullAnimation->tick(renderer, animationDtMs);
                 }
             }
 
@@ -348,12 +409,22 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
             // the selected animation's good-moment flag would be stale.
             if (currentIndicator == Indicator::None) {
                 BaseAnimation *shuffleCur = anim;  // == getAnimation(currentAnimation) here
-                // The animation was ticked with this same kTargetRenderIntervalMs, so its
-                // own pacing clock and the shuffle dwell advance in lockstep on nominal
-                // ms — a requested "time to my next boundary" is exact in the same units
-                // the deadline is compared against, even when the render loop overruns.
+                // onFrame takes whole ms, but animationDtMs is fractional
+                // (~33.3): a bare truncating cast would drop ~0.3 ms EVERY
+                // frame, running the shuffle dwell clock ~1% slow against the
+                // animation's float clock (~0.55 s behind over a 60 s dwell;
+                // ~3.9% at a 16.65 ms pair) — and with wall-clock dt the lost
+                // fraction varies per frame rather than being a fixed offset
+                // (PR #381 review round 9; the truncation itself predates this
+                // PR). Carrying the fractional remainder across frames keeps
+                // the two clocks agreeing in the long run, so a requested
+                // "time to my next boundary" stays honest against the dwell
+                // deadline it is compared with.
+                const float shuffleDtTotalMs = animationDtMs + shuffleDtRemainderMs;
+                const uint32_t shuffleDtMs = static_cast<uint32_t>(shuffleDtTotalMs);
+                shuffleDtRemainderMs = shuffleDtTotalMs - static_cast<float>(shuffleDtMs);
                 const ShuffleController::Decision d = sShuffleController.onFrame(
-                    currentAnimation, static_cast<uint32_t>(kTargetRenderIntervalMs),
+                    currentAnimation, shuffleDtMs,
                     shuffleCur ? shuffleCur->isAtGoodSwitchPoint() : true,
                     shuffleCur ? shuffleCur->goodSwitchPointGraceMs() : 0u);
                 if (d.switchNow) {
@@ -383,13 +454,82 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
                 lastRenderOverrunLogMs = nowMs;
                 renderOverrunsSinceLog = 0;
             }
-            // Always yield, even after blowing the budget. This thread is preemptible so a
-            // spin here is survivable, but an unconditional yield costs nothing and removes
-            // a latent trap identical to the one fixed in led_controller.cpp (issue #267).
+            // Yield unconditionally even after blowing the budget (PR #381
+            // review): during a SUSTAINED overrun the display's coalesced
+            // credit is already pending when the wait below runs, and
+            // k_sem_take on an available semaphore returns without
+            // rescheduling — so without this sleep the loop never yields and
+            // everything below priority 4 starves (the prio-14 persist and
+            // MCUboot-updater workqueues: OTA flash writes and debounced
+            // settings saves would stall for as long as the overrun lasts).
+            // Same latent trap as issue #267's in led_controller.cpp.
             k_msleep(1);
-        } else {
-            // Sleep for however much time is left
-            k_msleep(kTargetRenderIntervalMs - updateTimeMs);
+            // At N == 1 the immediate take after an overrun is the correct
+            // catch-up (the display is about to want a fresh frame), and
+            // consecutive immediate takes cannot outpace the display's
+            // max-count-1 gives. Known N > 1 caveat (PR #381 review): gives
+            // that land DURING an overlong render coalesce into one credit, so
+            // a render spanning several display periods still waits N-1 more
+            // periods afterwards — the effective interval can stretch past
+            // N*display by the render's own overshoot. Accepted: a count-N
+            // semaphore would let the render burst to catch up after a stall,
+            // which is worse than briefly pacing slower than a non-default
+            // divider asked for.
+        }
+
+        // Pace off the display clock (issue #379): wait until the display thread
+        // has consumed N frames, then render the next one. Bounded, never
+        // K_FOREVER — the display thread exits at boot when the LED strip devices
+        // are not ready, and this thread must keep ticking (shuffle, indicators,
+        // extension activation) rather than wedge; on timeout the loop breaks and
+        // proceeds, and the next iteration's wall-clock dt (above) absorbs the
+        // extra elapsed time. All N takes share ONE deadline of ~2x the
+        // CONFIGURED render interval (2 x N x display + 5 ms), each take getting
+        // only the remaining budget — a full timeout per take would let N
+        // just-under-timeout takes stack to ~2 x N^2 x display, silently pausing
+        // shuffle/indicator/extension servicing far past the documented bound
+        // (PR #381 review round 6; threading.md's "~2 x N display periods"
+        // invariant is this deadline). A per-display-period deadline with the
+        // break would instead render dividers' frames N times too fast, burning
+        // render/sandbox CPU on frames nobody pushes (PR #381 review). A timeout
+        // can also fire during a genuine multi-hundred-ms display stall (#312
+        // measured ~1.5 s of cooperative-band starvation) — that is benign: dt
+        // stays truthful, the WARN is rate-limited, and the max-count-1
+        // semaphore re-syncs the pacing on the display's next give.
+        if (displayIntervalMs <= 0.0f) {
+            // Display interval written to 0 (remotely writable, unclamped): the
+            // display thread's own trailing k_msleep(0 - work) makes it a
+            // spinner that gives a credit every iteration, so pacing off the
+            // semaphore would make THIS thread a second unpaced spinner and
+            // starve everything below priority 4 (PR #381 review). Self-pace
+            // exactly as the pre-handshake code did — dt above already fell
+            // back to getRenderRateMs() on this path.
+            float sleepMs = kTargetRenderIntervalMs - updateTimeMs;
+            if (sleepMs < 1.0f) {
+                sleepMs = 1.0f;
+            }
+            k_msleep((int32_t)sleepMs);
+            continue;
+        }
+        const int32_t waitTimeoutMs =
+            (int32_t)(2.0f * (float)framesPerRender * displayIntervalMs) + 5;
+        const int64_t waitDeadlineMs = k_uptime_get() + waitTimeoutMs;
+        for (uint32_t consumed = 0; consumed < framesPerRender; consumed++) {
+            const int64_t remainingMs = waitDeadlineMs - k_uptime_get();
+            if (remainingMs <= 0 ||
+                led_controller_wait_frame_consumed(K_MSEC((int32_t)remainingMs)) != 0) {
+                waitTimeoutsSinceLog++;
+                const int64_t nowMs = k_uptime_get();
+                if (nowMs - lastWaitTimeoutLogMs >= 5000) {
+                    LOG_WRN("Display consumed %u of %u frame(s) within %d ms (%u timeout(s) "
+                            "in the last %lld ms) — render self-pacing until it recovers",
+                            consumed, framesPerRender, waitTimeoutMs, waitTimeoutsSinceLog,
+                            nowMs - lastWaitTimeoutLogMs);
+                    lastWaitTimeoutLogMs = nowMs;
+                    waitTimeoutsSinceLog = 0;
+                }
+                break;  // don't stack N timeouts on a stopped display thread
+            }
         }
     }
 }

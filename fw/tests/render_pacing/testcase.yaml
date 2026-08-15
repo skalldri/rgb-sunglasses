@@ -1,0 +1,6 @@
+tests:
+  interfaces.render_pacing:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

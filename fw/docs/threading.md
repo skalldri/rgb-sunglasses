@@ -223,7 +223,20 @@ Each of these is enforced by a `BUILD_ASSERT` next to the thread it constrains, 
 | `IMU_THREAD_PRIORITY > APP_PATTERN_CONTROLLER_THREAD_PRIORITY` | `src/imu/imu.cpp` | The animation tick must preempt the sensor reader. |
 | The three flash/FS workqueue priorities are valid preemptible values | their respective `.cpp` files | They do the longest blocking I/O in the system and must stay at the bottom. |
 
-Not machine-checkable, but equally binding: **the TPS25750 workqueue must rank below the
+Not machine-checkable, but equally binding: **the render thread may block on the display
+thread — never the reverse.** Since issue #379 the pattern controller paces itself by
+waiting (bounded at ~2 × N display periods **total** — one deadline shared across all N
+takes, not a fresh timeout per take, which would compound to ~2 × N² display periods —
+where N is the render-rate divider
+`ceil(render/display)` — N = 1 at the defaults; never `K_FOREVER`) on `led_controller`'s
+frame-consumed semaphore, given once per display cycle. The display thread stays a pure
+free-running clock: it never waits for a fresh frame (it re-shows the last one and counts
+a `held frame` in `led_stats`), which is what keeps its hard frame deadline — and
+`test_soak.py`'s frame-count gate — independent of producer health. The wait sits outside
+`displayBufferMutex`, so no lock-ordering edge exists between the handshake and the buffer
+bookkeeping. Do not add any path where the display thread blocks on the render thread.
+
+Also not machine-checkable: **the TPS25750 workqueue must rank below the
 rendering threads.** It runs multi-step CMD1/DATA1 bridge transactions under the driver's
 task mutex and can hold the CPU for a while. It cannot be asserted in the driver, which is
 built standalone in two test suites and does not see the application's symbols.

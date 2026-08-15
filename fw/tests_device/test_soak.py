@@ -58,6 +58,71 @@ def _require_shuffle_off(rgb: RgbShell) -> None:
     )
 
 
+def _persisted_rate_ms_x1000(rgb: RgbShell, key: str, default: int = 33300) -> int:
+    """Persisted uint32 rate (ms x 1000) from the settings partition, or the
+    firmware default when the key is not persisted. `settings read` prints a
+    hex dump (4 bytes little-endian); a missing key prints an error line.
+
+    Only those two outcomes are accepted — anything else (shell disabled,
+    hexdump format change, empty exchange) fails LOUDLY rather than reading as
+    "not persisted", which would let a real persisted divider slip past the
+    precondition and surface as a misleading held-frames failure instead
+    (PR #381 review)."""
+    out = rgb.exec(f"settings read {key}", check=False)
+    hexdump_seen = False
+    error_seen = False
+    for line in out:
+        s = line.strip()
+        m = re.match(r"^[0-9a-fA-F]+:\s+((?:[0-9a-fA-F]{2}\s+)+)", s)
+        if m:
+            b = bytes(int(x, 16) for x in m.group(1).split())
+            if len(b) >= 4:
+                return int.from_bytes(b[:4], "little")
+            hexdump_seen = True
+        # ONLY Zephyr's actual settings-miss string ("Setting not found",
+        # cmd_read() in subsys/settings/src/settings_shell.c) means genuinely
+        # not persisted. A broader match ("not found"/"failed"/"err") also
+        # swallowed `settings: command not found` from a build without
+        # CONFIG_SETTINGS_SHELL — turning this guard into a silent no-op, the
+        # opposite of its documented loud failure (PR #381 review). Believed
+        # only after scanning EVERY line and seeing no hexdump.
+        if "Setting not found" in s:
+            error_seen = True
+    if error_seen and not hexdump_seen:
+        return default
+    pytest.fail(
+        f"unparseable `settings read {key}` output (neither a 4-byte hex dump "
+        f"nor a not-found error) — cannot verify the divider precondition: {out!r}"
+    )
+
+
+def _require_default_divider(rgb: RgbShell) -> None:
+    """Hard fail (fixable setup): a persisted render rate above the display
+    rate makes the render thread run once per N consumed display frames
+    (#379), so held_frames == (N-1)/N of frames BY DESIGN and the zero-held
+    gate below would misfire on a correctly-behaving board."""
+    render = _persisted_rate_ms_x1000(rgb, "appcfg/core/render_thread_rate_ms")
+    display = _persisted_rate_ms_x1000(rgb, "appcfg/core/display_thread_rate_ms")
+    # Split asserts so each failure names the key that actually has to change
+    # (PR #381 review: one message covered only one of the three failure modes).
+    assert display > 0, (
+        f"persisted display rate is {display} (x1000 ms) — the render thread "
+        "falls back to self-pacing (pattern_controller.cpp), so the #379 "
+        "held-frames gate is meaningless; delete appcfg/core/display_thread_rate_ms"
+    )
+    # Mirrors the firmware's ceiling-with-epsilon divider (render_pacing.h):
+    # ratios in (1.0, 1.001] still give N == 1, so the bound carries the same
+    # epsilon — a plain render <= display would hard-fail a board (e.g.
+    # 33320/33300) that runs at the default 1:1 pacing (PR #381 review).
+    assert render <= display * 1.001, (
+        f"persisted render/display rates {render}/{display} give a divider of "
+        f"{-(-render // display)} — delete whichever of "
+        "appcfg/core/render_thread_rate_ms (if > 33300) or "
+        "appcfg/core/display_thread_rate_ms (if < 33300) is the non-default "
+        "one; the #379 held-frames gate assumes the default 1:1 pacing"
+    )
+
+
 def _glim_loop_mode(rgb: RgbShell) -> str | None:
     """Current persisted loop mode, or None if never persisted (default).
 
@@ -134,6 +199,7 @@ def test_frame_pacing_soak(rgb: RgbShell):
     """#267/#271/#312: 5 minutes under PROVEN rendering load (LZ4 decode +
     FAT reads + render), then the led_stats budget gates."""
     _require_shuffle_off(rgb)
+    _require_default_divider(rgb)
     with _glim_playback(rgb, GLIM_LZ4):
         rgb.exec("led_stats reset")
         console = _collect_console(rgb, 300.0)
@@ -151,6 +217,22 @@ def test_frame_pacing_soak(rgb: RgbShell):
             f"at {s['target_us']} µs/frame): {s}"
         )
         assert s["overruns"] == 0, f"frame overruns during soak (#267): {s}"
+        # The render thread is phase-locked to the display clock (#379), so at
+        # the default 1:1 divider a display cycle re-shows an unchanged frame
+        # only when a render genuinely overran its full display period — and
+        # this soak's render thread does FAT reads + LZ4 decodes, where a
+        # single ~300 ms stall costs ~9 held frames BY DESIGN (PR #381 review:
+        # this gate has never run under this load, so a tight bound would fail
+        # healthy boards). Report the value, and gate only at 0.5% — well
+        # above several stall-class events, still 3x under the pre-fix
+        # free-running slip (135/8,243 = 1.64%), which is the regression class
+        # this exists to catch. Tighten once soak passes establish the real
+        # distribution.
+        held_budget = max(10, s["frames"] // 200)
+        print(f"held_frames={s['held_frames']} (budget {held_budget}, frames {s['frames']})")
+        assert s["held_frames"] <= held_budget, (
+            f"held frames {s['held_frames']} > budget {held_budget} during soak (#379): {s}"
+        )
         assert s["work_max_us"] < s["target_us"], (
             f"work max {s['work_max_us']} µs exceeds the {s['target_us']} µs "
             f"frame budget (#267): {s}"

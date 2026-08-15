@@ -15,6 +15,7 @@
 #include <zephyr/shell/shell_dummy.h>
 #include <zephyr/ztest.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #include "fake_led_strip.h"
@@ -281,6 +282,25 @@ ZTEST(led_controller, test_stats_late_frame_threshold) {
     zassert_equal(s.lateFrames, 1, "a zero target must not produce late frames");
 }
 
+// Guards the Stats -> Summary plumbing for the held-frames field (the place a
+// new field gets forgotten), nothing more: the #379 behavior itself — the
+// generation comparison in claimBufferForDisplay — is pinned by the
+// with/without-producer halves of test_held_frames_counter_climbs_without_producer.
+ZTEST(led_controller, test_stats_held_frames_count_and_reset) {
+    led_stats_core::Stats s;
+    led_stats_core::reset(s);
+    zassert_equal(s.heldFrames, 0, "reset must zero held frames");
+
+    led_stats_core::recordHeldFrame(s);
+    led_stats_core::recordHeldFrame(s);
+    zassert_equal(s.heldFrames, 2, "each held frame must count once");
+    zassert_equal(led_stats_core::summarize(s).heldFrames, 2,
+                  "summarize must pass held frames through");
+
+    led_stats_core::reset(s);
+    zassert_equal(s.heldFrames, 0, "reset must clear held frames");
+}
+
 ZTEST(led_controller, test_stats_keeps_worst_not_last) {
     led_stats_core::Stats s;
     led_stats_core::reset(s);
@@ -290,6 +310,90 @@ ZTEST(led_controller, test_stats_keeps_worst_not_last) {
 
     zassert_equal(s.workMaxUs, 9000, "work max must survive a later smaller sample");
     zassert_equal(s.worstSegmentUs, 8000, "worst segment must survive a later smaller sample");
+}
+
+// Issue #379: the display loop gives the frame-consumed signal once per cycle,
+// in every panel output mode. This pins the give's EXISTENCE and CADENCE only —
+// NOT its placement. Placement (immediately after the latch, so the producer
+// gets the full display period) is verified by inspection only: at matched
+// producer/consumer rates exactly one release lands between consecutive claims
+// wherever the give sits, so every steady-state count/held assertion is
+// phase-invariant. Two candidate placement tests (count-based, and a
+// configurable-push-delay variant) both PASSED under a mutation moving the give
+// after the strip pushes, so neither was kept; pinning it mechanically needs a
+// give->claim latency probe. Deferred (PR #381 review).
+ZTEST(led_controller, test_display_signals_frame_consumed) {
+    // The signal recurs, once per display cycle...
+    run_led_output_cmd("led_output on");
+    while (led_controller_wait_frame_consumed(K_NO_WAIT) == 0) {
+    }
+    zassert_equal(led_controller_wait_frame_consumed(K_MSEC(100)), 0,
+                  "display loop must give the frame-consumed signal");
+    zassert_equal(led_controller_wait_frame_consumed(K_MSEC(100)), 0,
+                  "the signal must recur every display cycle");
+
+    // ...in every panel output mode — claim/release (and the give) run
+    // identically in all three (issue #172's requirement).
+    static const char *const kModes[] = {"led_output blank", "led_output off", "led_output on"};
+    for (size_t i = 0; i < ARRAY_SIZE(kModes); i++) {
+        run_led_output_cmd(kModes[i]);
+        while (led_controller_wait_frame_consumed(K_NO_WAIT) == 0) {
+        }
+        zassert_equal(led_controller_wait_frame_consumed(K_MSEC(100)), 0,
+                      "frame-consumed signal missing in mode '%s'", kModes[i]);
+    }
+}
+
+ZTEST(led_controller, test_held_frames_counter_climbs_without_producer) {
+    const struct shell *sh = shell_backend_dummy_get_ptr();
+    zassert_not_null(sh, "dummy shell backend missing");
+
+    zassert_equal(shell_execute_cmd(sh, "led_stats reset"), 0, "led_stats reset failed");
+    k_msleep(kSeveralTicksMs);  // ~30 display ticks, no render in between
+
+    shell_backend_dummy_clear_output(sh);
+    zassert_equal(shell_execute_cmd(sh, "led_stats"), 0, "led_stats failed");
+
+    size_t len = 0;
+    const char *out = shell_backend_dummy_get_output(sh, &len);
+    zassert_not_null(out, "no shell output captured");
+    const char *held = strstr(out, "held frames:");
+    zassert_not_null(held, "led_stats should report held frames");
+
+    unsigned int heldCount = 0;
+    zassert_equal(sscanf(held, "held frames:   %u", &heldCount), 1,
+                  "held frames line should parse");
+    // 300 ms with no producer: nearly every claim after the first re-samples.
+    // native_sim's 10 ms system tick makes the effective display period ~10-20 ms
+    // (k_msleep rounds up to a tick boundary), so a 300 ms window yields 14-29
+    // held frames — floor at 10 to stay timing-tolerant.
+    zassert_true(heldCount >= 10, "expected >= 10 held frames with no producer, got %u",
+                 heldCount);
+
+    // Positive control (PR #381 review): the same window WITH a producer must
+    // count ~none — this is the assertion that pins the render-generation
+    // comparison. Mutating claimBufferForDisplay to count every cycle
+    // (heldFrame = haveSampledFrame) passes the lower bound above MORE easily;
+    // only this upper bound catches it. The producer runs on this cooperative
+    // ztest thread, so each 10 ms tick releases a fresh frame before the
+    // preemptible display thread's claim samples it.
+    zassert_equal(shell_execute_cmd(sh, "led_stats reset"), 0, "led_stats reset failed");
+    for (int i = 0; i < 30; i++) {
+        size_t buffer = 0;
+        zassert_equal(claimBufferForRender(buffer), 0, "claimBufferForRender failed");
+        zassert_equal(releaseBufferFromRender(buffer), 0, "releaseBufferFromRender failed");
+        k_msleep(10);
+    }
+    shell_backend_dummy_clear_output(sh);
+    zassert_equal(shell_execute_cmd(sh, "led_stats"), 0, "led_stats failed");
+    out = shell_backend_dummy_get_output(sh, &len);
+    zassert_not_null(out, "no shell output captured");
+    held = strstr(out, "held frames:");
+    zassert_not_null(held, "led_stats should report held frames");
+    unsigned int heldFed = 0;
+    zassert_equal(sscanf(held, "held frames:   %u", &heldFed), 1,
+                  "held frames line should parse");
+    zassert_true(heldFed <= 3, "a fed display must count ~no held frames, got %u", heldFed);
 }
 
 ZTEST(led_controller, test_led_stats_shell_command) {
