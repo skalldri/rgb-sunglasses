@@ -31,3 +31,18 @@ jobs:
 
       - name: Run scripts/ tests
         run: pytest scripts/tests/ -v
+
+      # pr-watch.sh carries its own offline state-machine suite. It needs no
+      # network or gh token, so there is no reason for it to be the one test
+      # nothing runs.
+      - name: pr-watch.sh self-test
+        run: bash scripts/pr-watch.sh --self-test
+
+      # Scoped to pr-watch.sh deliberately: scripts/fw-env.sh trips a
+      # pre-existing SC1090 (non-constant source), and widening this step would
+      # mean either a red build for an unrelated file or suppressing someone
+      # else's warning from this PR.
+      - name: Shellcheck pr-watch.sh
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning scripts/pr-watch.sh

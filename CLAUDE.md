@@ -273,6 +273,22 @@ When the user says "Remember" (or "Remember that"), update the appropriate CLAUD
 
 - While this account has a **pending (draft) review** on a PR, the API rejects ALL new review comments from it with 422 "user can only have one pending review per pull request" — both `POST /pulls/<n>/reviews` and standalone `POST /pulls/<n>/comments` (standalone line comments are single-comment reviews internally). Never touch or submit the user's pending review; fall back to regular PR comments (`gh pr comment`) with `https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>` permalinks, which render the referenced snippet inline.
 - Once a review is submitted, reply to its line-comment threads with `gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body=...`.
+- **`-f body=@file` does NOT read the file — it posts the literal string `@file`.** `-f`/`--raw-field` is verbatim; only `-F`/`--field` interprets a leading `@` as a file path. Writing a long comment to a temp file and passing `-f body=@/tmp/c1.md` (a natural-looking move, and how `curl` behaves) silently publishes a comment whose entire body is `@/tmp/c1.md`. Observed 2026-08-15 on PR #377: five review comments posted this way, all stale on GitHub until repaired. Prefer the unambiguous form, which works regardless of flag semantics:
+
+  ```bash
+  gh api -X POST repos/<owner>/<repo>/pulls/<n>/comments -f body="$(cat /tmp/c1.md)" ...
+  ```
+
+  Note the temp file is still the right way to carry markdown — heredocs and inline quoting mangle backticks and `$` in code snippets. It is only the `@` hand-off that is broken.
+- **Always verify a posted comment round-trips.** The POST returns 201 with a valid comment object either way, so the failure is invisible without an explicit check. After posting, re-read the bodies and assert none is a bare `@path`:
+
+  ```bash
+  gh api --paginate repos/<owner>/<repo>/pulls/<n>/comments \
+    --jq '.[] | select(.body | test("^\\s*@\\S+\\s*$")) | "STALE \(.id) \(.body)"'
+  ```
+
+  Repair in place with `gh api -X PATCH repos/<owner>/<repo>/pulls/comments/<comment_id> -f body="$(cat …)"` — no need to delete and repost, which would lose thread replies.
+- Comment listing endpoints **paginate at 30**. A PR with several review rounds silently truncates, so a "did my comment land?" check without `--paginate` can report a false negative.
 
 ## Process management — NEVER use pkill
 
@@ -342,7 +358,7 @@ Before working on any subsystem, **read its CLAUDE.md first** — those files ar
 | `.devcontainer/`    | Devcontainer definition and setup scripts.                                               |
 | `.claude/skills/`   | Project skills (slash commands).                                                         |
 | `.claude/hooks/`    | Claude Code hooks (e.g. the hardware-lock `PreToolUse` guard).                           |
-| `scripts/`          | Cross-cutting host tooling shared by all subsystems — currently just `hw-lock.sh`, the multi-agent hardware-lock coordinator (see "Hardware locking" above). |
+| `scripts/`          | Cross-cutting host tooling shared by all subsystems — `hw-lock.sh`, the multi-agent hardware-lock coordinator (see "Hardware locking" above), and `pr-watch.sh`, the GitHub PR watcher behind /pr-review-watch. |
 
 ## Task routing
 
@@ -368,6 +384,7 @@ This is the project's **single** routing table — other docs link here, never c
 | Fresh worktree/session orientation | /worktree-setup |
 | Prove a change actually works | /verify |
 | Pre-PR gate | /submit-pr |
+| Watch GitHub for new PRs/pushes and auto-review them in parallel | /pr-review-watch |
 | Cut a release | /release |
 
 Four things sound alike — don't mix them up: a **built-in C++ animation** compiled into firmware = /add-animation; an in-repo **loadable `.llext` extension** = /add-extension; a **community extension** (same `.llext` on the device, but developed in a standalone repo against the released `rgbx-sdk`, never the in-repo EDK path) = the standalone-extension row above; a **`.glim` asset file** (stored animation data) = `fw/src/storage/GLIM_FORMAT.md` + the `fw/tools/` converters (see `fw/CLAUDE.md`).
