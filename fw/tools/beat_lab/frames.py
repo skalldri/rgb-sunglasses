@@ -56,6 +56,9 @@ class FrameDump:
     buckets: np.ndarray = None  # (N, NUM_BUCKETS) or None
     frames_reported: int = None  # from #DONE, None if absent
     dropped: int = None
+    blocks_reported: int = None  # from #DONE blocks=, None on pre-2026-08 files
+    rows_lost: int = None  # from #DONE lost=, None on pre-2026-08 files
+    misaligned: bool = False  # #MISALIGNED present: rows do NOT pair with the WAV
 
     @property
     def times(self) -> np.ndarray:
@@ -103,6 +106,37 @@ def _parse_params(line: str) -> dict:
     return out
 
 
+def require_wav_aligned(dump: "FrameDump", path=None) -> None:
+    """Raise unless this dump's rows pair positionally with the WAV.
+
+    The device pairs the two files by POSITION - row i describes block i - so
+    any drift makes every row after it describe the wrong audio. A host cannot
+    detect that from the rows themselves (a D-line's seq counts frames the DSP
+    PRODUCED, not frames that reached the WAV), which is why the firmware states
+    the verdict in the file.
+
+    Call this before using a dump alongside its WAV. Not folded into
+    parse_dump(): inspecting a known-bad capture is legitimate, tuning against
+    one silently is not.
+    """
+    where = f" ({path})" if path else ""
+    if dump.misaligned:
+        raise ValueError(
+            f"capture CSV{where} is marked #MISALIGNED - its rows do not line up "
+            f"with the WAV and must not be paired with it"
+        )
+    # Independent recomputation, so a file predating the #MISALIGNED marker (or
+    # one written by a device that failed before it could emit it) is still
+    # caught whenever the trailer carries the block count.
+    if dump.blocks_reported is not None and dump.frames_reported is not None:
+        if dump.frames_reported != dump.blocks_reported or (dump.rows_lost or 0) != 0:
+            raise ValueError(
+                f"capture CSV{where} reports {dump.frames_reported} rows for "
+                f"{dump.blocks_reported} WAV blocks ({dump.rows_lost or 0} lost) - "
+                f"rows do not pair with the WAV"
+            )
+
+
 def parse_dump(path_or_lines) -> FrameDump:
     """Parse a frame dump from a file path or an iterable of lines.
 
@@ -121,6 +155,13 @@ def parse_dump(path_or_lines) -> FrameDump:
         line = line.strip()
         if line.startswith("#PARAMS"):
             dump.params = _parse_params(line)
+        elif line.startswith("#MISALIGNED"):
+            # The device detected row/block drift and said so IN the file,
+            # because the console line it also prints reaches nobody on an
+            # app-started capture. Every row after the drift point describes
+            # the wrong audio, so this is not a warning to weigh - see
+            # require_wav_aligned().
+            dump.misaligned = True
         elif line.startswith("#DONE"):
             for tok in line.split()[1:]:
                 key, _, val = tok.partition("=")
@@ -128,6 +169,10 @@ def parse_dump(path_or_lines) -> FrameDump:
                     dump.frames_reported = int(val)
                 elif key == "dropped":
                     dump.dropped = int(val)
+                elif key == "blocks":
+                    dump.blocks_reported = int(val)
+                elif key == "lost":
+                    dump.rows_lost = int(val)
         elif line.startswith("D,"):
             rows.append(line.split(","))
 

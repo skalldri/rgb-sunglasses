@@ -378,3 +378,73 @@ class TestScenarioSidecarWarnings:
         _write_capture_sidecar(Path(str(wav) + ".csv"), _make_dump_lines(n=20, buckets=True))
         capture_to_scenario.main([str(wav), "--scenarios-dir", str(tmp_path / "out")])
         assert "warning:" not in capsys.readouterr().err
+
+
+# --- #MISALIGNED marker: the device's verdict has to survive the trip off-device ---
+
+_ALIGNED = (
+    "#PARAMS gamma=3f800000 alpha=3f800000 floor=00000000 refractory=4 agc_frozen=0\n"
+    "D,0,54,0,3f800000," + ",".join(["3f800000"] * 16) + "\n"
+    "#DONE frames=1 dropped=0 blocks=1 lost=0\n"
+)
+_MISALIGNED = _ALIGNED.replace(
+    "#DONE frames=1 dropped=0 blocks=1 lost=0",
+    "#MISALIGNED do NOT pair this file with the WAV\n#DONE frames=2 dropped=0 blocks=1 lost=0",
+)
+
+
+def test_done_trailer_carries_blocks_and_lost():
+    """Extra #DONE fields parse; older trailers without them still load."""
+    d = frames.parse_dump(_ALIGNED.splitlines())
+    assert (d.frames_reported, d.blocks_reported, d.rows_lost) == (1, 1, 0)
+    assert d.misaligned is False
+
+    legacy = frames.parse_dump(
+        _ALIGNED.replace(" blocks=1 lost=0", "").splitlines()
+    )
+    assert legacy.frames_reported == 1
+    assert legacy.blocks_reported is None and legacy.misaligned is False
+    frames.require_wav_aligned(legacy)  # unknowable, not assumed bad
+
+
+def test_misaligned_marker_is_parsed_and_rejected():
+    d = frames.parse_dump(_MISALIGNED.splitlines())
+    assert d.misaligned is True
+    with pytest.raises(ValueError, match="MISALIGNED"):
+        frames.require_wav_aligned(d)
+    # ...and the rows still parse, so inspecting a known-bad capture stays possible
+    assert len(d.seq) == 1
+
+
+def test_row_block_drift_is_caught_without_the_marker():
+    """A file predating the marker is still caught from the trailer alone."""
+    d = frames.parse_dump(
+        _ALIGNED.replace("frames=1 dropped=0 blocks=1", "frames=1 dropped=0 blocks=7").splitlines()
+    )
+    assert d.misaligned is False
+    with pytest.raises(ValueError, match="do not pair"):
+        frames.require_wav_aligned(d)
+
+
+def test_capture_to_scenario_refuses_a_misaligned_capture(tmp_path):
+    """The converter is the path a misaligned capture would become tuning truth."""
+    import subprocess, sys, wave, struct
+
+    wav = tmp_path / "cap_0001.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes(struct.pack("<512h", *([0] * 512)))
+    (tmp_path / "cap_0001.wav.csv").write_text(
+        _MISALIGNED + "I,0,0,1,2,3,4,5,6\n"
+    )
+    r = subprocess.run(
+        [sys.executable, str(Path(capture_to_scenario.__file__)),
+         str(wav), "--scenarios-dir", str(tmp_path / "out")],
+        capture_output=True, text=True,
+    )
+    assert r.returncode != 0, r.stdout + r.stderr
+    # Assert on the message, not just the exit code: an argparse usage error
+    # also exits non-zero, which is how the first version of this test "passed"
+    # while never reaching the guard.
+    assert "MISALIGNED" in r.stderr, r.stderr
+    assert "unrecognized arguments" not in r.stderr

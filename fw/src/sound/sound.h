@@ -27,6 +27,12 @@
 #define CAPTURE_WAV_BYTES_PER_FRAME 1024u
 #define CAPTURE_IMU_BYTES_PER_FRAME 56u      /* 25 Hz of I-rows, charged per audio frame */
 #define CAPTURE_ANALYSIS_BYTES_PER_FRAME 360u /* one 41-field D-line per block */
+/* record_wav_tap()'s D-line allowance. Its pre-flight charges BLOCK_SIZE + 175
+ * per frame, NOT the 360 above: it writes a 21-field line (no display buckets).
+ * Kept here rather than in capture.cpp because on a CONFIG_APP_AUDIO_DEBUG
+ * build sound_record_wav() routes an app-started capture to THAT function, so
+ * this is the cost the recordable-seconds clamp has to be measured against. */
+#define CAPTURE_TAP_ANALYSIS_BYTES_PER_FRAME 175u
 #define CAPTURE_OVERHEAD_SLACK_BYTES (64u * 1024u)
 #define CAPTURE_SECTOR_BYTES 4096u
 /* Fixed cost: FAT slack, the sector-padded WAV prologue, and the CSV's

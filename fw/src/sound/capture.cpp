@@ -39,13 +39,29 @@ constexpr const char *kSuffix = ".wav";
  * uses: 64 KiB of slack, the sector-padded WAV prologue, and one more sector
  * for the CSV header when any CSV is written at all — conditional, not the
  * flat two sectors an earlier revision of this comment described. */
+/* Which pre-flight this has to agree with depends on the build, because
+ * sound_record_wav() routes on CONFIG_APP_AUDIO_DEBUG BEFORE it considers
+ * CONFIG_APP_CAPTURE: on a debug build an app-started capture runs
+ * record_wav_tap(), not record_wav_capture(). APP_CAPTURE_AUDIO_SIDECAR
+ * depends on !APP_AUDIO_DEBUG, so keying only on the sidecar symbol left the
+ * debug build charging 1024 + 56 = 1080 B/frame against a pre-flight that
+ * wants BLOCK_SIZE + 175 = 1199 plus a second sidecar — the generous-clamp
+ * direction this comment warns about, reachable on a legal config. */
 constexpr uint32_t kBytesPerFrame =
     CAPTURE_WAV_BYTES_PER_FRAME + (IS_ENABLED(CONFIG_IMU) ? CAPTURE_IMU_BYTES_PER_FRAME : 0u) +
-    (IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) ? CAPTURE_ANALYSIS_BYTES_PER_FRAME : 0u);
+    (IS_ENABLED(CONFIG_APP_AUDIO_DEBUG)   ? CAPTURE_TAP_ANALYSIS_BYTES_PER_FRAME
+     : IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) ? CAPTURE_ANALYSIS_BYTES_PER_FRAME
+                                                    : 0u);
 constexpr uint32_t kBytesPerSecond =
     kBytesPerFrame * MSEC_PER_SEC / CAPTURE_BLOCK_TIME_MS;
 
-constexpr uint32_t kReserveBytes = CAPTURE_OVERHEAD_BYTES;
+/* The tap path opens a THIRD file (<wav>.imu.csv) with its own padded header
+ * sector, which CAPTURE_OVERHEAD_BYTES does not account for — it charges one
+ * sector for "any CSV at all". Its own pre-flight does not charge it either,
+ * so this is the clamp staying strictly on the conservative side of both. */
+constexpr uint32_t kReserveBytes =
+    CAPTURE_OVERHEAD_BYTES +
+    ((IS_ENABLED(CONFIG_APP_AUDIO_DEBUG) && IS_ENABLED(CONFIG_IMU)) ? CAPTURE_SECTOR_BYTES : 0u);
 
 /* A capture nobody stops is the normal field case, so the cap is not optional.
  * No longer the binding limit, though: with the analysis rows the volume holds

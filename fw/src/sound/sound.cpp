@@ -947,9 +947,14 @@ static int imu_sidecar_open(struct imu_sidecar *sc, const char *wav_path, int64_
 /* Called once per audio frame from the capture loop; drains whatever the IMU
  * thread has produced since the last call. */
 static void imu_sidecar_drain(struct imu_sidecar *sc) {
-    if (!sc->open) {
-        return;
-    }
+    /* Deliberately NO function-level `if (!sc->open) return;`. This is the only
+     * reader of imu_tap_q on these paths, so bailing out when the sidecar never
+     * opened (FatFs already at CONFIG_FS_FATFS_NUM_FILES, -ENOSPC, ...) leaves
+     * the 8-deep tap to fill and the IMU thread dropping samples for the rest of
+     * the recording — a sidecar that failed to open would degrade the IMU
+     * pipeline itself. The loop below drains and discards instead. Same rule as
+     * audio_sidecar_drain(); it had this fixed first, and leaving the guard here
+     * made the pair inconsistent in exactly the case that matters. */
     /* `open` gates every iteration, not just entry: a flush failing mid-loop
      * clears it WITHOUT consuming the buffer, so len stays >= IMU_CSV_CHUNK and
      * the next line would be formatted at &s_imu_batch[len] — past the end of a
@@ -1390,8 +1395,29 @@ static int audio_sidecar_close(struct audio_sidecar *sc, const struct shell *she
         shell_warn(shell, "Capture CSV write failed - the file is incomplete");
         return -EIO;
     }
-    char trailer[64];
-    int n = snprintf(trailer, sizeof(trailer), "#DONE frames=%u dropped=%u\n", sc->frames, dropped);
+    /* Computed BEFORE the trailer write so the verdict can go INTO the file.
+     * A shell_warn is the wrong and only channel for it on the path this
+     * feature exists for: an app-started capture has no console, the return is
+     * deliberately 0, and last_error never leaves the UART — so a misaligned
+     * CSV would reach the laptop with a well-formed #PARAMS, well-formed D,
+     * rows and a valid #DONE, i.e. nothing in the file itself saying it must
+     * not be paired with the WAV. frames.py would parse it happily and
+     * capture_to_scenario.py would pick it, making the misaligned capture the
+     * one that gets tuned against. The ABANDONED case is already
+     * self-describing (no #DONE); this makes MISALIGNED equally so.
+     *
+     * blocks=/lost= go into #DONE unconditionally, not just on the bad path:
+     * they let a host redo the cross-check itself rather than trust that the
+     * device would have flagged it. #DONE is parsed as key=value tokens
+     * (frames.py::parse), so older files without them still load. */
+    uint32_t lost = (uint32_t)atomic_get(&s_capture_analysis_dropped);
+    bool misaligned = (sc->frames != blocks || lost != 0);
+
+    char trailer[256];
+    int n = snprintf(trailer, sizeof(trailer),
+                     "%s#DONE frames=%u dropped=%u blocks=%u lost=%u\n",
+                     misaligned ? "#MISALIGNED do NOT pair this file with the WAV\n" : "",
+                     sc->frames, dropped, blocks, lost);
     /* Bounded like every other snprintf-then-write in this file: the return is
      * what it WOULD have written, so an outgrown format would hand a length
      * past the end of the buffer to the writer. Unreachable at ~44 B today. */
@@ -1424,8 +1450,7 @@ static int audio_sidecar_close(struct audio_sidecar *sc, const struct shell *she
      * the file is worth parsing with a re.search for exactly that prefix, so
      * wording this like the success line would hand every downstream consumer
      * the file this branch exists to reject. */
-    uint32_t lost = (uint32_t)atomic_get(&s_capture_analysis_dropped);
-    if (sc->frames != blocks || lost != 0) {
+    if (misaligned) {
         shell_warn(shell,
                    "Capture CSV MISALIGNED: %u rows for %u blocks written (%u rows lost) - "
                    "do NOT pair with the WAV",
@@ -1487,7 +1512,7 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
     struct fs_statvfs vfs;
     if (fs_statvfs("/NAND:", &vfs) == 0) {
         uint64_t free_bytes = (uint64_t)vfs.f_bfree * vfs.f_frsize;
-        uint64_t needed = (uint64_t)total_frames * (BLOCK_SIZE + 175) + WAV_DATA_OFFSET +
+        uint64_t needed = (uint64_t)total_frames * (BLOCK_SIZE + CAPTURE_TAP_ANALYSIS_BYTES_PER_FRAME) + WAV_DATA_OFFSET +
                           TAP_CSV_CHUNK + 64 * 1024;
         if (needed > free_bytes) {
             /* Multiply by the block time rather than dividing by a frame rate,
@@ -1500,7 +1525,7 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
                 (uint32_t)((free_bytes > WAV_DATA_OFFSET + TAP_CSV_CHUNK + 64 * 1024)
                                ? ((free_bytes - WAV_DATA_OFFSET - TAP_CSV_CHUNK - 64 * 1024) *
                                   BLOCK_CAPTURE_TIME_MS) /
-                                     ((uint64_t)(BLOCK_SIZE + 175) * MSEC_PER_SEC)
+                                     ((uint64_t)(BLOCK_SIZE + CAPTURE_TAP_ANALYSIS_BYTES_PER_FRAME) * MSEC_PER_SEC)
                                : 0);
             shell_error(shell, "Not enough free space for %u s (max ~%u s free)", duration_s,
                         max_s);
@@ -1632,8 +1657,10 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
      * which never sees an errno and cannot act on a sidecar. Here the consumer
      * is the MCP capture_scenario handler, which keys on this path's
      * "Wrote ... (N frames, ...)" line as proof the CSV is worth parsing and
-     * would hand a damaged one straight to beat_lab — so this still has to
-     * fail, just honestly.
+     * would hand a damaged one straight to beat_lab. Suppressing that line is
+     * what protects it — the handler bails on `"Wrote" not in output`
+     * (rgb_sunglasses.py:365,407) — NOT the return value, which it never
+     * inspects.
      *
      * Mid-loop CSV failures stay io_error: they break out of the capture, so
      * the WAV is truncated too and the abort line is accurate. */
@@ -1788,16 +1815,29 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
         return -EIO;
     }
     if (csv_unusable) {
-        /* Must return before the "Wrote ..." line below: that is the string the
-         * MCP handler treats as proof the analysis CSV is parseable. Wording
-         * chosen so neither success gate can match it, same rule as
+        /* Returning before the "Wrote ..." line is the whole mechanism: that
+         * string is what the MCP handler treats as proof the analysis CSV is
+         * parseable, and it bails on `"Wrote" not in output`. Wording chosen so
+         * neither success gate can match it either, same rule as
          * audio_sidecar_close()'s failures (pinned by
-         * fw/tools/tests/test_capture_csv_contract.py). */
+         * fw/tools/tests/test_capture_csv_contract.py).
+         *
+         * Return 0 all the same, for the reason record_wav_capture()'s
+         * sidecar_unusable comment gives. This is NOT a debug-only path:
+         * sound_record_wav() routes here whenever APP_AUDIO_DEBUG=y and the DSP
+         * is streaming, ahead of the APP_CAPTURE branch — including for
+         * capture.cpp's worker, i.e. a phone-triggered capture. A non-zero
+         * return there becomes CAPTURE_FAILED, so a complete, playable WAV
+         * would render a "Failed" badge on an APP_AUDIO_DEBUG=y + APP_CAPTURE=y
+         * build, with last_error never leaving the UART to explain it. The
+         * automated consumer is already protected by the suppressed line above,
+         * so the errno bought nothing and cost exactly the regression the
+         * sibling function was just fixed for. */
         shell_error(shell,
                     "Analysis CSV unusable - the WAV is COMPLETE (%u of %u frames, %u dropped) "
                     "but its sidecar is not; keep %s, discard %s",
                     frames_captured, total_frames, dropped, path, csv_path);
-        return -EBADMSG;
+        return 0;
     }
     if (stopped_early) {
         shell_print(shell, "Stopped early at %u of %u frames", frames_captured, total_frames);

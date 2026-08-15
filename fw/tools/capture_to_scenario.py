@@ -205,6 +205,20 @@ def main(argv=None):
     # that cannot exist on such an image, while the real sidecar sat beside it.
     imu_csv = args.imu_csv
     combined = Path(str(args.wav) + ".csv")
+    # A capture the device marked misaligned must not become a scenario: the
+    # I-rows are timestamped and would look fine, but the D-rows and the WAV
+    # they are interleaved with are off by the drift, and this scenario is what
+    # later tuning is measured against. Cheap textual check - this parser
+    # deliberately does not import beat_lab (scipy/librosa are not installed
+    # everywhere it runs), so it re-reads the one marker rather than calling
+    # frames.require_wav_aligned(); both sides are pinned by the tests.
+    if combined.is_file():
+        with combined.open() as handle:
+            if any(line.startswith("#MISALIGNED") for line in handle):
+                parser.error(
+                    f"{combined} is marked #MISALIGNED by the device: its analysis rows "
+                    f"do not pair with {args.wav}. Re-record; do not tune against it."
+                )
     legacy = Path(str(args.wav) + ".imu.csv")
     if imu_csv is None:
         if _has_imu_rows(combined):
