@@ -121,15 +121,25 @@ config APP_CAPTURE_QUEUE_FRAMES
 config APP_CAPTURE_AUDIO_SIDECAR
 	bool "Write a per-frame audio-analysis sidecar next to each capture"
 	default y
-	depends on APP_CAPTURE
+	depends on APP_CAPTURE && !APP_AUDIO_DEBUG
 	help
-	  Writes "<wav>.audio.csv" alongside the WAV and the IMU sidecar, holding
+	  Writes "<wav>.csv" alongside the WAV, holding both the IMU rows and
 	  the analysis the DSP thread computed for the very samples being
 	  recorded: the AGC gain in force per frame, the per-band beat mask, RMS,
 	  band energy/flux/mean/sigma, and the 20-bucket spectrogram, under a
 	  #PARAMS header snapshotting every AGC and detector tunable. Same wire
 	  format as "sound dump" (src/sound/audio_tap_format.h), so
 	  fw/tools/beat_lab and the simulator decode it unchanged.
+
+	  ONE file, not two, because FF_FS_TINY makes every open FIL share a
+	  single sector window: a capture holds two FatFs handles this way rather
+	  than three.
+
+	  Unavailable with APP_AUDIO_DEBUG, and that is not an arbitrary
+	  exclusion: sound_record_wav() routes a debug build to record_wav_tap()
+	  or record_wav_direct(), so record_wav_capture() never runs and the
+	  ~6 KB of buffers here would be linked in dead — on the build that is
+	  already 33 KB of RAM heavier than stock.
 
 	  This exists because the BLE/app capture path does NOT freeze the AGC:
 	  its gain steps mid-recording, and the recorded samples already contain

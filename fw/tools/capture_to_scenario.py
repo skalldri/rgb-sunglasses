@@ -41,6 +41,19 @@ from pathlib import Path
 DEFAULT_SCALE = 1000
 
 
+def _has_imu_rows(path):
+    """True if `path` exists and actually contains at least one I-row.
+
+    Cheap and streaming: a capture CSV is a few hundred KB and the first I-row
+    lands within the first couple of rows, so this stops almost immediately.
+    """
+    try:
+        with open(path, "r", errors="replace") as handle:
+            return any(line.startswith("I,") for line in handle)
+    except OSError:
+        return False
+
+
 def parse_imu_csv(text):
     """Parse the sidecar into [(ms, accel[3], gyro[3])], ordered by time.
 
@@ -178,11 +191,18 @@ def main(argv=None):
     # capture can only hold two FatFs handles (see the sidecar comment in
     # fw/src/sound/sound.cpp). "<wav>.imu.csv" is the older split layout and is
     # still accepted so previously-collected captures keep converting.
+    # Chosen by CONTENT, not existence. On a CONFIG_APP_AUDIO_DEBUG build BOTH
+    # files exist and they are not interchangeable: record_wav_tap() writes
+    # "<wav>.csv" with D-rows ONLY and puts the I-rows in "<wav>.imu.csv".
+    # Picking the combined file on name alone would hand this parser a
+    # D-row-only file, yielding zero keyframes — and because the file exists,
+    # the not-found warning below would not fire either, so the scenario would
+    # come out silently audio-only.
     imu_csv = args.imu_csv
     if imu_csv is None:
         combined = Path(str(args.wav) + ".csv")
         legacy = Path(str(args.wav) + ".imu.csv")
-        imu_csv = combined if combined.is_file() else legacy
+        imu_csv = combined if _has_imu_rows(combined) else legacy
 
     if not args.wav.is_file():
         parser.error(f"{args.wav} not found")

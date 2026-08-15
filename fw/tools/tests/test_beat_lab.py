@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tools import capture_to_scenario  # noqa: E402
 from tools.beat_lab import compare, evaluate, frames  # noqa: E402
 
 
@@ -91,53 +92,95 @@ class TestCodec:
         assert np.array_equal(back, samples)
 
 
-def _write_capture_sidecar(path, lines):
-    """Write a byte-exact replica of the firmware's <wav>.audio.csv.
+IMU_SCALE = 1000
 
-    The shape matters, not just the field order: the capture writer pads the
-    #PARAMS line with spaces out to a full 4096-byte FAT sector so every
-    subsequent chunk write lands sector-aligned (a misaligned flush stalls the
-    drain loop long enough to drop audio frames — see fw/src/sound/sound.cpp).
-    Nothing else that produces this format pads anything, so the padding is
-    exercised nowhere else in this suite.
+
+def _write_capture_sidecar(path, lines, imu_rows=True):
+    """Write a byte-exact replica of the firmware's combined <wav>.csv.
+
+    Byte-exact matters: audio_sidecar_open() packs BOTH header lines into one
+    4096-byte FAT sector — "#PARAMS ...\n#IMU ...<spaces>\n" — so the padding
+    sits on the #IMU line, not the #PARAMS one, and the sector boundary is what
+    makes every later chunk write aligned (a misaligned flush stalls the drain
+    loop long enough to drop audio frames). Rows are then interleaved: one D-row
+    per WAV block, with the 25 Hz I-rows falling between them.
+
+    Nothing else in this suite exercises that shape, and the single-file layout
+    rests on two parsers each tolerating the other's rows.
     """
     params, *rest = lines
+    imu_hdr = (f"#IMU scale={IMU_SCALE} "
+               "cols=ms,seq,ax,ay,az,gx,gy,gz units=mm/s2,mrad/s")
+    header = params + "\n" + imu_hdr
+    assert len(header) < 4095, "header must fit one sector"
+    header = header.ljust(4095) + "\n"
+
+    body = []
+    for i, row in enumerate(rest[:-1]):
+        body.append(row)
+        # ~25 Hz IMU against ~31.25 fps audio: an I-row after most D-rows.
+        if imu_rows and i % 5 != 4:
+            ms = int(i * 32)
+            body.append(f"I,{ms},{i},{100 + i},{-200},{981},{1},{-2},{3}")
     with open(path, "w") as f:
-        f.write(params.ljust(4095) + "\n")
-        f.write("".join(line + "\n" for line in rest))
+        f.write(header)
+        f.write("".join(line + "\n" for line in body))
+        f.write(rest[-1] + "\n")
 
 
 class TestCaptureSidecar:
-    """The <wav>.audio.csv written beside every capture on a stock build."""
+    """The combined <wav>.csv written beside every capture on a stock build."""
 
-    def test_parses_sector_padded_sidecar(self, tmp_path):
-        p = tmp_path / "cap_0001.wav.audio.csv"
+    def test_beat_lab_ignores_interleaved_imu_rows(self, tmp_path):
+        p = tmp_path / "cap_0001.wav.csv"
         _write_capture_sidecar(p, _make_dump_lines(n=30, buckets=True))
         d = frames.parse_dump(str(p))
 
+        # The I-rows and the #IMU header must be invisible here.
         assert len(d.seq) == 30
         assert d.frames_reported == 30 and d.dropped == 0
-        # Captures always include the buckets: the firmware calls the formatter
-        # with buckets=true, so a 21-field sidecar means something regressed.
-        assert d.buckets is not None
-        assert d.buckets.shape == (30, frames.NUM_BUCKETS)
+        assert d.buckets is not None and d.buckets.shape == (30, frames.NUM_BUCKETS)
         assert d.params["gain"] == 0x28
         assert d.params["attack"] == 3 and d.params["release"] == 15
 
+    def test_imu_parser_ignores_interleaved_analysis_rows(self, tmp_path):
+        # The other half of the contract, and the half nothing covered before:
+        # capture_to_scenario.py must find the I-rows among the D-rows AND read
+        # scale= off an #IMU line that is space-padded out to the sector.
+        p = tmp_path / "cap_0002.wav.csv"
+        _write_capture_sidecar(p, _make_dump_lines(n=30, buckets=True))
+        samples = capture_to_scenario.parse_imu_csv(p.read_text())
+
+        assert len(samples) == 24, "one I-row after four of every five D-rows"
+        ms, accel, gyro = samples[0]
+        assert ms == 0
+        # 100 / 1000 -> 0.1 proves the padded #IMU header's scale= was read;
+        # a missed header would fall back to DEFAULT_SCALE and still give 0.1,
+        # so check a value the fallback cannot produce by coincidence.
+        assert accel == [pytest.approx(0.1), pytest.approx(-0.2), pytest.approx(0.981)]
+        assert gyro == [pytest.approx(0.001), pytest.approx(-0.002), pytest.approx(0.003)]
+
+    def test_scale_is_read_from_the_padded_header(self, tmp_path):
+        # Same file shape, non-default scale: the only way this passes is by
+        # parsing the #IMU line that sits mid-sector behind the #PARAMS line.
+        p = tmp_path / "cap_0003.wav.csv"
+        _write_capture_sidecar(p, _make_dump_lines(n=10, buckets=True))
+        text = p.read_text().replace(f"#IMU scale={IMU_SCALE} ", "#IMU scale=10 ")
+        samples = capture_to_scenario.parse_imu_csv(text)
+        assert samples[0][1][0] == pytest.approx(10.0)  # 100 / 10, not 100 / 1000
+
     def test_gain_column_tracks_a_live_agc(self, tmp_path):
-        # The reason this file exists. A capture started from the phone runs
+        # The reason the D-rows exist. A capture started from the phone runs
         # with the AGC live, so the gain steps mid-recording and the recorded
         # samples already contain those steps — the per-frame gain column is
-        # the only record of them, and a host cannot recover it from the WAV.
+        # the only record of them.
         lines = _make_dump_lines(n=6, buckets=True)
         gains = [0x28, 0x28, 0x2A, 0x2A, 0x2C, 0x26]
-        rows = [
-            row.replace(f",{0x28:02x},", f",{g:02x},", 1)
-            for row, g in zip(lines[1:-1], gains)
-        ]
-        _write_capture_sidecar(tmp_path / "c.audio.csv", [lines[0], *rows, lines[-1]])
+        rows = [row.replace(f",{0x28:02x},", f",{g:02x},", 1)
+                for row, g in zip(lines[1:-1], gains)]
+        _write_capture_sidecar(tmp_path / "c.csv", [lines[0], *rows, lines[-1]])
 
-        d = frames.parse_dump(str(tmp_path / "c.audio.csv"))
+        d = frames.parse_dump(str(tmp_path / "c.csv"))
         assert list(d.gain) == gains
 
 

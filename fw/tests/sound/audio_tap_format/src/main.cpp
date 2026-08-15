@@ -3,7 +3,7 @@
  * That header is the single source of truth for field ORDER across four
  * producers/consumers that are compiled separately and can therefore drift
  * silently: the firmware's `sound dump`, the CONFIG_APP_AUDIO_DEBUG record_wav
- * sidecar, the capture path's <wav>.audio.csv sidecar, the native_sim replay
+ * sidecar, the capture path's combined <wav>.csv sidecar, the native_sim replay
  * app, plus the host decoders fw/tools/beat_lab/frames.py and
  * fw/sim/node/dline.ts. Both decoders reject any row that is not exactly 21 or
  * 41 fields, and neither firmware nor CI had anything asserting the producer

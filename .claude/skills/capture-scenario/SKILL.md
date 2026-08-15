@@ -54,11 +54,11 @@ when the firmware wrote one — `analysis_csv_path` + `analysis_frames`.
 the same worker over BLE (`capture start`/`capture stop` and the GATT Capture service are two
 front ends onto one implementation), so a capture can be taken in the field and collected
 later. The phone never downloads anything — captures accumulate on `/NAND:` as
-`cap_NNNN.wav` + `.imu.csv` + `.audio.csv` and step 2 is unchanged. The app's Length picker
+`cap_NNNN.wav` + `.csv` (one combined sidecar) and step 2 is unchanged. The app's Length picker
 writes the persisted limit; the device clamps it to what the volume can still hold and the
 screen shows the clamped figure before you start. Note the app path does **not** freeze AGC
 gain the way the MCP tool does — for a reproducible stimulus, prefer the tool. What the app
-path *does* give you is `<wav>.audio.csv`, the per-frame analysis (gain, beats, spectrogram)
+path *does* give you is `<wav>.csv`, the per-frame analysis (gain, beats, spectrogram)
 the DSP computed for those samples, which is the only way to reconstruct what the detector
 saw across a live-AGC recording — see `fw/docs/beat-detection-debugging.md`.
 
@@ -131,7 +131,7 @@ executed when someone types its name.
   taken with the glasses flat on a desk has a valid IMU track that is a constant
   gravity vector — which looks fine in the JSON and teaches nothing.
 - **`sound dump` is a different tool.** It streams the same analysis D-lines this
-  capture now writes to `<wav>.audio.csv`, but live to the console, with no audio and
+  capture now writes to `<wav>.csv`, but live to the console, with no audio and
   no IMU, and only on a `CONFIG_APP_AUDIO_DEBUG=y` build
   (`fw/docs/beat-detection-debugging.md`). Use it to watch the detector while you turn
   a knob; use this when you need a stimulus you can replay.

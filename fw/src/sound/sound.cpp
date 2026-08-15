@@ -1049,7 +1049,7 @@ static int tap_write_at_retry(struct fs_file_t *f, const char *path, off_t pos,
 #endif /* CONFIG_APP_CAPTURE || CONFIG_APP_AUDIO_DEBUG */
 
 #if defined(CONFIG_APP_CAPTURE_AUDIO_SIDECAR)
-/* Audio-analysis sidecar: "<wav path>.audio.csv", written by the capture loop
+/* Combined capture sidecar: "<wav path>.csv", written by the capture loop
  * from capture_analysis_q — the analysis the DSP thread computed for the very
  * blocks going into the WAV.
  *
@@ -1892,7 +1892,7 @@ static void capture_taps_purge(void) {
 /* Capture from the lean PCM tap: the DSP thread stays the sole dmic_read()
  * consumer (so beat-reactive animations keep running through a recording) and
  * this drains its copy, plus — when CONFIG_APP_CAPTURE_AUDIO_SIDECAR is set —
- * the matching per-frame analysis into "<wav>.audio.csv". */
+ * the matching per-frame analysis into "<wav>.csv". */
 static int record_wav_capture(const struct shell *shell, uint32_t duration_s, const char *path) {
     const uint32_t total_blocks = (duration_s * MSEC_PER_SEC) / BLOCK_CAPTURE_TIME_MS;
 
