@@ -42,6 +42,20 @@ ZTEST(render_pacing_tests, test_faster_than_display_clamps_to_one) {
     zassert_equal(framesPerRender(0.0f, 33.3f), 1, "a zero render rate must give N=1");
 }
 
+/* PR #381 review round 6: both rates are remotely writable, so the ratio can
+ * reach ~2^32 (render near UINT32_MAX ms over display 0.001 ms) — and a
+ * float-to-uint32 conversion out of range is UB, not saturation. The divider
+ * must clamp BEFORE the cast. */
+ZTEST(render_pacing_tests, test_extreme_ratio_clamps_before_cast) {
+    zassert_equal(framesPerRender(4294967.0f, 0.001f), render_pacing::kMaxFramesPerRender,
+                  "a ~2^32 ratio must saturate at the divider cap, not hit UB");
+    zassert_equal(framesPerRender(1e9f, 0.5f), render_pacing::kMaxFramesPerRender,
+                  "any ratio past the cap must return exactly the cap");
+    // Just under the cap is untouched: the clamp must not distort legit large-N
+    // configs (a 10 s render over a 33.3 ms display is a valid low-CPU setting).
+    zassert_equal(framesPerRender(10000.0f, 33.3f), 301, "10 s / 33.3 ms must ceil to 301");
+}
+
 /* PR #381 review: an unusable display interval (0 is remotely writable and
  * unclamped) must not collapse dt to 0 — the fallback is the render rate, and
  * the divider is meaningless (the caller self-paces on this path). */

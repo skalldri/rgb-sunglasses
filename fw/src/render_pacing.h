@@ -10,6 +10,18 @@
 // the ztest suite is fw/tests/render_pacing/.
 namespace render_pacing {
 
+// Divider ceiling. Both rates are remotely writable and unclamped, so the
+// ratio can reach ~2^32 (render near UINT32_MAX ms over a display interval of
+// 0.001 ms) — and a float-to-uint32 conversion out of range is UB, not
+// saturation (PR #381 review). The cap is deliberately generous rather than
+// "a handful": a legitimately slow render rate (a static display re-rendered
+// every 10 s, say) yields a large N by design, and a small cap would silently
+// render it far faster than requested. 1000 is ~33 s per render at the default
+// display rate — beyond any sane configuration — and the wait loop's shared
+// deadline (~2 x N x display, see pattern_controller.cpp) keeps even a
+// capped-N misconfiguration's per-iteration stall bounded and logged.
+inline constexpr uint32_t kMaxFramesPerRender = 1000;
+
 // How many consumed display frames one render should span: CEIL(render/display),
 // so the effective render interval is never SHORTER than requested —
 // render_thread_rate_ms is the one knob trading frame rate against
@@ -23,6 +35,9 @@ inline uint32_t framesPerRender(float renderMs, float displayMs) {
         return 1;
     }
     const float ratio = renderMs / displayMs;
+    if (ratio >= (float)kMaxFramesPerRender) {
+        return kMaxFramesPerRender;
+    }
     uint32_t frames = (uint32_t)ratio;
     if ((float)frames < ratio - 0.001f) {
         frames++;

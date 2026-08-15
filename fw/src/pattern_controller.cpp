@@ -293,10 +293,6 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     uint32_t renderOverrunsSinceLog = 0;
     int64_t lastWaitTimeoutLogMs = 0;
     uint32_t waitTimeoutsSinceLog = 0;
-    // Set when the previous iteration's frame-consumed wait timed out (display
-    // clock unavailable): the next dt must track wall time, not the nominal
-    // display-derived interval (PR #381 review).
-    bool lastWaitTimedOut = false;
     int64_t prevIterStartMs = k_uptime_get();
 
     while (true) {
@@ -329,16 +325,27 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // system is degraded (PR #381 review).
         const float kTargetRenderIntervalMs =
             render_pacing::renderIntervalMs(renderRateMs, displayIntervalMs);
-        // The dt handed to the animations and shuffle: nominal on the healthy
-        // path, but the wall time actually elapsed after a wait timeout — the
-        // iteration started on the timeout's schedule (~2 x N display periods),
-        // and the nominal dt would run animation time at ~half speed for the
-        // whole degraded period (PR #381 review).
+        // The dt handed to the animations and shuffle: the wall time actually
+        // elapsed since the previous iteration, every iteration — not the
+        // nominal interval. The handshake makes this loop's real cadence a
+        // function of the display thread's ACTUAL period, and a chronic
+        // sub-timeout display slowdown (the display missing its budget under
+        // BT/flash load — exactly what #267/#312 measured) never trips the
+        // wait timeout below, so a nominal dt would run animation time slow
+        // for as long as the slowdown lasts with nothing logged (PR #381
+        // review round 6). Clamped to 4x nominal: the wait's shared deadline
+        // bounds a healthy iteration well inside that, and a multi-second
+        // display stall (#312 measured ~1.5 s) should not teleport animation
+        // clocks when it clears. elapsed <= 0 (sub-ms iteration off a
+        // coalesced credit) keeps the nominal fallback — dt 0 would stall
+        // animation and shuffle-dwell clocks.
         float animationDtMs = kTargetRenderIntervalMs;
-        if (lastWaitTimedOut) {
-            const int64_t elapsedMs = iterStartMs - prevIterStartMs;
-            if (elapsedMs > 0) {
-                animationDtMs = (float)elapsedMs;
+        const int64_t elapsedMs = iterStartMs - prevIterStartMs;
+        if (elapsedMs > 0) {
+            animationDtMs = (float)elapsedMs;
+            const float maxDtMs = 4.0f * kTargetRenderIntervalMs;
+            if (animationDtMs > maxDtMs) {
+                animationDtMs = maxDtMs;
             }
         }
         prevIterStartMs = iterStartMs;
@@ -392,8 +399,8 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
             if (currentIndicator == Indicator::None) {
                 BaseAnimation *shuffleCur = anim;  // == getAnimation(currentAnimation) here
                 // The animation was ticked with this same animationDtMs, so its
-                // own pacing clock and the shuffle dwell advance in lockstep on nominal
-                // ms — a requested "time to my next boundary" is exact in the same units
+                // own pacing clock and the shuffle dwell advance in lockstep — a
+                // requested "time to my next boundary" is exact in the same units
                 // the deadline is compared against, even when the render loop overruns.
                 const ShuffleController::Decision d = sShuffleController.onFrame(
                     currentAnimation, static_cast<uint32_t>(animationDtMs),
@@ -450,19 +457,24 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         }
 
         // Pace off the display clock (issue #379): wait until the display thread
-        // has consumed N frames, then render the next one. Bounded timeout, never
+        // has consumed N frames, then render the next one. Bounded, never
         // K_FOREVER — the display thread exits at boot when the LED strip devices
         // are not ready, and this thread must keep ticking (shuffle, indicators,
         // extension activation) rather than wedge; on timeout the loop breaks and
-        // proceeds, and the NEXT iteration's dt tracks wall time
-        // (lastWaitTimedOut above). The timeout is scaled by N so the degraded
-        // path self-paces at ~2x the CONFIGURED render interval — a per-display-
-        // period timeout with the break would render dividers' frames N times too
-        // fast, burning render/sandbox CPU on frames nobody pushes (PR #381
-        // review). A timeout can also fire during a genuine multi-hundred-ms
-        // display stall (#312 measured ~1.5 s of cooperative-band starvation) —
-        // that is benign: dt stays truthful, the WARN is rate-limited, and the
-        // max-count-1 semaphore re-syncs the pacing on the display's next give.
+        // proceeds, and the next iteration's wall-clock dt (above) absorbs the
+        // extra elapsed time. All N takes share ONE deadline of ~2x the
+        // CONFIGURED render interval (2 x N x display + 5 ms), each take getting
+        // only the remaining budget — a full timeout per take would let N
+        // just-under-timeout takes stack to ~2 x N^2 x display, silently pausing
+        // shuffle/indicator/extension servicing far past the documented bound
+        // (PR #381 review round 6; threading.md's "~2 x N display periods"
+        // invariant is this deadline). A per-display-period deadline with the
+        // break would instead render dividers' frames N times too fast, burning
+        // render/sandbox CPU on frames nobody pushes (PR #381 review). A timeout
+        // can also fire during a genuine multi-hundred-ms display stall (#312
+        // measured ~1.5 s of cooperative-band starvation) — that is benign: dt
+        // stays truthful, the WARN is rate-limited, and the max-count-1
+        // semaphore re-syncs the pacing on the display's next give.
         if (displayIntervalMs <= 0.0f) {
             // Display interval written to 0 (remotely writable, unclamped): the
             // display thread's own trailing k_msleep(0 - work) makes it a
@@ -476,21 +488,22 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
                 sleepMs = 1.0f;
             }
             k_msleep((int32_t)sleepMs);
-            lastWaitTimedOut = false;
             continue;
         }
         const int32_t waitTimeoutMs =
             (int32_t)(2.0f * (float)framesPerRender * displayIntervalMs) + 5;
-        lastWaitTimedOut = false;
+        const int64_t waitDeadlineMs = k_uptime_get() + waitTimeoutMs;
         for (uint32_t consumed = 0; consumed < framesPerRender; consumed++) {
-            if (led_controller_wait_frame_consumed(K_MSEC(waitTimeoutMs)) != 0) {
-                lastWaitTimedOut = true;
+            const int64_t remainingMs = waitDeadlineMs - k_uptime_get();
+            if (remainingMs <= 0 ||
+                led_controller_wait_frame_consumed(K_MSEC((int32_t)remainingMs)) != 0) {
                 waitTimeoutsSinceLog++;
                 const int64_t nowMs = k_uptime_get();
                 if (nowMs - lastWaitTimeoutLogMs >= 5000) {
-                    LOG_WRN("Display consumed no frame within %d ms (%u time(s) in the last "
-                            "%lld ms) — render self-pacing until it recovers",
-                            waitTimeoutMs, waitTimeoutsSinceLog, nowMs - lastWaitTimeoutLogMs);
+                    LOG_WRN("Display consumed %u of %u frame(s) within %d ms (%u timeout(s) "
+                            "in the last %lld ms) — render self-pacing until it recovers",
+                            consumed, framesPerRender, waitTimeoutMs, waitTimeoutsSinceLog,
+                            nowMs - lastWaitTimeoutLogMs);
                     lastWaitTimeoutLogMs = nowMs;
                     waitTimeoutsSinceLog = 0;
                 }
