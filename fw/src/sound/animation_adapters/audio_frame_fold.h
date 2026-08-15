@@ -13,9 +13,9 @@
  * `firstInBatch` must be true for the first frame of a new batch so the
  * previous batch's flags are cleared; the OR only spans a single batch. WHAT a
  * batch is belongs to the caller: the device adapter scopes it to one render
- * tick (inferred by wall clock, since update() runs several times per tick —
- * see SoundAnimationAudioSource::update()); the simulator host scopes it to
- * one tick's catch-up loop (fw/sim/core/host.ts).
+ * tick, identified exactly by `pattern_controller_tick_epoch()` (update() runs
+ * several times per tick — see SoundAnimationAudioSource::update()); the
+ * simulator host scopes it to one tick's catch-up loop (fw/sim/core/host.ts).
  *
  * Pure and kernel-free on purpose (same testable-seam idiom as
  * led_stats_core / extension_tick_budget): the ztest suite in

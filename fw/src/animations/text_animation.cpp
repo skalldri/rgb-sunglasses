@@ -236,6 +236,13 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
+    // Bound the accumulator against parameter-history abuse (PR #378 review;
+    // rationale in rainbow_animation.cpp — a huge-then-small remotely written
+    // step time would otherwise run accumulated/step iterations in one tick).
+    if (currentCycleTimeMs > stepMs + timeSinceLastTickMs) {
+        currentCycleTimeMs = stepMs + timeSinceLastTickMs;
+    }
+
     // Carry the remainder instead of resetting to 0 so the scroll rate stays
     // wall-clock correct at any render tick rate, including step times shorter
     // than the tick interval (issue #376). stepMs >= 1 (0 mapped above).

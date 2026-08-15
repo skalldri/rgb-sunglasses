@@ -22,6 +22,13 @@ void ZigZagAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTick
         stepTimeMs = kFastestStepTimeMs;
     }
 
+    // Bound the accumulator against parameter-history abuse (PR #378 review;
+    // rationale in rainbow_animation.cpp — a huge-then-small remotely written
+    // step time would otherwise run accumulated/step iterations in one tick).
+    if (currentCycleTimeMs > stepTimeMs + timeSinceLastTickMs) {
+        currentCycleTimeMs = stepTimeMs + timeSinceLastTickMs;
+    }
+
     // Carry the remainder instead of resetting to 0 so the step rate stays
     // wall-clock correct at any render tick rate, including step times shorter
     // than the tick interval (issue #376).
@@ -30,9 +37,13 @@ void ZigZagAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTick
         currentIndex++;
     }
 
+    const size_t totalIndices = renderer.displayWidth() * renderer.displayHeight();
+    if (totalIndices == 0) {
+        return;  // degenerate renderer: nothing to draw, and %= 0 would fault
+    }
     // Modulo (not reset-to-0) so a multi-step tick that overshoots the last
     // pixel keeps its phase within the wrapped-around pass.
-    currentIndex %= (renderer.displayWidth() * renderer.displayHeight());
+    currentIndex %= totalIndices;
 
     for (size_t x = 0; x < renderer.displayWidth(); x++) {
         for (size_t y = 0; y < renderer.displayHeight(); y++) {

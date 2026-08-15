@@ -165,6 +165,33 @@ ZTEST(zigzag_animation_di_tests, test_step_time_below_tick_advances_multiple_ste
     zassert_equal(sCapture.x, 3, "Expected 3 steps from one 33 ms tick at a 10 ms step time");
 }
 
+// PR #378 review: the accumulator is clamped to one step plus one tick, so a
+// huge-then-small remotely written step time cannot run accumulated/step loop
+// iterations (nor take a burst of steps) in a single tick. Same clamp in
+// rainbow and text; zigzag is the representative test.
+ZTEST(zigzag_animation_di_tests, test_step_time_change_does_not_burst) {
+    MutableUint32Source stepTimeMs(1000000);  // effectively "never step"
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    WideTestRenderer renderer;
+    for (int i = 0; i < 5; i++) {
+        animation->tick(renderer, 200);  // accumulate 1000 ms with no steps
+    }
+
+    // Drop to a 10 ms step: the clamp caps the accumulator at step + dt = 43,
+    // so this tick takes exactly floor((43-1)/10) = 4 steps — not the ~100 the
+    // stale 1000 ms accumulator would otherwise pay for in one tick.
+    stepTimeMs.set(10);
+    reset_capture();
+    animation->tick(renderer, 33);
+    zassert_equal(sCapture.x, 4, "Expected 4 steps after the step-time change, not a burst");
+}
+
 // Issue #376: total displacement must depend only on total elapsed time, not on how
 // that time is partitioned into ticks (90 Hz and 30 Hz must render the same motion).
 ZTEST(zigzag_animation_di_tests, test_equal_displacement_across_tick_rates) {

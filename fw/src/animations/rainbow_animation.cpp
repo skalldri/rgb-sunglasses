@@ -78,6 +78,15 @@ void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
         stepTimeMs = kFastestStepTimeMs;
     }
 
+    // Bound the accumulator against parameter-history abuse: a huge remotely
+    // written step time lets it grow for hours without wrapping, and a later
+    // small step time would then run accumulated/step iterations in one tick
+    // (PR #378 review). Clamping to one step plus this tick keeps the loop
+    // O(dt/step); in steady state the accumulator never exceeds this anyway.
+    if (currentCycleTimeMs > stepTimeMs + timeSinceLastTickMs) {
+        currentCycleTimeMs = stepTimeMs + timeSinceLastTickMs;
+    }
+
     // Carry the remainder instead of resetting to 0 so the scroll rate stays
     // wall-clock correct at any render tick rate, including step times shorter
     // than the tick interval (issue #376).
