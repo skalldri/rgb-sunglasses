@@ -58,6 +58,34 @@ def _require_shuffle_off(rgb: RgbShell) -> None:
     )
 
 
+def _persisted_rate_ms_x1000(rgb: RgbShell, key: str, default: int = 33300) -> int:
+    """Persisted uint32 rate (ms x 1000) from the settings partition, or the
+    firmware default when the key has never been written. `settings read`
+    prints a hex dump; the value is 4 bytes little-endian."""
+    out = rgb.exec(f"settings read {key}", check=False)
+    for line in out:
+        m = re.match(r"^[0-9a-fA-F]+:\s+((?:[0-9a-fA-F]{2}\s+)+)", line.strip())
+        if m:
+            b = bytes(int(x, 16) for x in m.group(1).split())
+            if len(b) >= 4:
+                return int.from_bytes(b[:4], "little")
+    return default
+
+
+def _require_default_divider(rgb: RgbShell) -> None:
+    """Hard fail (fixable setup): a persisted render rate above the display
+    rate makes the render thread run once per N consumed display frames
+    (#379), so held_frames == (N-1)/N of frames BY DESIGN and the zero-held
+    gate below would misfire on a correctly-behaving board."""
+    render = _persisted_rate_ms_x1000(rgb, "appcfg/core/render_thread_rate_ms")
+    display = _persisted_rate_ms_x1000(rgb, "appcfg/core/display_thread_rate_ms")
+    assert display > 0 and round(render / display) <= 1, (
+        f"persisted render/display rates {render}/{display} give a divider > 1 — "
+        "delete appcfg/core/render_thread_rate_ms (settings delete) before the "
+        "soak tier; the #379 held-frames gate assumes the default 1:1 pacing"
+    )
+
+
 def _glim_loop_mode(rgb: RgbShell) -> str | None:
     """Current persisted loop mode, or None if never persisted (default).
 
@@ -134,6 +162,7 @@ def test_frame_pacing_soak(rgb: RgbShell):
     """#267/#271/#312: 5 minutes under PROVEN rendering load (LZ4 decode +
     FAT reads + render), then the led_stats budget gates."""
     _require_shuffle_off(rgb)
+    _require_default_divider(rgb)
     with _glim_playback(rgb, GLIM_LZ4):
         rgb.exec("led_stats reset")
         console = _collect_console(rgb, 300.0)
