@@ -120,6 +120,43 @@ ZTEST(rainbow_animation_di_tests, test_injected_width_controls_gradient) {
                   "Expected x=1 color to change when injected width changes");
 }
 
+// PR #378 review round 8: rainbow/width_pixels is remotely writable with no range
+// validation and persists, and tick() uses it as a DIVISOR — an accepted 0 made
+// every subsequent render divide by zero (SIGFPE right here on native_sim; on the
+// M33, UDIV yields 0 and the inf/NaN blend narrows to uint8_t as UB). The floor
+// must make 0 render exactly as 1, not crash.
+ZTEST(rainbow_animation_di_tests, test_zero_width_floored_not_divide_by_zero) {
+    MutableUint32Source stepTimeMs(1000);
+    MutableUint32Source rainbowWidthPix(1);
+    RainbowAnimationDependencies deps(stepTimeMs, rainbowWidthPix);
+
+    RainbowAnimation *animation = RainbowAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    CapturingTestRenderer renderer;
+
+    reset_capture();
+    animation->tick(renderer, 1);
+    PixelColor widthOneX0 = sPixelColors[0];
+    PixelColor widthOneX1 = sPixelColors[1];
+
+    rainbowWidthPix.set(0);
+
+    reset_capture();
+    animation->init();
+    animation->tick(renderer, 1);  // unfloored, this tick dies with SIGFPE
+
+    zassert_true(sPixelColors[0].red == widthOneX0.red &&
+                     sPixelColors[0].green == widthOneX0.green &&
+                     sPixelColors[0].blue == widthOneX0.blue,
+                 "Width 0 must render exactly as the floored width 1 at x=0");
+    zassert_true(sPixelColors[1].red == widthOneX1.red &&
+                     sPixelColors[1].green == widthOneX1.green &&
+                     sPixelColors[1].blue == widthOneX1.blue,
+                 "Width 0 must render exactly as the floored width 1 at x=1");
+}
+
 namespace {
 bool same_color(const PixelColor &a, const PixelColor &b) {
     return a.red == b.red && a.green == b.green && a.blue == b.blue;

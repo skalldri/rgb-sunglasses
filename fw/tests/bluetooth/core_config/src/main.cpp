@@ -191,8 +191,9 @@ ZTEST(core_config_service, test_render_rate_below_display_write_rejected) {
      * display rate used to be a silent no-op — accepted, persisted, read back
      * as stored (so the app UI showed it applied) while getRenderRateMs()
      * floored it with no notify and no error. It is now rejected with an ATT
-     * error, so the app's read-back-after-write snaps the UI back — the
-     * standard feedback channel for these non-notifiable tunables. */
+     * error; the app reverts the field from its cached previous value and
+     * surfaces a write error (it does not read back on failure — see the
+     * characteristic's doc block in core_config.cpp, PR #378 review round 8). */
     ssize_t ret = gatt_write_u32(render, 20000);
     zassert_true(ret < 0, "a below-display render write must be ATT-rejected, got %zd", ret);
     zassert_equal(read_u32(render), sDefaultRenderRate,

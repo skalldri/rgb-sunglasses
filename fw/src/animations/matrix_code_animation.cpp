@@ -63,8 +63,9 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
             // Bounded: timeSinceLastTickMs is the NOMINAL configured interval
             // (pattern_controller passes kTargetRenderIntervalMs, never measured
             // elapsed time), so iterations <= dt/dropSpeed and there is no
-            // post-stall catch-up spike; each iteration consumes >= 1 ms of
-            // budget (dropSpeedMs is floored at 1 above).
+            // post-stall catch-up spike; each iteration consumes
+            // >= kFastestStepTimeMs of budget (dropSpeedMs is floored at
+            // kFastestStepTimeMs above — that floor is what bounds this loop).
             uint32_t budgetMs = timeSinceLastTickMs;
             bool stepped = false;
             while (columns_[x].active && budgetMs >= columns_[x].dropTimerMs) {

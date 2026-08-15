@@ -2,6 +2,7 @@
 #include <zephyr/drivers/led_strip.h>
 #include <zephyr/sys/__assert.h>
 
+#include <algorithm>
 #include <cstddef>
 
 #if defined(CONFIG_LED_STRIP_RGB_SCRATCH)
@@ -40,8 +41,14 @@ void RainbowAnimation::init() {
 void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) {
     __ASSERT(deps_, "RainbowAnimation::tick before setDependencies");
 
-    // Read BT variables
-    const uint32_t rainbowColorWidth = deps_->rainbowWidthPix.get();
+    // Read BT variables. Width is a DIVISOR below and shares step_time_ms's
+    // exposure (remotely writable with no range validation, persists): an
+    // accepted 0 would make every subsequent tick divide by zero — SIGFPE on
+    // native_sim, while Cortex-M's UDIV quietly yields 0 and the resulting
+    // inf/NaN float blend narrows to uint8_t as UB — wrecking Rainbow until
+    // the value is rewritten (PR #378 review round 8). Floor at 1: a 1 px
+    // band is a valid (busy) rendering, so no wider floor is warranted.
+    const uint32_t rainbowColorWidth = std::max(1u, deps_->rainbowWidthPix.get());
 
     // Turn off all LEDs
     for (size_t x = 0; x < renderer.displayWidth(); x++) {

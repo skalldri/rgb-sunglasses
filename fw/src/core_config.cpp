@@ -77,10 +77,16 @@ static constexpr const char kRenderRateKey[] = "core/render_thread_rate_ms";
  * Without the rejection, such a write was a silent no-op: accepted, persisted, read
  * back as stored — so the app UI showed it applied — while getRenderRateMs() floored
  * the effective rate at the display interval with no notify, no error, and no other
- * characteristic exposing the divergence. Rejecting makes the app's own
- * read-back-after-write snap the UI back — the standard feedback channel for these
- * non-notifiable tunables (same contract as Charge Current's range rejection,
- * battery_service.cpp). Consequences, all deliberate:
+ * characteristic exposing the divergence. On rejection the app reverts the field
+ * from its CACHED previous value and surfaces a write error — it does NOT read back
+ * on failure (bluetooth-context.tsx's catch restores the cache;
+ * scheduleClampReadBack runs only on the success branch — PR #378 review round 8).
+ * That means on a board carrying the legacy persisted 11100, a rejected write snaps
+ * the field back to 11100, a number the device is not rendering at: the rejection
+ * stops NEW silent divergences but cannot surface pre-existing ones (that remains
+ * the deferred effective-rate characteristic's job; see the PR's release-notes
+ * callout). Same rejection contract as Charge Current's range check
+ * (battery_service.cpp). Consequences, all deliberate:
  *
  *  - Setting a fast pair (e.g. 90 Hz) is display-FIRST: lower
  *    core/display_thread_rate_ms, then this one. The render-first order is rejected.
