@@ -410,8 +410,10 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
     imu = re.search(r"IMU sidecar: (\d+) samples", output)
     # This is a SUCCESS-only signal, and it is a `search`, so it matches a prefix
     # anywhere in the output. audio_sidecar_close() in fw/src/sound/sound.cpp
-    # relies on that: its failure paths ("Audio sidecar MISALIGNED: ...",
-    # "Audio sidecar write failed - ...") are deliberately worded so they cannot
+    # relies on that: its failure paths ("Capture CSV MISALIGNED: ...",
+    # "Capture CSV write failed - the file is incomplete", and
+    # "Capture CSV could not be opened; recording audio only" from
+    # record_wav_capture()) are deliberately worded so they cannot
     # match here, because a hit makes every downstream consumer
     # (capture_to_scenario.py, beat_lab) ingest the file. If you loosen this
     # pattern — e.g. to `Audio sidecar[: ]+(\d+)` — re-check those strings first.

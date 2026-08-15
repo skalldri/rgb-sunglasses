@@ -314,19 +314,20 @@ static atomic_t s_capture_dropped;
  * after the PCM put succeeded, so a queue-full drop drops both halves of a
  * frame. Rows still carry the DSP's seq, so a host can see the gap regardless.
  *
- * ONE DEEPER THAN THE PCM QUEUE, and that is not slack — it is what makes the
- * pairing hold. The consumer takes the PCM block first and its analysis last,
- * with imu_sidecar_drain() in between, so between those two gets it holds a
- * PCM slot free while still holding the analysis one: a == p + 1. That gap is
- * not brief — the IMU drain can flush a 4096 B chunk to FatFs there, which is
- * the multi-hundred-ms stall this buffering exists for in the first place, and
- * the DSP thread (higher priority) publishes right through it. At equal depths
- * the producer's PCM put would then succeed into the freed slot while the
- * analysis put found its queue still full, dropping one row for a block that
- * IS in the WAV — after which row k describes block k+1 for the rest of the
- * recording, with sc->frames still equal to blocks_captured so the close-time
- * cross-check never fires. One extra slot makes "analysis full while PCM had
- * room" unreachable. */
+ * ONE DEEPER THAN THE PCM QUEUE, and that is not slack — it is what keeps the
+ * pairing sound. The consumer takes the PCM block first and its analysis a few
+ * instructions later, inside audio_sidecar_drain(); the producer runs at a
+ * higher priority and can publish an entire PCM+analysis pair inside even that
+ * short window. At equal depths it would then land the PCM put in the slot just
+ * freed while the analysis queue was still full, dropping one row for a block
+ * that IS in the WAV — after which row k describes block k+1 for the rest of
+ * the recording, with sc->frames still equal to blocks_captured so the
+ * close-time cross-check never fires. One extra slot makes "analysis full while
+ * PCM had room" unreachable.
+ *
+ * (The window used to be far wider — imu_sidecar_drain() sat between the two
+ * gets and could stall on a 4096 B FatFs flush — but the IMU rows moved into
+ * audio_sidecar_drain() when the two CSVs merged. Narrower, not gone.) */
 struct capture_analysis_block {
     struct audio_analysis_result result;
     float rms;

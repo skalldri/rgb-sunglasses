@@ -21,28 +21,35 @@ constexpr const char *kDir = "/NAND:";
 constexpr const char *kPrefix = "cap_";
 constexpr const char *kSuffix = ".wav";
 
-/* Bytes per second of capture: 16 kHz mono 16-bit WAV, plus the IMU sidecar at
- * 25 Hz, plus (when enabled) the audio-analysis sidecar at 31.25 frames/s. Used
- * to turn free space into a recordable-seconds figure the app can show, and to
- * clamp a requested limit to what will actually fit.
+/* Space budget. These MUST match record_wav_capture()'s own pre-flight in
+ * sound.cpp byte for byte, because they are two halves of one contract: this
+ * turns free space into the recordable-seconds figure the app shows and the
+ * clamp capture_start() applies, and the pre-flight then re-checks the clamped
+ * length. If this side is the more generous of the two, the clamp advertises a
+ * length the pre-flight rejects with -ENOSPC — and since the free-space clamp
+ * now binds before kMaxLimitS on any normal volume, that is not an edge case
+ * but every capture at the advertised maximum.
  *
- * The analysis figure is a rate, not a guess: a 41-field D-line is 38 hex-encoded
- * floats at 9 bytes each plus ~17 bytes of prefix and newline, so ~360 B per
- * 32 ms frame. It has to be counted here or the app offers capture lengths the
- * volume cannot hold — this constant is the only thing behind both the Remaining
- * S readout and the clamp capture_start() applies. */
-constexpr uint32_t kAudioSidecarBytesPerSecond =
-    IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) ? 11250u : 0u;
-constexpr uint32_t kBytesPerSecond = 16000u * 2u + 1400u + kAudioSidecarBytesPerSecond;
+ * Both figures are therefore stated at the AUDIO frame rate (31.25 fps), the
+ * rate the pre-flight iterates at:
+ *   WAV      1024 B/frame  -> 32,000 B/s
+ *   IMU rows   56 B/frame  ->  1,750 B/s   (25 Hz of samples, charged per frame)
+ *   D-rows    360 B/frame  -> 11,250 B/s
+ * and the reserve carries the two sector-sized prologues (the WAV header and
+ * the CSV's padded #PARAMS/#IMU block) on top of the 64 KiB of slack, which
+ * the pre-flight also counts. */
+constexpr uint32_t kBytesPerFrame =
+    1024u + (IS_ENABLED(CONFIG_IMU) ? 56u : 0u) +
+    (IS_ENABLED(CONFIG_APP_CAPTURE_AUDIO_SIDECAR) ? 360u : 0u);
+constexpr uint32_t kBytesPerSecond = kBytesPerFrame * 1000u / 32u;
 
-/* Headroom left unclaimed so a capture cannot fill the volume to the point where
- * the filesystem itself struggles — the same instinct as record_wav's own check,
- * which keeps 64 KB back. */
-constexpr uint32_t kReserveBytes = 64u * 1024u;
+/* 64 KiB of slack, plus the WAV prologue, plus the CSV header sector. */
+constexpr uint32_t kReserveBytes = 64u * 1024u + 4096u + 4096u;
 
 /* A capture nobody stops is the normal field case, so the cap is not optional.
- * This is also close to the physical ceiling: the volume holds roughly three
- * minutes of audio in total. */
+ * No longer the binding limit, though: with the analysis rows the volume holds
+ * ~158 s, so the free-space clamp is what actually stops a capture and this is
+ * a backstop against a hypothetically larger volume. */
 constexpr uint32_t kMaxLimitS = 180;
 
 K_SEM_DEFINE(s_start_sem, 0, 1);
