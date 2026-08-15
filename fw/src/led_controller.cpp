@@ -176,6 +176,27 @@ static struct led_rgb led_2[kNumDisplayBuffers][LED_STRIP_2_NUM_PIXELS];
 // Hold this lock for _very_ short periods of time!
 K_MUTEX_DEFINE(displayBufferMutex);
 
+// Frame-consumed handshake (issue #379): given once per display cycle, after the
+// display releases its buffer; the render thread takes it (bounded, via
+// led_controller_wait_frame_consumed) to pace itself off the display clock
+// instead of running a second free-running k_msleep clock that slips phase.
+// Initial count 1 so the boot-time first render does not wait for a display
+// cycle; max count 1 so multiple display cycles coalesce into one credit
+// (k_sem_give on a full semaphore is a no-op — the correct semantics when the
+// producer is slower than the consumer). Give/take both happen OUTSIDE
+// displayBufferMutex, so this adds no lock-ordering edge.
+K_SEM_DEFINE(frameConsumedSem, 1, 1);
+
+// Counts completed renders, so claimBufferForDisplay can tell "sampling a new
+// frame" from "re-sampling the one it already showed" (a held frame — the
+// direct observable of issue #379's phase slip). A generation counter rather
+// than comparing buffer indices: with three buffers an index can recur while
+// the content is new. Guarded by displayBufferMutex like the rest of the
+// bookkeeping.
+uint32_t renderGeneration = 0;
+uint32_t lastSampledRenderGeneration = 0;
+bool haveSampledFrame = false;
+
 int claimBufferForRender(size_t &buffer) {
     k_mutex_lock(&displayBufferMutex, K_FOREVER);
 
@@ -237,6 +258,9 @@ int releaseBufferFromRender(const size_t buffer) {
     // Update the last rendered display buffer
     lastRenderedDisplayBuffer = buffer;
 
+    // A new frame exists (issue #379 held-frame detection)
+    renderGeneration++;
+
     // Decrement outstanding render buffer counter
     outstandingRenderBuffers--;
 
@@ -245,8 +269,10 @@ int releaseBufferFromRender(const size_t buffer) {
 }
 
 // Claim the best buffer to display right now, locking out anyone else from writing
-// content into the buffer
-int claimBufferForDisplay(size_t &buffer) {
+// content into the buffer. heldFrame reports that no render has completed since
+// the previous display claim — the display is re-showing the frame it already
+// pushed (issue #379's observable; counted into led_stats by the caller).
+int claimBufferForDisplay(size_t &buffer, bool &heldFrame) {
     k_mutex_lock(&displayBufferMutex, K_FOREVER);
 
     // Sanity check: lastRenderedDisplayBuffer should not currently be in-use
@@ -256,6 +282,11 @@ int claimBufferForDisplay(size_t &buffer) {
             "may ocurr");
         // Don't fail here: display thread _always_ needs a buffer, even if we show frame tearing
     }
+
+    // First-ever claim has no previous sample to compare against.
+    heldFrame = haveSampledFrame && (renderGeneration == lastSampledRenderGeneration);
+    lastSampledRenderGeneration = renderGeneration;
+    haveSampledFrame = true;
 
     // Mark that buffer as in-use
     displayBufferState[lastRenderedDisplayBuffer].inUse = true;
@@ -295,6 +326,10 @@ int releaseBufferFromDisplay(const size_t buffer) {
 
     k_mutex_unlock(&displayBufferMutex);
     return 0;
+}
+
+int led_controller_wait_frame_consumed(k_timeout_t timeout) {
+    return k_sem_take(&frameConsumedSem, timeout);
 }
 
 // Pick the default LED config
@@ -626,9 +661,15 @@ void led_display_thread_func(void *a, void *b, void *c) {
         };
 
         size_t bufferId = 0;
-        ret = claimBufferForDisplay(bufferId);
+        bool heldFrame = false;
+        ret = claimBufferForDisplay(bufferId, heldFrame);
         if (ret) {
             LOG_ERR("Error claiming display buffer!");
+        }
+        if (heldFrame) {
+            K_SPINLOCK(&sStatsLock) {
+                led_stats_core::recordHeldFrame(sStats);
+            }
         }
         markSegment("claim");  // claim can block on displayBufferMutex
 
@@ -664,6 +705,10 @@ void led_display_thread_func(void *a, void *b, void *c) {
         if (ret) {
             LOG_ERR("Error releasing display buffer!");
         }
+        // Frame consumed: let the render thread build the next one (issue #379).
+        // Given in ALL panel output modes — claim/release run identically in the
+        // three modes (issue #172's requirement), so producer pacing must too.
+        k_sem_give(&frameConsumedSem);
         markSegment("release");
 
         int64_t endTicks = k_uptime_ticks();
@@ -824,6 +869,7 @@ static int cmd_led_stats(const struct shell *shell, size_t argc, char **argv) {
                 led_stats_core::verdictText(led_stats_core::classifySegment(
                     s.worstSegmentUs, s.worstSegmentCpuUs, s.worstSegmentOtherUs,
                     s.worstSegmentIdleUs)));
+    shell_print(shell, "held frames:   %u", s.heldFrames);
     shell_print(shell, "overruns:      %u", s.overruns);
     return 0;
 }

@@ -52,6 +52,12 @@ struct Stats {
     uint32_t worstSegmentOtherUs;  // other threads ran during the segment
     uint32_t worstSegmentIdleUs;   // CPU had nothing to run during the segment
     uint32_t lateFrames;      // interval > 2x target
+    // Display claims where no render had completed since the previous claim —
+    // the panel re-showed the frame it already pushed. The direct observable of
+    // issue #379's render/display phase slip: ~0 in steady state under the
+    // frame-consumed handshake (nonzero only during genuine render overruns or
+    // a render-rate divider > 1).
+    uint32_t heldFrames;
 };
 
 // A frame is "late" past this multiple of the target interval. 2x means the panel visibly
@@ -173,6 +179,10 @@ inline void recordOverrun(Stats& s) {
     s.overruns++;
 }
 
+inline void recordHeldFrame(Stats& s) {
+    s.heldFrames++;
+}
+
 // Flattened view for reporting: resolves the "no samples yet" cases so the caller never has
 // to reason about the UINT32_MAX sentinel or divide by zero.
 struct Summary {
@@ -189,6 +199,7 @@ struct Summary {
     uint32_t worstSegmentOtherUs;
     uint32_t worstSegmentIdleUs;
     uint32_t overruns;
+    uint32_t heldFrames;
 };
 
 inline Summary summarize(const Stats& s) {
@@ -202,6 +213,7 @@ inline Summary summarize(const Stats& s) {
     out.worstSegmentOtherUs = s.worstSegmentOtherUs;
     out.worstSegmentIdleUs = s.worstSegmentIdleUs;
     out.overruns = s.overruns;
+    out.heldFrames = s.heldFrames;
 
     // Intervals are only recorded from the second frame onwards.
     out.intervalSamples = s.frames > 0 ? s.frames - 1 : 0;

@@ -15,6 +15,7 @@
 #include <zephyr/shell/shell_dummy.h>
 #include <zephyr/ztest.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #include "fake_led_strip.h"
@@ -281,6 +282,22 @@ ZTEST(led_controller, test_stats_late_frame_threshold) {
     zassert_equal(s.lateFrames, 1, "a zero target must not produce late frames");
 }
 
+// Issue #379: held-frame accounting is pure counter arithmetic in the core.
+ZTEST(led_controller, test_stats_held_frames_count_and_reset) {
+    led_stats_core::Stats s;
+    led_stats_core::reset(s);
+    zassert_equal(s.heldFrames, 0, "reset must zero held frames");
+
+    led_stats_core::recordHeldFrame(s);
+    led_stats_core::recordHeldFrame(s);
+    zassert_equal(s.heldFrames, 2, "each held frame must count once");
+    zassert_equal(led_stats_core::summarize(s).heldFrames, 2,
+                  "summarize must pass held frames through");
+
+    led_stats_core::reset(s);
+    zassert_equal(s.heldFrames, 0, "reset must clear held frames");
+}
+
 ZTEST(led_controller, test_stats_keeps_worst_not_last) {
     led_stats_core::Stats s;
     led_stats_core::reset(s);
@@ -290,6 +307,53 @@ ZTEST(led_controller, test_stats_keeps_worst_not_last) {
 
     zassert_equal(s.workMaxUs, 9000, "work max must survive a later smaller sample");
     zassert_equal(s.worstSegmentUs, 8000, "worst segment must survive a later smaller sample");
+}
+
+// Issue #379: the display loop gives the frame-consumed signal once per cycle,
+// in every panel output mode — the producer-side pacing contract.
+ZTEST(led_controller, test_display_signals_frame_consumed) {
+    // Drain any accumulated credit (max count 1, so at most one take succeeds).
+    while (led_controller_wait_frame_consumed(K_NO_WAIT) == 0) {
+    }
+
+    // The real display thread ticks every ~10 ms here; the signal must arrive
+    // well within a few ticks.
+    zassert_equal(led_controller_wait_frame_consumed(K_MSEC(100)), 0,
+                  "display loop must give the frame-consumed signal");
+
+    // And again — it is per display cycle, not one-shot.
+    zassert_equal(led_controller_wait_frame_consumed(K_MSEC(100)), 0,
+                  "the signal must recur every display cycle");
+}
+
+// Issue #379: with no producer rendering, every display claim re-samples the
+// same frame and the held-frames counter climbs — the phase-slip observable.
+// A fresh render resets the comparison so the next claim is NOT counted.
+ZTEST(led_controller, test_held_frames_counter_climbs_without_producer) {
+    const struct shell *sh = shell_backend_dummy_get_ptr();
+    zassert_not_null(sh, "dummy shell backend missing");
+
+    zassert_equal(shell_execute_cmd(sh, "led_stats reset"), 0, "led_stats reset failed");
+    k_msleep(kSeveralTicksMs);  // ~30 display ticks, no render in between
+
+    shell_backend_dummy_clear_output(sh);
+    zassert_equal(shell_execute_cmd(sh, "led_stats"), 0, "led_stats failed");
+
+    size_t len = 0;
+    const char *out = shell_backend_dummy_get_output(sh, &len);
+    zassert_not_null(out, "no shell output captured");
+    const char *held = strstr(out, "held frames:");
+    zassert_not_null(held, "led_stats should report held frames");
+
+    unsigned int heldCount = 0;
+    zassert_equal(sscanf(held, "held frames:   %u", &heldCount), 1,
+                  "held frames line should parse");
+    // 300 ms with no producer: nearly every claim after the first re-samples.
+    // native_sim's 10 ms system tick makes the effective display period ~10-20 ms
+    // (k_msleep rounds up to a tick boundary), so a 300 ms window yields 14-29
+    // held frames — floor at 10 to stay timing-tolerant.
+    zassert_true(heldCount >= 10, "expected >= 10 held frames with no producer, got %u",
+                 heldCount);
 }
 
 ZTEST(led_controller, test_led_stats_shell_command) {

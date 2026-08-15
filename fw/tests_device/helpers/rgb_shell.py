@@ -532,6 +532,7 @@ class RgbShell:
                 ("target_us", r"^target:\s+(\d+)\s+us/frame"),
                 ("late_frames", r"^late \(>\d+x\):\s+(\d+)\s+frame"),
                 ("work_max_us", r"^work max:\s+(\d+)\s+us"),
+                ("held_frames", r"^held frames:\s+(\d+)"),
                 ("overruns", r"^overruns:\s+(\d+)"),
             ):
                 m = re.match(pat, s)
