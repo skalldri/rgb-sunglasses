@@ -1107,6 +1107,11 @@ BUILD_ASSERT(AUDIO_CSV_LINE_MAX >=
 struct audio_sidecar {
     struct fs_file_t file;
     bool open;
+    /* Opened, then given up on mid-recording. `open` alone cannot say so — it
+     * is false both for a sidecar that never opened (nothing to report) and one
+     * abandoned at block 300 of 5000 (a truncated file the operator must be
+     * told about), and those two need opposite treatment at close. */
+    bool retired;
     size_t len;
     uint32_t frames;   /* analysis rows, one per WAV block */
     /* Both needed to survive a transient QSPI write error: FatFS latches a
@@ -1140,6 +1145,7 @@ static void audio_sidecar_flush(struct audio_sidecar *sc, bool final) {
                                sc->io_retries) != 0) {
             fs_close(&sc->file);
             sc->open = false; /* stop trying; the WAV is the primary artifact */
+            sc->retired = true;
             return;
         }
         sc->pos += (off_t)take;
@@ -1298,6 +1304,20 @@ static void audio_sidecar_drain(struct audio_sidecar *sc) {
 static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *shell,
                                 uint32_t blocks, uint32_t dropped) {
     if (!sc->open) {
+        /* A sidecar abandoned mid-recording used to leave here in silence: the
+         * capture then ran to completion and printed a clean WAV summary, while
+         * the volume kept a CSV holding only the rows written before the write
+         * failed, with no #DONE trailer and possibly a torn final row. Exactly
+         * the quietly-unusable artifact the MISALIGNED branch below exists to
+         * prevent, reached by a different route. Worded so the MCP success
+         * regex cannot match it. */
+        if (sc->retired) {
+            uint32_t lost = (uint32_t)atomic_get(&s_capture_analysis_dropped);
+            shell_warn(shell,
+                       "Capture CSV ABANDONED after %u rows (%u rows lost) - truncated, no "
+                       "#DONE trailer; do NOT pair with the WAV",
+                       sc->frames, lost);
+        }
         return;
     }
     audio_sidecar_flush(sc, true);
@@ -1594,13 +1614,20 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
         if (tap_write_at_retry(&f, path, wav_pos, s_wav_batch, tail, &io_retries) == 0) {
             total_bytes += tail;
         } else {
+            /* Same contract as record_wav_capture()'s: a short file must not
+             * return success. Beyond the shell, the MCP plugin treats this
+             * path's "Wrote ... (N frames, ...)" line as proof the analysis CSV
+             * is worth parsing, so falling through here hands a truncated
+             * artifact to beat_lab and capture_to_scenario.py. */
             shell_error(shell, "WAV write failed on final flush");
+            io_error = true;
         }
     }
     if (!io_error && csv_pos > 0) {
         if (tap_write_at_retry(&fcsv, csv_path, csv_file_pos, s_csv_batch, csv_pos,
                                &io_retries) != 0) {
             shell_error(shell, "CSV write failed on final flush");
+            io_error = true; /* loses up to a chunk of trailing D-rows */
         } else {
             csv_file_pos += (off_t)csv_pos;
         }
@@ -1635,6 +1662,7 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
                            frames_captured, dropped);
     if (tap_write_at_retry(&fcsv, csv_path, csv_file_pos, s_tap_line, len, &io_retries) != 0) {
         shell_error(shell, "CSV #DONE trailer write failed");
+        io_error = true;
     }
     fs_close(&fcsv);
 #if defined(CONFIG_IMU)
@@ -1940,11 +1968,18 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
         uint64_t free_bytes = (uint64_t)vfs.f_bfree * vfs.f_frsize;
         uint64_t needed = (uint64_t)total_blocks * per_frame + overhead;
         if (needed > free_bytes) {
+            /* Multiply by the block time rather than dividing by a frame
+             * rate: MSEC_PER_SEC / BLOCK_CAPTURE_TIME_MS truncates 31.25 to
+             * 31, which understates the cost per second and so overstates the
+             * advice by ~0.8 % — enough that retrying at the printed figure
+             * fails again and the operator has to guess downward. This matches
+             * kBytesPerSecond in capture.cpp, which already computes it this
+             * way. */
             uint32_t max_s =
-                (uint32_t)((free_bytes > overhead)
-                               ? (free_bytes - overhead) /
-                                     (per_frame * (MSEC_PER_SEC / BLOCK_CAPTURE_TIME_MS))
-                               : 0);
+                (uint32_t)((free_bytes > overhead) ? ((free_bytes - overhead) *
+                                                      BLOCK_CAPTURE_TIME_MS) /
+                                                         ((uint64_t)per_frame * MSEC_PER_SEC)
+                                                   : 0);
             shell_error(shell, "Not enough free space for %u s (max ~%u s free)", duration_s,
                         max_s);
             atomic_set(&s_capture_armed, 0);
