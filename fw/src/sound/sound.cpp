@@ -1079,9 +1079,9 @@ static int tap_write_at_retry(struct fs_file_t *f, const char *path, off_t pos,
  * given for s_csv_batch below: a misaligned flush pays the FF_FS_TINY shared-
  * window RMW penalty and stalls the drain loop long enough to DROP AUDIO
  * FRAMES. Writes go through tap_write_at_retry() like the WAV's, so a
- * transient QSPI -EIO is ridden out rather than retiring the file; only a
- * failure that survives close + reopen + reseek gives up. (This comment used
- * to say the opposite — the sidecar predated the retry being hoisted out of
+ * transient -EIO is ridden out rather than retiring the file; only a failure
+ * that survives close + reopen + reseek gives up. (This comment used to say
+ * the opposite — the sidecar predated the retry being hoisted out of
  * CONFIG_APP_AUDIO_DEBUG.) */
 #define AUDIO_CSV_CHUNK 4096
 #define AUDIO_CSV_LINE_MAX 512
@@ -1148,9 +1148,9 @@ struct audio_sidecar {
     bool retired;
     size_t len;
     uint32_t frames;   /* analysis rows, one per WAV block */
-    /* Both needed to survive a transient QSPI write error: FatFS latches a
-     * sticky error on the FIL, so recovery means close + reopen (by path) and
-     * seek back to where we were (the handle's own position is lost). */
+    /* Both needed to survive a transient write error: FatFS latches a sticky
+     * error on the FIL, so recovery means close + reopen (by path) and seek
+     * back to where we were (the handle's own position is lost). */
     char path[96];
     off_t pos;
     uint32_t *io_retries;
@@ -1169,12 +1169,25 @@ static void audio_sidecar_flush(struct audio_sidecar *sc, bool final) {
          * next row onto a truncated one. Give the handle back immediately; a
          * capture holds two of the four FatFs slots and leaking one starves
          * GLIM loads, extension loads and DFU staging until reboot. */
-        /* Retry across a transient QSPI hiccup rather than retiring the file on
-         * the first -EIO. That error is a documented, recoverable fact of
-         * sustained recording on this flash (see tap_write_at_retry), and
-         * giving up on it is what left a capture with a CSV shorter than its
-         * own directory entry claims. Only a failure that survives close +
-         * reopen + reseek retires the sidecar. */
+        /* Retry rather than retiring the file on the first -EIO; giving up on
+         * it is what left a capture with a CSV shorter than its own directory
+         * entry claims. Only a failure that survives close + reopen + reseek
+         * retires the sidecar.
+         *
+         * This is now a backstop, not the main event. While this branch was
+         * being written the -EIO looked like "a recoverable fact of sustained
+         * recording on this flash" — a hardware hiccup. Issue #380 root-caused
+         * it as software: FatFS has one shared sector window per volume and
+         * Zephyr's fs.c took no lock, so coredump_wq's unconditional 60 s
+         * fs_stat("/NAND:") raced this writer and manufactured -EIO with the
+         * flashdisk failure counters reading zero (PR #382's instrumented
+         * build caught one exactly on the 60 s tick). CONFIG_FS_FATFS_REENTRANT
+         * (PR #383) serializes the FatFS entry points and is the actual fix; a
+         * missing upstream flashdisk write-error backport (PR #382) was the
+         * other half. Expect 0 io retries on a healthy build now — a nonzero
+         * count is worth investigating, not shrugging at. Kept because USB MSC
+         * raw disk_access traffic is deliberately outside that lock and genuine
+         * media errors still exist. */
         if (tap_write_at_retry(&sc->file, sc->path, sc->pos, s_audio_batch, take,
                                sc->io_retries) != 0) {
             fs_close(&sc->file);
