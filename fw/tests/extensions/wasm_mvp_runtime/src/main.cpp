@@ -11,10 +11,49 @@
 #include <initializer_list>
 #include <vector>
 
+#include "cpptest_v2_module.h"
+
 namespace {
 
 constexpr uint32_t kExpectedCyan = 0x00ffff;
 constexpr uint32_t kExpectedMagenta = 0xff00ff;
+
+uint32_t wave8(uint32_t angle) {
+    const uint8_t t = angle & 0xffu;
+    const uint8_t half = t & 0x7fu;
+    const uint32_t hump = static_cast<uint32_t>(half) * (127u - half) / 32u;
+    return (t & 0x80u) ? 128u - hump : 128u + hump;
+}
+
+uint32_t cpptestReferencePixel(uint32_t timeMs, uint32_t color, bool invert, size_t x, size_t y) {
+    const uint32_t red = (color >> 16u) & 0xffu;
+    const uint32_t green = (color >> 8u) & 0xffu;
+    const uint32_t blue = color & 0xffu;
+    uint32_t value = (wave8(x * 13u + timeMs / 9u) + wave8(y * 23u + timeMs / 14u) +
+                      wave8((x + y) * 11u + timeMs / 6u)) /
+                     3u;
+    if (invert) {
+        value = 255u - value;
+    }
+    return ((red * value / 255u) << 16u) | ((green * value / 255u) << 8u) | (blue * value / 255u);
+}
+
+void expectV2Frame(const wasm_mvp_runtime::V2TickOutput& output, uint32_t timeMs, uint32_t color,
+                   bool invert) {
+    for (size_t y = 0; y < wasm_mvp_runtime::kV2Height; ++y) {
+        for (size_t x = 0; x < wasm_mvp_runtime::kV2Width; ++x) {
+            const size_t pixel = y * wasm_mvp_runtime::kV2Width + x;
+            zassert_equal(output.pixels[pixel], cpptestReferencePixel(timeMs, color, invert, x, y),
+                          "pixel %zu differs", pixel);
+        }
+    }
+    zassert_true(output.goodMoment);
+    zassert_true(output.arenaHighWater > 0);
+    zassert_true(output.arenaHighWater <= CONFIG_APP_WASM3_MVP_HEAP_SIZE);
+    zassert_true(output.cpuTimeUs <= CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS * 1000u);
+    zassert_true(output.wallTimeUs <= CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS * 1000u);
+    TC_PRINT("cpptest v2 tick: cpu %u us, wall %u us\n", output.cpuTimeUs, output.wallTimeUs);
+}
 
 K_THREAD_STACK_DEFINE(sConcurrentTickStack, 2048);
 struct k_thread sConcurrentTickThread;
@@ -23,6 +62,8 @@ struct ConcurrentTickState {
     wasm_mvp_runtime::Result result = wasm_mvp_runtime::Result::RuntimeFailure;
     wasm_mvp_runtime::TickOutput output{0xdeadbeef, 0};
 };
+
+wasm_mvp_runtime::V2TickOutput sV2Output;
 
 k_timepoint_t deadline() {
     return sys_timepoint_calc(K_MSEC(CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS));
@@ -89,6 +130,44 @@ ZTEST(wasm_mvp_runtime, test_actual_wasm3_parse_compile_link_and_call) {
     expectGoodActivationAndTick(500, kExpectedMagenta);
     expectGoodActivationAndTick(1000, kExpectedCyan);
     expectGoodActivationAndTick(UINT32_MAX, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_cpptest_v2_matches_legacy_effect_across_state_and_parameters) {
+    zassert_equal(wasm_mvp_runtime::startV2(kCppTestV2Module, sizeof(kCppTestV2Module), deadline()),
+                  wasm_mvp_runtime::Result::Completed);
+
+    wasm_mvp_runtime::V2TickInputs inputs;
+    inputs.params[0] = 50;
+    inputs.params[1] = 0x00ff40ff;
+    inputs.params[2] = 0;
+
+    uint32_t timeMs = 0;
+    zassert_equal(wasm_mvp_runtime::tickV2(17, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    timeMs += 17;
+    expectV2Frame(sV2Output, timeMs, inputs.params[1], false);
+
+    inputs.params[0] = 100;
+    inputs.params[1] = 0x00102080;
+    zassert_equal(wasm_mvp_runtime::tickV2(25, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    timeMs += 50;
+    expectV2Frame(sV2Output, timeMs, inputs.params[1], false);
+
+    inputs.params[2] = 1;
+    zassert_equal(wasm_mvp_runtime::tickV2(0, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    expectV2Frame(sV2Output, timeMs, inputs.params[1], true);
+
+    wasm_mvp_runtime::stop();
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_and_mvp_profiles_reject_each_others_modules) {
+    zassert_equal(wasm_mvp_runtime::start(kCppTestV2Module, sizeof(kCppTestV2Module), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    zassert_equal(wasm_mvp_runtime::startV2(kWasmMvpModule, sizeof(kWasmMvpModule), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
 }
 
 ZTEST(wasm_mvp_runtime, test_malformed_module_fails_then_good_module_recovers) {
