@@ -282,7 +282,10 @@ ZTEST(led_controller, test_stats_late_frame_threshold) {
     zassert_equal(s.lateFrames, 1, "a zero target must not produce late frames");
 }
 
-// Issue #379: held-frame accounting is pure counter arithmetic in the core.
+// Guards the Stats -> Summary plumbing for the held-frames field (the place a
+// new field gets forgotten), nothing more: the #379 behavior itself — the
+// generation comparison in claimBufferForDisplay — is pinned by the
+// with/without-producer halves of test_held_frames_counter_climbs_without_producer.
 ZTEST(led_controller, test_stats_held_frames_count_and_reset) {
     led_stats_core::Stats s;
     led_stats_core::reset(s);
@@ -310,25 +313,32 @@ ZTEST(led_controller, test_stats_keeps_worst_not_last) {
 }
 
 // Issue #379: the display loop gives the frame-consumed signal once per cycle,
-// in every panel output mode — the producer-side pacing contract.
+// in every panel output mode. Give PLACEMENT (the latch point) is pinned by
+// test_give_at_latch_grants_full_period below — with instantaneous fake
+// pushes, placement is pure instruction order and no black-box count can see
+// it, so that test dials in a real push duration first.
 ZTEST(led_controller, test_display_signals_frame_consumed) {
-    // Drain any accumulated credit (max count 1, so at most one take succeeds).
+    // The signal recurs, once per display cycle...
+    run_led_output_cmd("led_output on");
     while (led_controller_wait_frame_consumed(K_NO_WAIT) == 0) {
     }
-
-    // The real display thread ticks every ~10 ms here; the signal must arrive
-    // well within a few ticks.
     zassert_equal(led_controller_wait_frame_consumed(K_MSEC(100)), 0,
                   "display loop must give the frame-consumed signal");
-
-    // And again — it is per display cycle, not one-shot.
     zassert_equal(led_controller_wait_frame_consumed(K_MSEC(100)), 0,
                   "the signal must recur every display cycle");
+
+    // ...in every panel output mode — claim/release (and the give) run
+    // identically in all three (issue #172's requirement).
+    static const char *const kModes[] = {"led_output blank", "led_output off", "led_output on"};
+    for (size_t i = 0; i < ARRAY_SIZE(kModes); i++) {
+        run_led_output_cmd(kModes[i]);
+        while (led_controller_wait_frame_consumed(K_NO_WAIT) == 0) {
+        }
+        zassert_equal(led_controller_wait_frame_consumed(K_MSEC(100)), 0,
+                      "frame-consumed signal missing in mode '%s'", kModes[i]);
+    }
 }
 
-// Issue #379: with no producer rendering, every display claim re-samples the
-// same frame and the held-frames counter climbs — the phase-slip observable.
-// A fresh render resets the comparison so the next claim is NOT counted.
 ZTEST(led_controller, test_held_frames_counter_climbs_without_producer) {
     const struct shell *sh = shell_backend_dummy_get_ptr();
     zassert_not_null(sh, "dummy shell backend missing");
@@ -354,6 +364,31 @@ ZTEST(led_controller, test_held_frames_counter_climbs_without_producer) {
     // held frames — floor at 10 to stay timing-tolerant.
     zassert_true(heldCount >= 10, "expected >= 10 held frames with no producer, got %u",
                  heldCount);
+
+    // Positive control (PR #381 review): the same window WITH a producer must
+    // count ~none — this is the assertion that pins the render-generation
+    // comparison. Mutating claimBufferForDisplay to count every cycle
+    // (heldFrame = haveSampledFrame) passes the lower bound above MORE easily;
+    // only this upper bound catches it. The producer runs on this cooperative
+    // ztest thread, so each 10 ms tick releases a fresh frame before the
+    // preemptible display thread's claim samples it.
+    zassert_equal(shell_execute_cmd(sh, "led_stats reset"), 0, "led_stats reset failed");
+    for (int i = 0; i < 30; i++) {
+        size_t buffer = 0;
+        zassert_equal(claimBufferForRender(buffer), 0, "claimBufferForRender failed");
+        zassert_equal(releaseBufferFromRender(buffer), 0, "releaseBufferFromRender failed");
+        k_msleep(10);
+    }
+    shell_backend_dummy_clear_output(sh);
+    zassert_equal(shell_execute_cmd(sh, "led_stats"), 0, "led_stats failed");
+    out = shell_backend_dummy_get_output(sh, &len);
+    zassert_not_null(out, "no shell output captured");
+    held = strstr(out, "held frames:");
+    zassert_not_null(held, "led_stats should report held frames");
+    unsigned int heldFed = 0;
+    zassert_equal(sscanf(held, "held frames:   %u", &heldFed), 1,
+                  "held frames line should parse");
+    zassert_true(heldFed <= 3, "a fed display must count ~no held frames, got %u", heldFed);
 }
 
 ZTEST(led_controller, test_led_stats_shell_command) {

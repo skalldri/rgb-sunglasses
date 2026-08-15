@@ -11,6 +11,7 @@
 #include <core_config.h>
 #include <led_controller.h>
 #include <pattern_controller.h>
+#include <render_pacing.h>
 
 #if defined(CONFIG_FAT_FILESYSTEM_ELM)
 #include <storage/glim_registry.h>
@@ -311,35 +312,17 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // frames (see the wait at the bottom of the loop), so its cadence is
         // slaved to the display thread's clock and every display push samples
         // exactly one fresh frame. core/render_thread_rate_ms therefore acts as
-        // a DIVIDER: N = CEIL(render / display), so the effective render
-        // interval is never SHORTER than requested — render_thread_rate_ms is
-        // the one knob trading frame rate against render/sandbox CPU, and
-        // rounding would silently snap any 1.0-1.5x setting back up to the full
-        // display rate (PR #381 review). getRenderRateMs()'s floor guarantees
-        // N >= 1. The dt handed to the animations below is the true nominal
-        // inter-render interval, N * display interval — at the defaults N == 1
-        // and dt is 33.3 ms, exactly as before.
+        // a DIVIDER — the arithmetic (ceiling semantics, unusable-display
+        // fallback) lives in the pure seam render_pacing.h so it is
+        // native_sim-testable (fw/tests/render_pacing/), since this loop itself
+        // is not compiled into any test binary (PR #381 review). At the
+        // defaults N == 1 and dt is 33.3 ms, exactly as before.
         const float displayIntervalMs = getPatternConfig().getDisplayRateMs();
-        uint32_t framesPerRender = 1;
-        if (displayIntervalMs > 0.0f) {
-            const float ratio = getPatternConfig().getRenderRateMs() / displayIntervalMs;
-            framesPerRender = (uint32_t)ratio;
-            // Ceiling with a small epsilon so exact multiples (ratio 2.0 stored
-            // as 1.999... or 2.000...1 in float) do not gain a spurious frame.
-            if ((float)framesPerRender < ratio - 0.001f) {
-                framesPerRender++;
-            }
-            if (framesPerRender < 1) {
-                framesPerRender = 1;
-            }
-        }
-        // An unusable display interval (0 is remotely writable and unclamped)
-        // must not collapse dt to 0 — animations would freeze and shuffle's
-        // dwell clock would stop. Fall back to the render rate, which is what
-        // dt was before the handshake (PR #381 review).
-        float kTargetRenderIntervalMs = (displayIntervalMs > 0.0f)
-                                            ? framesPerRender * displayIntervalMs
-                                            : getPatternConfig().getRenderRateMs();
+        const float renderRateMs = getPatternConfig().getRenderRateMs();
+        const uint32_t framesPerRender =
+            render_pacing::framesPerRender(renderRateMs, displayIntervalMs);
+        float kTargetRenderIntervalMs =
+            render_pacing::renderIntervalMs(renderRateMs, displayIntervalMs);
         if (lastWaitTimedOut) {
             // The display clock was unavailable last iteration, so this
             // iteration started on the timeout's schedule (~2 display periods),
