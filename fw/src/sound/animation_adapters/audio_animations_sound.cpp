@@ -4,6 +4,7 @@
 #include <sound/animation_adapters/audio_frame_fold.h>
 #include <sound/audio_dsp.h>
 #include <sound/sound.h>
+#include <zephyr/sys/atomic.h>
 
 #if defined(CONFIG_ANIMATION_BEAT)
 #include <animations/beat_animation.h>
@@ -60,13 +61,18 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
             if (tmp.beat[kColorBeatBand]) {
                 beatCount_++;
             }
-            frameCount_++;
+            atomic_inc(&frameCount_);
         }
     }
 
     uint32_t beatCount() const { return beatCount_; }
 
-    uint32_t frameCount() const override { return frameCount_; }
+    /* atomic_t, not a plain uint32_t: incremented on the render thread, but
+     * FftBarsAnimation::init() reads it from whatever thread called
+     * pattern_controller_change_to_animation() (BT RX, shell, SMP workqueue —
+     * see pattern_controller.h) — same cross-thread class the tick epoch is
+     * atomic for (PR #378 review). */
+    uint32_t frameCount() const override { return (uint32_t)atomic_get(&frameCount_); }
 
     size_t numBands() const override { return AUDIO_NUM_BANDS; }
 
@@ -87,7 +93,7 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
    private:
     audio_analysis_result cache_ = {};
     uint32_t beatCount_ = 0;
-    uint32_t frameCount_ = 0;
+    atomic_t frameCount_ = ATOMIC_INIT(0);
     /* Tick epoch of the last frame-carrying drain; frames drained in the same
      * epoch OR into one batch. Initialized off any real epoch value's phase is
      * irrelevant — only equality matters, and epoch 0 vs UINT32_MAX simply makes
