@@ -141,10 +141,14 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // used to cut a long GLIM clip.
     //
     // A pixel step costs about one step-time regardless of the render tick rate (the
-    // carry-remainder accumulator below can take several steps in one tick), except a
-    // step time of 0, which steps exactly once per tick.
-    const size_t stepMs = deps_->stepTimeMs.get();
-    const size_t msPerPixel = (stepMs > 0) ? stepMs : timeSinceLastTickMs;
+    // carry-remainder accumulator below can take several steps in one tick). A step
+    // time of 0 means "fastest" and is treated as 1 ms so it is wall-clock defined at
+    // any tick rate (PR #378 review).
+    size_t stepMs = deps_->stepTimeMs.get();
+    if (stepMs == 0) {
+        stepMs = 1;
+    }
+    const size_t msPerPixel = stepMs;
     if (firstChar >= currentMessageLen) {
         // Done scrolling; only the kMinSlotDwellMs floor below is left to wait out.
         remainingScrollMs_ = (currentMessageDwellMs >= kMinSlotDwellMs)
@@ -232,17 +236,11 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (stepMs == 0) {
-        // Legacy "fastest" mode: exactly one step per render tick.
-        currentCycleTimeMs = 0;
-        currentTextOffset--;
-    } else {
-        // Carry the remainder instead of resetting to 0 so the scroll rate stays
-        // wall-clock correct at any render tick rate, including step times shorter
-        // than the tick interval (issue #376).
-        while (currentCycleTimeMs > stepMs) {
-            currentCycleTimeMs -= stepMs;
-            currentTextOffset--;  // Move text one pixel to the left
-        }
+    // Carry the remainder instead of resetting to 0 so the scroll rate stays
+    // wall-clock correct at any render tick rate, including step times shorter
+    // than the tick interval (issue #376). stepMs >= 1 (0 mapped above).
+    while (currentCycleTimeMs > stepMs) {
+        currentCycleTimeMs -= stepMs;
+        currentTextOffset--;  // Move text one pixel to the left
     }
 }

@@ -28,21 +28,37 @@ constexpr size_t kColorBeatBand = 0;
 class SoundAnimationAudioSource : public AnimationAudioSource {
    public:
     /* Drain the message queue and cache the newest frame, OR-folding beat flags
-     * across every frame drained in this tick (audio_frame_fold): at a ~33 ms
-     * render tick two ~32 ms analysis frames can arrive in one drain, and plain
-     * last-frame-wins dropped the older frame's beat (issue #376).
-     * Called once per animation tick so the animation sees a consistent snapshot.
+     * across every frame the current render tick drains (audio_frame_fold): at a
+     * ~33 ms render tick two ~32 ms analysis frames can arrive in one drain, and
+     * plain last-frame-wins dropped the older frame's beat (issue #376).
+     *
+     * The batch boundary is the render TICK, not one update() call: several
+     * update() calls happen per tick (the active animation's own, plus the
+     * beat/color sources'), and resetting per call would let a frame that lands
+     * between two same-tick drains clear a beat the first drain had just folded
+     * in, before its consumer read it (PR #378 review). This module stays
+     * deliberately ignorant of the render loop, so the tick is inferred by wall
+     * clock: analysis frames arrive ~32 ms apart, while frame-carrying drains
+     * within one tick are microseconds apart — any frame drained within
+     * kBatchWindowMs of the previous frame-carrying drain joins that batch.
+     * (This holds at ANY render rate, because the ~32 ms spacing is the audio
+     * thread's, not the render thread's.)
+     *
      * Beats for the edge-triggered consumers are COUNTED here, at drain time (once
      * per drained frame), not read from cache_.beat[] — so it doesn't matter which
-     * of the potentially-several update() calls in a tick (the Beat animation's own,
-     * or the beat source below) drains a beat-carrying frame, and a beat flag
-     * persisting in cache_ across ticks can't cause repeated re-rolls. */
+     * of the potentially-several update() calls in a tick drains a beat-carrying
+     * frame, and a beat flag persisting in cache_ across ticks can't cause
+     * repeated re-rolls. */
     void update() override {
         audio_analysis_result tmp;
-        bool firstInBatch = true;
+        bool drainedThisCall = false;
         while (k_msgq_get(&audio_result_q, &tmp, K_NO_WAIT) == 0) {
+            const int64_t now = k_uptime_get();
+            const bool firstInBatch =
+                !drainedThisCall && (now - lastFrameDrainMs_) > kBatchWindowMs;
             audio_frame_fold(cache_, tmp, firstInBatch);
-            firstInBatch = false;
+            lastFrameDrainMs_ = now;
+            drainedThisCall = true;
             if (tmp.beat[kColorBeatBand]) {
                 beatCount_++;
             }
@@ -71,9 +87,15 @@ class SoundAnimationAudioSource : public AnimationAudioSource {
     }
 
    private:
+    /* Same-tick frame-carrying drains are microseconds apart; distinct analysis
+     * frames arrive ~32 ms apart (audio thread cadence). 8 ms sits comfortably
+     * between, independent of the render rate. */
+    static constexpr int64_t kBatchWindowMs = 8;
+
     audio_analysis_result cache_ = {};
     uint32_t beatCount_ = 0;
     uint32_t frameCount_ = 0;
+    int64_t lastFrameDrainMs_ = 0;
 };
 
 SoundAnimationAudioSource sSoundSource;

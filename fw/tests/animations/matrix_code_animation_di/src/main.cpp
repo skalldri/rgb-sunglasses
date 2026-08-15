@@ -81,12 +81,16 @@ ZTEST(matrix_code_animation_di_tests, test_drop_advances_multiple_rows_in_one_ti
 
     reset_capture();
     // One 33 ms tick at a 10 ms drop speed: 33 → 23 → 13 → 3, exactly 3 rows.
+    // Each swept row is aged by its remaining in-tick budget (PR #378 review:
+    // a flat 255 sweep would lose the trail gradient): age = budget*255/600.
     animation->tick(renderer, 33);
 
-    zassert_equal(sColumnRed[1], 255, "Expected the head to light row 1 in this tick");
-    zassert_equal(sColumnRed[2], 255, "Expected the head to light row 2 in this tick");
-    zassert_equal(sColumnRed[3], 255, "Expected the head to light row 3 in this tick");
+    zassert_equal(sColumnRed[1], 246, "Expected row 1 aged by 23 ms (255 - 9)");
+    zassert_equal(sColumnRed[2], 250, "Expected row 2 aged by 13 ms (255 - 5)");
+    zassert_equal(sColumnRed[3], 254, "Expected row 3 aged by 3 ms (255 - 1)");
     zassert_equal(sColumnRed[4], 0, "Expected the head NOT to reach row 4 (3 steps only)");
+    zassert_true(sColumnRed[1] < sColumnRed[2] && sColumnRed[2] < sColumnRed[3],
+                 "Expected the falling gradient to brighten toward the head");
 }
 
 // Issue #376: head displacement must depend only on total elapsed time, not on how
@@ -142,15 +146,21 @@ ZTEST(matrix_code_animation_di_tests, test_drop_exits_bottom_within_one_tick) {
     spawn_drop(animation, renderer, density);
 
     reset_capture();
-    // 33 ms at 1 ms/row: the head sweeps rows 1..7, then exits and deactivates.
+    // 33 ms at 1 ms/row: the head sweeps rows 1..7 (each aged by its remaining
+    // in-tick budget, so the trail keeps its gradient), then exits and deactivates.
     animation->tick(renderer, 33);
     for (size_t y = 1; y < kTestHeight; y++) {
-        zassert_equal(sColumnRed[y], 255, "Expected row %zu lit by the sweeping head", y);
+        zassert_true(sColumnRed[y] >= 240, "Expected row %zu lit by the sweeping head", y);
+        if (y + 1 < kTestHeight) {
+            zassert_true(sColumnRed[y] <= sColumnRed[y + 1],
+                         "Expected brightness to rise toward the head at row %zu", y);
+        }
     }
+    const uint8_t bottomAfterSweep = sColumnRed[kTestHeight - 1];
 
     // The column is now inactive: the next tick only decays (33*255/600 = 14).
     reset_capture();
     animation->tick(renderer, 33);
-    zassert_equal(sColumnRed[kTestHeight - 1], 255 - 14,
+    zassert_equal(sColumnRed[kTestHeight - 1], bottomAfterSweep - 14,
                   "Expected pure decay (no new head) after the drop exited the bottom");
 }

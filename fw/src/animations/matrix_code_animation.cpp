@@ -70,8 +70,15 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
                     // Drop has exited the bottom; deactivate this column
                     columns_[x].active = false;
                 } else {
-                    // Light up the new head position at full brightness
-                    brightness_[x][columns_[x].headY] = 255;
+                    // Light the new head position, aged by the time that has
+                    // already elapsed since this step within the tick (the
+                    // remaining budget): the tick-level decay pass above ran
+                    // BEFORE this loop, so without this a multi-row sweep would
+                    // paint every crossed row at a flat 255 and the trail would
+                    // lose its falling gradient (PR #378 review).
+                    const uint32_t age = (budgetMs * 255) / fadeTimeMs;
+                    brightness_[x][columns_[x].headY] =
+                        (age < 255) ? (uint8_t)(255 - age) : 0;
                 }
             }
             if (columns_[x].active) {

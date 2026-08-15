@@ -5,13 +5,17 @@
 #include <cstddef>
 
 /* Fold one drained analysis frame into an animation-facing cache: the latest
- * frame wins for every field, but the beat flags OR across all frames drained
- * in ONE tick. At a ~33 ms render tick two ~32 ms analysis frames regularly
- * arrive in the same drain, and plain last-frame-wins silently dropped the
- * older frame's beat — a missed flash for every isBeat() consumer (issue #376).
+ * frame wins for every field, but the beat flags OR across all frames of one
+ * batch. At a ~33 ms render tick two ~32 ms analysis frames regularly arrive
+ * together, and plain last-frame-wins silently dropped the older frame's beat
+ * — a missed flash for every isBeat() consumer (issue #376).
  *
- * `firstInBatch` must be true for the first frame of a drain batch so the
- * previous tick's flags are cleared; the OR only spans a single batch.
+ * `firstInBatch` must be true for the first frame of a new batch so the
+ * previous batch's flags are cleared; the OR only spans a single batch. WHAT a
+ * batch is belongs to the caller: the device adapter scopes it to one render
+ * tick (inferred by wall clock, since update() runs several times per tick —
+ * see SoundAnimationAudioSource::update()); the simulator host scopes it to
+ * one tick's catch-up loop (fw/sim/core/host.ts).
  *
  * Pure and kernel-free on purpose (same testable-seam idiom as
  * led_stats_core / extension_tick_budget): the ztest suite in

@@ -393,8 +393,9 @@ ZTEST(text_animation_di_tests, test_grace_request_floors_at_min_dwell) {
 }
 
 ZTEST(text_animation_di_tests, test_grace_request_zero_step_time) {
-    // A 0 step time scrolls one pixel per render tick, so the per-pixel cost is the frame
-    // interval, not 0 — the request must not collapse to nothing.
+    // A 0 step time means "fastest" = a 1 ms step (wall-clock defined at any tick
+    // rate, PR #378 review), so the per-pixel cost is 1 ms, not 0 — the request
+    // must not collapse to nothing.
     ConstUint32Source stepTimeMs(0);
     ConstUint32Source color(0xFFFFFF);
     FixedSlotSource slotSource;  // slot 0 -> "HELLO"
@@ -408,14 +409,15 @@ ZTEST(text_animation_di_tests, test_grace_request_zero_step_time) {
     NullTestRenderer renderer;
     const size_t full = fullScrollPixels("HELLO", renderer.displayWidth());
 
-    // The request is a snapshot taken at the top of tick(), before that frame's pixel
-    // step — so the first tick still reports the full scroll, priced at 20 ms/px.
+    // The request is a snapshot taken at the top of tick(), before that frame's
+    // pixel steps — so the first tick still reports the full scroll, at 1 ms/px.
     animation->tick(renderer, 20);
-    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)(full * 20u),
-                  "a 0 step time must price a pixel at one render tick, not 0 ms");
+    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)(full * 1u),
+                  "a 0 step time must price a pixel at 1 ms, not 0 ms");
 
-    // The second tick sees the pixel the first one stepped: exactly one 20 ms frame less.
+    // The first tick's 20 ms stepped floor((20-1)/1) = 19 pixels; the second
+    // snapshot is exactly 19 ms less.
     animation->tick(renderer, 20);
-    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)((full - 1u) * 20u),
-                  "each scrolled pixel must retire one render tick's worth of the request");
+    zassert_equal(animation->goodSwitchPointGraceMs(), (uint32_t)((full - 19u) * 1u),
+                  "each scrolled pixel must retire one step time's worth of the request");
 }

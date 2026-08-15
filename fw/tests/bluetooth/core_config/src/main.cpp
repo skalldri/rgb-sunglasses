@@ -166,17 +166,23 @@ ZTEST(core_config_service, test_active_animation_binding_round_trip) {
  * Issue #376: the render rate defaults to the display rate, and
  * getRenderRateMs() floors the render interval at the display interval (a
  * shorter render interval only produces frames the display never samples).
- * The floor write-back is also the settings migration for boards that
- * persisted the old 11100 default.
+ * The floor clamps the RETURNED value only; the sole write-back is the
+ * exact-match migration of the pre-#376 default 11100 (PR #378 review: a
+ * general write-back destroyed the user's setting when the display rate was
+ * temporarily raised).
  * ------------------------------------------------------------------------- */
 
 ZTEST(core_config_service, test_render_rate_default_matches_display_rate) {
     zassert_equal(sDefaultDisplayRate, 33300, "Display Thread Rate must default to 33300");
     zassert_equal(sDefaultRenderRate, 33300,
                   "Render Thread Rate must default to the display rate (33300)");
+    zassert_within(CoreConfig::getInstance().getDisplayRateMs(), 33.3f, 0.001f,
+                   "getDisplayRateMs must decode the default as 33.3 ms");
+    zassert_within(CoreConfig::getInstance().getRenderRateMs(), 33.3f, 0.001f,
+                   "getRenderRateMs must decode the default as 33.3 ms");
 }
 
-ZTEST(core_config_service, test_render_rate_floored_at_display_rate) {
+ZTEST(core_config_service, test_render_rate_migrates_old_default) {
     const struct bt_gatt_attr *render = find_value_attr(2);
     zassert_not_null(render);
 
@@ -184,12 +190,33 @@ ZTEST(core_config_service, test_render_rate_floored_at_display_rate) {
     gatt_write_u32(render, 11100);
 
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
-    zassert_within(rateMs, 33.3f, 0.001f, "render interval must be floored at the display's");
+    zassert_within(rateMs, 33.3f, 0.001f, "the old default must be migrated to the new one");
 
-    /* The write-back must be GATT-visible, so the app's read-back-after-write
-     * (these characteristics are non-notifiable) shows the corrected value. */
-    zassert_equal(read_u32(render), 33300, "the floor must write back to the characteristic");
+    /* The migration write-back must be GATT-visible, so the app's
+     * read-back-after-write (these characteristics are non-notifiable) shows
+     * the corrected value. */
+    zassert_equal(read_u32(render), 33300, "the migration must write back to the characteristic");
     zassert_equal(read_u32(find_value_attr(1)), 33300, "the display rate must be untouched");
+}
+
+ZTEST(core_config_service, test_render_rate_floor_preserves_user_value) {
+    const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(render);
+
+    /* A user's own too-fast value (NOT the 11100 migration sentinel) is floored
+     * at point of use but never rewritten — the setting survives. */
+    gatt_write_u32(render, 20000);
+    float rateMs = CoreConfig::getInstance().getRenderRateMs();
+    zassert_within(rateMs, 33.3f, 0.001f, "render interval must be floored at the display's");
+    zassert_equal(read_u32(render), 20000, "the floor must not destroy the user's setting");
+
+    /* ...and becomes effective again once the display rate drops below it. */
+    gatt_write_u32(find_value_attr(1), 15000);
+    rateMs = CoreConfig::getInstance().getRenderRateMs();
+    zassert_within(rateMs, 20.0f, 0.001f, "the preserved value must apply when legal again");
+
+    gatt_write_u32(find_value_attr(1), sDefaultDisplayRate);  // restore
+    gatt_write_u32(render, sDefaultRenderRate);
 }
 
 ZTEST(core_config_service, test_render_rate_slower_than_display_allowed) {
@@ -204,21 +231,28 @@ ZTEST(core_config_service, test_render_rate_slower_than_display_allowed) {
     gatt_write_u32(render, sDefaultRenderRate);  // restore for order-independence
 }
 
-ZTEST(core_config_service, test_render_rate_follows_raised_display_rate) {
+ZTEST(core_config_service, test_render_rate_follows_raised_display_rate_reversibly) {
     const struct bt_gatt_attr *display = find_value_attr(1);
     const struct bt_gatt_attr *render = find_value_attr(2);
     zassert_not_null(display);
     zassert_not_null(render);
 
-    /* Slowing the display below the render rate must drag the render rate along
-     * on the next read — the invariant holds whichever knob moved. */
+    /* Slowing the display below the render rate must floor the effective render
+     * rate — the invariant holds whichever knob moved... */
     gatt_write_u32(display, 50000);
     gatt_write_u32(render, 33300);
 
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
     zassert_within(rateMs, 50.0f, 0.001f, "raising the display interval must floor the render");
-    zassert_equal(read_u32(render), 50000, "the floor must write back to the characteristic");
+    zassert_equal(read_u32(render), 33300,
+                  "the floor must NOT rewrite the characteristic (PR #378 review)");
 
-    gatt_write_u32(display, sDefaultDisplayRate);  // restore for order-independence
-    gatt_write_u32(render, sDefaultRenderRate);
+    /* ...and restoring the display rate must restore the render rate — the
+     * floor is reversible because it never destroyed the stored value. */
+    gatt_write_u32(display, sDefaultDisplayRate);
+    rateMs = CoreConfig::getInstance().getRenderRateMs();
+    zassert_within(rateMs, 33.3f, 0.001f, "the render rate must recover with the display rate");
+    zassert_equal(read_u32(render), 33300, "the stored render rate must be untouched");
+
+    gatt_write_u32(render, sDefaultRenderRate);  // restore for order-independence
 }

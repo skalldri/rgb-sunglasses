@@ -41,6 +41,15 @@ BtGattPrimaryService<kCoreConfigServiceUuid> coreConfigPrimaryService;
 // render default deliberately equals the display default, since rendering faster
 // than the display push just throws frames away (issue #376) — getRenderRateMs()
 // also enforces this as a runtime floor, whatever the persisted values say.
+//
+// Known cosmetic cost of 1:1 (PR #378 review): the two loops free-run with no
+// buffer-swap handshake, and each paces itself with a whole-ms k_msleep, so
+// their ~33 ms periods differ slightly and the phase slips — roughly once per
+// tens of seconds the display samples the same framebuffer twice (or skips
+// one), visible as a single 2 px jump or held frame on a 1 px/step scroll.
+// The old 3:1 ratio hid this by always having a fresh frame ready, at 3x the
+// render cost. A producer/consumer handshake on the swap would remove it
+// entirely — tracked in issue #379.
 constexpr uint32_t kDefaultThreadRateMsX1000 = 33300;
 
 // These four are app-written tunables with no device-side writer, so Notify=false
@@ -123,17 +132,25 @@ float CoreConfig::getRenderRateMs() {
     uint32_t renderRateUint = coreRenderThreadRateMs;
     const uint32_t displayRateUint = coreDisplayThreadRateMs;
 
+    // Migration only: correct the exact pre-#376 default in RAM (operator= does
+    // not persist — see persistent_characteristic.h; the AudioConfig::
+    // getTargetHigh() idiom) so boards that persisted 11100 read back the new
+    // default. Deliberately an exact match, not a range: any other value is a
+    // user's own setting and must survive (PR #378 review).
+    if (renderRateUint == 11100) {
+        renderRateUint = kDefaultThreadRateMsX1000;
+        coreRenderThreadRateMs = renderRateUint;
+    }
+
     // A render interval shorter than the display interval produces frames the
     // display thread never samples (issue #376), so floor it at the display
-    // interval. Rendering SLOWER than the display stays allowed. The write-back
-    // is RAM-only (operator= does not persist — see persistent_characteristic.h):
-    // deliberate settings migration in the AudioConfig::getTargetHigh() idiom, so
-    // boards that persisted the old 11100 default are floored on the first render
-    // tick of every boot, and the app sees the corrected value on its read-back
-    // (these characteristics are non-notifiable, see the comment above).
+    // interval — at point of use, WITHOUT writing back. A write-back here would
+    // destroy the user's render rate whenever the display rate is temporarily
+    // raised (and any later debounced save would persist the destruction);
+    // clamping only the returned value makes the floor fully reversible.
+    // Rendering SLOWER than the display stays allowed.
     if (renderRateUint < displayRateUint) {
         renderRateUint = displayRateUint;
-        coreRenderThreadRateMs = renderRateUint;
     }
 
     return ((float)renderRateUint) / 1000.0f;
