@@ -85,7 +85,10 @@ void FftBarsAnimation::setConfigSource(FftVisualizationConfigSource &source) {
 static constexpr uint32_t kEmaStepsPerFrame = 3;
 
 /* audio_result_q holds at most a few frames; bound the catch-up after a stall so a
- * wrapped/large frame-count delta cannot spin the EMA loop. */
+ * wrapped/large frame-count delta cannot spin the EMA loop. Worst-case tick cost:
+ * 12 steps x 24 buckets = 288 float multiply-adds, ~2-3 us on this M33+FPU at
+ * 128 MHz — noise against the 33.3 ms frame budget (the steady state is 3 steps
+ * x 20 buckets, comparable to the old 1-step-per-tick x 90 Hz total). */
 static constexpr uint32_t kMaxEmaStepsPerTick = 4 * kEmaStepsPerFrame;
 
 void FftBarsAnimation::init() {

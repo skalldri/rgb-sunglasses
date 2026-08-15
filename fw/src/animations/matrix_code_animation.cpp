@@ -53,6 +53,11 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
             // Consume the tick's time budget with carry so the drop rate stays
             // wall-clock correct at any render tick rate — one tick can step the
             // head several rows when dropSpeedMs < the tick interval (issue #376).
+            // Bounded: timeSinceLastTickMs is the NOMINAL configured interval
+            // (pattern_controller passes kTargetRenderIntervalMs, never measured
+            // elapsed time), so iterations <= dt/dropSpeed and there is no
+            // post-stall catch-up spike; each iteration consumes >= 1 ms of
+            // budget (dropSpeedMs is floored at 1 above).
             uint32_t budgetMs = timeSinceLastTickMs;
             while (columns_[x].active && budgetMs >= columns_[x].dropTimerMs) {
                 budgetMs -= columns_[x].dropTimerMs;

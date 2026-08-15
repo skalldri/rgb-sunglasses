@@ -37,18 +37,22 @@ BtGattPrimaryService<kCoreConfigServiceUuid> coreConfigPrimaryService;
 // app-written-only values.
 // ---------------------------------------------------------------------------
 
+// One shared default for both thread rates (ms x 1000 = 33.3 ms, ~30 Hz): the
+// render default deliberately equals the display default, since rendering faster
+// than the display push just throws frames away (issue #376) — getRenderRateMs()
+// also enforces this as a runtime floor, whatever the persisted values say.
+constexpr uint32_t kDefaultThreadRateMsX1000 = 33300;
+
 // These four are app-written tunables with no device-side writer, so Notify=false
 // is correct on its own terms: the clamp write-back in the getters below reaches
 // the app via its read-back-after-write on non-notifiable characteristics.
 BtGattPersistentCharacteristic<"core/brightness", "Brightness (0-1000)", false, uint32_t, 20>
     coreBrightness;
 BtGattPersistentCharacteristic<"core/display_thread_rate_ms", "Display Thread Rate * 1000 (ms)",
-                                false, uint32_t, 33300>
+                                false, uint32_t, kDefaultThreadRateMsX1000>
     coreDisplayThreadRateMs;
-// Default matches the display rate: rendering faster than the display push just
-// throws frames away (issue #376) — getRenderRateMs() enforces this as a floor.
 BtGattPersistentCharacteristic<"core/render_thread_rate_ms", "Render Thread Rate * 1000 (ms)",
-                                false, uint32_t, 33300>
+                                false, uint32_t, kDefaultThreadRateMsX1000>
     coreRenderThreadRateMs;
 BtGattPersistentCharacteristic<"core/status_led_brightness", "Status LED Brightness (0-1000)",
                                 false, uint32_t, 20>
