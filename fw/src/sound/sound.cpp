@@ -1617,7 +1617,16 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
                                   sizeof(total_bytes), &io_retries) == 0 &&
                patch_ok;
     if (!patch_ok) {
+        /* Same reasoning, and worse consequences: without these two patches the
+         * file keeps file_size=0/data_size=0 from the prologue, so it is not a
+         * WAV at all — wav_duration_ms() reads 0 ms and no sample loads. The
+         * console line is invisible to anyone on a phone, and capture.cpp would
+         * otherwise report CAPTURE_IDLE with last_error=0 and bump the capture
+         * count. The sidecar already refuses to look successful when it is
+         * unusable (see the MISALIGNED path); the primary artifact gets the
+         * same treatment. */
         shell_error(shell, "WAV header patch failed - the file will not parse as WAV");
+        io_error = true;
     }
     fs_close(&f);
 
@@ -2080,7 +2089,12 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
             wav_pos += (off_t)tail;
             total_bytes += (uint32_t)tail;
         } else {
+            /* Short WAV. Must fail the capture, not just log: capture.cpp keys
+             * the whole app-facing state off this function's return value, so
+             * returning 0 here notifies Ready with last_error=0 for a file that
+             * is missing its tail. */
             shell_error(shell, "PCM write failed on final flush");
+            io_error = true;
         }
     }
 
@@ -2095,7 +2109,16 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
                                   sizeof(total_bytes), &io_retries) == 0 &&
                patch_ok;
     if (!patch_ok) {
+        /* Same reasoning, and worse consequences: without these two patches the
+         * file keeps file_size=0/data_size=0 from the prologue, so it is not a
+         * WAV at all — wav_duration_ms() reads 0 ms and no sample loads. The
+         * console line is invisible to anyone on a phone, and capture.cpp would
+         * otherwise report CAPTURE_IDLE with last_error=0 and bump the capture
+         * count. The sidecar already refuses to look successful when it is
+         * unusable (see the MISALIGNED path); the primary artifact gets the
+         * same treatment. */
         shell_error(shell, "WAV header patch failed - the file will not parse as WAV");
+        io_error = true;
     }
     fs_close(&f);
 

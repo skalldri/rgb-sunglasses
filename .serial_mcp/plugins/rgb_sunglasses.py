@@ -415,7 +415,19 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
     # match here, because a hit makes every downstream consumer
     # (capture_to_scenario.py, beat_lab) ingest the file. If you loosen this
     # pattern — e.g. to `Audio sidecar[: ]+(\d+)` — re-check those strings first.
+    # Two firmware paths write the analysis CSV, and they announce it
+    # differently, so both signals are needed:
+    #   record_wav_capture()  -> "Audio sidecar: N frames[, M IMU samples]"
+    #   record_wav_tap()      -> "Wrote ... (N frames, D dropped, R io retries)"
+    # The second is the one that matters here: this handler hard-fails unless
+    # `sound agc gain` answers, so it only ever runs against a
+    # CONFIG_APP_AUDIO_DEBUG build, where APP_CAPTURE_AUDIO_SIDECAR is
+    # unavailable (it depends on !APP_AUDIO_DEBUG) and record_wav_tap() runs.
+    # Note "frames" vs "blocks" is the discriminator against the capture path's
+    # summary line; record_wav_direct() prints no parenthetical at all and
+    # writes no analysis file, so it is correctly excluded by both.
     audio = re.search(r"Audio sidecar: (\d+) frames", output)
+    tap = re.search(r"Wrote \d+ bytes of PCM to \S+ \((\d+) frames,", output)
     result = {
         "wav_path": path,
         # ".imu.csv", NOT the combined ".csv". This handler can only ever run
@@ -429,18 +441,21 @@ async def handle_capture_scenario(state: SerialState, args: dict) -> dict:
         "imu_samples": int(imu.group(1)) if imu else 0,
         "agc_restored": restored,
     }
-    # Reported ONLY on a positive success signal. Every completed capture now
-    # prints "... io retries" (both record_wav_tap and record_wav_capture), so
-    # keying on that text would advertise an analysis file for captures that
-    # never wrote one — the sidecar failing to open (FatFs is already at
-    # CONFIG_FS_FATFS_NUM_FILES=4), being retired mid-capture, or coming out
-    # misaligned. audio_sidecar_close() words those cases
+    # Reported ONLY on a positive success signal from one of those two lines.
+    # Keying on the summary line's "io retries" text instead would advertise a
+    # file for captures that never wrote one — the sidecar failing to open
+    # (FatFs is already at CONFIG_FS_FATFS_NUM_FILES=4), being retired
+    # mid-capture, or coming out misaligned. audio_sidecar_close() words those
     # ("Capture CSV could not be opened", "Capture CSV write failed",
-    # "Capture CSV MISALIGNED") precisely so this regex misses them; falling
-    # back on the summary line would hand the file over anyway.
-    if audio:
+    # "Capture CSV MISALIGNED") precisely so neither regex matches them.
+    #
+    # Both paths put the analysis in "<wav>.csv"; only the announcement and the
+    # rest of the layout differ (the tap path also writes the separate
+    # "<wav>.imu.csv" that imu_csv_path points at).
+    success = audio or tap
+    if success:
         result["analysis_csv_path"] = path + ".csv"
-        result["analysis_frames"] = int(audio.group(1))
+        result["analysis_frames"] = int(success.group(1))
     if not imu:
         # CONFIG_IMU off, or the sidecar could not be opened. The WAV is still
         # usable; the scenario just has no IMU track.

@@ -43,9 +43,9 @@ tunable), `sound agc status|gate|rate|attack|release`, `sound rms`, the BLE
 **A per-frame analysis sidecar is NOT one of the things you lose.** A stock
 build's capture path writes `<wav>.csv` under
 `CONFIG_APP_CAPTURE_AUDIO_SIDECAR` (`default y`), in the same format, so
-device-vs-host comparison works on a shipping image. Two differences from the
-`=y` sidecar worth knowing: it is named `.csv` and also carries the IMU rows, and it
-always carries the display buckets (41 fields, not 21). What `=y` still buys is
+device-vs-host comparison works on a shipping image. Both builds name it `<wav>.csv`; the two differences worth knowing are that
+this one also carries the IMU `I,` rows (the `=y` path puts them in a separate
+`<wav>.imu.csv`) and that it always emits the display buckets (41 fields, not 21). What `=y` still buys is
 the console tools and the ability to pin the gain — without `sound agc freeze`
 you cannot record a *fixed-gain* clip, which is what the corpus below wants.
 
@@ -54,7 +54,7 @@ you cannot record a *fixed-gain* clip, which is what the corpus below wants.
 | Piece | Where | What |
 |---|---|---|
 | Audio tap | `sound.cpp` (`audio_tap_q`) | DSP thread tees each 512-sample PCM block + `audio_analysis_result` into a 16-deep queue when armed; `record_wav`/`dump` drain it. The DSP thread stays the only `dmic_read()` consumer. |
-| `sound mic record_wav [s] [path]` | shell | Writes WAV (+ sidecar `.csv` with one D-line per frame) to `/NAND:` from the tap. Sector-aligned batched writes (JUNK-chunk-padded WAV header) — a 30 s capture runs at 0 dropped frames; transient QSPI errors are retried (close/reopen clears FatFS's sticky error flag). 180 s hard cap + an upfront free-space check; 30–60 s is the working size. An aborted capture prints `ABORTED: capture incomplete` and returns an error (the MCP tool reports `record_failed`). When the DSP thread isn't streaming (boot failure diagnosis) — or with `CONFIG_APP_AUDIO_DEBUG=n` — it falls back to a direct raw capture (WAV only, no sidecar), so mic capture exists in every build. |
+| `sound mic record_wav [s] [path]` | shell | Writes WAV (+ sidecar `.csv` with one D-line per frame) to `/NAND:` from the tap. Sector-aligned batched writes (JUNK-chunk-padded WAV header) — a 30 s capture runs at 0 dropped frames; transient QSPI errors are retried (close/reopen clears FatFS's sticky error flag). 180 s hard cap + an upfront free-space check; 30–60 s is the working size. An aborted capture prints `ABORTED: capture incomplete` and returns an error (the MCP tool reports `record_failed`). When the DSP thread isn't streaming (boot failure diagnosis) it falls back to a direct raw capture (WAV only, no sidecar), so mic capture exists in every build. Note `CONFIG_APP_AUDIO_DEBUG=n` does NOT mean no sidecar: with `CONFIG_APP_CAPTURE=y` and the DSP streaming — the normal case — an `=n` build routes to `record_wav_capture()`, which writes the combined `<wav>.csv`. |
 | `sound dump <frames> [buckets]` | shell | Streams live D-lines to the console (no MSC roundtrip). |
 | Capture analysis sidecar | `sound.cpp` (`audio_sidecar`), `CONFIG_APP_CAPTURE_AUDIO_SIDECAR` (**default y**) | `<wav>.csv` beside every capture on the *stock* build — same `#PARAMS` + `D,` format as `sound dump`, buckets always included (41 fields). Fed by a second small tap (`capture_analysis_q`) drained in lockstep with the PCM one, so rows and WAV blocks share an index. ~6 KB RAM, ~11 KB/s of volume. This is what makes a phone-started capture analysable — see below. |
 | `sound agc freeze [on\|off]` / `sound agc gain <0..0x50>` | shell | Freeze AGC / set PDM gain directly (gain implies freeze). **Record with frozen gain** — a mid-capture gain step makes device-vs-host comparison impossible. |
