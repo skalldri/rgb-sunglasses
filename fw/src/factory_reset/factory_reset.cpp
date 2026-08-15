@@ -167,9 +167,14 @@ int erase_coredump_op() {
 int reformat_fat_op() {
     /* Unmounts the live volume. With CONFIG_FS_FATFS_REENTRANT this carries
      * the volume-mutex re-init hazard documented above cmd_storage_reformat
-     * (fw/src/storage/storage.cpp) — tolerable here because a factory reset
-     * ends in a reboot and runs while the system is being torn down, not
-     * during normal concurrent FS use. */
+     * (fw/src/storage/storage.cpp) — and `factory_reset now` runs this on
+     * the shell thread of a FULLY LIVE system (GLIM playback, the coredump
+     * wq tick and an active capture are all possible; the boot-gesture path
+     * is the quiet one). What actually bounds the damage is the
+     * SYS_REBOOT_COLD ~100 ms later in reset_and_reboot(): an orphaned
+     * waiter or a stuck inherited priority does not outlive the reset. Any
+     * future NON-rebooting caller of this op inherits a permanent-hang
+     * hazard and must quiesce FS users first. */
     int rc = storage_fat_wipe_for_reset();
     if (rc != 0) {
         LOG_ERR("FAT reformat failed: %d", rc);

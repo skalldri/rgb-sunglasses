@@ -235,13 +235,21 @@ Since issue #380's `CONFIG_FS_FATFS_REENTRANT`, every FatFS entry takes a per-vo
 `pattern_controller` at 4 doing a GLIM `fs_read`, or `mcumgr smp` at 3) blocks on the
 volume mutex while a priority-14 FS worker (capture worker, coredump wq) holds it
 mid-`f_write`, the worker is **boosted to the blocker's priority for the remainder of
-that one FatFS call** — including the flashdisk erase/program it wraps (worst case one
-4 KB erase+program; the QSPI readiness ceiling is `CONFIG_NORDIC_QSPI_NOR_TIMEOUT_MS`).
-This is bounded and it is the price of metadata consistency, but it means the "FS
-workqueues sit at the bottom" invariant above is a *steady-state* property, not an
-instantaneous one — the BUILD_ASSERTs cannot see it. The blocked caller also freezes
-for the same window: a GLIM frame read landing mid-erase misses frame deadlines rather
-than reading torn metadata, which is the intended trade.
+that one FatFS call** — including the flashdisk erase/program it wraps. That window is
+**not bounded**: the erase/program completion waits are `k_sem_take(..., K_FOREVER)` and
+an uncapped WIP poll (`nrf_qspi_nor.c`), and `CONFIG_NORDIC_QSPI_NOR_TIMEOUT_MS` bounds
+only nrfx's peripheral-readiness spin, not these (see that symbol's comment in the
+proto0 conf — the two must not drift apart again). A single `f_write` can also drive
+several erase+program cycles under the one held mutex (data page, FAT page, dir page),
+so even the typical window is a multiple of one flash op. Priority inheritance
+therefore bounds the *inversion*, not the *duration*; a wedged part holds the mutex —
+and the boosted priority — indefinitely. It is still the price of metadata
+consistency, and it means the "FS workqueues sit at the bottom" invariant above is a
+*steady-state* property, not an instantaneous one — the BUILD_ASSERTs cannot see it.
+The blocked caller freezes for the same window: a GLIM frame read landing mid-erase
+misses frame deadlines rather than reading torn metadata, which is the intended trade
+(measured during a capture with `4096.glim` streaming: ~12 missed ticks per 5 s and
+14-18% of capture blocks dropped — a sustained-rate cost, not a transient one).
 
 ### The extension sandbox's scheduling latency is unbounded — by design
 

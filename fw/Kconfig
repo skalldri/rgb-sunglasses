@@ -103,17 +103,20 @@ config APP_CAPTURE
 
 config APP_CAPTURE_QUEUE_FRAMES
 	int "Capture PCM tap depth, in 32 ms blocks"
-	default 16
+	default 8
 	depends on APP_CAPTURE
 	help
 	  Buffering between the DSP thread and the capture writer. A flash sector
 	  erase stalls the writer for hundreds of ms, and anything not buffered
-	  across that stall is a dropped block. The recorder reports its drop
-	  count, so raise this if a capture reports drops rather than guessing.
-	  Raised 8 (~256 ms) -> 16 (~512 ms) with FS_FATFS_REENTRANT (issue
-	  #380): the volume mutex serializes the writer behind concurrent GLIM
-	  frame reads, and a capture during GLIM playback measured 112/625
-	  blocks dropped at depth 8. Costs ~8 KB RAM.
+	  across that stall is a dropped block. 8 blocks is ~256 ms. The recorder
+	  reports its drop count, so raise this if a capture reports BURSTY drops
+	  rather than guessing — but note depth cannot fix a SUSTAINED deficit:
+	  with FS_FATFS_REENTRANT (issue #380) a capture during GLIM playback
+	  runs the writer at ~82% of realtime for the whole recording, and a
+	  measured 8 -> 16 A/B only moved 112/625 dropped blocks to 88/625 for
+	  +8 KB RAM (reverted; matches the drain-loop precedent documented in
+	  sound.cpp). That contention wants fixing at the source — batching, the
+	  post-#377 sync-cadence work — not buffering.
 
 config APP_CAPTURE_THREAD_STACK_SIZE
 	int "Capture worker stack size"

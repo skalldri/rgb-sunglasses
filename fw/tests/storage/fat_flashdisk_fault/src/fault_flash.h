@@ -31,6 +31,13 @@ void fault_flash_disarm(void);
 /* Number of ops actually failed since the last arm/disarm reset. */
 unsigned int fault_flash_injected(void);
 
+/* Sleep this long at the top of every flash op (0 = off, the default).
+ * Purpose: on native_sim a RAM-backed flash op has no blocking point, so
+ * concurrent threads never interleave inside FatFS/flashdisk critical
+ * sections and a concurrency test proves nothing (see the add-fw-test
+ * skill's concurrency note). A small delay creates real preemption windows. */
+void fault_flash_set_op_delay_ms(unsigned int ms);
+
 #ifdef __cplusplus
 }
 #endif
