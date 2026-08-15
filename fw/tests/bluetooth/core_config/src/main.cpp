@@ -329,19 +329,20 @@ ZTEST(core_config_service, test_render_rate_floor_preserves_user_value) {
      * display rate is later raised; it is floored at point of use but never
      * rewritten — the setting survives. (Direct below-display writes are
      * rejected since round 6, so the raise-the-display-later path is the one
-     * way this state still arises over BLE.) */
+     * way this state still arises over BLE. 30000 is an exact 2x multiple of
+     * the 15000 display, so the snap stores it as written.) */
     gatt_write_u32(display, 15000);
-    gatt_write_u32(render, 20000);
+    gatt_write_u32(render, 30000);
     gatt_write_u32(display, sDefaultDisplayRate);  // raise back above the render rate
 
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
     zassert_within(rateMs, 33.3f, 0.001f, "render interval must be floored at the display's");
-    zassert_equal(read_u32(render), 20000, "the floor must not destroy the user's setting");
+    zassert_equal(read_u32(render), 30000, "the floor must not destroy the user's setting");
 
     /* ...and becomes effective again once the display rate drops below it. */
     gatt_write_u32(display, 15000);
     rateMs = CoreConfig::getInstance().getRenderRateMs();
-    zassert_within(rateMs, 20.0f, 0.001f, "the preserved value must apply when legal again");
+    zassert_within(rateMs, 30.0f, 0.001f, "the preserved value must apply when legal again");
 
     gatt_write_u32(display, sDefaultDisplayRate);  // restore
     gatt_write_u32(render, sDefaultRenderRate);
@@ -351,12 +352,40 @@ ZTEST(core_config_service, test_render_rate_slower_than_display_allowed) {
     const struct bt_gatt_attr *render = find_value_attr(2);
     zassert_not_null(render);
 
-    gatt_write_u32(render, 50000);
+    /* Rendering slower than the display is allowed — and since the divider
+     * renders once per ceil(render/display) frames, the write is snapped UP to
+     * the exact multiple it will actually run at (50000 under a 33300 display
+     * really renders every 66600), so read-back reports the true rate
+     * (PR #381 review round 9). */
+    zassert_equal(gatt_write_u32(render, 50000), (ssize_t)sizeof(uint32_t),
+                  "a slower-than-display write must be accepted");
+    zassert_equal(read_u32(render), 66600,
+                  "a non-multiple must be snapped to the next display multiple");
     float rateMs = CoreConfig::getInstance().getRenderRateMs();
-    zassert_within(rateMs, 50.0f, 0.001f, "rendering slower than the display must be allowed");
-    zassert_equal(read_u32(render), 50000, "a slower-than-display value must not be rewritten");
+    zassert_within(rateMs, 66.6f, 0.001f, "the effective rate must equal the stored snap");
 
     gatt_write_u32(render, sDefaultRenderRate);  // restore for order-independence
+}
+
+ZTEST(core_config_service, test_render_rate_snap_to_display_multiple) {
+    const struct bt_gatt_attr *render = find_value_attr(2);
+    zassert_not_null(render);
+
+    /* PR #381 review round 9: a render rate that is not an exact multiple of
+     * the display rate would be silently effective at N x display while
+     * reading back as written — the same stored-vs-effective divergence class
+     * the below-display rejection closes, for a much larger set of values.
+     * The write is snapped up to the divider's ceiling multiple instead. */
+    gatt_write_u32(render, 100000);  // ratio 3.003 -> N = 4 (strict ceiling)
+    zassert_equal(read_u32(render), 133200,
+                  "just-above-a-multiple must snap up a full step (ceil semantics)");
+
+    gatt_write_u32(render, 66600);  // exact multiple: stored untouched
+    zassert_equal(read_u32(render), 66600, "an exact multiple must be stored as written");
+
+    gatt_write_u32(render, sDefaultRenderRate);  // restore (33300 = exact 1x multiple)
+    zassert_equal(read_u32(render), sDefaultRenderRate,
+                  "the default must remain storable as itself");
 }
 
 ZTEST(core_config_service, test_render_rate_follows_raised_display_rate_reversibly) {

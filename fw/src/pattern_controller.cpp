@@ -294,6 +294,10 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     int64_t lastWaitTimeoutLogMs = 0;
     uint32_t waitTimeoutsSinceLog = 0;
     int64_t prevIterStartTicks = k_uptime_ticks();
+#if defined(CONFIG_APP_SHUFFLE)
+    // Fractional-ms carry for the shuffle dwell clock (see the onFrame call).
+    float shuffleDtRemainderMs = 0.0f;
+#endif
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -405,12 +409,22 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
             // the selected animation's good-moment flag would be stale.
             if (currentIndicator == Indicator::None) {
                 BaseAnimation *shuffleCur = anim;  // == getAnimation(currentAnimation) here
-                // The animation was ticked with this same animationDtMs, so its
-                // own pacing clock and the shuffle dwell advance in lockstep — a
-                // requested "time to my next boundary" is exact in the same units
-                // the deadline is compared against, even when the render loop overruns.
+                // onFrame takes whole ms, but animationDtMs is fractional
+                // (~33.3): a bare truncating cast would drop ~0.3 ms EVERY
+                // frame, running the shuffle dwell clock ~1% slow against the
+                // animation's float clock (~0.55 s behind over a 60 s dwell;
+                // ~3.9% at a 16.65 ms pair) — and with wall-clock dt the lost
+                // fraction varies per frame rather than being a fixed offset
+                // (PR #381 review round 9; the truncation itself predates this
+                // PR). Carrying the fractional remainder across frames keeps
+                // the two clocks agreeing in the long run, so a requested
+                // "time to my next boundary" stays honest against the dwell
+                // deadline it is compared with.
+                const float shuffleDtTotalMs = animationDtMs + shuffleDtRemainderMs;
+                const uint32_t shuffleDtMs = static_cast<uint32_t>(shuffleDtTotalMs);
+                shuffleDtRemainderMs = shuffleDtTotalMs - static_cast<float>(shuffleDtMs);
                 const ShuffleController::Decision d = sShuffleController.onFrame(
-                    currentAnimation, static_cast<uint32_t>(animationDtMs),
+                    currentAnimation, shuffleDtMs,
                     shuffleCur ? shuffleCur->isAtGoodSwitchPoint() : true,
                     shuffleCur ? shuffleCur->goodSwitchPointGraceMs() : 0u);
                 if (d.switchNow) {
