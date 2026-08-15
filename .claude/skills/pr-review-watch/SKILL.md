@@ -25,6 +25,7 @@ lock is ever needed.
 
 ```
 Monitor(command: "scripts/pr-watch.sh", description: "new PRs + pushes on <repo>", persistent: true)
+# default poll/debounce is 15 min; use --poll 60 only if you want every push separately
 ```
 
 It baselines on the PRs open right now and then emits one line per event:
@@ -34,7 +35,7 @@ NEW PR #383 by skalldri [fix-380-fatfs-reentrant]: fw: serialize FatFS access (#
 UPDATED PR #377 by skalldri [capture-audio-sidecar]: sound: ... (head 57545a20 -> 6ad8b144)
 ```
 
-Flags: `--repo OWNER/NAME`, `--poll SECONDS` (default 60), `--state-dir DIR`,
+Flags: `--repo OWNER/NAME`, `--poll SECONDS` (default 900 = 15 min; the cycle IS the debounce), `--state-dir DIR`,
 `--limit N` (default 100 open PRs; it warns rather than truncating silently),
 `--skip-drafts` (defer drafts, then fire `READY` when one is marked ready for
 review). `--self-test` exercises the state machine offline — run it after any
@@ -141,28 +142,74 @@ The higher-value review is often of the *pair*: #382 adds a diagnostic behind a
 make that diagnostic unrunnable during the fault it diagnoses. Neither PR shows
 that alone.
 
-## 5. Coalesce; never chase a stale head
+## 5. Triage before you spawn — most pushes do not need a review
 
-Events can outrun reviews. When several are queued:
+A high-effort review costs minutes and real tokens. Three cheap local checks
+decide it, and in one session they correctly skipped roughly half the events:
 
-- Review each PR **once, at its current head**. Skip superseded SHAs — a review
-  of a head the author has already replaced is wasted.
-- Prefer never-reviewed PRs over re-reviews.
-- Snapshot heads before fanning out:
-  `gh pr list --state open --json number,headRefOid,title`
+**Is it a rebase?** On a stacked PR, compare the PR-only diff at both heads.
+Identical patch-id means this PR's own content did not move and the previous
+review still stands — post a short note saying so instead of re-reviewing.
 
-## 6. Cost knobs
+```bash
+mb=$(git merge-base <base-pr-head> <this-pr-head>)
+git diff "$mb" <this-pr-head> | git patch-id --stable
+```
+
+This fires constantly on stacked branches, and the file list will not tell you:
+a rebase shows the *base's* changed files, so a pure rebase can look like a
+21-file, +907/−64 change. Reviewing that attributes the sibling's work to this
+PR — confident, detailed, and entirely wrong.
+
+**Did anything relevant change?** `gh api repos/O/R/compare/<old>...<new>` with
+a file list answers "does this push touch the thing the open finding is about?"
+A push that adds 20 lines of docstring to the test you said cannot work has not
+changed the answer.
+
+**Is a review already in flight?** If the delta since the in-flight head is
+small and touches no test, let it finish and check the delta against its
+conclusions afterwards. Restarting means two agents reviewing overlapping
+states and reporting contradictory "fixed / not fixed" verdicts.
+
+Otherwise: review each PR **once, at its current head**, skip superseded SHAs,
+and prefer never-reviewed PRs over re-reviews. Snapshot heads before fanning
+out with `gh pr list --state open --json number,headRefOid,title`.
+
+## 6. Know when to stop
+
+The loop does not self-terminate, and an author fixing findings as fast as they
+arrive will keep it running indefinitely. Stop a PR's reviews when:
+
+- **The finding stops changing.** If three consecutive rounds re-derive the same
+  structural conclusion, further rounds cost a full review to learn nothing.
+  Say what would change your mind — "review again when the test can observe a
+  return value" — and stop until that lands. One PR reached round 14 with the
+  same finding open since round 8; rounds 9–13 each re-proved it.
+- **You are reviewing your own work.** One or two adversarial passes on a PR
+  this session authored is genuinely valuable — in one session they found two
+  HIGH defects the author had missed, including a review-storm bug. Past that
+  it degenerates into reviewing fixes to findings from reviews of fixes. Cap it
+  at two.
+- **Each round's fixes reliably introduce the next round's findings.** That is a
+  signal the code lacks the tests to be changed safely, not that the reviews are
+  working. The useful output becomes "add a test of this shape", not finding
+  number 47.
+
+Say the cost out loud when you notice it. The user cannot see how many agents
+are running or what they are re-deriving.
+
+## 7. Cost knobs
 
 A high-effort review per push is expensive, and an active author can push every
 few minutes. Offer these rather than silently burning the budget:
 
 | Knob | How |
 | ---- | --- |
-| Fewer reviews per burst | `--poll 600` — a longer cycle is also a longer debounce |
+| Fewer reviews per burst | raise `--poll` — the cycle IS the debounce; 900 is the default for this reason |
 | Cheaper re-reviews | `medium` effort for `UPDATED`, `high` for `NEW` |
 | Narrow the scope | watch one label/author; filter in the `gh pr list` query |
 
-## 7. Pitfalls
+## 8. Pitfalls
 
 - **Never key the trigger on `updatedAt`.** It bumps on every comment,
   *including the review comments this workflow posts*, so the watcher
@@ -211,7 +258,7 @@ few minutes. Offer these rather than silently burning the budget:
   the `board`/`app` locks (`/flash-and-verify`, `/e2e-test`) — never something
   a review agent does on its own.
 
-## 8. Stopping
+## 9. Stopping
 
 `TaskStop` the monitor task. Nothing else to clean up: state lives under
 `$TMPDIR`, and agent worktrees are removed automatically when unchanged.

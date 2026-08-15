@@ -30,13 +30,19 @@
 #      collapses a burst into one review of the settled state. Newly-seen PRs
 #      settle the same way, so open-then-immediately-fixup is one review too.
 #
+#      The default interval is 15 MINUTES, not seconds, because the debounce IS
+#      the poll cycle. At 60s a session watching 5 actively-developed PRs spawned
+#      a review per push and spent most of its time re-reviewing heads the author
+#      had already replaced. Pass --poll 60 only when you genuinely want every
+#      push reviewed separately.
+#
 # Usage:
 #   scripts/pr-watch.sh [--repo OWNER/NAME] [--poll SECONDS] [--state-dir DIR]
 #                       [--limit N] [--skip-drafts]
 #   scripts/pr-watch.sh --self-test      # offline check of the state machine
 set -uo pipefail
 
-POLL="${PR_WATCH_POLL:-60}"
+POLL="${PR_WATCH_POLL:-900}"
 STATE_DIR="${PR_WATCH_STATE_DIR:-}"
 LIMIT="${PR_WATCH_LIMIT:-100}"
 SKIP_DRAFTS=0
