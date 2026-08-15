@@ -1,5 +1,8 @@
 source "Kconfig.zephyr"
 
+# For CONFIG_DISK_DRIVER_FLASH_PATCHED (the issue #380 flashdisk backport).
+rsource "../../../drivers/Kconfig"
+
 # storage.cpp gates storage_fat_corrupt_boot_sector() on this symbol, which is defined in
 # fw/Kconfig — invisible to a standalone Twister app, so it is redeclared here.
 #
