@@ -60,8 +60,8 @@ re-download, and the part ended up in a broken state. The correct move at step z
 was: "I don't have the TPS25750 host-interface TRM — please provide it before I write
 anything to this chip."
 
-The TRM (and the TPS25750/BQ25792 datasheets) are now checked in under
-`fw/docs/datasheets/` — that is the authoritative source this rule demands. GO2P
+The TRM (and the TPS25750/BQ25792 and MX25R6435F datasheets) are now checked in
+under `fw/docs/datasheets/` — that is the authoritative source this rule demands. GO2P
 itself has since been implemented the sanctioned way (user-commissioned 2026-07-17,
 cited to TRM SLVUC05A Table 3-12): `tps25750_go2p()` + the `power pd go2p` shell
 command, which refuses to run without a battery present (the 2026-07-05 wedge was
