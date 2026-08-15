@@ -50,9 +50,13 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
     // Advance active drop heads and spawn new drops on inactive columns
     for (size_t x = 0; x < width; x++) {
         if (columns_[x].active) {
-            if (columns_[x].dropTimerMs > timeSinceLastTickMs) {
-                columns_[x].dropTimerMs -= timeSinceLastTickMs;
-            } else {
+            // Consume the tick's time budget with carry so the drop rate stays
+            // wall-clock correct at any render tick rate — one tick can step the
+            // head several rows when dropSpeedMs < the tick interval (issue #376).
+            uint32_t budgetMs = timeSinceLastTickMs;
+            while (columns_[x].active && budgetMs >= columns_[x].dropTimerMs) {
+                budgetMs -= columns_[x].dropTimerMs;
+
                 // Time to step the head down one row
                 columns_[x].dropTimerMs = dropSpeedMs;
                 columns_[x].headY++;
@@ -64,6 +68,9 @@ void MatrixCodeAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLast
                     // Light up the new head position at full brightness
                     brightness_[x][columns_[x].headY] = 255;
                 }
+            }
+            if (columns_[x].active) {
+                columns_[x].dropTimerMs -= budgetMs;
             }
         } else {
             // density (0-100) = % chance per second; scale to per-tick probability so

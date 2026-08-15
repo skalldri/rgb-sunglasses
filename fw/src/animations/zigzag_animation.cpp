@@ -15,14 +15,24 @@ void ZigZagAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTick
 
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > deps_->stepTimeMs.get()) {
+    const uint32_t stepTimeMs = deps_->stepTimeMs.get();
+    if (stepTimeMs == 0) {
+        // Legacy "fastest" mode: exactly one step per render tick.
         currentCycleTimeMs = 0;
         currentIndex++;
+    } else {
+        // Carry the remainder instead of resetting to 0 so the step rate stays
+        // wall-clock correct at any render tick rate, including step times shorter
+        // than the tick interval (issue #376).
+        while (currentCycleTimeMs > stepTimeMs) {
+            currentCycleTimeMs -= stepTimeMs;
+            currentIndex++;
+        }
     }
 
-    if (currentIndex >= (renderer.displayWidth() * renderer.displayHeight())) {
-        currentIndex = 0;
-    }
+    // Modulo (not reset-to-0) so a multi-step tick that overshoots the last
+    // pixel keeps its phase within the wrapped-around pass.
+    currentIndex %= (renderer.displayWidth() * renderer.displayHeight());
 
     for (size_t x = 0; x < renderer.displayWidth(); x++) {
         for (size_t y = 0; y < renderer.displayHeight(); y++) {

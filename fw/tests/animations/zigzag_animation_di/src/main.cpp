@@ -45,6 +45,12 @@ class CapturingTestRenderer : public AnimationRenderer {
 void reset_capture() {
     sCapture = {};
 }
+
+// 8x1 display so multi-step advances are distinguishable without wrapping.
+class WideTestRenderer : public CapturingTestRenderer {
+   public:
+    size_t displayWidth() const override { return 8; }
+};
 }  // namespace
 
 ZTEST_SUITE(zigzag_animation_di_tests, NULL, NULL, NULL, NULL, NULL);
@@ -112,4 +118,57 @@ ZTEST(zigzag_animation_di_tests, test_pixel_wraps_to_first_index_after_all_indic
     zassert_equal(sCapture.litPixelWrites, 1, "Expected exactly one lit pixel write after wrap");
     zassert_equal(sCapture.x, 0, "Expected lit pixel at x=0 after wrapping");
     zassert_equal(sCapture.y, 0, "Expected lit pixel at y=0 after wrapping");
+}
+
+// Issue #376: a step time shorter than the tick interval must take several steps in
+// one tick (carry-remainder accumulator), not be floored to one step per tick.
+ZTEST(zigzag_animation_di_tests, test_step_time_below_tick_advances_multiple_steps) {
+    MutableUint32Source stepTimeMs(10);
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    WideTestRenderer renderer;
+    reset_capture();
+    // One 33 ms tick with a 10 ms step: 33 → 23 → 13 → 3, i.e. exactly 3 steps.
+    animation->tick(renderer, 33);
+
+    zassert_equal(sCapture.x, 3, "Expected 3 steps from one 33 ms tick at a 10 ms step time");
+}
+
+// Issue #376: total displacement must depend only on total elapsed time, not on how
+// that time is partitioned into ticks (90 Hz and 30 Hz must render the same motion).
+ZTEST(zigzag_animation_di_tests, test_equal_displacement_across_tick_rates) {
+    MutableUint32Source stepTimeMs(45);  // divides neither 11 nor 33 evenly
+    MutableUint32Source color(0xFF0000);
+    ZigZagAnimationDependencies deps(stepTimeMs, color);
+
+    ZigZagAnimation *animation = ZigZagAnimation::getInstance();
+    animation->setDependencies(deps);
+    WideTestRenderer renderer;
+
+    // 990 ms as 90 ticks of 11 ms (the old ~90 Hz render rate)...
+    animation->init();
+    for (int i = 0; i < 90; i++) {
+        animation->tick(renderer, 11);
+    }
+    reset_capture();
+    animation->tick(renderer, 0);  // render-only tick to observe the final position
+    const size_t xAt90Hz = sCapture.x;
+
+    // ...and as 30 ticks of 33 ms (the ~30 Hz render rate).
+    animation->init();
+    for (int i = 0; i < 30; i++) {
+        animation->tick(renderer, 33);
+    }
+    reset_capture();
+    animation->tick(renderer, 0);
+    const size_t xAt30Hz = sCapture.x;
+
+    // floor((990-1)/45) = 21 steps either way; 21 % 8 = index 5.
+    zassert_equal(xAt90Hz, xAt30Hz, "Displacement must not depend on tick partitioning");
+    zassert_equal(xAt90Hz, 5, "Expected exactly 21 steps in 990 ms at a 45 ms step time");
 }

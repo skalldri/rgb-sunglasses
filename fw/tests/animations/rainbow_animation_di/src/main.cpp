@@ -119,3 +119,77 @@ ZTEST(rainbow_animation_di_tests, test_injected_width_controls_gradient) {
                       (widthOneX1.blue == widthTwoX1.blue),
                   "Expected x=1 color to change when injected width changes");
 }
+
+namespace {
+bool same_color(const PixelColor &a, const PixelColor &b) {
+    return a.red == b.red && a.green == b.green && a.blue == b.blue;
+}
+}  // namespace
+
+// Issue #376: a step time shorter than the tick interval must take several steps in
+// one tick (carry-remainder accumulator), not be floored to one step per tick.
+ZTEST(rainbow_animation_di_tests, test_step_time_below_tick_advances_multiple_steps) {
+    MutableUint32Source stepTimeMs(10);
+    MutableUint32Source rainbowWidthPix(1);  // one rainbow step shifts colors one pixel
+    RainbowAnimationDependencies deps(stepTimeMs, rainbowWidthPix);
+
+    RainbowAnimation *animation = RainbowAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    CapturingTestRenderer renderer;
+
+    // The tick renders BEFORE advancing, so this frame shows step 0...
+    reset_capture();
+    animation->tick(renderer, 33);
+    PixelColor x1BeforeAdvance = sPixelColors[1];
+    PixelColor x3BeforeAdvance = sPixelColors[3];
+
+    // ...and one 33 ms tick at a 10 ms step advanced exactly 3 steps, so the next
+    // frame's x0 must show what x3 (not x1) showed before.
+    reset_capture();
+    animation->tick(renderer, 0);  // render-only: 33-30=3 ms remainder < step time
+    PixelColor x0AfterAdvance = sPixelColors[0];
+
+    zassert_true(same_color(x0AfterAdvance, x3BeforeAdvance),
+                 "Expected 3 steps from one 33 ms tick at a 10 ms step time");
+    zassert_false(same_color(x0AfterAdvance, x1BeforeAdvance),
+                  "Expected more than 1 step from one 33 ms tick at a 10 ms step time");
+}
+
+// Issue #376: total displacement must depend only on total elapsed time, not on how
+// that time is partitioned into ticks (90 Hz and 30 Hz must render the same motion).
+ZTEST(rainbow_animation_di_tests, test_equal_displacement_across_tick_rates) {
+    MutableUint32Source stepTimeMs(45);  // divides neither 11 nor 33 evenly
+    MutableUint32Source rainbowWidthPix(1);
+    RainbowAnimationDependencies deps(stepTimeMs, rainbowWidthPix);
+
+    RainbowAnimation *animation = RainbowAnimation::getInstance();
+    animation->setDependencies(deps);
+    CapturingTestRenderer renderer;
+
+    // 990 ms as 90 ticks of 11 ms (the old ~90 Hz render rate)...
+    animation->init();
+    for (int i = 0; i < 90; i++) {
+        animation->tick(renderer, 11);
+    }
+    reset_capture();
+    animation->tick(renderer, 0);  // render-only tick to observe the final position
+    PixelColor x0At90Hz = sPixelColors[0];
+
+    // ...and as 30 ticks of 33 ms (the ~30 Hz render rate).
+    animation->init();
+    for (int i = 0; i < 30; i++) {
+        animation->tick(renderer, 33);
+    }
+    reset_capture();
+    animation->tick(renderer, 0);
+    PixelColor x0At30Hz = sPixelColors[0];
+
+    zassert_true(same_color(x0At90Hz, x0At30Hz),
+                 "Displacement must not depend on tick partitioning");
+    // floor((990-1)/45) = 21 steps either way; (21 + 0) % 7 colors = red again.
+    zassert_equal(x0At90Hz.red, 255, "Expected exactly 21 steps in 990 ms (red)");
+    zassert_equal(x0At90Hz.green, 0, "Expected exactly 21 steps in 990 ms (red)");
+    zassert_equal(x0At90Hz.blue, 0, "Expected exactly 21 steps in 990 ms (red)");
+}

@@ -71,8 +71,18 @@ void RainbowAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > deps_->stepTimeMs.get()) {
+    const uint32_t stepTimeMs = deps_->stepTimeMs.get();
+    if (stepTimeMs == 0) {
+        // Legacy "fastest" mode: exactly one step per render tick.
         currentCycleTimeMs = 0;
-        currentRainbowStep++;  // Move text one pixel to the left
+        currentRainbowStep++;
+    } else {
+        // Carry the remainder instead of resetting to 0 so the scroll rate stays
+        // wall-clock correct at any render tick rate, including step times shorter
+        // than the tick interval (issue #376).
+        while (currentCycleTimeMs > stepTimeMs) {
+            currentCycleTimeMs -= stepTimeMs;
+            currentRainbowStep++;  // Move the rainbow one pixel to the left
+        }
     }
 }

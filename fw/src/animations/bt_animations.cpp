@@ -47,12 +47,14 @@ void BtConnectingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLa
     // What should the current brightness be?
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    // Wrap around animation cycle
-    if (currentCycleTimeMs > kFlashSpeedMs) {
+    // Wrap around animation cycle. Carry the remainder instead of resetting to 0
+    // so the flash cadence stays wall-clock correct at any render tick rate
+    // (issue #376).
+    while (currentCycleTimeMs > kFlashSpeedMs) {
         // Invert the state of what we are flashing
         isBrightFlash = !isBrightFlash;
         // Wrap around
-        currentCycleTimeMs = 0;
+        currentCycleTimeMs -= kFlashSpeedMs;
     }
 
     size_t currentBrightness = 0;
@@ -230,8 +232,10 @@ void BtPairingAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastT
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > kStepTimeMs) {
-        currentCycleTimeMs = 0;
+    // Carry the remainder instead of resetting to 0 so the scroll rate stays
+    // wall-clock correct at any render tick rate (issue #376).
+    while (currentCycleTimeMs > kStepTimeMs) {
+        currentCycleTimeMs -= kStepTimeMs;
         currentTextOffset--;  // Move text one pixel to the left
     }
 }

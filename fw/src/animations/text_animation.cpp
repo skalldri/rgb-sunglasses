@@ -140,11 +140,11 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // the getter has no access to. Without it, shuffle hard-cuts a long message the way it
     // used to cut a long GLIM clip.
     //
-    // A pixel step costs at least one render tick (currentCycleTimeMs only advances by
-    // timeSinceLastTickMs) and about one step-time, so max() of the two tracks the real
-    // scroll rate — including a step time of 0, which steps every tick.
+    // A pixel step costs about one step-time regardless of the render tick rate (the
+    // carry-remainder accumulator below can take several steps in one tick), except a
+    // step time of 0, which steps exactly once per tick.
     const size_t stepMs = deps_->stepTimeMs.get();
-    const size_t msPerPixel = (stepMs > timeSinceLastTickMs) ? stepMs : timeSinceLastTickMs;
+    const size_t msPerPixel = (stepMs > 0) ? stepMs : timeSinceLastTickMs;
     if (firstChar >= currentMessageLen) {
         // Done scrolling; only the kMinSlotDwellMs floor below is left to wait out.
         remainingScrollMs_ = (currentMessageDwellMs >= kMinSlotDwellMs)
@@ -232,8 +232,17 @@ void TextAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs
     // Add the time to our counter
     currentCycleTimeMs += timeSinceLastTickMs;
 
-    if (currentCycleTimeMs > deps_->stepTimeMs.get()) {
+    if (stepMs == 0) {
+        // Legacy "fastest" mode: exactly one step per render tick.
         currentCycleTimeMs = 0;
-        currentTextOffset--;  // Move text one pixel to the left
+        currentTextOffset--;
+    } else {
+        // Carry the remainder instead of resetting to 0 so the scroll rate stays
+        // wall-clock correct at any render tick rate, including step times shorter
+        // than the tick interval (issue #376).
+        while (currentCycleTimeMs > stepMs) {
+            currentCycleTimeMs -= stepMs;
+            currentTextOffset--;  // Move text one pixel to the left
+        }
     }
 }

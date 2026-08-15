@@ -163,6 +163,58 @@ ZTEST(text_animation_di_tests, test_tick_does_not_advance_offset_before_step_tim
                   "Expected offset unchanged when step time has not elapsed");
 }
 
+// Issue #376: a step time shorter than the tick interval must take several steps in
+// one tick (carry-remainder accumulator), not be floored to one step per tick.
+ZTEST(text_animation_di_tests, test_step_time_below_tick_advances_multiple_steps) {
+    ConstUint32Source stepTimeMs(10);
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    animation->init();
+
+    NullTestRenderer renderer;
+    animation->tick(renderer, 35);  // floor((35-1)/10) = 3 steps
+
+    zassert_equal(animation->currentTextOffset, -3,
+                  "Expected 3 pixel steps from one 35 ms tick at a 10 ms step time");
+}
+
+// Issue #376: total displacement must depend only on total elapsed time, not on how
+// that time is partitioned into ticks (90 Hz and 30 Hz must render the same motion).
+ZTEST(text_animation_di_tests, test_equal_displacement_across_tick_rates) {
+    ConstUint32Source stepTimeMs(45);  // divides neither 11 nor 33 evenly
+    ConstUint32Source color(0xFFFFFF);
+    FixedSlotSource slotSource;
+    SequenceUpNextSource upNextSource;
+    TextAnimationDependencies deps(stepTimeMs, color, slotSource, upNextSource);
+
+    TextAnimation *animation = TextAnimation::getInstance();
+    animation->setDependencies(deps);
+    NullTestRenderer renderer;
+
+    // 990 ms as 90 ticks of 11 ms (the old ~90 Hz render rate)...
+    animation->init();
+    for (int i = 0; i < 90; i++) {
+        animation->tick(renderer, 11);
+    }
+    const int32_t offsetAt90Hz = animation->currentTextOffset;
+
+    // ...and as 30 ticks of 33 ms (the ~30 Hz render rate).
+    animation->init();
+    for (int i = 0; i < 30; i++) {
+        animation->tick(renderer, 33);
+    }
+    const int32_t offsetAt30Hz = animation->currentTextOffset;
+
+    zassert_equal(offsetAt90Hz, offsetAt30Hz,
+                  "Displacement must not depend on tick partitioning");
+    zassert_equal(offsetAt90Hz, -21, "Expected exactly 21 steps in 990 ms");
+}
+
 // Regression (issue #188 follow-up): an empty slot satisfies "finished scrolling"
 // (firstChar >= currentMessageLen == 0) on every tick, so without a minimum-dwell floor
 // it advanced to the next slot - and fired GATT notifications via getUpNext() - at the
