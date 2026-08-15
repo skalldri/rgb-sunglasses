@@ -88,7 +88,17 @@ int write_at_retry(struct fs_file_t *f, const char *path, off_t pos, const uint8
             return 0;
         }
         (*io_retries)++;
-        fs_close(f);
+        if (fs_close(f) < 0) {
+            /* A failed close (its CTRL_SYNC commit hit the fault) leaves
+             * zfp->mp SET — fs.c returns before clearing it — so every later
+             * fs_open on this handle would return -EBUSY and the retry loop
+             * would be permanently dead. FatFS's fatfs_close has already
+             * freed the FIL slab unconditionally (fat_fs.c), so re-initing
+             * the handle leaks nothing and is the only way back. (Review
+             * finding on the first revision; production tap_write_at_retry
+             * has the same gap, tracked for the post-#377 capture PR.) */
+            fs_file_t_init(f);
+        }
         if (fs_open(f, path, FS_O_WRITE) < 0) {
             return -EIO; /* same bail-out sound.cpp's original does */
         }
@@ -105,7 +115,9 @@ int sync_with_retry(struct fs_file_t *f, const char *path, off_t end_pos, int *i
             return 0;
         }
         (*io_retries)++;
-        fs_close(f);
+        if (fs_close(f) < 0) {
+            fs_file_t_init(f); /* see write_at_retry() */
+        }
         if (fs_open(f, path, FS_O_WRITE) < 0) {
             return -EIO;
         }
@@ -154,6 +166,13 @@ void fresh_volume_before_each(void *fixture) {
     ARG_UNUSED(fixture);
     test_nonce++;
     fault_flash_disarm();
+#ifdef CONFIG_DISK_DRIVER_FLASH_PATCHED
+    /* Counters live in the driver for the binary's lifetime; without this,
+     * each test's counter assertions test the running total of every earlier
+     * test's faults instead of its own (review finding on the first
+     * revision) — and this is flashdisk_patched_stats_reset()'s one caller. */
+    flashdisk_patched_stats_reset("NAND");
+#endif
     if (sys_dnode_is_linked(&nand_mnt.node)) {
         zassert_ok(fs_unmount(&nand_mnt));
     }
@@ -310,5 +329,96 @@ ZTEST(fat_flashdisk_fault, test_bystander_file_survives_fault) {
 
     remount();
     verify_file_fully_readable(bystander, kBystanderChunks * kChunk, chunk_seed(0));
+}
+
+/* The fsck invariant without a content expectation: however much of the file
+ * survived, every byte the directory claims must be readable through the
+ * chain. */
+void verify_file_size_matches_chain(const char *path) {
+    struct fs_dirent entry;
+    zassert_ok(fs_stat(path, &entry), "stat of %s failed", path);
+
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_READ));
+    size_t total = 0;
+    while (true) {
+        ssize_t r = fs_read(&f, read_buf, sizeof(read_buf));
+        zassert_true(r >= 0, "read failed at offset %zu (%d) — size exceeds chain", total,
+                     static_cast<int>(r));
+        if (r == 0) {
+            break;
+        }
+        total += static_cast<size_t>(r);
+    }
+    fs_close(&f);
+    zassert_equal(total, entry.size, "readable bytes %zu != dir size %zu", total, entry.size);
+}
+
+/* Sustained faults — the condition issue #380 actually describes ("fs_write
+ * returns -EIO after 12-20 s of continuous writes", i.e. repeatedly, not a
+ * single blip; review finding on the first revision, which only ever armed
+ * one-shot faults). A two-shot fault makes the recovery's own fs_close consume
+ * the second fault: its CTRL_SYNC commit fails, fs.c leaves zfp->mp set (the
+ * fs_file_t_init() path in write_at_retry() is what un-wedges the handle), and
+ * the file's un-synced metadata is simply GONE — the reopened file has its
+ * last durably-synced size, and Zephyr's fatfs_seek refuses to seek past EOF.
+ * Lossless resume is therefore structurally impossible without periodic
+ * fs_sync bounding the rewind span (the post-#377 capture-hardening PR); what
+ * this test pins is everything that CAN survive:
+ *   1. the write episode fails cleanly (bounded -EIO, no hang, no wedge);
+ *   2. the handle and the path stay usable — a fresh open works (no -EBUSY);
+ *   3. the fsck invariant holds for whatever was persisted, across a remount;
+ *   4. the volume keeps accepting new files afterwards. */
+ZTEST(fat_flashdisk_fault, test_sustained_faults_leave_volume_consistent) {
+    const char *path = "/NAND:/sus.bin";
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+
+    int io_retries = 0;
+    int episode_rc = 0;
+    unsigned int chunks_acked = 0;
+    for (unsigned int i = 0; i < 6; i++) {
+        fill_pattern(chunk_buf, kChunk, chunk_seed(i));
+        if (i == 2) {
+            /* Two shots: the first fails the in-flight write, the second
+             * fails the recovery's own close (commit of the dirty page). */
+            fault_flash_arm(FAULT_FLASH_OP_WRITE, 2, 0, 0);
+        }
+        episode_rc = write_at_retry(&f, path, static_cast<off_t>(i) * kChunk, chunk_buf,
+                                    kChunk, &io_retries);
+        if (episode_rc < 0) {
+            break;
+        }
+        chunks_acked++;
+    }
+
+    /* Property 1: the sustained fault aborts the episode with a clean error
+     * after the armed faults fired — it must not "succeed" by fabricating
+     * data it cannot have (the pre-fault chunks' metadata was never synced). */
+    zassert_equal(episode_rc, -EIO, "episode should abort cleanly under sustained faults");
+    zassert_equal(chunks_acked, 2, "chunks before the fault should have been accepted");
+    zassert_equal(fault_flash_injected(), 2, "both armed faults should have fired");
+    zassert_true(io_retries >= 1, "the faults fired but no retry happened?");
+    fs_close(&f); /* whatever state the helper left; must not be load-bearing */
+
+    /* Property 2: no permanent -EBUSY wedge — the path opens fresh. And
+     * property 3: whatever the directory now claims for it is fully
+     * readable, before and after a remount. */
+    verify_file_size_matches_chain(path);
+    remount();
+    verify_file_size_matches_chain(path);
+
+    /* Property 4: the volume still takes new files, verbatim. */
+    const char *after = "/NAND:/after.bin";
+    struct fs_file_t g;
+    fs_file_t_init(&g);
+    zassert_ok(fs_open(&g, after, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    fill_pattern(chunk_buf, kChunk, chunk_seed(100));
+    zassert_equal(fs_write(&g, chunk_buf, kChunk), static_cast<ssize_t>(kChunk));
+    zassert_ok(fs_sync(&g));
+    zassert_ok(fs_close(&g));
+    verify_file_fully_readable(after, kChunk, chunk_seed(100));
 }
 #endif /* CONFIG_DISK_DRIVER_FLASH_PATCHED */

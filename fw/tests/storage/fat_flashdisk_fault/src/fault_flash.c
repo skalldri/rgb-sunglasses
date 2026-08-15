@@ -92,6 +92,19 @@ static int fault_flash_write(const struct device *dev, off_t offset, const void 
 	if (fault_hits(FAULT_FLASH_OP_WRITE, offset, len)) {
 		return -EIO;
 	}
+	/* NOR programming can only clear bits: refuse to program un-erased
+	 * media instead of silently overwriting like RAM would. This is what
+	 * lets the suite catch a flashdisk_cache_commit that ever skips its
+	 * erase (review finding on the first revision) — on real hardware that
+	 * bug produces bitwise-AND garbage in FAT sectors, i.e. issue #380's
+	 * corruption class, and a plain memcpy double could never see it. */
+	for (size_t i = 0; i < len; i++) {
+		const uint8_t want = ((const uint8_t *)data)[i];
+
+		if ((backing[offset + i] & want) != want) {
+			return -EIO;
+		}
+	}
 	memcpy(&backing[offset], data, len);
 	return 0;
 }

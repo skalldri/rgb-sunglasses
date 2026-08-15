@@ -689,6 +689,14 @@ static struct flashdisk_data *flashdisk_find_by_name(const char *disk_name)
 	return NULL;
 }
 
+/* Deliberately LOCKLESS (review finding on the first revision): ctx->lock is
+ * held across the underlying QSPI erase/program, up to the full
+ * NORDIC_QSPI_NOR timeout when the part stalls — which is exactly when an
+ * operator runs `flashdisk stats` to find out what is happening. A diagnostic
+ * that blocks behind the fault it diagnoses is useless. The counters are
+ * three independent naturally-aligned uint32_t with no cross-field invariant,
+ * so unlocked reads cannot tear; the worst case is a snapshot one increment
+ * stale, which is fine for a failure counter. */
 int flashdisk_patched_stats_get(const char *disk_name, struct flashdisk_patched_stats *out)
 {
 	struct flashdisk_data *ctx = flashdisk_find_by_name(disk_name);
@@ -696,9 +704,7 @@ int flashdisk_patched_stats_get(const char *disk_name, struct flashdisk_patched_
 	if (ctx == NULL) {
 		return -ENOENT;
 	}
-	k_mutex_lock(&ctx->lock, K_FOREVER);
 	*out = ctx->stats;
-	k_mutex_unlock(&ctx->lock);
 	return 0;
 }
 
@@ -709,9 +715,10 @@ int flashdisk_patched_stats_reset(const char *disk_name)
 	if (ctx == NULL) {
 		return -ENOENT;
 	}
-	k_mutex_lock(&ctx->lock, K_FOREVER);
+	/* Lockless for the same reason as _get(); a reset racing an in-flight
+	 * increment may lose that one count, which is acceptable for a
+	 * diagnostic counter and beats blocking behind a stalled flash op. */
 	memset(&ctx->stats, 0, sizeof(ctx->stats));
-	k_mutex_unlock(&ctx->lock);
 	return 0;
 }
 
@@ -726,11 +733,12 @@ static int cmd_flashdisk_stats(const struct shell *sh, size_t argc, char **argv)
 	for (int i = 0; i < ARRAY_SIZE(flash_disks); i++) {
 		struct flashdisk_data *ctx = &flash_disks[i];
 
-		k_mutex_lock(&ctx->lock, K_FOREVER);
+		/* No ctx->lock on purpose — see flashdisk_patched_stats_get()'s
+		 * comment: this must keep working while a flash op is stalled
+		 * holding the lock, which is precisely when it gets run. */
 		shell_print(sh, "%s: read_errors=%u erase_errors=%u program_errors=%u",
 			    ctx->info.name, ctx->stats.read_errors,
 			    ctx->stats.erase_errors, ctx->stats.program_errors);
-		k_mutex_unlock(&ctx->lock);
 	}
 	return 0;
 }
