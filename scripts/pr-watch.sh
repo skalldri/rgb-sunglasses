@@ -109,25 +109,36 @@ classify() { # classify <num> <sha> <draft>
 
   known_draft=$(lookup_draft "$num" "$STATE")
 
-  # A draft marked ready-for-review changes no SHA. Only meaningful when we
-  # skipped it on open; otherwise it was already reported as NEW.
+  # A draft marked ready-for-review changes no SHA, so it is invisible to the
+  # head-SHA trigger. Only meaningful when we skipped it on open.
+  #
+  # The stored draft flag is deliberately one-way: once a PR has been reported,
+  # state records draft=false forever. Converting back to draft and out again
+  # would otherwise re-fire READY at a byte-identical head on every toggle —
+  # the same no-diff retrigger this script rejects `updatedAt` for.
   if [ "$SKIP_DRAFTS" = 1 ] && [ "$known_draft" = "true" ] && [ "$draft" != "true" ]; then
-    upsert "$STATE" "$num" "$sha" "$draft"
+    upsert "$STATE" "$num" "$sha" "false"
     drop "$num" "$PEND"
     echo "READY"
     return
   fi
 
   if [ "$known" != "$sha" ]; then
+    # A push to a PR we are deliberately deferring is still deferred: track the
+    # new head silently so READY later fires at the right SHA.
+    if [ "$SKIP_DRAFTS" = 1 ] && [ "$draft" = "true" ] && [ "$known_draft" = "true" ]; then
+      upsert "$STATE" "$num" "$sha" "true"
+      drop "$num" "$PEND"
+      return
+    fi
     if [ "$(lookup "$num" "$PEND")" = "$sha" ]; then
-      upsert "$STATE" "$num" "$sha" "$draft"
+      upsert "$STATE" "$num" "$sha" "$known_draft"
       drop "$num" "$PEND"
       echo "UPDATED $known"
     else
       upsert "$PEND" "$num" "$sha"
     fi
   else
-    [ "$known_draft" != "$draft" ] && upsert "$STATE" "$num" "$sha" "$draft"
     drop "$num" "$PEND"   # pushed then reverted inside one cycle
   fi
 }
@@ -178,6 +189,18 @@ if [ "$SELF_TEST" = 1 ]; then
   check "draft is not reported"          ""             "$(classify 20 dr01 true)"
   check "draft->ready fires READY"       "READY"        "$(classify 20 dr01 false)"
   check "ready then silent"              ""             "$(classify 20 dr01 false)"
+  # A ready PR converted back to draft and out again moves no SHA. Re-firing
+  # READY on each toggle is the no-diff retrigger we reject updatedAt for.
+  check "ready->draft is silent"         ""             "$(classify 20 dr01 true)"
+  check "draft->ready does NOT re-fire"  ""             "$(classify 20 dr01 false)"
+  # A push to a still-draft PR stays deferred, but must track the new head so
+  # READY later fires at the right SHA rather than a stale one.
+  check "push while draft settles"       ""             "$(classify 21 dr10 true)"
+  check "push while draft is deferred"   ""             "$(classify 21 dr10 true)"
+  check "  (pushed again, still draft)"  ""             "$(classify 21 dr11 true)"
+  check "  (still silent)"               ""             "$(classify 21 dr11 true)"
+  check "  (READY at the NEW head)"      "READY"        "$(classify 21 dr11 false)"
+  check "  (state holds the new head)"   "dr11"         "$(lookup 21 "$STATE")"
   SKIP_DRAFTS=0
 
   # Closed-then-reopened at an unchanged head must still fire.
@@ -191,6 +214,26 @@ if [ "$SELF_TEST" = 1 ]; then
   # number-less line no helper could ever remove.
   printf '40 beef false\n' > "$STATE"; : > "$PEND"
   check "prune keeps open PR"            "40 beef false" "$(prune "40"; cat "$STATE")"
+
+  # prune must survive the shapes a half-written state file can take.
+  printf '' > "$STATE"; : > "$PEND"
+  check "prune on empty state"           ""             "$(prune "1 2"; cat "$STATE")"
+  printf '50 f00d false\n\n51 baad true\n' > "$STATE"
+  check "prune skips blank lines"        "50 f00d false" "$(prune "50"; cat "$STATE")"
+
+  # The main loop must not treat "zero open PRs" as authoritative on the first
+  # reading: pruning there wipes state and re-fires NEW for every PR.
+  printf '60 aaaa false\n61 bbbb false\n' > "$STATE"; : > "$PEND"
+  empty_polls=0; count=0
+  for _ in 1 2; do
+    if [ "$count" = 0 ]; then empty_polls=$((empty_polls + 1)); else empty_polls=0; fi
+    [ "$count" -gt 0 ] || [ "$empty_polls" -ge 3 ] && prune ""
+  done
+  check "1 empty poll does not wipe"     "60 aaaa false
+61 bbbb false" "$(cat "$STATE")"
+  empty_polls=3
+  { [ "$count" -gt 0 ] || [ "$empty_polls" -ge 3 ]; } && prune ""
+  check "3 empty polls do prune"         ""             "$(cat "$STATE")"
 
   [ "$fail" = 0 ] && echo "self-test: PASS" || echo "self-test: FAIL"
   exit "$fail"
@@ -214,17 +257,52 @@ PEND="$STATE_DIR/pending"
 
 # The state files are read-modify-written non-atomically, so two watchers on
 # one repo would interleave and lose events. mkdir is the atomic primitive.
+#
+# Reclaiming a stale lock has to go back through mkdir, not just overwrite the
+# pid: two watchers starting together both find the same dead pid, and if the
+# reclaim path simply falls through, BOTH believe they own it.
 LOCK="$STATE_DIR/lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  other=$(cat "$LOCK/pid" 2>/dev/null || echo "?")
-  if [ "$other" != "?" ] && kill -0 "$other" 2>/dev/null; then
-    echo "PR-WATCH ERROR: another watcher (pid $other) already owns $STATE_DIR — exiting"
-    exit 1
-  fi
-  echo "PR-WATCH: reclaiming stale lock from pid $other"
-fi
-echo $$ > "$LOCK/pid"
-trap 'rm -rf "$LOCK"' EXIT INT TERM
+acquire_lock() {
+  local attempt other
+  for attempt in 1 2; do
+    if mkdir "$LOCK" 2>/dev/null; then
+      echo $$ > "$LOCK/pid"
+      return 0
+    fi
+    other=$(cat "$LOCK/pid" 2>/dev/null)
+    # An unreadable or empty pid file means a watcher died between mkdir and
+    # the write. Treat it as stale rather than deadlocking on it forever.
+    if [ -n "${other:-}" ] && kill -0 "$other" 2>/dev/null; then
+      echo "PR-WATCH ERROR: another watcher (pid $other) already owns $STATE_DIR — exiting"
+      return 1
+    fi
+    [ "$attempt" = 1 ] || break
+    echo "PR-WATCH: reclaiming stale lock from pid ${other:-<unknown>}"
+    rm -rf "$LOCK"   # loser of this race fails the next mkdir and exits
+  done
+  echo "PR-WATCH ERROR: lost the race to reclaim $LOCK — another watcher won; exiting"
+  return 1
+}
+acquire_lock || exit 1
+
+# Only release a lock we still own. A watcher that was signalled after another
+# process reclaimed its lock would otherwise delete the NEW owner's lock on the
+# way out, and the damage compounds from there.
+release_lock() {
+  [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
+  return 0
+}
+# INT/TERM must EXIT, not just release. A bash signal handler returns to the
+# loop by default, which would leave a watcher polling on with no lock — a
+# ghost that keeps consuming API calls and emitting events nobody owns.
+#
+# Two accepted caveats: bash defers the handler until the in-flight `sleep`
+# returns, so a stop takes up to POLL seconds to land; and SIGKILL runs no
+# handler at all, leaking the lock dir until the next watcher's stale-pid
+# reclaim clears it.
+trap 'release_lock' EXIT
+trap 'release_lock; exit 130' INT
+trap 'release_lock; exit 143' TERM
 
 QUERY='.[] | "\(.number)\t\(.headRefOid)\t\(.isDraft)\t\(.author.login)\t\(.headRefName)\t\(.title)"'
 
@@ -241,9 +319,11 @@ echo "PR-WATCH: armed on $REPO — new PRs + pushes to $(wc -l < "$STATE" | tr -
 
 fails=0
 truncated_warned=0
+empty_polls=0
+GHERR="$STATE_DIR/gh.err"
 while true; do
   if cur=$(gh pr list --repo "$REPO" --state open --limit "$LIMIT" \
-             --json number,headRefOid,isDraft,author,headRefName,title -q "$QUERY" 2>/dev/null); then
+             --json number,headRefOid,isDraft,author,headRefName,title -q "$QUERY" 2>"$GHERR"); then
     [ "$fails" -ge 5 ] && echo "PR-WATCH: recovered, polling again"
     fails=0
 
@@ -266,10 +346,26 @@ while true; do
       esac
     done <<< "$cur"
 
-    prune "${open_nums# }"
+    count=$(printf '%s\n' $open_nums | grep -c . || true)
+
+    # An exit-0 response listing zero PRs is ambiguous: either the repo really
+    # has none open, or the API hiccuped. Pruning on the second reading wipes
+    # state, and then EVERY open PR re-fires as NEW next cycle — a full review
+    # storm from one blip. A genuinely empty repo stays empty, so require the
+    # reading to repeat before believing it.
+    if [ "$count" = 0 ]; then
+      empty_polls=$((empty_polls + 1))
+      if [ "$empty_polls" = 1 ] && [ -s "$STATE" ]; then
+        echo "PR-WATCH: poll returned zero open PRs but state is non-empty — not pruning until it repeats"
+      fi
+    else
+      empty_polls=0
+    fi
+    if [ "$count" -gt 0 ] || [ "$empty_polls" -ge 3 ]; then
+      prune "${open_nums# }"
+    fi
 
     # A silent cap reads as "covered everything" when it isn't.
-    count=$(printf '%s\n' $open_nums | grep -c . || true)
     if [ "$count" -ge "$LIMIT" ] && [ "$truncated_warned" = 0 ]; then
       truncated_warned=1
       echo "PR-WATCH WARNING: $count open PRs hit the --limit $LIMIT window — PRs outside it are not watched"
@@ -277,9 +373,12 @@ while true; do
   else
     fails=$((fails + 1))
     # Re-warn periodically: a watcher that warned once an hour ago and has been
-    # dead since is indistinguishable from a quiet repo.
+    # dead since is indistinguishable from a quiet repo. Carry gh's own first
+    # line of stderr — "gh auth" vs "rate limit" vs DNS are different problems
+    # and the operator cannot see this process's stderr.
     if [ "$fails" = 5 ] || { [ "$fails" -gt 5 ] && [ $(( fails % 30 )) = 0 ]; }; then
-      echo "PR-WATCH WARNING: $fails consecutive 'gh pr list' failures — PR polling is broken"
+      why=$(head -1 "$GHERR" 2>/dev/null)
+      echo "PR-WATCH WARNING: $fails consecutive 'gh pr list' failures — PR polling is broken${why:+ — $why}"
     fi
   fi
   sleep "$POLL"

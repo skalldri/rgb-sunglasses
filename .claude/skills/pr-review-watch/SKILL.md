@@ -61,8 +61,13 @@ For each event, spawn an agent with `isolation: "worktree"`:
 
 ```
 Agent(subagent_type: "general-purpose", isolation: "worktree",
-      name: "review-<N>", description: "Review PR <N>", prompt: <template below>)
+      name: "review-<N>-r<round>", description: "Review PR <N>", prompt: <template below>)
 ```
+
+Include the round in the name. A bare `review-<N>` collides the second time the
+same PR is reviewed, and the newer agent takes the name — which silently
+redirects any follow-up `SendMessage` (e.g. resuming an interrupted review)
+to the wrong one.
 
 `isolation: "worktree"` is **required, not an optimization.** `/code-review`
 checks out the PR branch to read it. Two agents doing that in one checkout
