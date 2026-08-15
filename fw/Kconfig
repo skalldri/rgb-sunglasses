@@ -103,14 +103,17 @@ config APP_CAPTURE
 
 config APP_CAPTURE_QUEUE_FRAMES
 	int "Capture PCM tap depth, in 32 ms blocks"
-	default 8
+	default 16
 	depends on APP_CAPTURE
 	help
 	  Buffering between the DSP thread and the capture writer. A flash sector
 	  erase stalls the writer for hundreds of ms, and anything not buffered
-	  across that stall is a dropped block. 8 blocks is ~256 ms. The recorder
-	  reports its drop count, so raise this if a capture reports drops rather
-	  than guessing.
+	  across that stall is a dropped block. The recorder reports its drop
+	  count, so raise this if a capture reports drops rather than guessing.
+	  Raised 8 (~256 ms) -> 16 (~512 ms) with FS_FATFS_REENTRANT (issue
+	  #380): the volume mutex serializes the writer behind concurrent GLIM
+	  frame reads, and a capture during GLIM playback measured 112/625
+	  blocks dropped at depth 8. Costs ~8 KB RAM.
 
 config APP_CAPTURE_THREAD_STACK_SIZE
 	int "Capture worker stack size"
