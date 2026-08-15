@@ -182,22 +182,28 @@ K_MUTEX_DEFINE(displayBufferMutex);
 // render thread takes it (bounded, via led_controller_wait_frame_consumed) to
 // pace itself off the display clock instead of running a second free-running
 // k_msleep clock that slips phase.
-// Initial count 1 so the boot-time first render does not wait for a display
-// cycle; max count 1 so multiple display cycles coalesce into one credit
+// Initial count 0: the render loop's wait sits at the BOTTOM of its loop, so
+// the boot-time first render is never gated by this semaphore anyway — a
+// pre-armed credit only made the second render fire back-to-back with the
+// first (a ~2-5 ms dt tick the display never samples, one wasted
+// extension-sandbox budget) before synchronising (PR #381 review round 6).
+// Max count 1 so multiple display cycles coalesce into one credit
 // (k_sem_give on a full semaphore is a no-op — the correct semantics when the
 // producer is slower than the consumer). Give/take both happen OUTSIDE
 // displayBufferMutex, so this adds no lock-ordering edge.
-K_SEM_DEFINE(frameConsumedSem, 1, 1);
+K_SEM_DEFINE(frameConsumedSem, 0, 1);
 
 // Counts completed renders, so claimBufferForDisplay can tell "sampling a new
 // frame" from "re-sampling the one it already showed" (a held frame — the
 // direct observable of issue #379's phase slip). A generation counter rather
 // than comparing buffer indices: with three buffers an index can recur while
 // the content is new. Guarded by displayBufferMutex like the rest of the
-// bookkeeping.
-uint32_t renderGeneration = 0;
-uint32_t lastSampledRenderGeneration = 0;
-bool haveSampledFrame = false;
+// bookkeeping. static (unlike this file's older globals, which predate the
+// convention): these names are generic enough to alias another TU's symbol,
+// and the linker resolves that ODR collision silently (PR #381 review round 6).
+static uint32_t renderGeneration = 0;
+static uint32_t lastSampledRenderGeneration = 0;
+static bool haveSampledFrame = false;
 
 int claimBufferForRender(size_t &buffer) {
     k_mutex_lock(&displayBufferMutex, K_FOREVER);

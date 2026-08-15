@@ -293,7 +293,7 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     uint32_t renderOverrunsSinceLog = 0;
     int64_t lastWaitTimeoutLogMs = 0;
     uint32_t waitTimeoutsSinceLog = 0;
-    int64_t prevIterStartMs = k_uptime_get();
+    int64_t prevIterStartTicks = k_uptime_ticks();
 
     while (true) {
         int64_t startTicks = k_uptime_ticks();
@@ -301,7 +301,6 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // sources, extension inputs) belongs to this epoch — see
         // pattern_controller_tick_epoch().
         atomic_inc(&sTickEpoch);
-        const int64_t iterStartMs = k_uptime_get();
 
         // Producer-gated pacing (issue #379): this thread no longer runs its own
         // free-running sleep clock — it renders once per N consumed display
@@ -333,22 +332,30 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         // BT/flash load — exactly what #267/#312 measured) never trips the
         // wait timeout below, so a nominal dt would run animation time slow
         // for as long as the slowdown lasts with nothing logged (PR #381
-        // review round 6). Clamped to 4x nominal: the wait's shared deadline
-        // bounds a healthy iteration well inside that, and a multi-second
-        // display stall (#312 measured ~1.5 s) should not teleport animation
-        // clocks when it clears. elapsed <= 0 (sub-ms iteration off a
-        // coalesced credit) keeps the nominal fallback — dt 0 would stall
-        // animation and shuffle-dwell clocks.
+        // review round 6). Measured in kernel ticks, not k_uptime_get()'s
+        // whole-ms truncation: at the 33.3 ms default a ms-quantised delta
+        // alternates 33/34 — a ±2% per-frame velocity wobble in every
+        // dt-integrating animation, the same stepping-irregularity class this
+        // PR removes, re-injected at small amplitude (PR #381 review round 6;
+        // startTicks is already sampled above, so this costs nothing). Clamped
+        // to 4x nominal: the wait's shared deadline bounds a healthy iteration
+        // well inside that, and a multi-second display stall (#312 measured
+        // ~1.5 s) should not teleport animation clocks when it clears. A
+        // same-tick iteration (elapsed 0 — unreachable in practice at 32768 Hz
+        // resolution) keeps the nominal fallback, since dt 0 would stall
+        // animation and shuffle-dwell clocks; a genuinely tiny elapsed (an
+        // immediate take off a coalesced credit) is passed through truthfully.
         float animationDtMs = kTargetRenderIntervalMs;
-        const int64_t elapsedMs = iterStartMs - prevIterStartMs;
-        if (elapsedMs > 0) {
-            animationDtMs = (float)elapsedMs;
+        const int64_t elapsedTicks = startTicks - prevIterStartTicks;
+        if (elapsedTicks > 0) {
+            animationDtMs =
+                1000.0f * (float)elapsedTicks / (float)CONFIG_SYS_CLOCK_TICKS_PER_SEC;
             const float maxDtMs = 4.0f * kTargetRenderIntervalMs;
             if (animationDtMs > maxDtMs) {
                 animationDtMs = maxDtMs;
             }
         }
-        prevIterStartMs = iterStartMs;
+        prevIterStartTicks = startTicks;
 
         size_t bufferId = 0;
         ret = claimBufferForRender(bufferId);
