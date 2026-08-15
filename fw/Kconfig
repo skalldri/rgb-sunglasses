@@ -968,11 +968,15 @@ config APP_PATTERN_CONTROLLER_THREAD_PRIORITY
 
 config APP_PATTERN_CONTROLLER_THREAD_STACK_SIZE
 	int "Pattern controller (render) thread stack size (bytes)"
-	default 4096
+	default 5120
 	help
 	  Kernel-only stack (K_KERNEL_THREAD_DEFINE). Extension code runs on the
 	  extension host's own K_USER sandbox thread, never on this one, so this
 	  stack never needs the CONFIG_USERSPACE privileged reservation.
+	  Raised 4096 -> 5120 for FS_FATFS_LFN_MODE_STACK's ~512 B per-call LFN
+	  frame (issue #380): this thread is a deep FatFS caller — GLIM fs_open
+	  and per-frame reads, plus .llext loads (llext_load -> fs_loader
+	  fs_open) and the boot-time registry dir walks.
 
 config APP_BT_THREAD_PRIORITY
 	int "Application Bluetooth state-machine thread priority"

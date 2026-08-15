@@ -126,9 +126,36 @@ int storage_fat_corrupt_boot_sector(void) {
 
 #if defined(CONFIG_SHELL) && defined(CONFIG_FILE_SYSTEM_MKFS)
 
+#if defined(CONFIG_APP_CAPTURE)
+#include "sound/capture.h"
+#endif
+
+/* HAZARD (issue #380 follow-up, CONFIG_FS_FATFS_REENTRANT): a runtime
+ * unmount/remount re-initializes the per-volume FatFS mutex out from under
+ * any in-flight FS user — f_mount() calls ff_mutex_create() unconditionally,
+ * and Zephyr's glue is a bare k_mutex_init(), which wipes the owner AND the
+ * wait queue. A thread queued on the mutex (K_FOREVER — e.g. the coredump
+ * wq's 60 s fs_stat tick, or a GLIM frame read) is orphaned and never wakes;
+ * a thread holding it gets -EPERM from its eventual unlock and keeps any
+ * inherited priority forever. Before reentrancy this race "only" corrupted
+ * data; now it can hang a thread permanently. There is no clean way to test
+ * volume idleness from here (the mutex is FatFS-internal), so this command
+ * gates on the one long-running writer it can see — an active capture — and
+ * otherwise relies on the operator: do not reformat while anything is using
+ * /NAND:. The same applies to `fatfs corrupt` below and to the factory-reset
+ * remount path. */
 static int cmd_storage_reformat(const struct shell *sh, size_t argc, char **argv) {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
+
+#if defined(CONFIG_APP_CAPTURE)
+    if (capture_is_recording()) {
+        shell_error(sh, "Refusing: a capture is recording to %s.", fat_mnt.mnt_point);
+        shell_print(sh, "A remount re-initializes the FatFS volume mutex under the");
+        shell_print(sh, "writer (permanent-hang hazard). `capture stop` first.");
+        return -EBUSY;
+    }
+#endif
 
     shell_warn(sh, "Reformatting %s — all files will be erased.", fat_mnt.mnt_point);
 
@@ -187,6 +214,14 @@ static int cmd_storage_reformat(const struct shell *sh, size_t argc, char **argv
  * volume still mounted intact on the next boot.
  */
 static int cmd_storage_corrupt(const struct shell *sh, size_t argc, char **argv) {
+#if defined(CONFIG_APP_CAPTURE)
+    /* Same volume-mutex re-init hazard as cmd_storage_reformat above. */
+    if (capture_is_recording()) {
+        shell_error(sh, "Refusing: a capture is recording to %s.", fat_mnt.mnt_point);
+        shell_print(sh, "`capture stop` first (see the reformat command's hazard note).");
+        return -EBUSY;
+    }
+#endif
     if (argc != 2 || strcmp(argv[1], "confirm") != 0) {
         shell_error(sh, "Refusing without explicit confirmation.");
         shell_print(sh, "Usage: fatfs corrupt confirm");

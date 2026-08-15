@@ -165,6 +165,11 @@ int erase_coredump_op() {
 
 #if defined(FACTORY_RESET_HAS_FAT)
 int reformat_fat_op() {
+    /* Unmounts the live volume. With CONFIG_FS_FATFS_REENTRANT this carries
+     * the volume-mutex re-init hazard documented above cmd_storage_reformat
+     * (fw/src/storage/storage.cpp) — tolerable here because a factory reset
+     * ends in a reboot and runs while the system is being torn down, not
+     * during normal concurrent FS use. */
     int rc = storage_fat_wipe_for_reset();
     if (rc != 0) {
         LOG_ERR("FAT reformat failed: %d", rc);
