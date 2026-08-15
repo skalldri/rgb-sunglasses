@@ -45,15 +45,17 @@ BtGattPrimaryService<kCoreConfigServiceUuid> coreConfigPrimaryService;
 // than the display push just throws frames away (issue #376) — getRenderRateMs()
 // also enforces this as a runtime floor, whatever the persisted values say.
 //
-// Known cosmetic cost of 1:1 (PR #378 review): the two loops free-run with no
-// buffer-swap handshake, and each paces itself with a whole-ms k_msleep whose
-// float argument TRUNCATES — so each period is work + trunc(33.3 - work), and
-// the two threads' different work times give systematically different periods.
-// The phase slip is therefore steady, not random: MEASURED on proto0 (PR #381's
-// held-frames counter, zigzag), 135 held/skipped frames in 275 s — one every
-// ~2 s, each a 2 px jump or held frame on a 1 px/step scroll. The old 3:1
-// ratio hid this by always having a fresh frame ready, at 3x the render cost.
-// A producer/consumer handshake on the swap removes it entirely — issue #379.
+// The two loops do NOT free-run at these rates independently — that
+// phase-slipped systematically (the whole-ms k_msleep truncation gave the two
+// threads different periods; measured pre-fix at one held/skipped frame per
+// ~2 s — issue #379): the display thread is the only clock, and the render
+// thread paces itself off its frame-consumed signal
+// (led_controller_wait_frame_consumed, pattern_controller.cpp). The render rate
+// therefore acts as a divider — render once per ceil(render/display) consumed
+// display frames, so the effective render interval is never SHORTER than
+// requested — which getRenderRateMs()'s floor keeps >= 1. led_stats'
+// "held frames" counts display cycles that re-showed an unchanged frame; ~0 in
+// steady state unless the divider is > 1 or a render genuinely overruns.
 constexpr uint32_t kDefaultThreadRateMsX1000 = 33300;
 
 // These four are app-written tunables with no device-side writer, so Notify=false

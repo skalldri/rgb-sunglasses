@@ -35,7 +35,7 @@ proves logic, not linkage or timing.
 | RNG | Seeded mulberry32 (reproducible runs, golden tests). | `sys_rand32_get` (hardware entropy). | Random color-mode hue *sequences* differ; semantics (≥60° distance) identical. |
 | Float arithmetic | wasm IEEE-754 (deterministic across platforms/browsers). libm (`cosf` in the Hann window, `log1pf` in flux) is wasi-libc. | ARM VFMA contraction + newlib libm. | Audio features differ from the device in late bits (see the measured 3.7e-7 above vs native_sim; device-vs-native_sim has the same class of difference — `fw/tools/beat_lab/compare.py`). Beat decisions on borderline frames can flip. |
 | Audio input level | Browser mic / WAV levels are line-level; there is **no AGC loop** (the device's PDM gain servo). Band energies are raw mean power either way (consumers scale by energyScale ≈ 20). | PDM capture + AGC holding RMS in a target window. | Absolute energy magnitudes from live mic may sit in a different range than a well-AGC'd device signal. Use device WAV recordings (`sound mic record_wav`) or the metronome scenarios for calibrated stimuli. |
-| Display refresh | Render ~30 Hz = the strip rate (issue #376); browser canvas paints every tick, CLI has no refresh. | Strip updates at 30 Hz, same as the render rate. | Cosmetic. |
+| Display refresh | Render ~30 Hz = the strip rate (issue #376); browser canvas paints every tick, CLI has no refresh. | Strip updates at 30 Hz; since issue #379 the device render thread is phase-locked to the display clock (frame-consumed handshake), so every push samples one fresh frame — which the sim's single tick clock models exactly. | Cosmetic. |
 
 ## Not covered at all — device-only
 

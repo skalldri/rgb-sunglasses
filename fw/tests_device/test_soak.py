@@ -151,6 +151,11 @@ def test_frame_pacing_soak(rgb: RgbShell):
             f"at {s['target_us']} µs/frame): {s}"
         )
         assert s["overruns"] == 0, f"frame overruns during soak (#267): {s}"
+        # The render thread is phase-locked to the display clock (#379), so at
+        # the default 1:1 divider no display cycle may re-show an unchanged
+        # frame. This is the assertion that would have caught the free-running
+        # phase slip from day one.
+        assert s["held_frames"] == 0, f"held frames during soak (#379): {s}"
         assert s["work_max_us"] < s["target_us"], (
             f"work max {s['work_max_us']} µs exceeds the {s['target_us']} µs "
             f"frame budget (#267): {s}"
