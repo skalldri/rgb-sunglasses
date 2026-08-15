@@ -1301,8 +1301,15 @@ static void audio_sidecar_drain(struct audio_sidecar *sc) {
 #endif
 }
 
-static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *shell,
-                                uint32_t blocks, uint32_t dropped) {
+/* Returns 0 only if the file on the volume is one a consumer may trust; the
+ * caller folds that into io_error. Without it these warnings reach the UART
+ * alone — and a phone-triggered capture has no UART, so capture.cpp would
+ * publish CAPTURE_IDLE with last_error=0 for a truncated or misaligned CSV.
+ * A sidecar that never opened is NOT a failure: nothing was promised, the
+ * warning at open time said so, and the WAV stands on its own. A file that
+ * exists but cannot be trusted is the case worth failing. */
+static int audio_sidecar_close(struct audio_sidecar *sc, const struct shell *shell,
+                               uint32_t blocks, uint32_t dropped) {
     if (!sc->open) {
         /* A sidecar abandoned mid-recording used to leave here in silence: the
          * capture then ran to completion and printed a clean WAV summary, while
@@ -1317,8 +1324,9 @@ static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *sh
                        "Capture CSV ABANDONED after %u rows (%u rows lost) - truncated, no "
                        "#DONE trailer; do NOT pair with the WAV",
                        sc->frames, lost);
+            return -EIO;
         }
-        return;
+        return 0;
     }
     audio_sidecar_flush(sc, true);
     /* The trailer only means anything if everything before it got out, and the
@@ -1328,7 +1336,7 @@ static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *sh
      * and worth parsing, so a truncated one must not produce it. */
     if (!sc->open) {
         shell_warn(shell, "Capture CSV write failed - the file is incomplete");
-        return;
+        return -EIO;
     }
     char trailer[64];
     int n = snprintf(trailer, sizeof(trailer), "#DONE frames=%u dropped=%u\n", sc->frames, dropped);
@@ -1350,7 +1358,7 @@ static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *sh
      * below are worded to dodge that regex for exactly this reason. */
     if (!trailer_ok) {
         shell_warn(shell, "Capture CSV lost its #DONE trailer - row count unverifiable");
-        return;
+        return -EIO;
     }
     /* Row count MUST equal the number of blocks that reached the WAV — the two
      * files are paired by position, so any drift makes every row after the
@@ -1370,13 +1378,14 @@ static void audio_sidecar_close(struct audio_sidecar *sc, const struct shell *sh
                    "Capture CSV MISALIGNED: %u rows for %u blocks written (%u rows lost) - "
                    "do NOT pair with the WAV",
                    sc->frames, blocks, lost);
-        return;
+        return -EIO;
     }
 #if defined(CONFIG_IMU)
     shell_print(shell, "Audio sidecar: %u frames, %u IMU samples", sc->frames, sc->samples);
 #else
     shell_print(shell, "Audio sidecar: %u frames", sc->frames);
 #endif
+    return 0;
 }
 #endif /* CONFIG_APP_CAPTURE_AUDIO_SIDECAR */
 
@@ -1677,9 +1686,15 @@ static int record_wav_tap(const struct shell *shell, uint32_t duration_s, const 
     }
     fs_close(&f);
 
-    len = (size_t)snprintf(s_tap_line, sizeof(s_tap_line), "#DONE frames=%u dropped=%u\n",
-                           frames_captured, dropped);
-    if (tap_write_at_retry(&fcsv, csv_path, csv_file_pos, s_tap_line, len, &io_retries) != 0) {
+    /* Bounded like its sibling in audio_sidecar_close(): a negative snprintf
+     * return casts to a huge size_t and would be handed to the writer as a
+     * length. Unreachable at ~44 B into 512, but two identical trailer writes
+     * with opposite treatment is the configuration most likely to drift back. */
+    int trailer_len = snprintf(s_tap_line, sizeof(s_tap_line), "#DONE frames=%u dropped=%u\n",
+                               frames_captured, dropped);
+    len = (trailer_len > 0 && (size_t)trailer_len < sizeof(s_tap_line)) ? (size_t)trailer_len : 0;
+    if (len == 0 ||
+        tap_write_at_retry(&fcsv, csv_path, csv_file_pos, s_tap_line, len, &io_retries) != 0) {
         shell_error(shell, "CSV #DONE trailer write failed");
         io_error = true;
     }
@@ -2194,7 +2209,11 @@ static int record_wav_capture(const struct shell *shell, uint32_t duration_s, co
      * below the loop is skipped — so the sidecar overruns the audio and
      * blocks_captured would report them equal. On a clean capture the two are
      * identical, so this costs nothing there. */
-    audio_sidecar_close(&audio_sc, shell, total_bytes / BLOCK_SIZE, dropped);
+    if (audio_sidecar_close(&audio_sc, shell, total_bytes / BLOCK_SIZE, dropped) != 0) {
+        /* The console line is invisible to anyone on a phone; this is what
+         * turns it into CAPTURE_FAILED instead of a clean CAPTURE_IDLE. */
+        io_error = true;
+    }
 #endif
 
     if (io_error) {

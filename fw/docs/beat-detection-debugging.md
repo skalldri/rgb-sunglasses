@@ -140,8 +140,13 @@ feeds it back into the harness.
 
 Until something does, the honest options for a live-AGC capture are: read the
 gain column to understand what the detector saw (plots, `report.py`), or replay
-with `BEAT_AGC=sim` so the harness runs the real `AgcController` rather than a
-pinned gain. A fixed-gain bench clip remains the only way to get an exact
+with `--agc sim` so the harness runs the real `AgcController` rather than a
+pinned gain. Use the **flag**, not `BEAT_AGC=sim` in the environment:
+`run_replay()` does `env["BEAT_AGC"] = agc` unconditionally from `--agc`
+(default `off`), so an exported value is inherited and then overwritten — a
+silent fixed-gain replay. `--params-from --agc sim` is the combination that
+reproduces the device's trajectory, since `--params-from` also copies all six
+AGC parameters plus `sf_delta`/`mode` out of `#PARAMS`, not just the gain. A fixed-gain bench clip remains the only way to get an exact
 device-vs-host match. `compare.py`'s notion of a PASS still assumes a constant gain, so a
 live-AGC capture is for *reading* what the detector did, not for re-validating
 the harness — use a frozen-gain bench clip for that.
@@ -208,7 +213,7 @@ only the latter is shippable — `phase3_table.py` reports both, plus the
 
 ## Known pitfalls
 
-- **Record at frozen gain** (`sound agc gain`) or `BEAT_AGC=sim` comparison is
+- **Record at frozen gain** (`sound agc gain`) or `--agc sim` comparison is
   meaningless — the recorded samples already contain the hardware gain steps.
 - **A sweep that peaks at the edge of its range has not found the optimum.**
   Issue #264's alpha was swept over 1.0–3.5 and "best at 1.0" was read as a
