@@ -103,13 +103,23 @@ def _require_default_divider(rgb: RgbShell) -> None:
     gate below would misfire on a correctly-behaving board."""
     render = _persisted_rate_ms_x1000(rgb, "appcfg/core/render_thread_rate_ms")
     display = _persisted_rate_ms_x1000(rgb, "appcfg/core/display_thread_rate_ms")
-    # Mirrors the firmware's CEILING divider (pattern_controller.cpp): N == 1
-    # exactly when render <= display. round() here missed the (1.0, 1.5) ratio
-    # band where the firmware already picks N = 2 (PR #381 review).
-    assert display > 0 and render <= display, (
-        f"persisted render/display rates {render}/{display} give a divider > 1 — "
-        "delete appcfg/core/render_thread_rate_ms (settings delete) before the "
-        "soak tier; the #379 held-frames gate assumes the default 1:1 pacing"
+    # Split asserts so each failure names the key that actually has to change
+    # (PR #381 review: one message covered only one of the three failure modes).
+    assert display > 0, (
+        f"persisted display rate is {display} (x1000 ms) — the render thread "
+        "falls back to self-pacing (pattern_controller.cpp), so the #379 "
+        "held-frames gate is meaningless; delete appcfg/core/display_thread_rate_ms"
+    )
+    # Mirrors the firmware's ceiling-with-epsilon divider (render_pacing.h):
+    # ratios in (1.0, 1.001] still give N == 1, so the bound carries the same
+    # epsilon — a plain render <= display would hard-fail a board (e.g.
+    # 33320/33300) that runs at the default 1:1 pacing (PR #381 review).
+    assert render <= display * 1.001, (
+        f"persisted render/display rates {render}/{display} give a divider of "
+        f"{-(-render // display)} — delete whichever of "
+        "appcfg/core/render_thread_rate_ms (if > 33300) or "
+        "appcfg/core/display_thread_rate_ms (if < 33300) is the non-default "
+        "one; the #379 held-frames gate assumes the default 1:1 pacing"
     )
 
 
@@ -209,13 +219,17 @@ def test_frame_pacing_soak(rgb: RgbShell):
         assert s["overruns"] == 0, f"frame overruns during soak (#267): {s}"
         # The render thread is phase-locked to the display clock (#379), so at
         # the default 1:1 divider a display cycle re-shows an unchanged frame
-        # only when a render genuinely overran its full display period. The
-        # pre-fix free-running slip measured ~1 held frame per 60 (135 in
-        # 8,243), so a 0.1% allowance still catches any regression by two
-        # orders of magnitude while tolerating the occasional LZ4/FAT render
-        # tick this gate has not yet been measured under (PR #381 review) —
-        # tighten to == 0 once a soak pass has demonstrated it.
-        held_budget = max(1, s["frames"] // 1000)
+        # only when a render genuinely overran its full display period — and
+        # this soak's render thread does FAT reads + LZ4 decodes, where a
+        # single ~300 ms stall costs ~9 held frames BY DESIGN (PR #381 review:
+        # this gate has never run under this load, so a tight bound would fail
+        # healthy boards). Report the value, and gate only at 0.5% — well
+        # above several stall-class events, still 3x under the pre-fix
+        # free-running slip (135/8,243 = 1.64%), which is the regression class
+        # this exists to catch. Tighten once soak passes establish the real
+        # distribution.
+        held_budget = max(10, s["frames"] // 200)
+        print(f"held_frames={s['held_frames']} (budget {held_budget}, frames {s['frames']})")
         assert s["held_frames"] <= held_budget, (
             f"held frames {s['held_frames']} > budget {held_budget} during soak (#379): {s}"
         )

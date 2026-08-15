@@ -313,10 +313,15 @@ ZTEST(led_controller, test_stats_keeps_worst_not_last) {
 }
 
 // Issue #379: the display loop gives the frame-consumed signal once per cycle,
-// in every panel output mode. Give PLACEMENT (the latch point) is pinned by
-// test_give_at_latch_grants_full_period below — with instantaneous fake
-// pushes, placement is pure instruction order and no black-box count can see
-// it, so that test dials in a real push duration first.
+// in every panel output mode. This pins the give's EXISTENCE and CADENCE only —
+// NOT its placement. Placement (immediately after the latch, so the producer
+// gets the full display period) is verified by inspection only: at matched
+// producer/consumer rates exactly one release lands between consecutive claims
+// wherever the give sits, so every steady-state count/held assertion is
+// phase-invariant. Two candidate placement tests (count-based, and a
+// configurable-push-delay variant) both PASSED under a mutation moving the give
+// after the strip pushes, so neither was kept; pinning it mechanically needs a
+// give->claim latency probe. Deferred (PR #381 review).
 ZTEST(led_controller, test_display_signals_frame_consumed) {
     // The signal recurs, once per display cycle...
     run_led_output_cmd("led_output on");

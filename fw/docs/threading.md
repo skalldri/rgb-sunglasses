@@ -225,7 +225,8 @@ Each of these is enforced by a `BUILD_ASSERT` next to the thread it constrains, 
 
 Not machine-checkable, but equally binding: **the render thread may block on the display
 thread — never the reverse.** Since issue #379 the pattern controller paces itself by
-waiting (bounded, ~2 display periods — never `K_FOREVER`) on `led_controller`'s
+waiting (bounded at ~2 × N display periods, where N is the render-rate divider
+`ceil(render/display)` — N = 1 at the defaults; never `K_FOREVER`) on `led_controller`'s
 frame-consumed semaphore, given once per display cycle. The display thread stays a pure
 free-running clock: it never waits for a fresh frame (it re-shows the last one and counts
 a `held frame` in `led_stats`), which is what keeps its hard frame deadline — and

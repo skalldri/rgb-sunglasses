@@ -321,18 +321,24 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
         const float renderRateMs = getPatternConfig().getRenderRateMs();
         const uint32_t framesPerRender =
             render_pacing::framesPerRender(renderRateMs, displayIntervalMs);
-        float kTargetRenderIntervalMs =
+        // The NOMINAL interval: the overrun threshold at the bottom of the loop
+        // and the wait-timeout base. Deliberately never substituted with wall
+        // time — doing so would silently raise the overrun threshold to ~2x
+        // N x display for the whole degraded stretch, disabling the overrun
+        // telemetry exactly when someone is reading the log to find out why the
+        // system is degraded (PR #381 review).
+        const float kTargetRenderIntervalMs =
             render_pacing::renderIntervalMs(renderRateMs, displayIntervalMs);
+        // The dt handed to the animations and shuffle: nominal on the healthy
+        // path, but the wall time actually elapsed after a wait timeout — the
+        // iteration started on the timeout's schedule (~2 x N display periods),
+        // and the nominal dt would run animation time at ~half speed for the
+        // whole degraded period (PR #381 review).
+        float animationDtMs = kTargetRenderIntervalMs;
         if (lastWaitTimedOut) {
-            // The display clock was unavailable last iteration, so this
-            // iteration started on the timeout's schedule (~2 display periods),
-            // not the nominal one. Hand the animations the wall time actually
-            // elapsed or they run at ~half speed for the whole degraded period
-            // (PR #381 review). Nominal dt stays authoritative on the healthy
-            // path — this never fires while the handshake is being honored.
             const int64_t elapsedMs = iterStartMs - prevIterStartMs;
             if (elapsedMs > 0) {
-                kTargetRenderIntervalMs = (float)elapsedMs;
+                animationDtMs = (float)elapsedMs;
             }
         }
         prevIterStartMs = iterStartMs;
@@ -363,12 +369,12 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
             PatternControllerRenderer renderer(get_current_led_config(), bufferId);
 
             if (anim) {
-                anim->tick(renderer, kTargetRenderIntervalMs);
+                anim->tick(renderer, animationDtMs);
             } else {
                 // No animation: default to all LEDs off to save power
                 BaseAnimation *nullAnimation = animation_registry_get(Animation::None);
                 if (nullAnimation) {
-                    nullAnimation->tick(renderer, kTargetRenderIntervalMs);
+                    nullAnimation->tick(renderer, animationDtMs);
                 }
             }
 
@@ -385,12 +391,12 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
             // the selected animation's good-moment flag would be stale.
             if (currentIndicator == Indicator::None) {
                 BaseAnimation *shuffleCur = anim;  // == getAnimation(currentAnimation) here
-                // The animation was ticked with this same kTargetRenderIntervalMs, so its
+                // The animation was ticked with this same animationDtMs, so its
                 // own pacing clock and the shuffle dwell advance in lockstep on nominal
                 // ms — a requested "time to my next boundary" is exact in the same units
                 // the deadline is compared against, even when the render loop overruns.
                 const ShuffleController::Decision d = sShuffleController.onFrame(
-                    currentAnimation, static_cast<uint32_t>(kTargetRenderIntervalMs),
+                    currentAnimation, static_cast<uint32_t>(animationDtMs),
                     shuffleCur ? shuffleCur->isAtGoodSwitchPoint() : true,
                     shuffleCur ? shuffleCur->goodSwitchPointGraceMs() : 0u);
                 if (d.switchNow) {

@@ -51,4 +51,9 @@ ZTEST(render_pacing_tests, test_unusable_display_interval_falls_back) {
                    "display 0 must fall back to the render rate for dt");
     zassert_within(renderIntervalMs(50.0f, -1.0f), 50.0f, 0.001f,
                    "a negative display interval must fall back too");
+    // Both rates written to 0 (getRenderRateMs()'s floor is a no-op when the
+    // display rate is 0): dt must still never be 0 — animations would freeze
+    // and shuffle's dwell clock would stop (PR #381 review).
+    zassert_within(renderIntervalMs(0.0f, 0.0f), 1.0f, 0.001f,
+                   "dt must be floored at 1 ms even with both rates zero");
 }

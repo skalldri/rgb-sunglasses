@@ -36,7 +36,12 @@ inline uint32_t framesPerRender(float renderMs, float displayMs) {
 // dwell clock would stop — PR #381 review).
 inline float renderIntervalMs(float renderMs, float displayMs) {
     if (displayMs <= 0.0f) {
-        return renderMs;
+        // Both rates are remotely writable and unclamped, and getRenderRateMs()'s
+        // floor is a no-op when the display rate is 0 — so renderMs can be 0 here
+        // too. dt must never reach the animations as 0 (they would freeze and
+        // shuffle's dwell clock would stop), so hold a 1 ms floor (PR #381
+        // review).
+        return (renderMs > 1.0f) ? renderMs : 1.0f;
     }
     return (float)framesPerRender(renderMs, displayMs) * displayMs;
 }
