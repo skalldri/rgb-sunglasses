@@ -469,6 +469,80 @@ off_t raw_media_find(const uint8_t *needle, size_t needle_len) {
     return found;
 }
 
+/* Concurrent volume users — the issue #380 layer-2 configuration
+ * (FS_FATFS_REENTRANT + LFN stack mode, mirrored from the proto0 conf into
+ * this suite's prj.conf) must serialize a writer against readers without
+ * corruption or spurious errors. The fault driver's op-delay creates real
+ * preemption windows inside FatFS/flashdisk critical sections; without it,
+ * RAM-backed flash ops never block and threads never interleave (the
+ * add-fw-test skill's concurrency rule), making the test vacuous. Without
+ * FF_FS_REENTRANT this interleaving races the shared FF_FS_TINY window —
+ * the corruption class #383 exists to close. */
+struct hammer_ctx {
+    atomic_t stop;
+    atomic_t reader_errors;
+    atomic_t reader_iterations;
+};
+K_THREAD_STACK_DEFINE(hammer_reader_stack, 3072);
+struct k_thread hammer_reader_thread;
+
+void hammer_reader(void *p1, void *, void *) {
+    auto *ctx = static_cast<hammer_ctx *>(p1);
+    uint8_t local_buf[512];
+
+    while (!atomic_get(&ctx->stop)) {
+        struct fs_dirent entry;
+        int rc = fs_stat("/NAND:/hammer.bin", &entry);
+        if (rc < 0 && rc != -ENOENT) {
+            atomic_inc(&ctx->reader_errors);
+        }
+        struct fs_file_t rf;
+        fs_file_t_init(&rf);
+        if (fs_open(&rf, "/NAND:/hammer.bin", FS_O_READ) == 0) {
+            if (fs_read(&rf, local_buf, sizeof(local_buf)) < 0) {
+                atomic_inc(&ctx->reader_errors);
+            }
+            fs_close(&rf);
+        }
+        atomic_inc(&ctx->reader_iterations);
+    }
+}
+
+ZTEST(fat_flashdisk_fault, test_concurrent_reader_does_not_corrupt) {
+    const char *path = "/NAND:/hammer.bin";
+    constexpr unsigned int kChunks = 6;
+
+    fault_flash_set_op_delay_ms(1); /* create interleaving windows */
+
+    hammer_ctx ctx = {};
+    k_thread_create(&hammer_reader_thread, hammer_reader_stack,
+                    K_THREAD_STACK_SIZEOF(hammer_reader_stack), hammer_reader, &ctx, nullptr,
+                    nullptr, k_thread_priority_get(k_current_get()), 0, K_NO_WAIT);
+
+    struct fs_file_t f;
+    fs_file_t_init(&f);
+    zassert_ok(fs_open(&f, path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC));
+    for (unsigned int i = 0; i < kChunks; i++) {
+        fill_pattern(chunk_buf, kChunk, chunk_seed(i));
+        zassert_equal(fs_write(&f, chunk_buf, kChunk), static_cast<ssize_t>(kChunk),
+                      "write %u failed under concurrent reads", i);
+        zassert_ok(fs_sync(&f), "sync %u failed under concurrent reads", i);
+    }
+    zassert_ok(fs_close(&f));
+
+    atomic_set(&ctx.stop, 1);
+    zassert_ok(k_thread_join(&hammer_reader_thread, K_SECONDS(10)));
+    fault_flash_set_op_delay_ms(0);
+
+    zassert_equal(atomic_get(&ctx.reader_errors), 0, "reader saw %ld errors",
+                  atomic_get(&ctx.reader_errors));
+    zassert_true(atomic_get(&ctx.reader_iterations) > 0, "reader never ran — test is inert");
+
+    verify_file_fully_readable(path, kChunks * kChunk, chunk_seed(0));
+    remount();
+    verify_file_fully_readable(path, kChunks * kChunk, chunk_seed(0));
+}
+
 /* fs_sync must put the directory metadata ON MEDIA before returning. The
  * subtlety (which the first version of this test got wrong): the dir entry's
  * NAME reaches media early — the dir sector gets evicted-and-committed as a

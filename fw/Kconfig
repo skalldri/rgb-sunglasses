@@ -109,16 +109,23 @@ config APP_CAPTURE_QUEUE_FRAMES
 	  Buffering between the DSP thread and the capture writer. A flash sector
 	  erase stalls the writer for hundreds of ms, and anything not buffered
 	  across that stall is a dropped block. 8 blocks is ~256 ms. The recorder
-	  reports its drop count, so raise this if a capture reports drops rather
-	  than guessing.
+	  reports its drop count, so raise this if a capture reports BURSTY drops
+	  rather than guessing — but note depth cannot fix a SUSTAINED deficit:
+	  with FS_FATFS_REENTRANT (issue #380) a capture during GLIM playback
+	  runs the writer at ~82% of realtime for the whole recording, and a
+	  measured 8 -> 16 A/B only moved 112/625 dropped blocks to 88/625 for
+	  +8 KB RAM (reverted; matches the drain-loop precedent documented in
+	  sound.cpp). That contention wants fixing at the source — batching, the
+	  post-#377 sync-cadence work — not buffering.
 
 config APP_CAPTURE_THREAD_STACK_SIZE
 	int "Capture worker stack size"
-	default 4096
+	default 5120
 	depends on APP_CAPTURE
 	help
 	  Sized for FATFS writes on the capture path, matching the SMP workqueue
-	  which was raised to 4096 for the same reason.
+	  which was raised to 4096 for the same reason; +1 KB on top of that for
+	  FS_FATFS_LFN_MODE_STACK's ~512 B per-call LFN buffer (issue #380).
 
 config APP_CAPTURE_THREAD_PRIORITY
 	int "Capture worker thread priority"
@@ -740,12 +747,14 @@ config APP_COREDUMP_MANAGER_INIT_PRIORITY
 
 config APP_COREDUMP_WORKQ_STACK_SIZE
 	int "Stack size for the coredump manager workqueue"
-	default 3072
+	default 4096
 	depends on APP_COREDUMP_MANAGER
 	help
 	  The coredump manager does FAT filesystem I/O (fs_opendir/fs_write)
 	  from its own workqueue; FATFS calls are stack-hungry (fatfs reformat
 	  was measured at ~5 KB), so the 2 KB system workqueue is not used.
+	  Raised 3072 -> 4096 for FS_FATFS_LFN_MODE_STACK's ~512 B per-call LFN
+	  buffer (issue #380).
 
 config APP_COREDUMP_MAX_FILES
 	int "Maximum core_NNNN.bin files kept on /NAND:/coredump"
@@ -965,11 +974,15 @@ config APP_PATTERN_CONTROLLER_THREAD_PRIORITY
 
 config APP_PATTERN_CONTROLLER_THREAD_STACK_SIZE
 	int "Pattern controller (render) thread stack size (bytes)"
-	default 4096
+	default 5120
 	help
 	  Kernel-only stack (K_KERNEL_THREAD_DEFINE). Extension code runs on the
 	  extension host's own K_USER sandbox thread, never on this one, so this
 	  stack never needs the CONFIG_USERSPACE privileged reservation.
+	  Raised 4096 -> 5120 for FS_FATFS_LFN_MODE_STACK's ~512 B per-call LFN
+	  frame (issue #380): this thread is a deep FatFS caller — GLIM fs_open
+	  and per-frame reads, plus .llext loads (llext_load -> fs_loader
+	  fs_open) and the boot-time registry dir walks.
 
 config APP_BT_THREAD_PRIORITY
 	int "Application Bluetooth state-machine thread priority"

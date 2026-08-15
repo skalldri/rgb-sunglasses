@@ -126,9 +126,74 @@ int storage_fat_corrupt_boot_sector(void) {
 
 #if defined(CONFIG_SHELL) && defined(CONFIG_FILE_SYSTEM_MKFS)
 
+#if defined(CONFIG_APP_CAPTURE)
+#include "sound/capture.h"
+#endif
+#if defined(CONFIG_ANIMATION_GLIM_PLAYER)
+#include "animations/animation_types.h"
+#include "pattern_controller.h"
+#endif
+
+/* HAZARD (issue #380 follow-up, CONFIG_FS_FATFS_REENTRANT): a runtime
+ * unmount/remount re-initializes the per-volume FatFS mutex out from under
+ * any in-flight FS user — f_mount() calls ff_mutex_create() unconditionally,
+ * and Zephyr's glue is a bare k_mutex_init(), which wipes the owner AND the
+ * wait queue. A thread queued on the mutex (K_FOREVER — e.g. the coredump
+ * wq's 60 s fs_stat tick, or a GLIM frame read) is orphaned and never wakes;
+ * a thread holding it gets -EPERM from its eventual unlock and keeps any
+ * inherited priority forever. Before reentrancy this race "only" corrupted
+ * data; now it can hang a thread permanently.
+ *
+ * The guards below cover the two long-running FS users visible from here —
+ * an active capture, and GLIM playback (per-frame fs_read on the render
+ * thread, the device's NORMAL state whenever a GLIM animation plays; without
+ * this gate a reformat during playback orphans the render thread and the
+ * LEDs freeze until a manual reset, with the shell printing "Done"). Both
+ * checks are ADVISORY, not airtight: they are check-then-act (a BLE
+ * `capture start` or animation switch can land between the check and the
+ * unmount), and other FS users (mcumgr, a second shell) are not visible from
+ * here at all — the mutex is FatFS-internal and true idleness cannot be
+ * tested. Operator rule stands: do not reformat while anything is using
+ * /NAND:. */
+static bool fat_volume_busy(const struct shell *sh) {
+#if defined(CONFIG_APP_CAPTURE)
+    if (capture_is_recording()) {
+        shell_error(sh, "Refusing: a capture is recording to %s.", fat_mnt.mnt_point);
+        shell_print(sh, "A remount re-initializes the FatFS volume mutex under the");
+        shell_print(sh, "writer (permanent-hang hazard). `capture stop` first.");
+        return true;
+    }
+#endif
+#if defined(CONFIG_ANIMATION_GLIM_PLAYER)
+    if (pattern_controller_get_current_animation() == Animation::GlimPlayer) {
+        shell_error(sh, "Refusing: GLIM playback is reading %s every frame.", fat_mnt.mnt_point);
+        shell_print(sh, "A remount re-initializes the FatFS volume mutex under the render");
+        shell_print(sh, "thread (it would freeze permanently). Switch animations first.");
+        return true;
+    }
+#endif
+    /* The bootloader updater interleaves fs_read of /NAND:/mcuboot.bin with
+     * internal-flash writes; fs_unmount succeeds with that file open and
+     * leaves MCUboot half-written (same guard `fatfs corrupt` has carried
+     * since it existed — review pointed out reformat was missing it). */
+    const struct McubootUpdaterStatus updater = mcuboot_updater_get_status();
+    if (updater.state != MCUBOOT_UPDATER_LOCKED && updater.state != MCUBOOT_UPDATER_IDLE) {
+        shell_error(sh, "Refusing: MCUboot updater is busy (state %d).", (int)updater.state);
+        shell_print(sh, "A bootloader commit reads /NAND:/mcuboot.bin page by page; pulling");
+        shell_print(sh, "the filesystem out from under it can leave MCUboot half-written.");
+        shell_print(sh, "Wait for it to finish, or `mcuboot_update abort`, then retry.");
+        return true;
+    }
+    return false;
+}
+
 static int cmd_storage_reformat(const struct shell *sh, size_t argc, char **argv) {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
+
+    if (fat_volume_busy(sh)) {
+        return -EBUSY;
+    }
 
     shell_warn(sh, "Reformatting %s — all files will be erased.", fat_mnt.mnt_point);
 
@@ -198,18 +263,20 @@ static int cmd_storage_corrupt(const struct shell *sh, size_t argc, char **argv)
         return -EINVAL;
     }
 
-    /* Refuse while the bootloader updater owns /NAND:. commit_work_handler() interleaves
-     * fs_read() of /NAND:/mcuboot.bin with erase/write of the internal MCUboot partition,
-     * page by page, driven by the app over BLE — invisible to whoever is typing here.
-     * fs_unmount() succeeds with that file open and invalidates the FIL, so the next
-     * fs_read fails AFTER pages 1..p-1 of the bootloader have been rewritten, leaving
-     * MCUboot half-updated and the board dependent on J-Link or serial recovery. */
-    const struct McubootUpdaterStatus updater = mcuboot_updater_get_status();
-    if (updater.state != MCUBOOT_UPDATER_LOCKED && updater.state != MCUBOOT_UPDATER_IDLE) {
-        shell_error(sh, "Refusing: MCUboot updater is busy (state %d).", (int)updater.state);
-        shell_print(sh, "A bootloader commit reads /NAND:/mcuboot.bin page by page; pulling");
-        shell_print(sh, "the filesystem out from under it can leave MCUboot half-written.");
-        shell_print(sh, "Wait for it to finish, or `mcuboot_update abort`, then retry.");
+    /* Shared busy gate (capture / GLIM playback / MCUboot updater — see
+     * fat_volume_busy above; its MCUboot arm carries the original rationale:
+     * commit_work_handler() interleaves fs_read() of /NAND:/mcuboot.bin with
+     * internal-flash writes, and fs_unmount() succeeding mid-commit leaves
+     * MCUboot half-written). Deliberately AFTER the confirm-argument check,
+     * so `fatfs corrupt` with no args always prints the usage text — that
+     * text carries the unmount-the-host-disk-first instruction that decides
+     * whether the test silently passes (review finding: the first revision's
+     * pre-args gate made the usage unreachable during a capture).
+     *
+     * Note the success path below leaves the volume UNMOUNTED and never
+     * calls fs_mount(), so it does not hit the volume-mutex re-init hazard —
+     * only the two fs_mount() ERROR paths further down do. */
+    if (fat_volume_busy(sh)) {
         return -EBUSY;
     }
 

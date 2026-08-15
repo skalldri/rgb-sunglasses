@@ -104,10 +104,19 @@ the on-device capture is what settles it.)
 
 ## Stack sizes
 
+**FatFS entry points cost ~512 B of caller stack since issue #380's
+reentrancy change**: `CONFIG_FS_FATFS_LFN_MODE_STACK` (required to unlock
+`CONFIG_FS_FATFS_REENTRANT`) frames the `(FF_MAX_LFN+1)*2`-byte LFN buffer on
+the stack of whichever thread calls a path-taking FatFS API (`fs_open`,
+`fs_stat`, `fs_unlink`, `fs_readdir`, `fs_mkdir`, `fs_rename`...). Size any
+new fs-calling thread with that in mind; the capture worker, coredump wq and
+pattern controller bumps below are this cost landing.
+
 | Thread | Kconfig symbol | Default |
 | --- | --- | ---: |
 | `led_display_thread` | `CONFIG_APP_LED_DISPLAY_THREAD_STACK_SIZE` | 4096 |
-| `pattern_controller_thread` | `CONFIG_APP_PATTERN_CONTROLLER_THREAD_STACK_SIZE` | 4096 |
+| `pattern_controller_thread` | `CONFIG_APP_PATTERN_CONTROLLER_THREAD_STACK_SIZE` | 5120 |
+| `capture_worker_thread` | `CONFIG_APP_CAPTURE_THREAD_STACK_SIZE` | 5120 |
 | `bt_thread` | `CONFIG_APP_BT_THREAD_STACK_SIZE` | 2048 |
 | `status_led_thread` | `CONFIG_APP_STATUS_LED_THREAD_STACK_SIZE` | 2048 |
 | `audio_dsp_thread` | `CONFIG_APP_AUDIO_DSP_THREAD_STACK_SIZE` | 2048 |
@@ -129,7 +138,7 @@ only ~376 B of the old 2,048 B default — the same stack a 2,048-byte
 `fs_mgmt` chunk array once overflowed with a board-resetting crash (see the
 `DL_CHUNK_SIZE` comment in the proto0 conf). Set in
 `fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`.
-| coredump manager wq | `CONFIG_APP_COREDUMP_WORKQ_STACK_SIZE` | 3072 |
+| coredump manager wq | `CONFIG_APP_COREDUMP_WORKQ_STACK_SIZE` | 4096 |
 | MCUboot updater wq | `CONFIG_APP_MCUBOOT_UPDATER_STACK_SIZE` | 4096 |
 | TPS25750 wq | `CONFIG_TPS25750_WORKQ_STACK_SIZE` | 1024 |
 
@@ -218,6 +227,29 @@ Not machine-checkable, but equally binding: **the TPS25750 workqueue must rank b
 rendering threads.** It runs multi-step CMD1/DATA1 bridge transactions under the driver's
 task mutex and can hold the CPU for a while. It cannot be asserted in the driver, which is
 built standalone in two test suites and does not see the application's symbols.
+
+### The FatFS volume mutex can temporarily hoist FS workers above the render band
+
+Since issue #380's `CONFIG_FS_FATFS_REENTRANT`, every FatFS entry takes a per-volume
+`k_mutex` — with priority inheritance. If a render-band thread (e.g.
+`pattern_controller` at 4 doing a GLIM `fs_read`, or `mcumgr smp` at 3) blocks on the
+volume mutex while a priority-14 FS worker (capture worker, coredump wq) holds it
+mid-`f_write`, the worker is **boosted to the blocker's priority for the remainder of
+that one FatFS call** — including the flashdisk erase/program it wraps. That window is
+**not bounded**: the erase/program completion waits are `k_sem_take(..., K_FOREVER)` and
+an uncapped WIP poll (`nrf_qspi_nor.c`), and `CONFIG_NORDIC_QSPI_NOR_TIMEOUT_MS` bounds
+only nrfx's peripheral-readiness spin, not these (see that symbol's comment in the
+proto0 conf — the two must not drift apart again). A single `f_write` can also drive
+several erase+program cycles under the one held mutex (data page, FAT page, dir page),
+so even the typical window is a multiple of one flash op. Priority inheritance
+therefore bounds the *inversion*, not the *duration*; a wedged part holds the mutex —
+and the boosted priority — indefinitely. It is still the price of metadata
+consistency, and it means the "FS workqueues sit at the bottom" invariant above is a
+*steady-state* property, not an instantaneous one — the BUILD_ASSERTs cannot see it.
+The blocked caller freezes for the same window: a GLIM frame read landing mid-erase
+misses frame deadlines rather than reading torn metadata, which is the intended trade
+(measured during a capture with `4096.glim` streaming: ~12 missed ticks per 5 s and
+14-18% of capture blocks dropped — a sustained-rate cost, not a transient one).
 
 ### The extension sandbox's scheduling latency is unbounded — by design
 

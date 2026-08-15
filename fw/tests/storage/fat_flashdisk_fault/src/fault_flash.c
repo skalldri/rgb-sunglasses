@@ -29,7 +29,20 @@ static struct {
 	off_t win_start;
 	size_t win_len;
 	unsigned int injected;
+	unsigned int op_delay_ms;
 } fault;
+
+void fault_flash_set_op_delay_ms(unsigned int ms)
+{
+	fault.op_delay_ms = ms;
+}
+
+static void op_delay(void)
+{
+	if (fault.op_delay_ms != 0) {
+		k_msleep(fault.op_delay_ms);
+	}
+}
 
 void fault_flash_arm(unsigned int op_mask, unsigned int count, off_t win_start, size_t win_len)
 {
@@ -43,6 +56,7 @@ void fault_flash_arm(unsigned int op_mask, unsigned int count, off_t win_start, 
 void fault_flash_disarm(void)
 {
 	fault_flash_arm(0, 0, 0, 0);
+	fault.op_delay_ms = 0;
 }
 
 unsigned int fault_flash_injected(void)
@@ -73,6 +87,7 @@ static bool in_bounds(off_t offset, size_t len)
 static int fault_flash_read(const struct device *dev, off_t offset, void *data, size_t len)
 {
 	ARG_UNUSED(dev);
+	op_delay();
 	if (!in_bounds(offset, len)) {
 		return -EINVAL;
 	}
@@ -86,6 +101,7 @@ static int fault_flash_read(const struct device *dev, off_t offset, void *data, 
 static int fault_flash_write(const struct device *dev, off_t offset, const void *data, size_t len)
 {
 	ARG_UNUSED(dev);
+	op_delay();
 	if (!in_bounds(offset, len) || (offset % WRITE_BLOCK) != 0 || (len % WRITE_BLOCK) != 0) {
 		return -EINVAL;
 	}
@@ -112,6 +128,7 @@ static int fault_flash_write(const struct device *dev, off_t offset, const void 
 static int fault_flash_erase(const struct device *dev, off_t offset, size_t size)
 {
 	ARG_UNUSED(dev);
+	op_delay();
 	if (!in_bounds(offset, size) || (offset % ERASE_BLOCK) != 0 || (size % ERASE_BLOCK) != 0) {
 		return -EINVAL;
 	}
