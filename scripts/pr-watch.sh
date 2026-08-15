@@ -16,102 +16,182 @@
 #      comment, including the review comments an automated reviewer posts in
 #      response to this very monitor — so an updatedAt-keyed watcher reviews a
 #      PR, bumps its own timestamp, and loops forever. A head-SHA change only
-#      happens when someone pushes code.
+#      happens when the branch moves.
+#
+#      Known limits of that choice, both accepted: a base-branch retarget or an
+#      "Update branch"/merge-queue sync moves (or fails to move) the head
+#      without matching author intent, so this can review a merge commit nobody
+#      wrote, and will miss a retarget that changes the whole diff. Neither is
+#      worth reintroducing the self-trigger loop to catch.
 #
 #   2. Pushes are debounced by one poll cycle: a changed SHA must survive one
 #      full interval before it fires. Authors push fixes in bursts (and rebase,
 #      then fixup), and a high-effort review costs real time and tokens; this
-#      collapses a burst into one review of the settled state.
+#      collapses a burst into one review of the settled state. Newly-seen PRs
+#      settle the same way, so open-then-immediately-fixup is one review too.
 #
 # Usage:
 #   scripts/pr-watch.sh [--repo OWNER/NAME] [--poll SECONDS] [--state-dir DIR]
+#                       [--limit N] [--skip-drafts]
 #   scripts/pr-watch.sh --self-test      # offline check of the state machine
-#
-# Events emitted on stdout:
-#   PR-WATCH: armed on <repo> — ...
-#   NEW PR #<n> by <author> [<branch>]<draft>: <title>
-#   UPDATED PR #<n> by <author> [<branch>]: <title> (head <old> -> <new>)
-#   PR-WATCH WARNING: 5 consecutive 'gh pr list' failures — ...
-#   PR-WATCH ERROR: ... (monitor exits)
-#
-# Silence is never success here: a broken `gh` surfaces as a WARNING event
-# rather than a monitor that has quietly stopped noticing PRs.
 set -uo pipefail
 
 POLL="${PR_WATCH_POLL:-60}"
 STATE_DIR="${PR_WATCH_STATE_DIR:-}"
+LIMIT="${PR_WATCH_LIMIT:-100}"
+SKIP_DRAFTS=0
 REPO=""
 SELF_TEST=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo)       REPO="${2:?--repo needs OWNER/NAME}"; shift 2 ;;
-    --poll)       POLL="${2:?--poll needs SECONDS}"; shift 2 ;;
-    --state-dir)  STATE_DIR="${2:?--state-dir needs DIR}"; shift 2 ;;
-    --self-test)  SELF_TEST=1; shift ;;
-    -h|--help)    sed -n '2,40p' "$0"; exit 0 ;;
+    --repo)        REPO="${2:?--repo needs OWNER/NAME}"; shift 2 ;;
+    --poll)        POLL="${2:?--poll needs SECONDS}"; shift 2 ;;
+    --state-dir)   STATE_DIR="${2:?--state-dir needs DIR}"; shift 2 ;;
+    --limit)       LIMIT="${2:?--limit needs N}"; shift 2 ;;
+    --skip-drafts) SKIP_DRAFTS=1; shift ;;
+    --self-test)   SELF_TEST=1; shift ;;
+    -h|--help)     sed -n '2,45p' "$0"; exit 0 ;;
     *) echo "PR-WATCH ERROR: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
 
-# ---------------------------------------------------------------- state files
-# "<pr number> <sha>" per line. STATE = last SHA reported for that PR.
-# PEND = a changed SHA seen once, waiting one cycle to settle.
+# A non-numeric or zero poll turns the loop into a `gh` busy-spin, which reads
+# as "the watcher is working" right up until the rate limit.
+case "$POLL" in
+  ''|*[!0-9]*) echo "PR-WATCH ERROR: --poll must be a whole number of seconds, got '$POLL'"; exit 2 ;;
+esac
+[ "$POLL" -lt 1 ] && { echo "PR-WATCH ERROR: --poll must be >= 1, got '$POLL'"; exit 2; }
+case "$LIMIT" in
+  ''|*[!0-9]*) echo "PR-WATCH ERROR: --limit must be a whole number, got '$LIMIT'"; exit 2 ;;
+esac
+[ "$LIMIT" -lt 1 ] && { echo "PR-WATCH ERROR: --limit must be >= 1, got '$LIMIT'"; exit 2; }
 
-lookup() { # lookup <num> <file>
-  grep -m1 "^$1 " "$2" 2>/dev/null | awk '{print $2}'
+# ---------------------------------------------------------------- state files
+# STATE: "<num> <sha> <draft>" — last state reported for that PR.
+# PEND:  "<num> <sha>"         — a change seen once, waiting a cycle to settle.
+#                                A PEND entry with no STATE entry is a new PR.
+
+field() { # field <num> <file> <n>
+  grep -m1 "^$1 " "$2" 2>/dev/null | awk -v n="$3" '{print $n}'
 }
-upsert() { # upsert <file> <num> <sha>
-  { grep -v "^$2 " "$1" 2>/dev/null || true; echo "$2 $3"; } > "$1.tmp" && mv "$1.tmp" "$1"
+lookup()       { field "$1" "$2" 2; }
+lookup_draft() { field "$1" "$2" 3; }
+upsert() { # upsert <file> <num> <rest...>
+  local f="$1" num="$2"; shift 2
+  { grep -v "^$num " "$f" 2>/dev/null || true; echo "$num $*"; } > "$f.tmp" && mv "$f.tmp" "$f"
 }
 drop() { # drop <num> <file>
   { grep -v "^$1 " "$2" 2>/dev/null || true; } > "$2.tmp" && mv "$2.tmp" "$2"
 }
 
-# Decide what a single observation of (num, sha) means, and update state.
-# Echoes the event kind: NEW | UPDATED <oldsha> | (nothing, if silent).
-classify() { # classify <num> <sha>
-  local num="$1" sha="$2" known
+# Decide what one observation of (num, sha, draft) means, and update state.
+# Echoes: NEW | UPDATED <oldsha> | READY | (nothing, if silent).
+classify() { # classify <num> <sha> <draft>
+  local num="$1" sha="$2" draft="$3" known known_draft
   known=$(lookup "$num" "$STATE")
+
   if [ -z "$known" ]; then
-    upsert "$STATE" "$num" "$sha"
+    # Unseen PR. Settle one cycle, so an open-then-fixup is a single review.
+    if [ "$(lookup "$num" "$PEND")" != "$sha" ]; then
+      upsert "$PEND" "$num" "$sha"
+      return
+    fi
+    drop "$num" "$PEND"
+    if [ "$SKIP_DRAFTS" = 1 ] && [ "$draft" = "true" ]; then
+      upsert "$STATE" "$num" "$sha" "$draft"   # tracked, deliberately unreported
+      return
+    fi
+    upsert "$STATE" "$num" "$sha" "$draft"
     echo "NEW"
-  elif [ "$known" != "$sha" ]; then
+    return
+  fi
+
+  known_draft=$(lookup_draft "$num" "$STATE")
+
+  # A draft marked ready-for-review changes no SHA. Only meaningful when we
+  # skipped it on open; otherwise it was already reported as NEW.
+  if [ "$SKIP_DRAFTS" = 1 ] && [ "$known_draft" = "true" ] && [ "$draft" != "true" ]; then
+    upsert "$STATE" "$num" "$sha" "$draft"
+    drop "$num" "$PEND"
+    echo "READY"
+    return
+  fi
+
+  if [ "$known" != "$sha" ]; then
     if [ "$(lookup "$num" "$PEND")" = "$sha" ]; then
-      upsert "$STATE" "$num" "$sha"
+      upsert "$STATE" "$num" "$sha" "$draft"
       drop "$num" "$PEND"
       echo "UPDATED $known"
     else
-      upsert "$PEND" "$num" "$sha"   # settle one cycle before firing
+      upsert "$PEND" "$num" "$sha"
     fi
   else
-    drop "$num" "$PEND"              # pushed then reverted within a cycle
+    [ "$known_draft" != "$draft" ] && upsert "$STATE" "$num" "$sha" "$draft"
+    drop "$num" "$PEND"   # pushed then reverted inside one cycle
   fi
 }
 
+# Forget PRs that are no longer open. Without this, a closed-then-reopened PR
+# whose head never moved matches its own stale entry and never fires again —
+# and state grows without bound.
+prune() { # prune <space-separated list of currently-open numbers>
+  local seen=" $1 " f
+  for f in "$STATE" "$PEND"; do
+    while read -r num rest; do
+      [ -z "${num:-}" ] && continue
+      case "$seen" in *" $num "*) echo "$num $rest" ;; esac
+    done < "$f" > "$f.tmp"
+    mv "$f.tmp" "$f"
+  done
+}
+
 # ------------------------------------------------------------------ self-test
-# Runs the state machine offline against the cases that have actually bitten:
-# a burst of pushes inside one cycle, and a push-then-revert.
 if [ "$SELF_TEST" = 1 ]; then
   STATE=$(mktemp); PEND=$(mktemp)
   trap 'rm -f "$STATE" "$PEND" "$STATE.tmp" "$PEND.tmp"' EXIT
-  printf '10 aaaa\n' > "$STATE"; : > "$PEND"
   fail=0
   check() { # check <label> <expected> <actual>
     if [ "$2" = "$3" ]; then echo "  ok   $1"; else echo "  FAIL $1: expected '$2', got '$3'"; fail=1; fi
   }
-  check "unchanged is silent"            ""             "$(classify 10 aaaa)"
-  check "push does not fire immediately" ""             "$(classify 10 bbbb)"
-  check "push fires once settled"        "UPDATED aaaa" "$(classify 10 bbbb)"
-  check "settled push is then silent"    ""             "$(classify 10 bbbb)"
-  check "burst: first sha silent"        ""             "$(classify 10 cccc)"
-  check "burst: second sha silent"       ""             "$(classify 10 dddd)"
-  check "burst: fires once, final sha"   "UPDATED bbbb" "$(classify 10 dddd)"
-  check "push then revert is silent"     ""             "$(classify 10 eeee)"
-  check "revert leaves no pending fire"  ""             "$(classify 10 dddd)"
-  check "unseen PR is NEW"               "NEW"          "$(classify 11 ffff)"
-  check "new PR then silent"             ""             "$(classify 11 ffff)"
-  check "pending file drained"           ""             "$(cat "$PEND")"
+
+  printf '10 aaaa false\n' > "$STATE"; : > "$PEND"
+  check "unchanged is silent"            ""             "$(classify 10 aaaa false)"
+  check "push does not fire immediately" ""             "$(classify 10 bbbb false)"
+  check "push fires once settled"        "UPDATED aaaa" "$(classify 10 bbbb false)"
+  check "settled push is then silent"    ""             "$(classify 10 bbbb false)"
+  check "burst: first sha silent"        ""             "$(classify 10 cccc false)"
+  check "burst: second sha silent"       ""             "$(classify 10 dddd false)"
+  check "burst: fires once, final sha"   "UPDATED bbbb" "$(classify 10 dddd false)"
+  check "push then revert is silent"     ""             "$(classify 10 eeee false)"
+  check "revert leaves no pending fire"  ""             "$(classify 10 dddd false)"
+
+  check "unseen PR settles first"        ""             "$(classify 11 ffff false)"
+  check "unseen PR fires once settled"   "NEW"          "$(classify 11 ffff false)"
+  check "new PR then silent"             ""             "$(classify 11 ffff false)"
+  check "open-then-fixup is one NEW"     ""             "$(classify 12 aa11 false)"
+  check "  (fixup lands mid-settle)"     ""             "$(classify 12 bb22 false)"
+  check "  (fires once, at final sha)"   "NEW"          "$(classify 12 bb22 false)"
+
+  SKIP_DRAFTS=1
+  check "draft settles"                  ""             "$(classify 20 dr01 true)"
+  check "draft is not reported"          ""             "$(classify 20 dr01 true)"
+  check "draft->ready fires READY"       "READY"        "$(classify 20 dr01 false)"
+  check "ready then silent"              ""             "$(classify 20 dr01 false)"
+  SKIP_DRAFTS=0
+
+  # Closed-then-reopened at an unchanged head must still fire.
+  printf '30 cafe false\n' > "$STATE"; : > "$PEND"
+  prune ""
+  check "prune drops closed PR"          ""             "$(cat "$STATE")"
+  check "reopened settles"               ""             "$(classify 30 cafe false)"
+  check "reopened fires NEW"             "NEW"          "$(classify 30 cafe false)"
+
+  # A newline in a title used to split one record into two and write a
+  # number-less line no helper could ever remove.
+  printf '40 beef false\n' > "$STATE"; : > "$PEND"
+  check "prune keeps open PR"            "40 beef false" "$(prune "40"; cat "$STATE")"
+
   [ "$fail" = 0 ] && echo "self-test: PASS" || echo "self-test: FAIL"
   exit "$fail"
 fi
@@ -132,40 +212,75 @@ mkdir -p "$STATE_DIR" || { echo "PR-WATCH ERROR: cannot create $STATE_DIR"; exit
 STATE="$STATE_DIR/state"
 PEND="$STATE_DIR/pending"
 
-QUERY='.[] | "\(.number)\t\(.headRefOid)\t\(.author.login)\t\(.headRefName)\t\(.isDraft)\t\(.title)"'
+# The state files are read-modify-written non-atomically, so two watchers on
+# one repo would interleave and lose events. mkdir is the atomic primitive.
+LOCK="$STATE_DIR/lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  other=$(cat "$LOCK/pid" 2>/dev/null || echo "?")
+  if [ "$other" != "?" ] && kill -0 "$other" 2>/dev/null; then
+    echo "PR-WATCH ERROR: another watcher (pid $other) already owns $STATE_DIR — exiting"
+    exit 1
+  fi
+  echo "PR-WATCH: reclaiming stale lock from pid $other"
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT INT TERM
+
+QUERY='.[] | "\(.number)\t\(.headRefOid)\t\(.isDraft)\t\(.author.login)\t\(.headRefName)\t\(.title)"'
 
 # Baseline: every currently-open PR at its current head, so nothing already
-# open fires until it is pushed to again. Re-arming re-baselines — a push that
-# landed while the monitor was down is absorbed, not reported.
-: > "$PEND"
-if ! gh pr list --repo "$REPO" --state open --limit 100 --json number,headRefOid \
-      -q '.[] | "\(.number) \(.headRefOid)"' > "$STATE" 2>/dev/null; then
+# open fires until it changes. Re-arming re-baselines — a push that landed
+# while the monitor was down is absorbed, not reported.
+if ! gh pr list --repo "$REPO" --state open --limit "$LIMIT" --json number,headRefOid,isDraft \
+      -q '.[] | "\(.number) \(.headRefOid) \(.isDraft)"' > "$STATE" 2>/dev/null; then
   echo "PR-WATCH ERROR: baseline query failed (gh auth?) — monitor exiting"
   exit 1
 fi
-echo "PR-WATCH: armed on $REPO — new PRs + pushes to $(wc -l < "$STATE" | tr -d ' ') open PR(s), ${POLL}s poll, 1-cycle push debounce"
+: > "$PEND"
+echo "PR-WATCH: armed on $REPO — new PRs + pushes to $(wc -l < "$STATE" | tr -d ' ') open PR(s), ${POLL}s poll, 1-cycle debounce$([ "$SKIP_DRAFTS" = 1 ] && echo ', drafts deferred')"
 
 fails=0
+truncated_warned=0
 while true; do
-  if cur=$(gh pr list --repo "$REPO" --state open --limit 100 \
-             --json number,headRefOid,author,headRefName,isDraft,title -q "$QUERY" 2>/dev/null); then
+  if cur=$(gh pr list --repo "$REPO" --state open --limit "$LIMIT" \
+             --json number,headRefOid,isDraft,author,headRefName,title -q "$QUERY" 2>/dev/null); then
     [ "$fails" -ge 5 ] && echo "PR-WATCH: recovered, polling again"
     fails=0
-    while IFS=$'\t' read -r num sha author branch draft title; do
-      [ -z "$num" ] && continue
-      verdict=$(classify "$num" "$sha")
+
+    open_nums=""
+    while IFS=$'\t' read -r num sha draft author branch title; do
+      # A newline inside a title splits one record in two. Skip the orphan
+      # rather than writing a key-less line into state that nothing can remove.
+      case "${num:-}" in ''|*[!0-9]*) continue ;; esac
+      open_nums="$open_nums $num"
+      verdict=$(classify "$num" "$sha" "$draft")
       case "$verdict" in
         NEW)
           [ "$draft" = "true" ] && d=" (draft)" || d=""
           echo "NEW PR #$num by $author [$branch]$d: $title" ;;
+        READY)
+          echo "READY PR #$num by $author [$branch]: $title (draft marked ready)" ;;
         UPDATED*)
           old="${verdict#UPDATED }"
           echo "UPDATED PR #$num by $author [$branch]: $title (head ${old:0:8} -> ${sha:0:8})" ;;
       esac
     done <<< "$cur"
+
+    prune "${open_nums# }"
+
+    # A silent cap reads as "covered everything" when it isn't.
+    count=$(printf '%s\n' $open_nums | grep -c . || true)
+    if [ "$count" -ge "$LIMIT" ] && [ "$truncated_warned" = 0 ]; then
+      truncated_warned=1
+      echo "PR-WATCH WARNING: $count open PRs hit the --limit $LIMIT window — PRs outside it are not watched"
+    fi
   else
     fails=$((fails + 1))
-    [ "$fails" -eq 5 ] && echo "PR-WATCH WARNING: 5 consecutive 'gh pr list' failures — PR polling may be broken"
+    # Re-warn periodically: a watcher that warned once an hour ago and has been
+    # dead since is indistinguishable from a quiet repo.
+    if [ "$fails" = 5 ] || { [ "$fails" -gt 5 ] && [ $(( fails % 30 )) = 0 ]; }; then
+      echo "PR-WATCH WARNING: $fails consecutive 'gh pr list' failures — PR polling is broken"
+    fi
   fi
   sleep "$POLL"
 done

@@ -1,7 +1,7 @@
 ---
 name: pr-review-watch
 description: "Stand up a session that watches GitHub for new PRs and pushes to open PRs, and automatically code-reviews each one with a parallel agent that posts findings to the PR. Use for unattended/continuous PR review, babysitting a stack of in-flight PRs, or any 'review PRs as they come in' request."
-allowed-tools: Bash(scripts/pr-watch.sh *), Bash(gh:*)
+allowed-tools: Monitor, Agent, Skill, TaskStop, Bash(scripts/pr-watch.sh *), Bash(gh:*)
 ---
 
 Continuous PR review: a `Monitor` watches GitHub, and every event spawns a
@@ -10,8 +10,16 @@ isolated worktrees, so a burst of PRs is reviewed concurrently instead of
 queueing behind whichever review is in flight.
 
 This skill is the workflow. `scripts/pr-watch.sh` is the watcher; `/code-review`
-does the actual reviewing. Neither needs hardware, so **no `hw-lock` is
-required** — but see § 6 before letting a review touch the board.
+does the actual reviewing. Neither drives hardware.
+
+**That does not mean you can skip the hardware locks.** The `PreToolUse` guard
+matches on command *text*, so a read-only command that merely contains `adb`,
+`mcumgr`, `JLinkExe`, etc. is denied without the lock — grepping a hook file or
+a doc that mentions them is enough to trip it (root `CLAUDE.md` § "Hardware
+locking" documents this; it was hit while reviewing this very skill). Reviews of
+firmware PRs routinely read such files. Either avoid the tokens (Read/Grep tools
+rather than shell), or take the lock deliberately — do not tell an agent that no
+lock is ever needed.
 
 ## 1. Arm the watcher
 
@@ -26,8 +34,16 @@ NEW PR #383 by skalldri [fix-380-fatfs-reentrant]: fw: serialize FatFS access (#
 UPDATED PR #377 by skalldri [capture-audio-sidecar]: sound: ... (head 57545a20 -> 6ad8b144)
 ```
 
-Flags: `--repo OWNER/NAME`, `--poll SECONDS` (default 60), `--state-dir DIR`.
-`--self-test` exercises the state machine offline — run it after any edit.
+Flags: `--repo OWNER/NAME`, `--poll SECONDS` (default 60), `--state-dir DIR`,
+`--limit N` (default 100 open PRs; it warns rather than truncating silently),
+`--skip-drafts` (defer drafts, then fire `READY` when one is marked ready for
+review). `--self-test` exercises the state machine offline — run it after any
+edit; it covers the burst, revert, open-then-fixup, draft→ready, and
+closed-then-reopened cases.
+
+One watcher per repo: the state files are read-modify-written non-atomically,
+so a second instance would interleave and lose events. The script takes an
+atomic `mkdir` lock on its state dir and reclaims it from a dead pid.
 
 **Already-open PRs never fire.** Baselining is what stops the arming of the
 monitor from kicking off a review of every open PR at once. If the user wants
@@ -92,7 +108,25 @@ actually check rather than assume the commit message.
 Ask for confirmation *by inspection*: "the commit says it fixed X" is not
 evidence. Verified arithmetic or a re-read of the changed lines is.
 
-## 4. Coalesce; never chase a stale head
+## 4. Review a stacked pair as a unit
+
+When PR B is based on PR A rather than `main` (this repo stacks routinely —
+#381 on #378, #383 on #382), two things go wrong if you review them separately:
+
+- **Diff the merge base, not `main`.** A base that is itself being pushed to
+  makes an agent report the *base's* changes as the PR's. Tell the agent the
+  base branch explicitly and have it report which merge base it used.
+- **A defect fixed by the sibling gets re-reported every round.** #378 carries a
+  render/display phase slip that only the stacked #381 fixes; two independent
+  agents found it, posted it, and had to delete their own comments. State the
+  sibling and the issue number in the prompt.
+
+The higher-value review is often of the *pair*: #382 adds a diagnostic behind a
+`K_FOREVER` lock, #383 serializes FatFS on top of it, and only together do they
+make that diagnostic unrunnable during the fault it diagnoses. Neither PR shows
+that alone.
+
+## 5. Coalesce; never chase a stale head
 
 Events can outrun reviews. When several are queued:
 
@@ -102,7 +136,7 @@ Events can outrun reviews. When several are queued:
 - Snapshot heads before fanning out:
   `gh pr list --state open --json number,headRefOid,title`
 
-## 5. Cost knobs
+## 6. Cost knobs
 
 A high-effort review per push is expensive, and an active author can push every
 few minutes. Offer these rather than silently burning the budget:
@@ -113,12 +147,17 @@ few minutes. Offer these rather than silently burning the budget:
 | Cheaper re-reviews | `medium` effort for `UPDATED`, `high` for `NEW` |
 | Narrow the scope | watch one label/author; filter in the `gh pr list` query |
 
-## 6. Pitfalls
+## 7. Pitfalls
 
 - **Never key the trigger on `updatedAt`.** It bumps on every comment,
   *including the review comments this workflow posts*, so the watcher
   re-triggers on its own output and loops forever. `headRefOid` only changes
-  on a push. The script is already correct; the danger is "improving" it.
+  when the branch moves. The danger is "improving" this back.
+- **`headRefOid` is not a perfect proxy for author intent**, and the script
+  accepts that. An "Update branch" / merge-queue sync moves the SHA with no
+  authored change (one wasted review); a base-branch retarget changes the whole
+  diff with no SHA move (one missed review). Watch for retargets by hand on a
+  stacked series; neither case justifies the `updatedAt` loop.
 - **`-f body=@file` posts the literal string `@file`.** Root `CLAUDE.md`
   § "GitHub PR review comments via `gh api`" has the full trap and the fix.
   It bit this workflow on 2026-08-15 (PR #377, 5 empty comments), which is why
@@ -140,7 +179,7 @@ few minutes. Offer these rather than silently burning the budget:
   the `board`/`app` locks (`/flash-and-verify`, `/e2e-test`) — never something
   a review agent does on its own.
 
-## 7. Stopping
+## 8. Stopping
 
 `TaskStop` the monitor task. Nothing else to clean up: state lives under
 `$TMPDIR`, and agent worktrees are removed automatically when unchanged.
