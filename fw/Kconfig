@@ -279,6 +279,26 @@ config APP_WASM3_MVP_WALL_BACKSTOP_MS
 	  for one later tick. It contains blocking code while the CPU budget contains
 	  spinning code. Detection may overshoot by at most 10 ms.
 
+config APP_WASM3_V2_PROTOTYPE
+	bool "Enable the RGBX v2 host ABI prototype"
+	default n
+	depends on APP_WASM3_MVP
+	help
+	  Adds the bounded RGBX v2 parameter and framebuffer-span imports to the
+	  otherwise-disabled Wasm3 experiment. This does not install, activate, or
+	  select a Wasm effect; production boards leave it off by default.
+
+config APP_WASM3_V2_ADMISSION_CPU_BUDGET_MS
+	int "RGBX v2 admission CPU budget (ms)"
+	default 250
+	range 2 490
+	depends on APP_WASM3_V2_PROTOTYPE
+	help
+	  CPU allowance for parsing, full compilation, linking, and rgbx_init. The
+	  steady-state tick keeps APP_WASM3_MVP_CPU_BUDGET_MS. Build assertions
+	  require this value to exceed the tick budget and remain below the wall
+	  backstop.
+
 config APP_PERSIST_BT_CONFIG
 	bool "Persist BT-settable configuration via the Settings subsystem"
 	default y

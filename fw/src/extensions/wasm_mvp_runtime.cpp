@@ -485,7 +485,8 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
     if (shared->profile == RuntimeProfile::V2) {
         IM3Function initFunction = nullptr;
         result = m3_FindFunction(&initFunction, runtime, kV2InitExport);
-        if (result != m3Err_none) {
+        if (result != m3Err_none || m3_GetArgCount(initFunction) != 0 ||
+            m3_GetRetCount(initFunction) != 0) {
             shared->status = SharedStatus::ExportLookupFailed;
             k_sem_give(&sDoneSem);
             return;
