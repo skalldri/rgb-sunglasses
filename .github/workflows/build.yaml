@@ -38,6 +38,12 @@ jobs:
       - name: Checkout (GitHub)
         uses: actions/checkout@v4
 
+      # Keep the checked-in interpreter snapshot pinned and reviewable. This
+      # test is deliberately offline: it verifies the source/license manifest
+      # and the recorded upstream revision and archive digest.
+      - name: Verify vendored Wasm3 snapshot
+        run: node fw/scripts/tests/test_wasm3_vendor.mjs
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
