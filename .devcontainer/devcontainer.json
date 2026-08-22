@@ -36,8 +36,15 @@
     // actual token/history/config data lives solely in the local `rgb-sunglasses-claude`
     // Docker volume on your machine and is never committed. Empty on first rebuild (log in
     // once); persists forever after. Paired with CLAUDE_CONFIG_DIR above.
+    //
+    // Same idea for the GitHub CLI: `gh` keeps its token in /root/.config/gh/hosts.yml, which
+    // is otherwise discarded on rebuild (forcing a `gh auth login` every time). The dedicated
+    // `rgb-sunglasses-gh` named volume keeps that config dir persistent. The token lives only
+    // in the local Docker volume, never committed. Empty on first rebuild after adding this —
+    // run `gh auth login` once, then it survives forever.
     "mounts": [
-        "source=rgb-sunglasses-claude,target=/root/.claude,type=volume"
+        "source=rgb-sunglasses-claude,target=/root/.claude,type=volume",
+        "source=rgb-sunglasses-gh,target=/root/.config/gh,type=volume"
     ],
     // Runs before the container starts. With Docker Desktop + "Clone in Container Volume",
     // this executes inside docker-desktop WSL2 (not on the Windows host), so we use a
