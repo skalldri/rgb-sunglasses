@@ -371,7 +371,7 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
         shared->pendingColor = 0;
         shared->status = SharedStatus::Empty;
 
-        result = m3_CallV(tickFunction, shared->requestElapsedMs);
+        result = m3_CallV(tickFunction, static_cast<int32_t>(shared->requestElapsedMs));
         if (result == m3Err_none && shared->fillCallCount == 1) {
             shared->committedColor = shared->pendingColor;
             shared->completedGeneration = generation;

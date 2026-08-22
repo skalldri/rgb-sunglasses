@@ -88,6 +88,7 @@ ZTEST(wasm_mvp_runtime, test_actual_wasm3_parse_compile_link_and_call) {
     expectGoodActivationAndTick(499, kExpectedCyan);
     expectGoodActivationAndTick(500, kExpectedMagenta);
     expectGoodActivationAndTick(1000, kExpectedCyan);
+    expectGoodActivationAndTick(UINT32_MAX, kExpectedCyan);
 }
 
 ZTEST(wasm_mvp_runtime, test_malformed_module_fails_then_good_module_recovers) {
