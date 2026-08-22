@@ -1,4 +1,5 @@
 #include <animations/wasm_mvp_module.h>
+#include <animations/plasma_v2_module.h>
 #include <extensions/wasm_mvp_runtime.h>
 #include <zephyr/ztest.h>
 
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -54,6 +56,63 @@ void expectV2Frame(const wasm_mvp_runtime::V2TickOutput& output, uint32_t timeMs
     zassert_true(output.cpuTimeUs <= CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS * 1000u);
     zassert_true(output.wallTimeUs <= CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS * 1000u);
     TC_PRINT("cpptest v2 tick: cpu %u us, wall %u us\n", output.cpuTimeUs, output.wallTimeUs);
+}
+
+uint8_t colorChannel(uint32_t color, uint32_t shift) {
+    return static_cast<uint8_t>((color >> shift) & 0xffu);
+}
+
+uint8_t plasmaLerp8(uint8_t from, uint8_t to, uint32_t amount) {
+    const int32_t delta = static_cast<int32_t>(to) - static_cast<int32_t>(from);
+    return static_cast<uint8_t>(static_cast<int32_t>(from) +
+                                delta * static_cast<int32_t>(amount) / 255);
+}
+
+uint32_t plasmaReferencePixel(uint32_t timeMs, uint32_t foreground, bool invert,
+                              uint32_t background, size_t x, size_t y) {
+    constexpr float kTau = 6.2831853f;
+    const float time = static_cast<float>(timeMs) * 0.001f;
+    const float fx = static_cast<float>(x) / static_cast<float>(wasm_mvp_runtime::kV2Width);
+    const float fy = static_cast<float>(y) / static_cast<float>(wasm_mvp_runtime::kV2Height);
+    const float wave = std::sin(fx * kTau * 1.5f + time * 1.1f) +
+                       std::sin(fy * kTau + time * 0.7f) + std::sin((fx + fy) * kTau + time * 1.7f);
+    float value = (wave + 3.0f) * (255.0f / 6.0f);
+    if (invert) {
+        value = 255.0f - value;
+    }
+    const uint32_t amount = static_cast<uint32_t>(value);
+    return (static_cast<uint32_t>(
+                plasmaLerp8(colorChannel(background, 16), colorChannel(foreground, 16), amount))
+            << 16u) |
+           (static_cast<uint32_t>(
+                plasmaLerp8(colorChannel(background, 8), colorChannel(foreground, 8), amount))
+            << 8u) |
+           static_cast<uint32_t>(
+               plasmaLerp8(colorChannel(background, 0), colorChannel(foreground, 0), amount));
+}
+
+void expectPlasmaFrame(const wasm_mvp_runtime::V2TickOutput& output, uint32_t timeMs,
+                       const wasm_mvp_runtime::V2TickInputs& inputs) {
+    for (size_t y = 0; y < wasm_mvp_runtime::kV2Height; ++y) {
+        for (size_t x = 0; x < wasm_mvp_runtime::kV2Width; ++x) {
+            const size_t pixel = y * wasm_mvp_runtime::kV2Width + x;
+            const uint32_t expected = plasmaReferencePixel(
+                timeMs, inputs.params[1], inputs.params[2] != 0, inputs.params[3], x, y);
+            for (uint32_t shift : {0u, 8u, 16u}) {
+                const int32_t actualChannel = colorChannel(output.pixels[pixel], shift);
+                const int32_t expectedChannel = colorChannel(expected, shift);
+                const int32_t difference = std::abs(actualChannel - expectedChannel);
+                zassert_true(difference <= 1, "pixel %zu channel %u differs by %d", pixel, shift,
+                             difference);
+            }
+        }
+    }
+    zassert_true(output.goodMoment);
+    zassert_true(output.arenaHighWater > 0);
+    zassert_true(output.arenaHighWater <= CONFIG_APP_WASM3_MVP_HEAP_SIZE);
+    zassert_true(output.cpuTimeUs <= CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS * 1000u);
+    zassert_true(output.wallTimeUs <= CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS * 1000u);
+    TC_PRINT("plasma v2 tick: cpu %u us, wall %u us\n", output.cpuTimeUs, output.wallTimeUs);
 }
 
 K_THREAD_STACK_DEFINE(sConcurrentTickStack, 2048);
@@ -341,6 +400,63 @@ ZTEST(wasm_mvp_runtime, test_cpptest_v2_matches_legacy_effect_across_state_and_p
     zassert_equal(wasm_mvp_runtime::tickV2(0, inputs, deadline(), sV2Output),
                   wasm_mvp_runtime::Result::Completed);
     expectV2Frame(sV2Output, timeMs, inputs.params[1], true);
+
+    wasm_mvp_runtime::stop();
+}
+
+ZTEST(wasm_mvp_runtime, test_plasma_v2_matches_registry_effect_with_bounded_math) {
+    zassert_equal(wasm_mvp_runtime::startV2(kPlasmaV2Module, sizeof(kPlasmaV2Module), deadline()),
+                  wasm_mvp_runtime::Result::Completed);
+
+    wasm_mvp_runtime::V2TickInputs inputs;
+    inputs.params[0] = 50;
+    inputs.params[1] = 0x00ff40ff;
+    inputs.params[2] = 0;
+    inputs.params[3] = 0;
+
+    uint32_t timeMs = 0;
+    zassert_equal(wasm_mvp_runtime::tickV2(17, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    timeMs += 17;
+    expectPlasmaFrame(sV2Output, timeMs, inputs);
+
+    inputs.params[0] = 100;
+    inputs.params[1] = 0x00102080;
+    inputs.params[3] = 0x00ffffff;
+    zassert_equal(wasm_mvp_runtime::tickV2(25, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    timeMs += 50;
+    expectPlasmaFrame(sV2Output, timeMs, inputs);
+
+    inputs.params[2] = 1;
+    zassert_equal(wasm_mvp_runtime::tickV2(0, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    expectPlasmaFrame(sV2Output, timeMs, inputs);
+
+    // Cross the 62,832 ms accumulator boundary exactly: 67 + 62,766 -> 1.
+    inputs.params[0] = 285300u;
+    inputs.params[2] = 0;
+    constexpr uint32_t kDtMs = 11;
+    constexpr uint32_t kPeriodMs = 62832;
+    uint32_t step =
+        static_cast<uint32_t>((static_cast<uint64_t>(kDtMs) * inputs.params[0] / 50u) % kPeriodMs);
+    zassert_equal(step, 62766u);
+    timeMs = (timeMs + step) % kPeriodMs;
+    zassert_equal(timeMs, 1u);
+    zassert_equal(wasm_mvp_runtime::tickV2(kDtMs, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    expectPlasmaFrame(sV2Output, timeMs, inputs);
+
+    // Separately prove the guest keeps the dt*speed product in 64 bits.
+    inputs.params[0] = 390451573u;
+    inputs.params[1] = 0x00f02040;
+    inputs.params[3] = 0x00102030;
+    step =
+        static_cast<uint32_t>((static_cast<uint64_t>(kDtMs) * inputs.params[0] / 50u) % kPeriodMs);
+    timeMs = (timeMs + step) % kPeriodMs;
+    zassert_equal(wasm_mvp_runtime::tickV2(kDtMs, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    expectPlasmaFrame(sV2Output, timeMs, inputs);
 
     wasm_mvp_runtime::stop();
 }
