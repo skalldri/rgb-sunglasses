@@ -15,6 +15,13 @@ only in the focused QEMU test profile. The firmware application still runs the
 embedded `rgbx_mvp.fill` demonstration and the production extension path is
 still LLEXT.
 
+The checked `cpptest_v2_module.h` bytes are a reviewed behavioral fixture, not
+yet reproducible compiler provenance for `cpptest_v2.c`. The readable C file
+defines the intended lowering, while framebuffer parity proves what the bytes
+do. A later compiler-fixture PR must pin the compiler, flags, generator, and
+source-to-Wasm comparison before generated effects or production loading rely
+on this path.
+
 The production profile does not define `CONFIG_APP_WASM3_V2_PROTOTYPE`, and
 its ELF contains no v2 runtime or import symbols. The verification build uses
 842,192 of 900,608 flash bytes and 434,176 of 450,560 RAM bytes, leaving 58,416

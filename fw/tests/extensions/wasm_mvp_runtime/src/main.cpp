@@ -109,7 +109,8 @@ void appendLebU32(std::vector<uint8_t>& output, uint32_t value) {
     } while (value != 0);
 }
 
-std::vector<uint8_t> minimalV2Module(const std::vector<uint8_t>& tickInstructions) {
+std::vector<uint8_t> minimalV2Module(const std::vector<uint8_t>& tickInstructions,
+                                     const std::vector<uint8_t>& initInstructions = {}) {
     std::vector<uint8_t> module = {
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
         0x01, 0x19, 0x04, 0x60, 0x01, 0x7f, 0x01, 0x7f,
@@ -124,11 +125,16 @@ std::vector<uint8_t> minimalV2Module(const std::vector<uint8_t>& tickInstruction
         0x00, 0x02, 0x09, 0x72, 0x67, 0x62, 0x78, 0x5f, 0x74, 0x69, 0x63, 0x6b, 0x00, 0x03,
     };
 
+    std::vector<uint8_t> initBody = {0x00};
+    initBody.insert(initBody.end(), initInstructions.begin(), initInstructions.end());
+    initBody.push_back(0x0b);
     std::vector<uint8_t> tickBody = {0x00};
     tickBody.insert(tickBody.end(), tickInstructions.begin(), tickInstructions.end());
     tickBody.push_back(0x0b);
 
-    std::vector<uint8_t> codePayload = {0x02, 0x02, 0x00, 0x0b};
+    std::vector<uint8_t> codePayload = {0x02};
+    appendLebU32(codePayload, initBody.size());
+    codePayload.insert(codePayload.end(), initBody.begin(), initBody.end());
     appendLebU32(codePayload, tickBody.size());
     codePayload.insert(codePayload.end(), tickBody.begin(), tickBody.end());
     module.push_back(0x0a);
@@ -241,6 +247,26 @@ ZTEST(wasm_mvp_runtime, test_v2_checks_init_signature_before_call) {
     expectGoodActivationAndTick(0, kExpectedCyan);
 }
 
+ZTEST(wasm_mvp_runtime, test_v2_rejects_wrong_import_signatures) {
+    std::array<uint8_t, sizeof(kCppTestV2Module)> wrongParamSignature{};
+    std::copy_n(kCppTestV2Module, wrongParamSignature.size(), wrongParamSignature.begin());
+    wrongParamSignature[57] = 0x03;  // param_u32 changes from (i32)->i32 to (i32)->void
+    zassert_equal(wasm_mvp_runtime::startV2(wrongParamSignature.data(),
+                                            wrongParamSignature.size(), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_admission_budget_aborts_infinite_init) {
+    const auto infiniteInit = minimalV2Module({}, {0x03, 0x40, 0x0c, 0x00, 0x0b});
+    const auto result =
+        wasm_mvp_runtime::startV2(infiniteInit.data(), infiniteInit.size(), deadline());
+    zassert_true(result == wasm_mvp_runtime::Result::CpuBudgetExceeded ||
+                     result == wasm_mvp_runtime::Result::WallBackstopExceeded,
+                 "infinite init returned unexpected result %u", static_cast<unsigned int>(result));
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
 ZTEST(wasm_mvp_runtime, test_v2_host_import_limits_trap_without_committing_output) {
     std::vector<uint8_t> badSpanInstructions;
     for (uint32_t argument = 0; argument < 9; ++argument) {
@@ -249,6 +275,9 @@ ZTEST(wasm_mvp_runtime, test_v2_host_import_limits_trap_without_committing_outpu
     }
     badSpanInstructions.insert(badSpanInstructions.end(), {0x10, 0x01});  // call set_span8
 
+    auto partialFrameInstructions = badSpanInstructions;
+    partialFrameInstructions[1] = 0x00;  // one valid first span, then an incomplete return
+
     std::vector<uint8_t> excessParamInstructions;
     for (size_t call = 0; call < 17; ++call) {
         excessParamInstructions.insert(excessParamInstructions.end(),
@@ -256,6 +285,7 @@ ZTEST(wasm_mvp_runtime, test_v2_host_import_limits_trap_without_committing_outpu
     }
 
     for (const auto& module : {minimalV2Module(badSpanInstructions),
+                               minimalV2Module(partialFrameInstructions),
                                minimalV2Module(excessParamInstructions)}) {
         zassert_equal(wasm_mvp_runtime::startV2(module.data(), module.size(), deadline()),
                       wasm_mvp_runtime::Result::Completed);
