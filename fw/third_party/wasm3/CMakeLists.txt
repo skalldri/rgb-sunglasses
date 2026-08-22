@@ -28,7 +28,9 @@ zephyr_library_app_memory(rgbx_wasm3_partition)
 zephyr_library_compile_definitions(
   d_m3CodePageAlignSize=1024
   d_m3MaxFunctionStackHeight=128
-  d_m3CascadedOpcodes=0
+  # Keep the same opcode surface but use Wasm3's faster cascaded dispatch for
+  # bounded framebuffer guests.
+  d_m3CascadedOpcodes=1
   d_m3VerboseErrorMessages=0
   d_m3FixedHeap=${CONFIG_APP_WASM3_MVP_HEAP_SIZE}
   d_m3HasFloat=0

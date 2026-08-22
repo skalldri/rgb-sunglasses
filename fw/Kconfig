@@ -227,15 +227,18 @@ config APP_WASM3_MVP_HEAP_SIZE
 
 config APP_WASM3_MVP_VALUE_STACK_SIZE
 	int "Wasm3 value stack size (bytes)"
+	default 2048 if APP_WASM3_V2_PROTOTYPE
 	default 1024
 	range 512 4096
 	depends on APP_WASM3_MVP
 	help
-	  Runtime WebAssembly value stack. This is separate from the Zephyr pattern
-	  controller thread stack.
+	  Runtime WebAssembly value stack. RGBX v2 span calls use 2 KiB for their
+	  bounded scalar arguments and compiler output. This is separate from the
+	  Zephyr pattern-controller thread stack.
 
 config APP_WASM3_MVP_MODULE_MAX_SIZE
 	int "Maximum embedded Wasm module size (bytes)"
+	default 2048 if APP_WASM3_V2_PROTOTYPE
 	default 256
 	range 128 4096
 	depends on APP_WASM3_MVP

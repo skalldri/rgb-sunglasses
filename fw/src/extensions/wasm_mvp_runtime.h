@@ -75,6 +75,11 @@ Result triggerMemoryFaultForTest(k_timepoint_t deadline);
 
 /** Test-only: wait until the sandbox has accepted an execution request. */
 bool waitForRequestStartForTest(k_timeout_t timeout);
+
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+/** Test-only pure oracle for the palette/luma span conversion. */
+uint32_t blendLumaForTest(uint32_t foreground, uint32_t background, uint32_t luma);
+#endif
 #endif
 
 }  // namespace wasm_mvp_runtime

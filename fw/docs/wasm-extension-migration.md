@@ -23,11 +23,12 @@ source-to-Wasm comparison before generated effects or production loading rely
 on this path.
 
 The production profile does not define `CONFIG_APP_WASM3_V2_PROTOTYPE`, and
-its ELF contains no v2 runtime or import symbols. The verification build uses
-842,192 of 900,608 flash bytes and 434,176 of 450,560 RAM bytes, leaving 58,416
-flash bytes and 16,384 RAM bytes free. That is below both the 64 KiB flash and
-24 KiB RAM stop-loss limits, so no board configuration enables this test-only
-port and no device was flashed.
+its ELF contains no v2 runtime or import symbols. The explicit verification
+build with the palette/luma ABI and 2 KiB value/module buffers uses 845,316 of
+900,608 flash bytes and 435,488 of 450,560 RAM bytes, leaving 55,292 flash bytes
+and 15,072 RAM bytes free. That is below both the 64 KiB flash and 24 KiB RAM
+stop-loss limits, so no board configuration enables this test-only path and no
+device was flashed.
 
 ## Effect inventory
 
@@ -48,13 +49,20 @@ The focused prototype accepts a deliberately small, memoryless profile:
 
 - required exports: `rgbx_init()` and `rgbx_tick(dt_ms)`;
 - exact imports: `rgbx_v2.param_u32(id)` and
-  `rgbx_v2.set_span8(first_pixel, color0, ..., color7)`;
+  exactly one of `rgbx_v2.set_span8(first_pixel, color0, ..., color7)` or
+  `rgbx_v2.set_luma_span8(first_pixel, foreground, background, luma0, ..., luma7)`;
 - `set_span8` calls must cover linear pixel offsets `0, 8, ..., 472` in order;
 - a frame commits only after exactly 60 valid spans produce all 480 pixels;
 - no linear memory, table, start function, data segments, or element segments;
 - at most eight functions, eight numeric globals, and 32 locals per function;
 - a separate 250 ms activation compilation budget and the unchanged 50 ms
   steady-state tick CPU budget.
+
+The palette/luma primitive accepts only luma values from 0 through 255 and
+interpolates each RGB channel with signed integer deltas. It preserves the same
+ordered 60-span, complete-frame transaction as direct RGB output while reducing
+repeated guest palette math for bounded effects such as Plasma. A module may
+import one span encoding, never both.
 
 The eight-pixel primitive is a measured requirement, not an aesthetic choice.
 A faithful port using 480 `set_pixel` crossings exceeded the 50 ms QEMU tick
