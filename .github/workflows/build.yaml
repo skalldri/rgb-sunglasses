@@ -199,7 +199,10 @@ jobs:
           cacheFrom: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           configFile: .devcontainer/ci/devcontainer.json
           push: filter
-          runCmd: twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim --coverage --coverage-tool lcov --outdir /workspaces/rgb-sunglasses/fw/twister-out-ci
+          runCmd: >-
+            bash -euo pipefail -c "
+            twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim --coverage --coverage-tool lcov --outdir /workspaces/rgb-sunglasses/fw/twister-out-ci &&
+            twister -T /workspaces/rgb-sunglasses/fw/tests/extensions/wasm_mvp_runtime -p mps2/an385 --outdir /tmp/twister-out-wasm3-ci"
 
       - name: Fix permissions on test output
         if: always()
