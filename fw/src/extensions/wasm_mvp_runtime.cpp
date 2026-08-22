@@ -212,6 +212,12 @@ bool modulePolicyAllows(IM3Module module) {
         return false;
     }
 
+    for (uint32_t i = 0; i < module->numGlobals; ++i) {
+        if (module->globals[i].imported) {
+            return false;
+        }
+    }
+
     const M3ImportInfo& import = module->functions[0].import;
     return import.moduleUtf8 != nullptr && import.fieldUtf8 != nullptr &&
            std::strcmp(import.moduleUtf8, kImportModule) == 0 &&
@@ -334,7 +340,8 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
 
     IM3Function tickFunction = nullptr;
     result = m3_FindFunction(&tickFunction, runtime, kTickExport);
-    if (result != m3Err_none) {
+    if (result != m3Err_none || m3_GetArgCount(tickFunction) != 1 ||
+        m3_GetArgType(tickFunction, 0) != c_m3Type_i32 || m3_GetRetCount(tickFunction) != 0) {
         shared->status = SharedStatus::ExportLookupFailed;
         k_sem_give(&sDoneSem);
         return;

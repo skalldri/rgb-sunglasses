@@ -30,6 +30,8 @@ M3Result  EnsureCodePageNumLines  (IM3Compilation o, u32 i_numLines)
 {
     M3Result result = m3Err_none;
 
+    if (i_numLines > UINT32_MAX - 2u)
+        return m3Err_mallocFailedCodePage;
     i_numLines += 2; // room for Bridge
 
     if (NumFreeLines (o->page) < i_numLines)
@@ -1595,7 +1597,7 @@ _   (ReadLEB_u32 (& targetCount, & o->wasm, o->wasmEnd));
 
     // targetCount is untrusted. Keep the code-line calculation below from
     // wrapping before it reaches the allocator (wasm3 issue #570).
-    _throwif (m3Err_wasmMalformed, targetCount > UINT32_MAX - 4u);
+    _throwif (m3Err_wasmMalformed, targetCount > UINT32_MAX - 6u);
 
     // Spec: validate that the branch index operand is i32
     if (not IsStackPolymorphic (o))

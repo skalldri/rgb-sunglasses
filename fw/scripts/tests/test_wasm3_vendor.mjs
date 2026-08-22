@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const expectedRevision = "8815edc280e6fb039dbdc40dbb4cdebd20d769f5";
 const expectedArchiveSha256 = "31be9cfd655879d5c5e9a5067f8e964d70d8ea7e0ea3a38d32c5ace8d163aa92";
-const expectedManifestSha256 = "8523e19208d1b1be3bc673aa0055a4480a57245047d7ec34c843bb22c4174726";
+const expectedManifestSha256 = "c992f4c8a1a5a1637a0202370136294928b27868bbc6e64f7ce39c3bd6515e80";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const vendorRoot = resolve(scriptDir, "../../third_party/wasm3");

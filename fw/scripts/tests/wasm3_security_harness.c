@@ -150,11 +150,19 @@ done:
 }
 
 int main(void) {
+    uint8_t branch_table[sizeof(kWasm3BranchTableOverflowModule)];
     if (expect_parse_rejected(kWasm3DataSegmentOverflowModule,
-                              sizeof(kWasm3DataSegmentOverflowModule)) != 0 ||
-        expect_compile_rejected(kWasm3BranchTableOverflowModule,
-                                sizeof(kWasm3BranchTableOverflowModule)) != 0 ||
-        expect_recursive_call_traps(kWasm3Issue562Module, sizeof(kWasm3Issue562Module), "main",
+                              sizeof(kWasm3DataSegmentOverflowModule)) != 0) {
+        return 1;
+    }
+    for (uint8_t low_byte = 0xfa; low_byte <= 0xfc; ++low_byte) {
+        memcpy(branch_table, kWasm3BranchTableOverflowModule, sizeof(branch_table));
+        branch_table[sizeof(branch_table) - 7] = low_byte;
+        if (expect_compile_rejected(branch_table, sizeof(branch_table)) != 0) {
+            return 1;
+        }
+    }
+    if (expect_recursive_call_traps(kWasm3Issue562Module, sizeof(kWasm3Issue562Module), "main",
                                     false) != 0) {
         return 1;
     }

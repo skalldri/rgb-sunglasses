@@ -4,6 +4,7 @@
 
 #include "wasm3_security_modules.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -120,6 +121,28 @@ ZTEST(wasm_mvp_runtime, test_extra_import_is_rejected_before_load) {
     expectGoodActivationAndTick(0, kExpectedCyan);
 }
 
+ZTEST(wasm_mvp_runtime, test_imported_global_is_rejected_before_load) {
+    auto importedGlobal = moduleVector();
+    importedGlobal[16] = 0x18;  // import payload grows from 17 to 24 bytes
+    importedGlobal[17] = 0x02;  // fill plus one imported global
+    insertBytes(importedGlobal, 34, {0x01, 'x', 0x01, 'g', 0x03, 0x7f, 0x00});
+    zassert_equal(wasm_mvp_runtime::start(importedGlobal.data(), importedGlobal.size(), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_tick_export_signature_is_checked_before_first_call) {
+    auto twoArgumentTick = moduleVector();
+    twoArgumentTick[9] = 0x0a;   // type payload grows from 5 to 10 bytes
+    twoArgumentTick[10] = 0x02;  // fill type plus tick type
+    insertBytes(twoArgumentTick, 15, {0x60, 0x02, 0x7f, 0x7f, 0x00});
+    twoArgumentTick[42] = 0x01;  // defined rgbx_tick uses the second type
+    zassert_equal(
+        wasm_mvp_runtime::start(twoArgumentTick.data(), twoArgumentTick.size(), deadline()),
+        wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
 ZTEST(wasm_mvp_runtime, test_start_function_is_rejected_before_load) {
     auto startFunction = moduleVector();
     // Section 8 names function index 1 as the start function. Insert it before
@@ -166,9 +189,13 @@ ZTEST(wasm_mvp_runtime, test_malformed_data_segment_size_is_rejected_then_recove
 }
 
 ZTEST(wasm_mvp_runtime, test_overflowing_branch_table_count_is_rejected_then_recovers) {
-    zassert_equal(wasm_mvp_runtime::start(kWasm3BranchTableOverflowModule,
-                                         sizeof(kWasm3BranchTableOverflowModule), deadline()),
-                  wasm_mvp_runtime::Result::InvalidModule);
+    for (uint8_t lowByte : {0xfau, 0xfbu, 0xfcu}) {
+        auto module = std::array<uint8_t, sizeof(kWasm3BranchTableOverflowModule)>{};
+        std::copy_n(kWasm3BranchTableOverflowModule, module.size(), module.begin());
+        module[module.size() - 7] = lowByte;
+        zassert_equal(wasm_mvp_runtime::start(module.data(), module.size(), deadline()),
+                      wasm_mvp_runtime::Result::InvalidModule);
+    }
     expectGoodActivationAndTick(0, kExpectedCyan);
 }
 
