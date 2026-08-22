@@ -41,4 +41,3 @@ done
 
 ASAN_OPTIONS=halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   "$test_tmp/wasm3-security"
-
