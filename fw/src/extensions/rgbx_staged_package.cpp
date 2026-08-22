@@ -72,9 +72,8 @@ StageOutcome StagedPackage::load(ReadNext readNext, void* readContext, const Pol
         }
     }
 
-    PackageView candidate = {};
     const Result packageResult =
-        validate(bytes_, stagedSize, policy, verifyDigest, digestContext, candidate);
+        validate(bytes_, stagedSize, policy, verifyDigest, digestContext, view_);
     if (packageResult != Result::Ok) {
         return {
             .result = StageResult::PackageRejected,
@@ -83,7 +82,6 @@ StageOutcome StagedPackage::load(ReadNext readNext, void* readContext, const Pol
         };
     }
 
-    view_ = candidate;
     size_ = stagedSize;
     admitted_ = true;
     return {

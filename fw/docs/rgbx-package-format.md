@@ -157,6 +157,12 @@ packet either recovers enough measured capacity or retires LLEXT.
 
 - Independently review integer bounds, pointer formation, canonical-CBOR
   behavior, digest coverage, policy enforcement, and parser stack use.
+- Add a host sanitizer/fuzz or equivalent property-testing lane for the complete
+  untrusted envelope and CBOR parser before production linkage. The focused
+  malformed-boundary cases are a regression suite, not a fuzzing substitute.
+- Measure the complete reader-to-PSA-to-parser call chain on the actual
+  production thread stack. The staging owner avoids a second `PackageView`
+  frame, but the 16 KiB QEMU test stack is not production sizing evidence.
 - Copy the candidate into one bounded staging buffer and validate that immutable
   snapshot. Do not validate one file view and execute another.
 - Refuse to overwrite an admitted staging owner. Reset it only after the Wasm
