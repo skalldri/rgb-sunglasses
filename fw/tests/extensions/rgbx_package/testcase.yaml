@@ -1,0 +1,7 @@
+tests:
+  extensions.rgbx_package:
+    platform_allow:
+      - mps2/an385
+    integration_platforms:
+      - mps2/an385
+    timeout: 60

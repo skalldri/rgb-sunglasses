@@ -202,7 +202,8 @@ jobs:
           runCmd: >-
             bash -euo pipefail -c "
             twister -T /workspaces/rgb-sunglasses/fw/tests -p native_sim --coverage --coverage-tool lcov --outdir /workspaces/rgb-sunglasses/fw/twister-out-ci &&
-            twister -T /workspaces/rgb-sunglasses/fw/tests/extensions/wasm_mvp_runtime -p mps2/an385 --outdir /tmp/twister-out-wasm3-ci"
+            twister -T /workspaces/rgb-sunglasses/fw/tests/extensions/wasm_mvp_runtime -p mps2/an385 --outdir /tmp/twister-out-wasm3-ci &&
+            twister -T /workspaces/rgb-sunglasses/fw/tests/extensions/rgbx_package -p mps2/an385 --outdir /tmp/twister-out-rgbx-package-ci"
 
       - name: Fix permissions on test output
         if: always()
