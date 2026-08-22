@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const expectedRevision = "8815edc280e6fb039dbdc40dbb4cdebd20d769f5";
 const expectedArchiveSha256 = "31be9cfd655879d5c5e9a5067f8e964d70d8ea7e0ea3a38d32c5ace8d163aa92";
-const expectedManifestSha256 = "fb4b94483840bd9c5aa84f93fdec70433d8a5bb524662c107a133b2db503fdb0";
+const expectedManifestSha256 = "1f3d0d63ef2505319ecb16cff4ed56f1b22a9db0396667d7362bc0d508facbd1";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const vendorRoot = resolve(scriptDir, "../../third_party/wasm3");
@@ -41,6 +41,10 @@ assert.ok(record.includes("Revision: `" + expectedRevision + "`"), "vendoring re
 assert.ok(
   record.includes("Upstream archive SHA-256: `" + expectedArchiveSha256 + "`"),
   "upstream archive digest drifted",
+);
+assert.ok(
+  record.includes("Patched `source/` plus `LICENSE` manifest SHA-256: `" + expectedManifestSha256 + "`"),
+  "patched source manifest digest drifted",
 );
 assert.equal(files.length, 44, "unexpected Wasm3 source/license file count");
 assert.equal(manifest.digest("hex"), expectedManifestSha256, "vendored Wasm3 manifest changed");

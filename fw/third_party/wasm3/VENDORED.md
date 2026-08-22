@@ -5,7 +5,8 @@
 - Retrieved: 2026-08-14
 - License: MIT, preserved in `LICENSE`
 - Upstream archive SHA-256: `31be9cfd655879d5c5e9a5067f8e964d70d8ea7e0ea3a38d32c5ace8d163aa92`
-- `source/` plus `LICENSE` manifest SHA-256: `fb4b94483840bd9c5aa84f93fdec70433d8a5bb524662c107a133b2db503fdb0`
+- Upstream `source/` plus `LICENSE` manifest SHA-256: `fb4b94483840bd9c5aa84f93fdec70433d8a5bb524662c107a133b2db503fdb0`
+- Patched `source/` plus `LICENSE` manifest SHA-256: `1f3d0d63ef2505319ecb16cff4ed56f1b22a9db0396667d7362bc0d508facbd1`
 
 The `source/` directory began as an exact copy from the pinned upstream
 revision. The project maintains one reviewed Zephyr port patch in
