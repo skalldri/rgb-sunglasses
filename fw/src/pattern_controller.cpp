@@ -286,7 +286,11 @@ void pattern_controller_thread_func(void *a, void *b, void *c) {
     // orphaned "appcfg/ext/<name>" blobs. Do not chase it as a fault.
     // They are deliberately not deleted — a one-shot migration delete would be exactly
     // the unnecessary NVS write this change removes.
+#if defined(CONFIG_APP_WASM3_MVP)
+    pattern_controller_change_to_animation(Animation::WasmMvp);
+#else
     pattern_controller_change_to_animation(Animation::ZigZag);
+#endif
 
     // Overrun logging is rate-limited (see the overrun branch at the bottom of the loop).
     int64_t lastRenderOverrunLogMs = 0;
@@ -632,6 +636,13 @@ int pattern_controller_set_pixel_in_framebuffer(const LedConfig *config, size_t 
 #define PULSE_SHELL_SUBCMD
 #endif
 
+#if defined(CONFIG_APP_WASM3_MVP)
+#define WASM_MVP_SHELL_SUBCMD \
+    , (wasm_mvp, 15, "Wasm3 MVP animation (embedded WebAssembly extension)")
+#else
+#define WASM_MVP_SHELL_SUBCMD
+#endif
+
 #if defined(CONFIG_SHELL)
 
 static int cmd_anim_set(const struct shell *shell, size_t argc, char **argv, void *data) {
@@ -705,6 +716,11 @@ static int cmd_anim_get(const struct shell *shell, size_t argc, char **argv) {
             name = "pulse";
             break;
 #endif
+#if defined(CONFIG_APP_WASM3_MVP)
+        case Animation::WasmMvp:
+            name = "wasm_mvp";
+            break;
+#endif
         default:
             name = "unknown";
             break;
@@ -722,7 +738,8 @@ SHELL_SUBCMD_DICT_SET_CREATE(sub_anim_set, cmd_anim_set, (none, 0, "No animation
                                  GLIM_PLAYER_SHELL_SUBCMD
                                  MATRIX_CODE_SHELL_SUBCMD
                                  TILT_SHELL_SUBCMD
-                                 PULSE_SHELL_SUBCMD);
+                                 PULSE_SHELL_SUBCMD
+                                 WASM_MVP_SHELL_SUBCMD);
 
 static int cmd_anim_indicator_clear(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argc);
