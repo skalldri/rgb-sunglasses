@@ -149,6 +149,15 @@ skips the 1 KB `CONFIG_USERSPACE` privileged-stack reservation. Those stacks can
 a `K_USER` thread. The two exceptions are `imu_thread` and the extension sandbox, both of
 which *are* user-mode threads and so use `K_THREAD_STACK_DEFINE`.
 
+The disabled-by-default Wasm3 experiment is also a `K_USER` thread. Its memory domain grants
+the dedicated interpreter partition plus Zephyr's `z_libc_partition`, which is required for
+user-thread startup and libc hooks. The latter contains shared TLS, stdio-hook, and allocator
+metadata, so the boundary is not accurately described as “Wasm state only”: a compromised
+interpreter remains unprivileged but could corrupt that shared libc metadata. This residual
+boundary is accepted only for the inert integration proof. Before firmware accepts untrusted
+RGBX packages, either narrow that grant or explicitly prove and review the shared-libc attack
+surface in the production configuration.
+
 ### Automatic creep detection: `stack_watch`
 
 `CONFIG_APP_STACK_WATCH` (default y) runs Zephyr's thread analyzer every

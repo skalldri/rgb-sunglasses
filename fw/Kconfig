@@ -212,7 +212,9 @@ config APP_WASM3_MVP
 
 	  This is an interpreter integration proof, not the production extension
 	  loader. It does not execute files from the FAT partition or accept modules
-	  from the companion app.
+	  from the companion app. The current dual-runtime proto0 build also falls
+	  below the production RAM stop-loss, so no board configuration may enable
+	  this until the migration recovers the required margin.
 
 config APP_WASM3_MVP_HEAP_SIZE
 	int "Fixed Wasm3 arena size (bytes)"
