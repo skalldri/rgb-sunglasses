@@ -44,6 +44,9 @@ jobs:
       - name: Verify vendored Wasm3 snapshot
         run: node fw/scripts/tests/test_wasm3_vendor.mjs
 
+      - name: Run Wasm3 sanitizer regressions
+        run: bash fw/scripts/tests/test_wasm3_security.sh
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:

@@ -6,16 +6,18 @@
 - License: MIT, preserved in `LICENSE`
 - Upstream archive SHA-256: `31be9cfd655879d5c5e9a5067f8e964d70d8ea7e0ea3a38d32c5ace8d163aa92`
 - Upstream `source/` plus `LICENSE` manifest SHA-256: `fb4b94483840bd9c5aa84f93fdec70433d8a5bb524662c107a133b2db503fdb0`
-- Patched `source/` plus `LICENSE` manifest SHA-256: `1f3d0d63ef2505319ecb16cff4ed56f1b22a9db0396667d7362bc0d508facbd1`
+- Patched `source/` plus `LICENSE` manifest SHA-256: `8523e19208d1b1be3bc673aa0055a4480a57245047d7ec34c843bb22c4174726`
 
 The `source/` directory began as an exact copy from the pinned upstream
-revision. The project maintains one reviewed Zephyr port patch in
-`source/m3_core.c`: Wasm3's fixed allocator now has fail-without-consumption,
-bulk-reset, and high-water semantics, and its terminal abort becomes a
-sandbox-contained Zephyr oops. The parent `CMakeLists.txt` routes all mutable
-library globals into the Wasm application-memory partition and builds only the
-core interpreter. WASI and the optional libc bindings are not linked into the
-firmware.
+revision. The project maintains a reviewed Zephyr port and narrow interpreter
+hardening patches: the fixed allocator has fail-without-consumption,
+bulk-reset, and high-water semantics; terminal aborts become sandbox-contained
+Zephyr oopses; outgoing call slots are included in stack checks; code-page
+emission has release-build bounds checks; and hostile branch-table and data
+segment sizes are rejected before arithmetic. The parent `CMakeLists.txt`
+routes all mutable library globals into the Wasm application-memory partition
+and builds only the core interpreter. WASI and the optional libc bindings are
+not linked into the firmware.
 
 `node fw/scripts/tests/test_wasm3_vendor.mjs` recomputes the local manifest
 digest without network access and verifies that this record still names the

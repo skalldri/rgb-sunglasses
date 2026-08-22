@@ -2,6 +2,8 @@
 #include <extensions/wasm_mvp_runtime.h>
 #include <zephyr/ztest.h>
 
+#include "wasm3_security_modules.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -153,6 +155,32 @@ ZTEST(wasm_mvp_runtime, test_excessive_locals_are_rejected_after_full_compile) {
     zassert_equal(
         wasm_mvp_runtime::start(excessiveLocals.data(), excessiveLocals.size(), deadline()),
         wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_malformed_data_segment_size_is_rejected_then_recovers) {
+    zassert_equal(wasm_mvp_runtime::start(kWasm3DataSegmentOverflowModule,
+                                         sizeof(kWasm3DataSegmentOverflowModule), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_overflowing_branch_table_count_is_rejected_then_recovers) {
+    zassert_equal(wasm_mvp_runtime::start(kWasm3BranchTableOverflowModule,
+                                         sizeof(kWasm3BranchTableOverflowModule), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_recursive_argument_copy_traps_then_recovers) {
+    zassert_equal(wasm_mvp_runtime::start(kWasm3RecursiveArgumentsModule,
+                                         sizeof(kWasm3RecursiveArgumentsModule), deadline()),
+                  wasm_mvp_runtime::Result::Completed);
+    wasm_mvp_runtime::TickOutput output{0xdeadbeef, 0};
+    zassert_equal(wasm_mvp_runtime::tick(0, deadline(), output),
+                  wasm_mvp_runtime::Result::Trap);
+    zassert_equal(output.color, 0xdeadbeef,
+                  "stack overflow must not commit partial output");
     expectGoodActivationAndTick(0, kExpectedCyan);
 }
 
