@@ -12,11 +12,24 @@
 #include "m3_core.h"
 #include "m3_env.h"
 
+#if defined(RGBX_WASM3_ZEPHYR_PORT)
+#include <wasm3_zephyr_port.h>
+#include <zephyr/kernel.h>
+#endif
+
 void m3_Abort(const char* message) {
 #ifdef DEBUG
     fprintf(stderr, "Error: %s\n", message);
 #endif
+#if defined(RGBX_WASM3_ZEPHYR_PORT)
+    (void)message;
+    /* abort() maps to a kernel panic in Zephyr. An interpreter-internal
+     * terminal path is instead a sandbox oops, which the runtime-neutral fatal
+     * handler may contain only for the exact Wasm user thread. */
+    k_oops();
+#else
     abort();
+#endif
 }
 
 M3_WEAK
@@ -54,6 +67,7 @@ static u8 fixedHeap[d_m3FixedHeap];
 static u8* fixedHeapPtr = fixedHeap;
 static u8* const fixedHeapEnd = fixedHeap + d_m3FixedHeap;
 static u8* fixedHeapLast = NULL;
+static size_t fixedHeapHighWater = 0;
 
 #if d_m3FixedHeapAlign > 1
 #   define HEAP_ALIGN_PTR(P) P = (u8*)(((size_t)(P)+(d_m3FixedHeapAlign-1)) & ~ (d_m3FixedHeapAlign-1));
@@ -64,17 +78,25 @@ static u8* fixedHeapLast = NULL;
 void *  m3_Malloc_Impl  (size_t i_size)
 {
     u8 * ptr = fixedHeapPtr;
+    u8 * next;
 
-    fixedHeapPtr += i_size;
-    HEAP_ALIGN_PTR(fixedHeapPtr);
+    if (i_size > (size_t)(fixedHeapEnd - fixedHeapPtr))
+    {
+        return NULL;
+    }
+    next = fixedHeapPtr + i_size;
+    HEAP_ALIGN_PTR(next);
 
-    if (fixedHeapPtr >= fixedHeapEnd)
+    if (next > fixedHeapEnd)
     {
         return NULL;
     }
 
+    fixedHeapPtr = next;
     memset (ptr, 0x0, i_size);
     fixedHeapLast = ptr;
+    size_t used = (size_t)(fixedHeapPtr - fixedHeap);
+    if (used > fixedHeapHighWater) fixedHeapHighWater = used;
 
     return ptr;
 }
@@ -98,12 +120,17 @@ void *  m3_Realloc_Impl  (void * i_ptr, size_t i_newSize, size_t i_oldSize)
 
     // Handle the last chunk
     if (i_ptr && i_ptr == fixedHeapLast) {
-        fixedHeapPtr = fixedHeapLast + i_newSize;
-        HEAP_ALIGN_PTR(fixedHeapPtr);
-        if (fixedHeapPtr >= fixedHeapEnd)
+        if (i_newSize > (size_t)(fixedHeapEnd - fixedHeapLast))
         {
             return NULL;
         }
+        u8 * next = fixedHeapLast + i_newSize;
+        HEAP_ALIGN_PTR(next);
+        if (next > fixedHeapEnd)
+        {
+            return NULL;
+        }
+        fixedHeapPtr = next;
         newPtr = i_ptr;
     } else {
         newPtr = m3_Malloc_Impl(i_newSize);
@@ -119,8 +146,26 @@ void *  m3_Realloc_Impl  (void * i_ptr, size_t i_newSize, size_t i_oldSize)
         memset ((u8 *) newPtr + i_oldSize, 0x0, i_newSize - i_oldSize);
     }
 
+    size_t used = (size_t)(fixedHeapPtr - fixedHeap);
+    if (used > fixedHeapHighWater) fixedHeapHighWater = used;
+
     return newPtr;
 }
+
+#if defined(RGBX_WASM3_ZEPHYR_PORT)
+void m3_ResetFixedHeap(void)
+{
+    memset(fixedHeap, 0, sizeof(fixedHeap));
+    fixedHeapPtr = fixedHeap;
+    fixedHeapLast = NULL;
+    fixedHeapHighWater = 0;
+}
+
+size_t m3_GetFixedHeapHighWater(void)
+{
+    return fixedHeapHighWater;
+}
+#endif
 
 #else
 

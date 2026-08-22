@@ -22,8 +22,8 @@
  * deadline overrun; the extension's init/tick function pointers travel as
  * thread arguments, so the user thread reads no kernel-side state. An MPU
  * fault inside the extension aborts only the sandbox thread (see the fatal
- * handler override below), which the in-flight tick observes as a deadline
- * overrun.
+ * handler in sandbox_fatal_handler.cpp), which the in-flight tick observes as
+ * sandbox death.
  */
 
 #include <animations/animation_registry.h>
@@ -39,20 +39,15 @@
 #include <pattern_controller.h>
 #include <settings/persistent_value_registry.h>
 #include <settings/persistent_value_store.h>
-#include <zephyr/fatal.h>
 #include <zephyr/kernel.h>
 #include <zephyr/llext/fs_loader.h>
 #include <zephyr/llext/llext.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/logging/log_ctrl.h>
 #include <zephyr/random/random.h>
 #include <zephyr/shell/shell.h>
 #include <strings.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/sys/libc-hooks.h>
-#include <zephyr/sys/reboot.h>
-
-#include <cmsis_core.h>
 
 #include <array>
 #include <cstdio>
@@ -554,49 +549,12 @@ void sandbox_fault(Slot &slot, const char *what, bool resetParams, uint32_t cpuU
 }
 
 }  // namespace
-}  // namespace extension_host
 
-/* Sandbox fault containment (issue #85, hardware-root-caused via GDB+SWD):
- * Zephyr's default (weak) k_sys_fatal_error_handler halts the ENTIRE system
- * on any fault — z_fatal_error() only demotes a fault to a thread abort if
- * this handler RETURNS, which the default never does. Without this override,
- * an MPU fault inside a sandboxed extension (verified: PC inside the llext
- * heap, reason 19) parked the CPU in arch_system_halt() and took down the
- * whole firmware, defeating the sandbox.
- *
- * The override returns — allowing z_fatal_error() to abort just the
- * offending thread — if and only if the faulting thread is the extension
- * sandbox thread (which is never essential). Kernel panics and faults on any
- * other thread keep the stock halt-everything behavior, preserving today's
- * debugging workflow (GDB attach to the halted CPU) for real firmware bugs.
- * Runs in exception context: keep it minimal.
- *
- * Coredump reboot policy (issue #80): by the time this handler runs, the
- * coredump (if enabled) has ALREADY been written to the coredump_partition —
- * z_fatal_error() calls coredump() before the handler. When no debugger is
- * attached (DHCSR C_DEBUGEN clear), reboot instead of halting so the device
- * recovers and coredump_manager can copy the dump to /NAND:/coredump on the
- * next boot. Under a debugger the halt is kept so GDB still sees the fault
- * live. sys_reboot() is safe here — on Nordic it's NVIC_SystemReset(), valid
- * in handler mode with IRQs locked. */
-extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf) {
-    ARG_UNUSED(esf);
-    if (reason != K_ERR_KERNEL_PANIC &&
-        k_current_get() == &extension_host::sSandboxThread) {
-        LOG_ERR("fault (reason %u) in extension sandbox — aborting only the sandbox thread",
-                reason);
-        return;
-    }
-    log_panic();
-#if defined(CONFIG_APP_COREDUMP_MANAGER)
-    if ((CoreDebug->DHCSR & CoreDebug_DHCSR_C_DEBUGEN_Msk) == 0) {
-        LOG_ERR("Fatal error (reason %u) — rebooting to preserve coredump", reason);
-        sys_reboot(SYS_REBOOT_COLD);
-    }
-#endif
-    LOG_ERR("Halting system (reason %u)", reason);
-    k_fatal_halt(reason);
+bool isCurrentSandboxThread() {
+    return k_current_get() == &sSandboxThread;
 }
+
+}  // namespace extension_host
 
 namespace extension_host {
 namespace {

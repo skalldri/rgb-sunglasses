@@ -8,6 +8,8 @@
 // Allow using opcodes for compilation process
 #define M3_COMPILE_OPCODES
 
+#include <stdint.h>
+
 #include "m3_env.h"
 #include "m3_compile.h"
 #include "m3_exec.h"
@@ -28,6 +30,8 @@ M3Result  EnsureCodePageNumLines  (IM3Compilation o, u32 i_numLines)
 {
     M3Result result = m3Err_none;
 
+    if (i_numLines > UINT32_MAX - 2u)
+        return m3Err_mallocFailedCodePage;
     i_numLines += 2; // room for Bridge
 
     if (NumFreeLines (o->page) < i_numLines)
@@ -1591,6 +1595,10 @@ _try {
     u32 targetCount;
 _   (ReadLEB_u32 (& targetCount, & o->wasm, o->wasmEnd));
 
+    // targetCount is untrusted. Keep the code-line calculation below from
+    // wrapping before it reaches the allocator (wasm3 issue #570).
+    _throwif (m3Err_wasmMalformed, targetCount > UINT32_MAX - 6u);
+
     // Spec: validate that the branch index operand is i32
     if (not IsStackPolymorphic (o))
     {
@@ -1764,6 +1772,11 @@ _       (Pop (o));
     u16 numRets = GetFuncTypeNumResults (i_type);
 
     u16 argTop = topSlot + (numArgs + numRets) * c_ioSlotCount;
+
+    // Argument copies execute before the callee's op_Entry stack check. Make
+    // that check account for the whole outgoing frame (wasm3 PR #501 and
+    // integer-only reproducer #562).
+    TouchSlot (o, argTop - 1);
 
     while (numArgs--)
     {

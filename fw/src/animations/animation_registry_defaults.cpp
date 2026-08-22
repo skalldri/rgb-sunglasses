@@ -35,6 +35,10 @@
 #include <animations/pulse_animation.h>
 #endif
 
+#if defined(CONFIG_APP_WASM3_MVP)
+#include <animations/wasm_mvp_animation.h>
+#endif
+
 #if defined(CONFIG_APP_EXTENSION_HOST)
 #include <extensions/extension_host.h>
 #endif
@@ -99,6 +103,10 @@ using TiltAnimationIsActive = AnimationIsActiveBinding<Animation::Tilt>;
 using PulseAnimationIsActive = AnimationIsActiveBinding<Animation::Pulse>;
 #endif
 
+#if defined(CONFIG_APP_WASM3_MVP)
+using WasmMvpAnimationIsActive = AnimationIsActiveBinding<Animation::WasmMvp>;
+#endif
+
 BaseAnimation *null_animation_factory() {
     return NullAnimation::getInstance();
 }
@@ -160,6 +168,12 @@ BaseAnimation *pulse_animation_factory() {
     return PulseAnimation::getInstance();
 }
 #endif
+
+#if defined(CONFIG_APP_WASM3_MVP)
+BaseAnimation *wasm_mvp_animation_factory() {
+    return WasmMvpAnimation::getInstance();
+}
+#endif
 }  // namespace
 
 int animation_registry_register_defaults() {
@@ -191,6 +205,9 @@ int animation_registry_register_defaults() {
 #endif
 #if defined(CONFIG_ANIMATION_PULSE)
     AnimationIsActiveBinding<Animation::Pulse>::registerActivator(&sActivator);
+#endif
+#if defined(CONFIG_APP_WASM3_MVP)
+    AnimationIsActiveBinding<Animation::WasmMvp>::registerActivator(&sActivator);
 #endif
 
     animation_registry_reset();
@@ -416,6 +433,25 @@ int animation_registry_register_defaults() {
     // panel — see PulseAnimation::setBeatSource.
     pulse_animation_bind_default_sound_dependencies();
 #endif
+#endif
+
+#if defined(CONFIG_APP_WASM3_MVP)
+    ret = animation_registry_register(Animation::WasmMvp, wasm_mvp_animation_factory);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_is_active(Animation::WasmMvp,
+                                                WasmMvpAnimationIsActive::setLocalActiveState);
+    if (ret) {
+        return ret;
+    }
+
+    ret = animation_registry_register_shuffle_include(
+        Animation::WasmMvp, AnimationShuffleIncludeBinding<Animation::WasmMvp>::included);
+    if (ret) {
+        return ret;
+    }
 #endif
 
 #if defined(CONFIG_APP_EXTENSION_HOST) && defined(CONFIG_IMU)

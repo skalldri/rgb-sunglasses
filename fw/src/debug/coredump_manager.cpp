@@ -25,7 +25,7 @@ extern "C" {
  *
  * The check runs every CONFIG_APP_COREDUMP_REMINDER_PERIOD_S rather than only
  * at boot: extension-sandbox faults are demoted to a thread abort by
- * k_sys_fatal_error_handler (extension_host.cpp) and never reboot, but
+ * k_sys_fatal_error_handler (extensions/sandbox_fatal_handler.cpp) and never reboot, but
  * z_fatal_error() captures their coredump before the handler runs — the
  * periodic pass harvests those dumps while the system keeps running.
  *

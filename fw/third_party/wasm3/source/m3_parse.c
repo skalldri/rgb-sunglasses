@@ -592,9 +592,8 @@ _       (Parse_InitExpr (io_module, & i_bytes, i_end));
 _       (ReadLEB_u32 (& segment->size, & i_bytes, i_end));
         segment->data = i_bytes;                                                    m3log (parse, "    segment [%u]  memory: %u;  expr-size: %d;  size: %d",
                                                                                        i, segment->memoryRegion, segment->initExprSize, segment->size);
+        _throwif("data segment underflow", segment->size > (size_t) (i_end - i_bytes));
         i_bytes += segment->size;
-
-        _throwif("data segment underflow", i_bytes > i_end);
     }
 
     _throwif (m3Err_wasmMalformed, i_bytes != i_end);      // section size mismatch

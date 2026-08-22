@@ -199,6 +199,86 @@ config ANIMATION_PULSE
 	  configurable period (period_ms), fading 0 -> full -> 0 in a repeating
 	  triangle-wave cycle.
 
+config APP_WASM3_MVP
+	bool "Enable the built-in Wasm3 extension MVP"
+	default n
+	depends on USERSPACE
+	select THREAD_RUNTIME_STATS
+	help
+	  Builds the pinned Wasm3 interpreter and a trusted, embedded WebAssembly
+	  animation. The module imports only rgbx_mvp.fill(i32) and exports
+	  rgbx_tick(i32). When explicitly enabled, it is selected at boot so a
+	  firmware flash provides an immediate hardware smoke test.
+
+	  This is an interpreter integration proof, not the production extension
+	  loader. It does not execute files from the FAT partition or accept modules
+	  from the companion app. The current dual-runtime proto0 build also falls
+	  below the production RAM stop-loss, so no board configuration may enable
+	  this until the migration recovers the required margin.
+
+config APP_WASM3_MVP_HEAP_SIZE
+	int "Fixed Wasm3 arena size (bytes)"
+	default 16384
+	range 8192 32768
+	depends on APP_WASM3_MVP
+	help
+	  Compile-time fixed arena used only by Wasm3. The interpreter does not draw
+	  from Zephyr's shared heap, and allocation cannot grow beyond this bound.
+
+config APP_WASM3_MVP_VALUE_STACK_SIZE
+	int "Wasm3 value stack size (bytes)"
+	default 1024
+	range 512 4096
+	depends on APP_WASM3_MVP
+	help
+	  Runtime WebAssembly value stack. This is separate from the Zephyr pattern
+	  controller thread stack.
+
+config APP_WASM3_MVP_MODULE_MAX_SIZE
+	int "Maximum embedded Wasm module size (bytes)"
+	default 256
+	range 128 4096
+	depends on APP_WASM3_MVP
+	help
+	  Size of the persistent module buffer inside the Wasm user-memory
+	  partition. Wasm3 requires the input bytes to outlive the loaded module.
+
+config APP_WASM3_MVP_THREAD_PRIORITY
+	int "Wasm sandbox thread priority"
+	default 9
+	depends on APP_WASM3_MVP
+	help
+	  Preemptive priority for the unprivileged Wasm3 sandbox. It must rank below
+	  the pattern controller so the supervisor can enforce CPU and wall limits.
+
+config APP_WASM3_MVP_THREAD_STACK_SIZE
+	int "Wasm sandbox thread stack size (bytes)"
+	default 4096
+	range 2048 8192
+	depends on APP_WASM3_MVP
+	help
+	  Zephyr user-thread stack for Wasm3 parsing, full compilation, imports, and
+	  execution. This is measured separately from the Wasm value stack.
+
+config APP_WASM3_MVP_CPU_BUDGET_MS
+	int "Wasm sandbox CPU budget per handshake (ms)"
+	default 50
+	range 1 250
+	depends on APP_WASM3_MVP
+	help
+	  Maximum CPU time consumed by the Wasm sandbox during initialization or one
+	  tick. The pattern controller measures thread runtime and aborts overruns.
+
+config APP_WASM3_MVP_WALL_BACKSTOP_MS
+	int "Wasm sandbox wall backstop per animation tick (ms)"
+	default 500
+	range 10 2000
+	depends on APP_WASM3_MVP
+	help
+	  Final wall-clock ceiling for lazy initialization plus the first tick, or
+	  for one later tick. It contains blocking code while the CPU budget contains
+	  spinning code. Detection may overshoot by at most 10 ms.
+
 config APP_PERSIST_BT_CONFIG
 	bool "Persist BT-settable configuration via the Settings subsystem"
 	default y

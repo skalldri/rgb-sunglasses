@@ -93,23 +93,30 @@ u32  NumFreeLines  (IM3CodePage i_page)
 
 
 void  EmitWord_impl  (IM3CodePage i_page, void * i_word)
-{                                                                       d_m3Assert (i_page->info.lineIndex+1 <= i_page->info.numLines);
+{
+    if (i_page->info.lineIndex >= i_page->info.numLines)
+        m3_Abort ("code page overflow");
     i_page->code [i_page->info.lineIndex++] = i_word;
 }
 
 void  EmitWord32  (IM3CodePage i_page, const u32 i_word)
-{                                                                       d_m3Assert (i_page->info.lineIndex+1 <= i_page->info.numLines);
+{
+    if (i_page->info.lineIndex >= i_page->info.numLines)
+        m3_Abort ("code page overflow");
     memcpy (& i_page->code[i_page->info.lineIndex++], & i_word, sizeof(i_word));
 }
 
 void  EmitWord64  (IM3CodePage i_page, const u64 i_word)
 {
 #if M3_SIZEOF_PTR == 4
-                                                                        d_m3Assert (i_page->info.lineIndex+2 <= i_page->info.numLines);
+    if (i_page->info.lineIndex > i_page->info.numLines ||
+        i_page->info.numLines - i_page->info.lineIndex < 2)
+        m3_Abort ("code page overflow");
     memcpy (& i_page->code[i_page->info.lineIndex], & i_word, sizeof(i_word));
     i_page->info.lineIndex += 2;
 #else
-                                                                        d_m3Assert (i_page->info.lineIndex+1 <= i_page->info.numLines);
+    if (i_page->info.lineIndex >= i_page->info.numLines)
+        m3_Abort ("code page overflow");
     memcpy (& i_page->code[i_page->info.lineIndex], & i_word, sizeof(i_word));
     i_page->info.lineIndex += 1;
 #endif
@@ -242,5 +249,3 @@ bool  MapPCToOffset  (IM3CodePage i_page, pc_t i_pc, u32 * o_moduleOffset)
 #endif // d_m3RecordBacktraces
 
 //---------------------------------------------------------------------------------------------------------------------------------
-
-
