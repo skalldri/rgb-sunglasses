@@ -17,9 +17,10 @@ still LLEXT.
 
 The production profile does not define `CONFIG_APP_WASM3_V2_PROTOTYPE`, and
 its ELF contains no v2 runtime or import symbols. The verification build uses
-829,204 of 900,608 flash bytes and 420,448 of 450,560 RAM bytes, leaving 71,404
-flash bytes and 30,112 RAM bytes free. It remains above the 64 KiB flash and 24
-KiB RAM stop-loss limits, but no device was flashed for this test-only port.
+842,192 of 900,608 flash bytes and 434,176 of 450,560 RAM bytes, leaving 58,416
+flash bytes and 16,384 RAM bytes free. That is below both the 64 KiB flash and
+24 KiB RAM stop-loss limits, so no board configuration enables this test-only
+port and no device was flashed.
 
 ## Effect inventory
 
