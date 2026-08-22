@@ -72,6 +72,12 @@ jobs:
             test -f "dist/browser/$(basename "$m")"
           done
           grep -q '/sim/assets/' dist/browser/index.html
+          # Scenario playback: the index plus EVERY scenario file must ship
+          # (derived from scenarios/, same no-hardcoded-list rule as above).
+          test -f dist/browser/scenario-index.json
+          for s in scenarios/*.json; do
+            test -f "dist/browser/scenarios/$(basename "$s")"
+          done
 
       - name: Upload run reports
         if: always()

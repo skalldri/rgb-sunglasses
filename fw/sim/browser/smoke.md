@@ -46,6 +46,8 @@ curl -s -o /dev/null -w '%{http_code}\n'            http://localhost:5199/      
 curl -s                                            http://localhost:5199/wasm-index.json
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://localhost:5199/hello.wasm  # 200 application/wasm (modules serve FLAT — publicDir is out/wasm)
 curl -s -o /dev/null -w '%{http_code}\n'            http://localhost:5199/main.ts     # 200, transformed TS
+curl -s                                            http://localhost:5199/scenario-index.json
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://localhost:5199/scenarios/dance.json  # 200 application/json (assets/ serves under here too)
 ```
 
 A non-200 (or an `index.html` body) from `/wasm-index.json` means the config
@@ -106,6 +108,17 @@ plugin is not registered at all.
 - **Audio**: the readout under the audio card shows live band energies and
   beat flags straight out of the firmware DSP. Metronome at 120 BPM should
   light band-0 beats about twice a second.
+- **Scenario playback** (Inputs tab → Scenario): pick `dance` and press
+  Play — the Audio/IMU cards gray out with an "overridden by scenario"
+  badge, the readouts show the scenario's beats and IMU sine, and the
+  status line counts up to the duration ("finished, inputs holding" after).
+  `buttons-tour` fires timeline presses (watch the pad flash); `color-modes`
+  writes params mid-run and the Params tab tracks them. Pause + Step works
+  mid-scenario (events fire exactly once, deterministically); Restart
+  reproduces the identical run; Stop restores the manual sources.
+  "Load scenario…" takes a `.json` picked together with its referenced
+  files (a fresh `capture_to_scenario.py` output, refs matched by
+  basename) and registers it session-only, like a dropped `.wasm`.
 
 ## Production build (the /sim/ Pages deployment)
 

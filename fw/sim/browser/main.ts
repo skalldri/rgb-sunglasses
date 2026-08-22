@@ -26,7 +26,20 @@ import {
   frameIndexForSimTime,
 } from "./sensors/audio";
 import { rejectionMessage, sniffModuleKind } from "../core/moduleSniff";
-import { G, ImuManager, ImuSourceKind, requestMotionPermission } from "./sensors/imu";
+import {
+  LoadedScenario,
+  ScenarioPlayer,
+  fetchScenario,
+  loadLocalScenario,
+  loadScenarioIndex,
+} from "./scenario";
+import {
+  G,
+  ImuManager,
+  ImuSourceKind,
+  TappedImuProvider,
+  requestMotionPermission,
+} from "./sensors/imu";
 import { ConsolePanel } from "./ui/console";
 import { ParamPanel } from "./ui/params";
 import { BrowserWorkerAdapter } from "./workerAdapter";
@@ -90,14 +103,27 @@ const els = {
   imuStatic: must<HTMLElement>("imu-static"),
   imuPermission: must<HTMLButtonElement>("imu-permission"),
   imuReadout: must<HTMLElement>("imu-readout"),
+  scenarioSelect: must<HTMLSelectElement>("scenario-select"),
+  scenarioPlay: must<HTMLButtonElement>("scenario-play"),
+  scenarioStop: must<HTMLButtonElement>("scenario-stop"),
+  scenarioLoad: must<HTMLButtonElement>("scenario-load"),
+  scenarioFile: must<HTMLInputElement>("scenario-file"),
+  scenarioDesc: must<HTMLElement>("scenario-desc"),
+  scenarioStatus: must<HTMLElement>("scenario-status"),
+  audioCard: must<HTMLElement>("audio-card"),
+  imuCard: must<HTMLElement>("imu-card"),
 };
 
 const renderer = new GlassesRenderer(els.canvas);
 const consolePanel = new ConsolePanel(els.console);
 const paramPanel = new ParamPanel(els.params);
 const audio = new AudioSources();
-const audioTap = new TappedAudioProvider(() => audio.provider);
 const imu = new ImuManager();
+// An active scenario's providers override the manual sources; the taps fall
+// back to audio/imu the moment the player's fields go null (Stop).
+const scenarioPlayer = new ScenarioPlayer();
+const audioTap = new TappedAudioProvider(() => scenarioPlayer.audioProvider ?? audio.provider);
+const imuTap = new TappedImuProvider(() => scenarioPlayer.imuProvider ?? imu);
 
 let host: SimHost | null = null;
 let running = false;
@@ -175,12 +201,29 @@ function activateBytes(label: string, bytes: ArrayBuffer): Promise<void> {
   return enqueueActivation(async () => {
     await teardownHost();
 
+    // Every activation replays an active scenario from frame 0: providers
+    // and the timeline hold per-run state (DSP history, clip position,
+    // fired events), and the new host's clock starts at 0 — both sides
+    // must agree on where frame 0 is. Covers Play, Restart, and switching
+    // or reloading the extension mid-scenario alike.
+    if (scenarioPlayer.active) {
+      try {
+        await scenarioPlayer.rearm();
+      } catch (err) {
+        consolePanel.note(`scenario unavailable: ${String(err)} — returning to manual inputs`);
+        stopScenario();
+      }
+    }
+
     const h = new SimHost({
       wasmBytes: bytes,
       adapterFactory: () => new BrowserWorkerAdapter(),
       dtMs: DT_MS,
+      // The CLI seeds its RNG from the scenario for reproducible runs;
+      // without a scenario the browser keeps its fixed default.
+      seed: scenarioPlayer.scenario?.seed ?? 0,
       audioProvider: audioTap,
-      imuProvider: imu,
+      imuProvider: imuTap,
     });
     // Publish BEFORE the await so a teardown can always reach the host
     // that is mid-activation (belt and braces on top of serialization).
@@ -415,6 +458,21 @@ async function stepOnce(): Promise<void> {
     return;
   }
   ticking = true;
+  // Timeline events due at or before the current sim time fire before the
+  // tick that first covers them — same ordering as the CLI's run loop. A
+  // bad event (param name the extension doesn't have) stops the scenario,
+  // not the extension.
+  if (scenarioPlayer.active) {
+    try {
+      const fired = scenarioPlayer.pump(h);
+      if (fired.firedSet) {
+        paramPanel.syncFromHost();
+      }
+    } catch (err) {
+      consolePanel.note(`scenario timeline error: ${String(err)}`);
+      stopScenario();
+    }
+  }
   let outcome: TickOutcome;
   try {
     outcome = await h.tick();
@@ -640,7 +698,9 @@ function updateReadouts(): void {
   }`;
   els.micLevel.style.width = `${Math.min(100, audio.micLevel * 300).toFixed(1)}%`;
 
-  const s = imu.last;
+  // The tap, not the manager: during scenario playback the manager never
+  // runs, and the readout must show what the extension actually saw.
+  const s = imuTap.last;
   const fmt = (v: number) => v.toFixed(2).padStart(7);
   els.imuReadout.textContent =
     `accel  ${fmt(s.accel[0])} ${fmt(s.accel[1])} ${fmt(s.accel[2])}  m/s²\n` +
@@ -828,6 +888,165 @@ function wireImuPanel(): void {
   syncDataFor(card, imu.sourceKind);
 }
 
+/* ------------------------------------------------------------------ */
+/* Scenario playback                                                    */
+/* ------------------------------------------------------------------ */
+
+/** One entry the scenario <select> can point at — bundled (fetched lazily)
+ * or picked from disk (bytes already snapshotted). Keyed by the option's
+ * value, same opaque-key pattern as moduleSources. */
+interface ScenarioSource {
+  label: string;
+  /** Shown on the hint line while this entry is selected. */
+  description: string;
+  load(): Promise<LoadedScenario>;
+}
+const scenarioSources = new Map<string, ScenarioSource>();
+
+/** Starts (or restarts) whatever the scenario <select> points at. The load
+ * happens BEFORE any host teardown so a broken file leaves the current run
+ * untouched; the actual provider build happens inside activateBytes'
+ * rearm, once per fresh host. */
+async function playScenario(): Promise<void> {
+  const source = scenarioSources.get(els.scenarioSelect.value);
+  if (source === undefined) {
+    return;
+  }
+  let loaded: LoadedScenario;
+  try {
+    loaded = await source.load();
+  } catch (err) {
+    consolePanel.note(`scenario "${source.label}" failed to load: ${String(err)}`);
+    return;
+  }
+  scenarioPlayer.setLoaded(loaded);
+  consolePanel.note(
+    `scenario "${loaded.scenario.name}" — ${(loaded.scenario.durationMs / 1000).toFixed(1)} s, replaying from frame 0`,
+  );
+  await activateSelection();
+  syncScenarioUi();
+}
+
+/** Back to manual inputs. No host restart: the taps fall back to the manual
+ * sources immediately; the manual audio generator is re-based to the current
+ * frame clock so it starts at ITS OWN frame 0 rather than mid-clip. */
+function stopScenario(): void {
+  if (!scenarioPlayer.active) {
+    return;
+  }
+  scenarioPlayer.stop();
+  audio.setSource({});
+  consolePanel.note("scenario stopped — manual inputs restored");
+  syncScenarioUi();
+}
+
+/** Reflects scenario state into the Inputs tab: button labels/enablement,
+ * and the "overridden" treatment on the manual Audio/IMU cards. */
+function syncScenarioUi(): void {
+  const active = scenarioPlayer.active;
+  const selected = scenarioSources.get(els.scenarioSelect.value);
+  els.scenarioPlay.disabled = selected === undefined;
+  els.scenarioPlay.textContent = active ? "Restart" : "Play scenario";
+  els.scenarioStop.disabled = !active;
+  els.scenarioDesc.textContent =
+    selected?.description ??
+    (scenarioSources.size === 0
+      ? "no bundled scenarios — use “Load scenario…” to pick a .json (+ its .wav) from disk"
+      : "");
+  els.scenarioStatus.classList.toggle("hidden", !active);
+  for (const card of [els.audioCard, els.imuCard]) {
+    card.classList.toggle("scenario-overridden", active);
+    card
+      .querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
+        "select, input, button",
+      )
+      .forEach((control) => (control.disabled = active));
+  }
+  updateScenarioStatus();
+}
+
+/** The progress line under the scenario controls, driven by the shared
+ * 200 ms UI timer — playback itself never depends on this. */
+function updateScenarioStatus(): void {
+  const s = scenarioPlayer.scenario;
+  if (s === null) {
+    return;
+  }
+  const t = host === null ? 0 : host.simTimeMs;
+  const clamped = Math.min(t, s.durationMs);
+  const done = scenarioPlayer.finished(t);
+  els.scenarioStatus.textContent =
+    `${s.name}  ${(clamped / 1000).toFixed(1)} / ${(s.durationMs / 1000).toFixed(1)} s` +
+    (done ? "  — finished, inputs holding" : "");
+}
+
+/** Registers files picked from disk as a session-only scenario and plays
+ * it — same immediate-activation behavior as dropping a .wasm. */
+async function handleScenarioFiles(files: File[]): Promise<void> {
+  let loaded: LoadedScenario;
+  try {
+    loaded = await loadLocalScenario(files);
+  } catch (err) {
+    consolePanel.note(`scenario load failed: ${String(err)}`);
+    return;
+  }
+  const key = `local:${loaded.scenario.name}`; // opaque Map key, never parsed
+  const isNew = !scenarioSources.has(key);
+  scenarioSources.set(key, {
+    label: loaded.scenario.name,
+    description: loaded.scenario.description ?? "",
+    load: () => Promise.resolve(loaded),
+  });
+  if (isNew) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = `${loaded.scenario.name} (local)`;
+    els.scenarioSelect.append(opt);
+  }
+  consolePanel.note(
+    `${isNew ? "loaded" : "replaced"} local scenario "${loaded.scenario.name}" — session only`,
+  );
+  els.scenarioSelect.value = key;
+  await playScenario();
+}
+
+async function wireScenarioPanel(): Promise<void> {
+  const entries = await loadScenarioIndex();
+  for (const entry of entries) {
+    const key = `bundled:${entry.url}`; // opaque Map key, never parsed
+    scenarioSources.set(key, {
+      label: entry.name,
+      description: entry.description,
+      load: () => fetchScenario(entry.url),
+    });
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = `${entry.name} (${(entry.durationMs / 1000).toFixed(0)} s)`;
+    els.scenarioSelect.append(opt);
+  }
+  els.scenarioSelect.addEventListener("change", () => {
+    // Choosing "None" while playing stops; choosing a scenario only arms
+    // the Play button (starting is an explicit action, like the CLI).
+    if (els.scenarioSelect.value === "") {
+      stopScenario();
+    }
+    syncScenarioUi();
+  });
+  els.scenarioPlay.addEventListener("click", () => void playScenario());
+  // Stop keeps the selection, so Play re-runs the same scenario in one click.
+  els.scenarioStop.addEventListener("click", () => stopScenario());
+  els.scenarioLoad.addEventListener("click", () => els.scenarioFile.click());
+  els.scenarioFile.addEventListener("change", () => {
+    const files = els.scenarioFile.files === null ? [] : Array.from(els.scenarioFile.files);
+    // Same files re-picked later must fire change again (iteration loop).
+    els.scenarioFile.value = "";
+    if (files.length > 0) {
+      void handleScenarioFiles(files);
+    }
+  });
+  syncScenarioUi();
+}
+
 function wireTabs(): void {
   document.querySelectorAll<HTMLButtonElement>(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -875,6 +1094,7 @@ async function boot(): Promise<void> {
   wireKeyboard();
   wireAudioPanel();
   wireImuPanel();
+  await wireScenarioPanel();
 
   audio.setFrameClock(() => (host === null ? 0 : frameIndexForSimTime(host.simTimeMs)));
   if (!(await audio.loadDsp())) {
@@ -942,6 +1162,7 @@ async function boot(): Promise<void> {
   setInterval(() => {
     updateStats();
     updateReadouts();
+    updateScenarioStatus();
     consolePanel.flush();
   }, 200);
 }

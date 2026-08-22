@@ -351,6 +351,34 @@ input[type="range"] {
   margin-top: 4px;
 }
 
+/* ---------------- scenario playback ---------------- */
+
+.scenario-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* A playing scenario drives audio + IMU itself: the manual cards stay
+ * visible (their readouts still show what the extension sees) but their
+ * controls are disabled and badged. */
+.card.scenario-overridden h3::after {
+  content: "overridden by scenario";
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.card.scenario-overridden .field,
+.card.scenario-overridden .check,
+.card.scenario-overridden .meter {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 /* ---------------- tabs ---------------- */
 
 .tabs {

@@ -9,6 +9,25 @@
 
 import type { ImuProvider, ImuSample } from "../../core/providers";
 
+/**
+ * Pass-through provider that remembers the last sample it handed to the
+ * host, so the readout shows what the extension saw regardless of which
+ * source produced it (manual or scenario). Indirects through a getter —
+ * the same pattern as TappedAudioProvider — so it can be assigned to
+ * SimHost.imuProvider once and the source swapped underneath.
+ */
+export class TappedImuProvider implements ImuProvider {
+  last: ImuSample = { accel: [0, 0, 9.81], gyro: [0, 0, 0] };
+
+  constructor(private readonly inner: () => ImuProvider) {}
+
+  sampleAt(tMs: number): ImuSample {
+    const sample = this.inner().sampleAt(tMs);
+    this.last = sample;
+    return sample;
+  }
+}
+
 export const G = 9.81;
 const DEG_TO_RAD = Math.PI / 180;
 

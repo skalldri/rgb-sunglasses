@@ -112,6 +112,17 @@ feed it through the **real DSP** wasm; `features` replays a D-line dump
 one-tick edges; params are set by name; everything is seeded and
 deterministic — same seed ⇒ bit-identical frames.
 
+The browser UI replays scenarios too (Inputs tab → Scenario): bundled ones
+are served via `/scenario-index.json` (assets included, dev and the `/sim/`
+Pages build alike), and "Load scenario…" takes an uncommitted `.json` picked
+together with the files it references (e.g. a fresh `capture_to_scenario.py`
+output — refs resolve by basename). Playback drives audio + IMU + the
+timeline through the same `core/scenarioProviders`/`core/scenarioTimeline`
+code as the CLI; `expect{}` is a CLI/CI concern and is ignored in the
+browser. Play/Restart tears down and rebuilds the host so every run starts
+at frame 0 (there is deliberately no seek — same reason the CLI rejects
+`--start-time-ms` for finite-stimulus scenarios).
+
 ## Goldens
 
 `fw/sim/golden/<ext>/<scenario>.json` holds frame digests at fixed ticks
