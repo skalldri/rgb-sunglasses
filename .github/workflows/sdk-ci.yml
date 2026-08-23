@@ -139,6 +139,31 @@ jobs:
             -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_TARGET=wasm -DRGBX_STRICT_TOOLCHAIN=ON
           cmake --build "$RUNNER_TEMP/b-wasm"
 
+      # The version gate's reject side. check-wasm.mjs uses top-level await, so
+      # an older node fails the wasm link with a bare SyntaxError from inside
+      # the SDK, naming neither node nor a version (rgbx-extension-template#5).
+      # The gate turns that into a message naming node, the version found and
+      # the fix — this proves it still fires. Pre-setting RGBX_NODE fills the
+      # cache entry find_program() would, so the stub is what gets checked.
+      - name: Reject a too-old node
+        run: |
+          stub="$RUNNER_TEMP/old-node/node"
+          mkdir -p "$(dirname "$stub")"
+          printf '#!/bin/sh\necho v12.22.9\n' > "$stub"
+          chmod +x "$stub"
+          if cmake -S fw/sdk/tests/consumer -B "$RUNNER_TEMP/b-oldnode" \
+               -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_TARGET=wasm \
+               -DRGBX_NODE="$stub" > "$RUNNER_TEMP/oldnode.log" 2>&1; then
+            echo "configure succeeded with node v12.22.9 — the version gate did not fire"
+            exit 1
+          fi
+          if ! grep -q "is too old" "$RUNNER_TEMP/oldnode.log"; then
+            echo "configure failed, but not with the version-gate message:"
+            cat "$RUNNER_TEMP/oldnode.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/oldnode.log"
+
       - name: Compare wasm export/import sets against build-extensions.sh
         run: |
           fw/sim/build-extensions.sh hello cpptest

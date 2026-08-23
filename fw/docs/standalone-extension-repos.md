@@ -172,7 +172,7 @@ rgbx-sdk-<fw-version>/
     shim/abi_offsets.c                   copied — struct-layout static_asserts compile
                                          into every module; ABI drift fails the build
     check-wasm.mjs                       copied from fw/sim/scripts/ (zero-import +
-                                         required-export gate; needs Node)
+                                         required-export gate; needs Node >= 20)
   cmake/
     rgbx-sdk-config.cmake                package entry point; defines rgbx_add_extension()
     toolchains/arm-llext.cmake           arm-none-eabi toolchain file with the §4 flags;
