@@ -53,6 +53,32 @@ if(RGBX_TARGET STREQUAL "wasm")
     if(NOT RGBX_NODE)
         message(FATAL_ERROR "rgbx-sdk: node not found — Node.js (>= 20) is required to run the wasm module gate (check-wasm.mjs)")
     endif()
+    # ...and it has to be new enough to RUN it. check-wasm.mjs uses top-level
+    # await, so an older node fails the wasm link with a bare SyntaxError
+    # pointing into this SDK tree, naming neither node nor a version — the arm
+    # target having built fine first, so it reads like the SDK shipped broken
+    # JS (rgbx-extension-template#5, reported against Ubuntu 22.04's v12.22.9).
+    # Deferring the check to link time is what made it unreadable; do it here.
+    execute_process(COMMAND "${RGBX_NODE}" --version
+                    OUTPUT_VARIABLE _rgbx_node_version
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET
+                    RESULT_VARIABLE _rgbx_node_rc)
+    if(NOT _rgbx_node_rc EQUAL 0)
+        message(FATAL_ERROR "rgbx-sdk: '${RGBX_NODE} --version' failed (exit ${_rgbx_node_rc})")
+    endif()
+    if(NOT _rgbx_node_version MATCHES "^v([0-9]+)\\.")
+        message(FATAL_ERROR "rgbx-sdk: unexpected 'node --version' output from '${RGBX_NODE}': '${_rgbx_node_version}'")
+    endif()
+    # Read CMAKE_MATCH_1 only under the confirmed match above — a later
+    # regex anywhere in this scope would otherwise decide the version.
+    if(CMAKE_MATCH_1 LESS 20)
+        message(FATAL_ERROR "rgbx-sdk: node ${_rgbx_node_version} at '${RGBX_NODE}' is too old — "
+            "Node.js >= 20 is required to run the wasm module gate (check-wasm.mjs uses "
+            "top-level await). Install a newer Node (e.g. nvm install 22), then re-configure "
+            "with -URGBX_NODE: RGBX_NODE is cached, so an existing build tree keeps using the "
+            "old interpreter.")
+    endif()
 endif()
 
 # rgbx_add_extension(<name> SOURCES <tu>)
