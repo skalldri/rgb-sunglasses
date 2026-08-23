@@ -21,6 +21,7 @@
 #     scripts/                 pinned toolchain installers
 
 set -euo pipefail
+export COPYFILE_DISABLE=1
 
 SDK_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SDK_DIR/../.." && pwd)"
@@ -50,6 +51,10 @@ if [ -z "$VERSION" ]; then
         fi
     fi
 fi
+if [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ ]]; then
+    echo "error: version must be a 1..64 character path-safe token" >&2
+    exit 2
+fi
 
 abi_version="$(grep -o '#define RGBX_ABI_VERSION [0-9]*' "$REPO_ROOT/fw/include/rgbx/rgbx_api.h" | grep -o '[0-9]*$')"
 arm_toolchain="$(grep -o 'ARM_TOOLCHAIN_VERSION="[^"]*"' "$SDK_DIR/scripts/install-arm-toolchain.sh" | cut -d'"' -f2)"
@@ -72,6 +77,7 @@ trap 'rm -rf "$tmp"' EXIT
 root="$tmp/rgbx-sdk-$VERSION"
 
 mkdir -p "$root/include/rgbx" "$root/arm" "$root/wasm/shim" "$root/cmake" "$root/scripts"
+cp "$SDK_DIR/LICENSE.Apache-2.0" "$root/LICENSE.Apache-2.0"
 
 # ABI headers — the contract, verbatim.
 cp "$REPO_ROOT/fw/include/rgbx/"*.h "$root/include/rgbx/"
@@ -110,7 +116,8 @@ cat > "$root/sdk-manifest.json" <<EOF
 EOF
 
 tarball="$OUTPUT/rgbx-sdk-$VERSION.tar.gz"
-tar -czf "$tarball" -C "$tmp" "rgbx-sdk-$VERSION"
+source_date_epoch="${SOURCE_DATE_EPOCH:-0}"
+python3 "$SDK_DIR/create-reproducible-archive.py" "$root" "$tarball" "$source_date_epoch"
 
 sha256="$(sha256sum "$tarball" | cut -d' ' -f1)"
 echo "built $tarball"

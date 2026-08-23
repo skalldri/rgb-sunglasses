@@ -66,6 +66,19 @@ jobs:
         with:
           version: 0.0.0-ci
 
+      - name: Verify SDK license payload
+        run: |
+          cmp fw/sdk/LICENSE.Apache-2.0 "$SDK_DIR/LICENSE.Apache-2.0"
+          fw/sdk/package-sdk.sh --version 0.0.0-ci --output "$RUNNER_TEMP/rgbx-sdk-second"
+          cmp "$SDK_TARBALL" "$RUNNER_TEMP/rgbx-sdk-second/rgbx-sdk-0.0.0-ci.tar.gz"
+          python3 fw/sdk/tests/check-sdk-archive.py "$SDK_TARBALL"
+          python3 fw/sdk/tests/check-sdk-archive.py \
+              "$RUNNER_TEMP/rgbx-sdk-second/rgbx-sdk-0.0.0-ci.tar.gz"
+          if fw/sdk/package-sdk.sh --version '../unsafe' --output "$RUNNER_TEMP"; then
+            echo "SDK packager accepted an unsafe version token"
+            exit 1
+          fi
+
       # Third member of the allowed-symbols lockstep set (the other two are
       # extension_exports.c, checked by build.yaml's check-allowed-symbols.sh):
       # every sanctioned symbol must be DECLARED by <rgbx/rgbx_sys.h> with the
