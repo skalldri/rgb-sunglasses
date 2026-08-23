@@ -6,12 +6,12 @@ migration targets.
 
 ## Current score
 
-- Behaviorally ported to the RGBX v2 prototype: **1 of 4 (25%)**.
+- Behaviorally ported to the RGBX v2 prototype: **2 of 4 (50%)**.
 - Production-loadable RGBX packages: **0 of 4**.
-- Shipped community effects migrated: **0 of 2**.
+- Shipped community effects migrated: **1 of 2**.
 
-`cpptest` is the first behaviorally complete port. It is intentionally enabled
-only in the focused QEMU test profile. The firmware application still runs the
+`cpptest` and the registry-pinned `plasma` effect are behaviorally complete
+ports. They are intentionally enabled only in the focused QEMU test profile. The firmware application still runs the
 embedded `rgbx_mvp.fill` demonstration and the production extension path is
 still LLEXT.
 
@@ -35,7 +35,7 @@ device was flashed.
 | Effect | Role | RGBX v2 status | Remaining work |
 | --- | --- | --- | --- |
 | `cpptest` | In-repo development and C++ integration fixture | Behaviorally ported. QEMU matches the legacy integer plasma output for state, speed, color, and invert changes. | Reproducible phone compiler lowering, RGBX packaging, production loader integration, proto0 timing. |
-| `plasma` | Registry-shipped community effect | Not ported. | Scalar parameters are covered, but its three `sinf` evaluations per pixel need a bounded math strategy and golden parity tests. |
+| `plasma` | Registry-shipped community effect | Behaviorally ported. The memoryless guest uses a bounded Q15 recurrence and palette/luma spans; QEMU compares every channel against the legacy three-sine formula within one value. | Reproducible compiler provenance, RGBX packaging, production loader integration, and proto0 visual/timing evidence. |
 | `demo_wave` | Registry-shipped community effect | Not ported. | Needs bounded sine, audio display buckets, beat inputs, and `set_good_moment`. |
 | `hello` | In-repo development and sandbox recovery fixture | Not ported. | Needs string parameters, buttons, IMU, audio buckets and beats, good-moment signaling, and replacements for deliberate crash and hang test hooks. |
 
@@ -92,8 +92,7 @@ A production migration additionally requires:
 
 1. Turn the `cpptest` lowering into a deterministic compiler fixture and load
    its staged RGBX package through the production candidate path.
-2. Add bounded math and port the shipped `plasma` effect.
-3. Add audio inputs and good-moment signaling, then port `demo_wave`.
-4. Add the remaining development-only inputs and sandbox test replacements,
+2. Add audio inputs and good-moment signaling, then port `demo_wave`.
+3. Add the remaining development-only inputs and sandbox test replacements,
    then port `hello`.
-5. Run the compatibility train and remove LLEXT support.
+4. Run the compatibility train and remove LLEXT support.
