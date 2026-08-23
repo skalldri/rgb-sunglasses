@@ -33,6 +33,7 @@ constexpr int kPollMs = MAX(1, MIN(CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS, 10));
 constexpr char kV2ImportModule[] = "rgbx_v2";
 constexpr char kV2ParamU32Import[] = "param_u32";
 constexpr char kV2SetSpan8Import[] = "set_span8";
+constexpr char kV2SetLumaSpan8Import[] = "set_luma_span8";
 constexpr char kV2InitExport[] = "rgbx_init";
 constexpr uint32_t kMaxV2Globals = 8;
 constexpr uint32_t kMaxV2ParamCallsPerTick = 16;
@@ -43,6 +44,12 @@ static_assert(kV2PixelCount % kV2PixelsPerSpan == 0);
 enum class RuntimeProfile : uint8_t {
     Mvp,
     V2,
+};
+
+enum class V2SpanEncoding : uint8_t {
+    None,
+    Rgb24,
+    PaletteLuma,
 };
 #endif
 
@@ -82,6 +89,7 @@ struct SharedMailbox {
     RequestKind requestKind;
 #if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
     RuntimeProfile profile;
+    V2SpanEncoding spanEncoding;
     uint32_t params[kV2ParameterCount];
     uint32_t pendingPixels[kV2PixelCount];
     uint32_t committedPixels[kV2PixelCount];
@@ -255,7 +263,7 @@ bool modulePolicyAllows(IM3Module module) {
         }
 
         bool foundParamU32 = false;
-        bool foundSetSpan8 = false;
+        V2SpanEncoding spanEncoding = V2SpanEncoding::None;
         for (uint32_t i = 0; i < module->numFuncImports; ++i) {
             const M3ImportInfo& import = module->functions[i].import;
             if (import.moduleUtf8 == nullptr || import.fieldUtf8 == nullptr ||
@@ -264,13 +272,21 @@ bool modulePolicyAllows(IM3Module module) {
             }
             if (std::strcmp(import.fieldUtf8, kV2ParamU32Import) == 0 && !foundParamU32) {
                 foundParamU32 = true;
-            } else if (std::strcmp(import.fieldUtf8, kV2SetSpan8Import) == 0 && !foundSetSpan8) {
-                foundSetSpan8 = true;
+            } else if (std::strcmp(import.fieldUtf8, kV2SetSpan8Import) == 0 &&
+                       spanEncoding == V2SpanEncoding::None) {
+                spanEncoding = V2SpanEncoding::Rgb24;
+            } else if (std::strcmp(import.fieldUtf8, kV2SetLumaSpan8Import) == 0 &&
+                       spanEncoding == V2SpanEncoding::None) {
+                spanEncoding = V2SpanEncoding::PaletteLuma;
             } else {
                 return false;
             }
         }
-        return foundParamU32 && foundSetSpan8;
+        if (!foundParamU32 || spanEncoding == V2SpanEncoding::None) {
+            return false;
+        }
+        sShared.spanEncoding = spanEncoding;
+        return true;
     }
 #endif
 
@@ -380,7 +396,8 @@ const void* setSpan8Host(IM3Runtime runtime, IM3ImportContext context, uint64_t*
 
     auto* shared = static_cast<SharedMailbox*>(const_cast<void*>(_ctx->userdata));
     if (shared == nullptr || shared->profile != RuntimeProfile::V2 ||
-        shared->requestGeneration == 0 || shared->setSpanCallCount >= kV2SpanCallsPerTick ||
+        shared->spanEncoding != V2SpanEncoding::Rgb24 || shared->requestGeneration == 0 ||
+        shared->setSpanCallCount >= kV2SpanCallsPerTick ||
         firstPixel != shared->setSpanCallCount * kV2PixelsPerSpan) {
         if (shared != nullptr) {
             shared->status = SharedStatus::HostImportRejected;
@@ -392,6 +409,66 @@ const void* setSpan8Host(IM3Runtime runtime, IM3ImportContext context, uint64_t*
                                                color4, color5, color6, color7};
     for (size_t i = 0; i < kV2PixelsPerSpan; ++i) {
         shared->pendingPixels[firstPixel + i] = colors[i] & 0x00ffffffu;
+    }
+    ++shared->setSpanCallCount;
+    m3ApiSuccess();
+}
+
+uint32_t blendLuma(uint32_t foreground, uint32_t background, uint32_t luma) {
+    foreground &= 0x00ffffffu;
+    background &= 0x00ffffffu;
+    const int32_t red0 = static_cast<int32_t>(background >> 16u);
+    const int32_t green0 = static_cast<int32_t>((background >> 8u) & 0xffu);
+    const int32_t blue0 = static_cast<int32_t>(background & 0xffu);
+    const int32_t amount = static_cast<int32_t>(luma);
+    const uint32_t red = static_cast<uint32_t>(red0 +
+                                               (static_cast<int32_t>(foreground >> 16u) - red0) *
+                                                   amount / 255);
+    const uint32_t green = static_cast<uint32_t>(
+        green0 + (static_cast<int32_t>((foreground >> 8u) & 0xffu) - green0) * amount / 255);
+    const uint32_t blue = static_cast<uint32_t>(
+        blue0 + (static_cast<int32_t>(foreground & 0xffu) - blue0) * amount / 255);
+    return (red << 16u) | (green << 8u) | blue;
+}
+
+const void* setLumaSpan8Host(IM3Runtime runtime, IM3ImportContext context, uint64_t* stack,
+                             void* memory) {
+    uint64_t* _sp = stack;
+    void* _mem = memory;
+    IM3ImportContext _ctx = context;
+    m3ApiGetArg(uint32_t, firstPixel);
+    m3ApiGetArg(uint32_t, foreground);
+    m3ApiGetArg(uint32_t, background);
+    m3ApiGetArg(uint32_t, luma0);
+    m3ApiGetArg(uint32_t, luma1);
+    m3ApiGetArg(uint32_t, luma2);
+    m3ApiGetArg(uint32_t, luma3);
+    m3ApiGetArg(uint32_t, luma4);
+    m3ApiGetArg(uint32_t, luma5);
+    m3ApiGetArg(uint32_t, luma6);
+    m3ApiGetArg(uint32_t, luma7);
+    (void)runtime;
+    (void)_mem;
+
+    auto* shared = static_cast<SharedMailbox*>(const_cast<void*>(_ctx->userdata));
+    const uint32_t lumas[kV2PixelsPerSpan] = {luma0, luma1, luma2, luma3,
+                                              luma4, luma5, luma6, luma7};
+    bool invalidLuma = false;
+    for (uint32_t luma : lumas) {
+        invalidLuma = invalidLuma || luma > 255u;
+    }
+    if (shared == nullptr || shared->profile != RuntimeProfile::V2 ||
+        shared->spanEncoding != V2SpanEncoding::PaletteLuma || shared->requestGeneration == 0 ||
+        shared->setSpanCallCount >= kV2SpanCallsPerTick ||
+        firstPixel != shared->setSpanCallCount * kV2PixelsPerSpan || invalidLuma) {
+        if (shared != nullptr) {
+            shared->status = SharedStatus::HostImportRejected;
+        }
+        return m3Err_trapAbort;
+    }
+
+    for (size_t i = 0; i < kV2PixelsPerSpan; ++i) {
+        shared->pendingPixels[firstPixel + i] = blendLuma(foreground, background, lumas[i]);
     }
     ++shared->setSpanCallCount;
     m3ApiSuccess();
@@ -445,9 +522,12 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
     if (shared->profile == RuntimeProfile::V2) {
         result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2ParamU32Import, "i(i)",
                                       paramU32Host, shared);
-        if (result == m3Err_none) {
+        if (result == m3Err_none && shared->spanEncoding == V2SpanEncoding::Rgb24) {
             result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2SetSpan8Import,
                                           "v(iiiiiiiii)", setSpan8Host, shared);
+        } else if (result == m3Err_none && shared->spanEncoding == V2SpanEncoding::PaletteLuma) {
+            result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2SetLumaSpan8Import,
+                                          "v(iiiiiiiiiii)", setLumaSpan8Host, shared);
         }
     } else
 #endif
@@ -800,6 +880,12 @@ Result triggerMemoryFaultForTest(k_timepoint_t deadline) {
 bool waitForRequestStartForTest(k_timeout_t timeout) {
     return k_sem_take(&sRequestStartedForTest, timeout) == 0;
 }
+
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+uint32_t blendLumaForTest(uint32_t foreground, uint32_t background, uint32_t luma) {
+    return blendLuma(foreground, background, luma);
+}
+#endif
 #endif
 
 }  // namespace wasm_mvp_runtime

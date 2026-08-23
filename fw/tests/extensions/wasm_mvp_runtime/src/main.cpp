@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <initializer_list>
 #include <vector>
 
@@ -107,6 +108,143 @@ void appendLebU32(std::vector<uint8_t>& output, uint32_t value) {
         }
         output.push_back(byte);
     } while (value != 0);
+}
+
+template <size_t Capacity>
+struct FixedBytes {
+    std::array<uint8_t, Capacity> bytes{};
+    size_t size = 0;
+
+    void push(uint8_t value) {
+        zassert_true(size < Capacity, "fixed Wasm builder overflow");
+        bytes[size++] = value;
+    }
+
+    void append(std::initializer_list<uint8_t> values) {
+        for (uint8_t value : values) {
+            push(value);
+        }
+    }
+
+    template <size_t OtherCapacity>
+    void append(const FixedBytes<OtherCapacity>& other) {
+        for (size_t i = 0; i < other.size; ++i) {
+            push(other.bytes[i]);
+        }
+    }
+};
+
+template <size_t Capacity>
+void appendLebU32(FixedBytes<Capacity>& output, uint32_t value) {
+    do {
+        uint8_t byte = value & 0x7fu;
+        value >>= 7u;
+        if (value != 0) {
+            byte |= 0x80u;
+        }
+        output.push(byte);
+    } while (value != 0);
+}
+
+template <size_t Capacity>
+void appendPositiveI32Const(FixedBytes<Capacity>& output, uint32_t value) {
+    output.push(0x41);
+    while (true) {
+        uint8_t byte = value & 0x7fu;
+        value >>= 7u;
+        const bool done = value == 0 && (byte & 0x40u) == 0;
+        if (!done) {
+            byte |= 0x80u;
+        }
+        output.push(byte);
+        if (done) {
+            return;
+        }
+    }
+}
+
+template <size_t Capacity>
+void appendName(FixedBytes<Capacity>& output, const char* name) {
+    const size_t length = std::strlen(name);
+    appendLebU32(output, length);
+    for (size_t i = 0; i < length; ++i) {
+        output.push(static_cast<uint8_t>(name[i]));
+    }
+}
+
+template <size_t ModuleCapacity, size_t PayloadCapacity>
+void appendSection(FixedBytes<ModuleCapacity>& module, uint8_t id,
+                   const FixedBytes<PayloadCapacity>& payload) {
+    module.push(id);
+    appendLebU32(module, payload.size);
+    module.append(payload);
+}
+
+FixedBytes<2048> sLumaSpanModule;
+
+void buildLumaSpanV2Module(FixedBytes<2048>& module, bool invalidLuma) {
+    module.bytes.fill(0);
+    module.size = 0;
+    module.append({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00});
+
+    FixedBytes<64> types;
+    types.append({0x04, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x0b});
+    for (size_t i = 0; i < 11; ++i) {
+        types.push(0x7f);
+    }
+    types.append({0x00, 0x60, 0x00, 0x00, 0x60, 0x01, 0x7f, 0x00});
+    appendSection(module, 0x01, types);
+
+    FixedBytes<96> imports;
+    imports.push(0x02);
+    appendName(imports, "rgbx_v2");
+    appendName(imports, "param_u32");
+    imports.append({0x00, 0x00});
+    appendName(imports, "rgbx_v2");
+    appendName(imports, "set_luma_span8");
+    imports.append({0x00, 0x01});
+    appendSection(module, 0x02, imports);
+
+    FixedBytes<8> functions;
+    functions.append({0x02, 0x02, 0x03});
+    appendSection(module, 0x03, functions);
+
+    FixedBytes<48> exports;
+    exports.push(0x02);
+    appendName(exports, "rgbx_init");
+    exports.append({0x00, 0x02});
+    appendName(exports, "rgbx_tick");
+    exports.append({0x00, 0x03});
+    appendSection(module, 0x07, exports);
+
+    FixedBytes<8> initBody;
+    initBody.append({0x00, 0x0b});
+    FixedBytes<128> tickBody;
+    tickBody.append({0x01, 0x01, 0x7f});  // one i32 local at index 1
+    appendPositiveI32Const(tickBody, 0);
+    tickBody.append({0x21, 0x01, 0x03, 0x40});  // local.set 1; loop
+    tickBody.append({0x20, 0x01});              // local.get 1: first pixel
+    appendPositiveI32Const(tickBody, 0x00204060u);
+    appendPositiveI32Const(tickBody, 0x00020406u);
+    for (uint32_t pixel = 0; pixel < 8; ++pixel) {
+        const uint32_t luma = invalidLuma && pixel == 0 ? 256u : pixel * 36u;
+        appendPositiveI32Const(tickBody, luma);
+    }
+    tickBody.append({0x10, 0x01,              // call set_luma_span8
+                     0x20, 0x01});            // local.get 1
+    appendPositiveI32Const(tickBody, 8);
+    tickBody.append({0x6a, 0x22, 0x01});      // i32.add; local.tee 1
+    appendPositiveI32Const(tickBody, 480);
+    tickBody.append({0x49, 0x0d, 0x00,        // i32.lt_u; br_if loop
+                     0x0b, 0x0b});            // end loop; end function
+
+    FixedBytes<192> code;
+    code.push(0x02);
+    appendLebU32(code, initBody.size);
+    code.append(initBody);
+    appendLebU32(code, tickBody.size);
+    code.append(tickBody);
+    appendSection(module, 0x0a, code);
 }
 
 std::vector<uint8_t> minimalV2Module(const std::vector<uint8_t>& tickInstructions,
@@ -301,6 +439,47 @@ ZTEST(wasm_mvp_runtime, test_v2_host_import_limits_trap_without_committing_outpu
         zassert_false(output.goodMoment);
         expectGoodActivationAndTick(0, kExpectedCyan);
     }
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_palette_luma_span_commits_only_complete_valid_frame) {
+    zassert_equal(wasm_mvp_runtime::blendLumaForTest(0x00102030u, 0x00f0d0b0u, 0),
+                  0x00f0d0b0u);
+    zassert_equal(wasm_mvp_runtime::blendLumaForTest(0x00102030u, 0x00f0d0b0u, 85),
+                  0x00a69686u);
+    zassert_equal(wasm_mvp_runtime::blendLumaForTest(0x00000000u, 0x00ffffffu, 128),
+                  0x007f7f7fu);
+    zassert_equal(wasm_mvp_runtime::blendLumaForTest(0x00102030u, 0x00f0d0b0u, 255),
+                  0x00102030u);
+
+    buildLumaSpanV2Module(sLumaSpanModule, false);
+    zassert_true(sLumaSpanModule.size <= CONFIG_APP_WASM3_MVP_MODULE_MAX_SIZE);
+    zassert_equal(wasm_mvp_runtime::startV2(sLumaSpanModule.bytes.data(), sLumaSpanModule.size,
+                                            deadline()),
+                  wasm_mvp_runtime::Result::Completed);
+    wasm_mvp_runtime::V2TickInputs inputs;
+    zassert_equal(wasm_mvp_runtime::tickV2(0, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    for (size_t pixel = 0; pixel < sV2Output.pixels.size(); ++pixel) {
+        zassert_equal(sV2Output.pixels[pixel],
+                      wasm_mvp_runtime::blendLumaForTest(0x00204060u, 0x00020406u,
+                                                        (pixel % 8u) * 36u),
+                      "palette/luma pixel %zu differs", pixel);
+    }
+    wasm_mvp_runtime::stop();
+
+    buildLumaSpanV2Module(sLumaSpanModule, true);
+    zassert_equal(wasm_mvp_runtime::startV2(sLumaSpanModule.bytes.data(), sLumaSpanModule.size,
+                                            deadline()),
+                  wasm_mvp_runtime::Result::Completed);
+    sV2Output.pixels.fill(0xdeadbeefu);
+    sV2Output.goodMoment = false;
+    zassert_equal(wasm_mvp_runtime::tickV2(0, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Trap);
+    for (uint32_t color : sV2Output.pixels) {
+        zassert_equal(color, 0xdeadbeefu, "invalid luma committed output");
+    }
+    zassert_false(sV2Output.goodMoment);
+    expectGoodActivationAndTick(0, kExpectedCyan);
 }
 
 ZTEST(wasm_mvp_runtime, test_malformed_module_fails_then_good_module_recovers) {
