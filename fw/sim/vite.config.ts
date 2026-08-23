@@ -30,6 +30,7 @@ import basicSsl from "@vitejs/plugin-basic-ssl";
 
 const simDir = __dirname;
 const wasmDir = path.resolve(simDir, "out/wasm");
+const scenariosDir = path.resolve(simDir, "scenarios");
 
 interface WasmEntry {
   name: string;
@@ -80,6 +81,126 @@ function wasmIndexPlugin(): Plugin {
   };
 }
 
+interface ScenarioEntry {
+  name: string;
+  url: string;
+  description: string;
+  durationMs: number;
+}
+
+/** Enumerates scenarios/*.json. Same contract as the wasm index: a missing
+ * directory is an empty index, unparseable files are skipped with a warning
+ * (the CLI would reject them too), and urls are RELATIVE to the deploy base. */
+function readScenarioIndex(): ScenarioEntry[] {
+  let files: string[];
+  try {
+    files = fs.readdirSync(scenariosDir).filter((f) => f.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const entries: ScenarioEntry[] = [];
+  for (const file of files.sort()) {
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(scenariosDir, file), "utf8"));
+      if (s?.schema !== "rgbx-scenario/1" || typeof s.name !== "string") {
+        throw new Error("not an rgbx-scenario/1 file");
+      }
+      entries.push({
+        name: s.name,
+        url: `scenarios/${file}`,
+        description: typeof s.description === "string" ? s.description : "",
+        durationMs: typeof s.durationMs === "number" ? s.durationMs : 0,
+      });
+    } catch (err) {
+      console.warn(`scenario-index: skipping ${file}: ${String(err)}`);
+    }
+  }
+  return entries;
+}
+
+/** Every file the scenario player may fetch: the scenario JSONs plus their
+ * `file:` assets (scenarios/assets/... — WAV captures, D-line dumps). */
+function listScenarioFiles(): string[] {
+  const out: string[] = [];
+  const walk = (rel: string): void => {
+    let names: fs.Dirent[];
+    try {
+      names = fs.readdirSync(path.join(scenariosDir, rel), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const d of names) {
+      const relPath = rel === "" ? d.name : `${rel}/${d.name}`;
+      if (d.isDirectory()) {
+        walk(relPath);
+      } else if (d.isFile()) {
+        out.push(relPath);
+      }
+    }
+  };
+  walk("");
+  return out.sort();
+}
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".json": "application/json",
+  ".wav": "audio/wav",
+  ".txt": "text/plain",
+};
+
+/** Serves /scenario-index.json and /scenarios/* — same split as the wasm
+ * plugin: read fresh per request in dev (a new capture_to_scenario.py output
+ * shows up without a server restart), frozen into the bundle on build. */
+function scenarioIndexPlugin(): Plugin {
+  return {
+    name: "rgbx-scenario-index",
+    configureServer(server) {
+      server.middlewares.use("/scenario-index.json", (_req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader("Cache-Control", "no-store");
+        res.end(JSON.stringify(readScenarioIndex()));
+      });
+      server.middlewares.use("/scenarios", (req, res, next) => {
+        // connect strips the mount prefix; what's left is the file path.
+        const rel = decodeURIComponent((req.url ?? "").split("?")[0]).replace(/^\/+/, "");
+        const resolved = path.resolve(scenariosDir, rel);
+        // Path-traversal guard: the resolved file must stay under scenarios/.
+        if (rel === "" || !resolved.startsWith(scenariosDir + path.sep)) {
+          next();
+          return;
+        }
+        let bytes: Buffer;
+        try {
+          bytes = fs.readFileSync(resolved);
+        } catch {
+          next();
+          return;
+        }
+        res.setHeader(
+          "Content-Type",
+          CONTENT_TYPES[path.extname(resolved)] ?? "application/octet-stream",
+        );
+        res.setHeader("Cache-Control", "no-store");
+        res.end(bytes);
+      });
+    },
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "scenario-index.json",
+        source: JSON.stringify(readScenarioIndex()),
+      });
+      for (const rel of listScenarioFiles()) {
+        this.emitFile({
+          type: "asset",
+          fileName: `scenarios/${rel}`,
+          source: fs.readFileSync(path.join(scenariosDir, rel)),
+        });
+      }
+    },
+  };
+}
+
 const config: UserConfig = {
   root: path.resolve(simDir, "browser"),
   // Deploy base: "/" for the dev server, "/sim/" when the Pages workflow
@@ -94,7 +215,11 @@ const config: UserConfig = {
   // basic-ssl is opt-in: the mic and DeviceMotion need a secure context, and
   // http://localhost only counts as one for the machine running the browser.
   // Set RGBX_SIM_SSL=1 to reach the sim from a phone over the LAN by IP.
-  plugins: [wasmIndexPlugin(), ...(process.env.RGBX_SIM_SSL === "1" ? [basicSsl()] : [])],
+  plugins: [
+    wasmIndexPlugin(),
+    scenarioIndexPlugin(),
+    ...(process.env.RGBX_SIM_SSL === "1" ? [basicSsl()] : []),
+  ],
   server: {
     fs: { allow: [simDir] },
   },

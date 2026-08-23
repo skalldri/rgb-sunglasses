@@ -115,6 +115,12 @@ Expect `PASS no_fault` and, for a music capture, `PASS beat_response` — that c
 what proves the recorded audio is genuinely reaching the DSP rather than the scenario
 merely loading.
 
+To watch it instead of reading digests, the browser sim replays it too
+(`npm run serve` → Inputs tab → Scenario). A committed capture appears in the
+scenario picker automatically; an uncommitted one loads via "Load scenario…" —
+pick the `.json` together with its `assets/*.wav` in one multi-select (refs
+resolve by basename).
+
 ## 5. Decide whether it earns a place in the repo
 
 A capture is only worth committing if it shows something the synthetic set cannot. Say

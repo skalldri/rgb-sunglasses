@@ -72,7 +72,37 @@
         </div>
 
         <div class="tab-panel" id="tab-inputs">
-          <div class="card">
+          <div class="card" id="scenario-card">
+            <h3>Scenario <span class="hint">replays recorded inputs</span></h3>
+            <label class="field">
+              <span>Scenario</span>
+              <select id="scenario-select">
+                <option value="">None (manual inputs)</option>
+              </select>
+            </label>
+            <div class="field scenario-actions">
+              <button id="scenario-play" class="btn btn-primary" disabled>Play scenario</button>
+              <button id="scenario-stop" class="btn" disabled>Stop</button>
+              <button
+                id="scenario-load"
+                class="btn"
+                title="Load a scenario .json from disk together with the files it references (e.g. its assets/*.wav capture)"
+              >
+                Load scenario&hellip;
+              </button>
+              <input
+                type="file"
+                id="scenario-file"
+                accept=".json,.wav,.txt,application/json,audio/wav"
+                multiple
+                hidden
+              />
+            </div>
+            <div class="hint" id="scenario-desc"></div>
+            <div class="readout hidden" id="scenario-status"></div>
+          </div>
+
+          <div class="card" id="audio-card">
             <h3>Audio</h3>
             <label class="field">
               <span>Source</span>
@@ -108,7 +138,7 @@
             <div class="readout" id="audio-readout"></div>
           </div>
 
-          <div class="card">
+          <div class="card" id="imu-card">
             <h3>IMU</h3>
             <label class="field">
               <span>Source</span>

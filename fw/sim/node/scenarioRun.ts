@@ -8,23 +8,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
-import { RgbxParamType } from "../core/abi";
 import { DEFAULT_BRIGHTNESS_FACTOR, toDisplayedFrame } from "../core/display";
 import { FaultInfo, SimHost } from "../core/host";
-import { KeyframeImuProvider, RampImuProvider, SineImuProvider } from "../core/imuGen";
-import {
-  AudioFeatureProvider,
-  FeatureReplayProvider,
-  ImuProvider,
-  SilenceAudioProvider,
-  StaticImuProvider,
-} from "../core/providers";
-import { DspAudioProvider } from "../core/audio";
-import { metronomePcm, noisePcm, samplesPcm, silencePcm, sweepPcm } from "../core/pcmGen";
-import { BUTTON_INDEX, Scenario, ScenarioAudio, ScenarioImu } from "../core/scenario";
+import { Scenario } from "../core/scenario";
+import { ScenarioIo, buildAudioProvider, buildImuProvider } from "../core/scenarioProviders";
+import { TimelineRunner, applyParam } from "../core/scenarioTimeline";
 import { NodeWorkerAdapter } from "./workerAdapter";
-import { decodeWavTo16kMono } from "./wav";
-import { dLineFramesToFeatures, parseDLines } from "./dline";
 import { Check, RunStats, buildReport, frameToAnsi } from "./report";
 import { frameToPng } from "./png";
 
@@ -69,118 +58,22 @@ export interface RunResult {
   exitCode: 0 | 2 | 3;
 }
 
-async function buildAudioProvider(
-  audio: ScenarioAudio | undefined,
-  opts: RunOptions,
-): Promise<AudioFeatureProvider> {
-  if (audio === undefined || audio.type === "silence") {
-    return new SilenceAudioProvider();
-  }
-  if (audio.type === "features") {
-    const text = fs.readFileSync(path.resolve(opts.scenarioDir, audio.file), "utf8");
-    return new FeatureReplayProvider(dLineFramesToFeatures(parseDLines(text)));
-  }
-  // All remaining types synthesize PCM and need the real DSP module.
-  if (!fs.existsSync(opts.dspWasmPath)) {
-    throw new Error(
-      `${opts.dspWasmPath} not built (run fw/sim/build-extensions.sh) — required for audio type "${audio.type}"`,
-    );
-  }
-  const buf = fs.readFileSync(opts.dspWasmPath);
-  const dspBytes = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-  switch (audio.type) {
-    case "metronome":
-      return DspAudioProvider.create(dspBytes, metronomePcm(audio));
-    case "sweep":
-      return DspAudioProvider.create(
-        dspBytes,
-        sweepPcm({ ...audio, durationMs: audio.durationMs ?? opts.scenario.durationMs }),
-      );
-    case "noise":
-      return DspAudioProvider.create(
-        dspBytes,
-        noisePcm({ ...audio, seed: audio.seed ?? opts.seed }),
-      );
-    case "wav": {
-      const samples = decodeWavTo16kMono(
-        fs.readFileSync(path.resolve(opts.scenarioDir, audio.file)),
-      );
-      return DspAudioProvider.create(dspBytes, samplesPcm(samples));
-    }
-  }
-}
-
-function buildImuProvider(imu: ScenarioImu | undefined, durationMs: number): ImuProvider {
-  if (imu === undefined) {
-    return new StaticImuProvider();
-  }
-  switch (imu.type) {
-    case "static":
-      return new StaticImuProvider({
-        accel: imu.accel ?? [0, 0, 9.81],
-        gyro: imu.gyro ?? [0, 0, 0],
-      });
-    case "ramp":
-      return new RampImuProvider({
-        fromAccel: imu.fromAccel,
-        toAccel: imu.toAccel,
-        fromGyro: imu.fromGyro,
-        toGyro: imu.toGyro,
-        startMs: imu.startMs ?? 0,
-        endMs: imu.endMs ?? durationMs,
-      });
-    case "sine":
-      return new SineImuProvider({
-        channel: imu.channel ?? "accel",
-        axis: imu.axis,
-        amplitude: imu.amplitude,
-        hz: imu.hz,
-        base: imu.base
-          ? { accel: imu.base.accel, gyro: imu.base.gyro ?? [0, 0, 0] }
-          : undefined,
-      });
-    case "keyframes":
-      return new KeyframeImuProvider(imu.frames);
-  }
-}
-
-/** Parses a scalar param value: decimal, 0x hex, or true/false. Returns
- * null when the token is not scalar-shaped. NEVER applied to STRING params
- * — their values pass through verbatim (a STRING param legitimately holds
- * the literal text "true" or "0x10"). */
-export function parseScalarParamValue(raw: number | string): number | null {
-  if (typeof raw === "number") {
-    return raw;
-  }
-  if (/^(0x[0-9a-fA-F]+|\d+)$/.test(raw)) {
-    return Number(raw);
-  }
-  if (raw === "true") {
-    return 1;
-  }
-  if (raw === "false") {
-    return 0;
-  }
-  return null;
-}
-
-function applyParam(host: SimHost, name: string, rawValue: number | string): string | null {
-  const idx = host.paramIndexByName(name);
-  if (idx < 0) {
-    return `no param named "${name}" (have: ${host.metadata?.params.map((p) => p.name).join(", ")})`;
-  }
-  // Type first, coercion second: STRING params take the raw token verbatim.
-  const type = host.metadata!.params[idx].type;
-  if (type === RgbxParamType.String) {
-    host.setStringParam(idx, String(rawValue));
-    return null;
-  }
-  const value = parseScalarParamValue(rawValue);
-  if (value === null) {
-    return `param "${name}" expects a number (decimal, 0x hex, or true/false), got "${rawValue}"`;
-  }
-  host.setParam(idx, value);
-  return null;
+/** Node's ScenarioIo: `file:` refs resolve against the scenario's own
+ * directory; DSP bytes come from the built out/wasm artifact. Provider
+ * construction itself lives in core/scenarioProviders.ts, shared with the
+ * browser scenario player. */
+function makeScenarioIo(opts: RunOptions): ScenarioIo {
+  return {
+    readBytes: async (ref) => fs.readFileSync(path.resolve(opts.scenarioDir, ref)),
+    readText: async (ref) => fs.readFileSync(path.resolve(opts.scenarioDir, ref), "utf8"),
+    getDspBytes: async () => {
+      if (!fs.existsSync(opts.dspWasmPath)) {
+        throw new Error(`${opts.dspWasmPath} not built (run fw/sim/build-extensions.sh)`);
+      }
+      const buf = fs.readFileSync(opts.dspWasmPath);
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    },
+  };
 }
 
 export async function runScenario(opts: RunOptions): Promise<RunResult> {
@@ -190,7 +83,8 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
   const buf = fs.readFileSync(opts.wasmPath);
   const wasmBytes = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
-  const audioProvider = await buildAudioProvider(scenario.audio, opts);
+  const io = makeScenarioIo(opts);
+  const audioProvider = await buildAudioProvider(scenario.audio, { scenario, seed: opts.seed, io });
   const imuProvider = buildImuProvider(scenario.imu, scenario.durationMs);
 
   const host = new SimHost({
@@ -229,8 +123,7 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
   // populated on the fault path too, and an init fault is exactly when its
   // contents matter most.
   stats.recordInitLog(host.initLog);
-  const timeline = [...(scenario.timeline ?? [])].sort((a, b) => a.atMs - b.atMs);
-  let timelineAt = 0;
+  const timeline = new TimelineRunner(scenario.timeline);
 
   if (fault === null) {
     // Apply CLI overrides at t=0 (after defaults, before the first tick).
@@ -242,23 +135,11 @@ export async function runScenario(opts: RunOptions): Promise<RunResult> {
     }
 
     // Timeline events due at or before the CURRENT sim time fire before the tick
-    // that first covers them. Shared by the warm-up and recording loops so a
-    // warmed-up run sees exactly the same event ordering as a cold one.
+    // that first covers them (TimelineRunner, shared with the browser player).
+    // Shared by the warm-up and recording loops so a warmed-up run sees exactly
+    // the same event ordering as a cold one.
     const pumpTimeline = (): void => {
-      while (timelineAt < timeline.length && timeline[timelineAt].atMs <= host.simTimeMs) {
-        const ev = timeline[timelineAt++];
-        if (ev.set !== undefined) {
-          for (const [name, value] of Object.entries(ev.set)) {
-            const err = applyParam(host, name, value);
-            if (err !== null) {
-              throw new Error(`timeline @${ev.atMs}ms: ${err}`);
-            }
-          }
-        }
-        if (ev.press !== undefined) {
-          host.pressButton(BUTTON_INDEX[ev.press]);
-        }
-      }
+      timeline.pump(host);
     };
 
     // Every tick index that leaves this function is relative to the RECORDED
