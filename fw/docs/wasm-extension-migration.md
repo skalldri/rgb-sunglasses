@@ -35,7 +35,7 @@ device was flashed.
 | Effect | Role | RGBX v2 status | Remaining work |
 | --- | --- | --- | --- |
 | `cpptest` | In-repo development and C++ integration fixture | Behaviorally ported. QEMU matches the legacy integer plasma output for state, speed, color, and invert changes. | Reproducible phone compiler lowering, RGBX packaging, production loader integration, proto0 timing. |
-| `plasma` | Registry-shipped community effect | Behaviorally ported. The memoryless guest uses a bounded Q15 recurrence and palette/luma spans; QEMU compares every channel against the legacy three-sine formula within one value. | Reproducible compiler provenance, RGBX packaging, production loader integration, and proto0 visual/timing evidence. |
+| `plasma` | Registry-shipped community effect | Behaviorally ported as a firmware conformance fixture. The memoryless guest uses a bounded Q15 recurrence and palette/luma spans; QEMU compares every channel against the legacy three-sine formula within one value. | Move the canonical source and deterministic package build to `skalldri/rgbx-plasma`, then consume its registry-pinned revision and digest here. |
 | `demo_wave` | Registry-shipped community effect | Not ported. | Needs bounded sine, audio display buckets, beat inputs, and `set_good_moment`. |
 | `hello` | In-repo development and sandbox recovery fixture | Not ported. | Needs string parameters, buttons, IMU, audio buckets and beats, good-moment signaling, and replacements for deliberate crash and hang test hooks. |
 
@@ -70,6 +70,40 @@ budget at about 55 ms. Replacing those with 60 spans but leaving interpreted
 helper calls also measured about 55 ms. Compiler inlining plus the span ABI
 passes the same 50 ms gate without allocating a 64 KiB WebAssembly memory page.
 
+## RGBX v2 input and lifecycle contract
+
+The public `rgbx/rgbx_v2.h` header defines three optional input/lifecycle
+imports in addition to the existing parameter and span functions:
+
+- `input_u32(kind, index) -> i32` reads one immutable per-tick snapshot value;
+- `set_good_moment(value)` publishes exactly one boolean shuffle boundary;
+- `debug_u32(tag, value)` emits at most four numeric diagnostics into the
+  bounded host mailbox.
+
+The host implementation must admit at most 64 `input_u32` calls per tick. Its kinds cover four Q16 audio
+bands, 20 Q16 display buckets, the beat mask, pressed-button mask, three signed
+accelerometer axes in milli-units, three signed gyroscope axes in milli-units,
+and the bounded length or byte sum of four NUL-terminated 31-byte string
+parameter slots. Kind and index validation is fail-closed. Signed IMU values
+preserve their i32 bit patterns.
+
+The immutable package capability mask authorizes input classes independently:
+buttons require `RGBX_V2_CAPABILITY_BUTTONS`, both IMU vectors require
+`RGBX_V2_CAPABILITY_IMU`, and every audio value requires
+`RGBX_V2_CAPABILITY_AUDIO`. String summaries require no sensor capability.
+Importing `input_u32` never grants a capability by itself.
+
+Importing `set_good_moment` makes one call mandatory for every successfully
+committed frame; omitting it keeps the compatibility default of `true`.
+The host must fail closed on duplicate calls, values outside zero or one,
+invalid input selectors, quota overruns, excess diagnostics, or wrong import
+signatures. A rejected generation cannot change the previous framebuffer,
+good-moment value, or diagnostics.
+
+This slice remains memoryless. Bounded linear memory, retained-frame scheduling,
+and the stateful Fluid profile are separate follow-ups and are not implied by
+the input snapshot contract.
+
 ## What counts as complete
 
 A behavioral port is complete when its admitted RGBX v2 guest matches the
@@ -90,9 +124,12 @@ A production migration additionally requires:
 
 ## Recommended order
 
-1. Turn the `cpptest` lowering into a deterministic compiler fixture and load
-   its staged RGBX package through the production candidate path.
-2. Add audio inputs and good-moment signaling, then port `demo_wave`.
-3. Add the remaining development-only inputs and sandbox test replacements,
-   then port `hello`.
-4. Run the compatibility train and remove LLEXT support.
+1. Move the deterministic RGBX v2 compiler/package workflow into
+   `rgbx-extension-template`, then move canonical Plasma source into
+   `rgbx-plasma`.
+2. Port `demo_wave` against the input and good-moment contract, keeping its
+   canonical source in its registry repository.
+3. Port the safe portions of `hello`; keep deliberate crash and hang coverage
+   in host-owned sandbox fixtures rather than public guest parameters.
+4. Add bounded stateful memory and retained frames for Fluid and Metaballs.
+5. Connect production loading and staged installation, then remove LLEXT.
