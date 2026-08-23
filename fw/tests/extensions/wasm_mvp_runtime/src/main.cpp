@@ -11,10 +11,49 @@
 #include <initializer_list>
 #include <vector>
 
+#include "cpptest_v2_module.h"
+
 namespace {
 
 constexpr uint32_t kExpectedCyan = 0x00ffff;
 constexpr uint32_t kExpectedMagenta = 0xff00ff;
+
+uint32_t wave8(uint32_t angle) {
+    const uint8_t t = angle & 0xffu;
+    const uint8_t half = t & 0x7fu;
+    const uint32_t hump = static_cast<uint32_t>(half) * (127u - half) / 32u;
+    return (t & 0x80u) ? 128u - hump : 128u + hump;
+}
+
+uint32_t cpptestReferencePixel(uint32_t timeMs, uint32_t color, bool invert, size_t x, size_t y) {
+    const uint32_t red = (color >> 16u) & 0xffu;
+    const uint32_t green = (color >> 8u) & 0xffu;
+    const uint32_t blue = color & 0xffu;
+    uint32_t value = (wave8(x * 13u + timeMs / 9u) + wave8(y * 23u + timeMs / 14u) +
+                      wave8((x + y) * 11u + timeMs / 6u)) /
+                     3u;
+    if (invert) {
+        value = 255u - value;
+    }
+    return ((red * value / 255u) << 16u) | ((green * value / 255u) << 8u) | (blue * value / 255u);
+}
+
+void expectV2Frame(const wasm_mvp_runtime::V2TickOutput& output, uint32_t timeMs, uint32_t color,
+                   bool invert) {
+    for (size_t y = 0; y < wasm_mvp_runtime::kV2Height; ++y) {
+        for (size_t x = 0; x < wasm_mvp_runtime::kV2Width; ++x) {
+            const size_t pixel = y * wasm_mvp_runtime::kV2Width + x;
+            zassert_equal(output.pixels[pixel], cpptestReferencePixel(timeMs, color, invert, x, y),
+                          "pixel %zu differs", pixel);
+        }
+    }
+    zassert_true(output.goodMoment);
+    zassert_true(output.arenaHighWater > 0);
+    zassert_true(output.arenaHighWater <= CONFIG_APP_WASM3_MVP_HEAP_SIZE);
+    zassert_true(output.cpuTimeUs <= CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS * 1000u);
+    zassert_true(output.wallTimeUs <= CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS * 1000u);
+    TC_PRINT("cpptest v2 tick: cpu %u us, wall %u us\n", output.cpuTimeUs, output.wallTimeUs);
+}
 
 K_THREAD_STACK_DEFINE(sConcurrentTickStack, 2048);
 struct k_thread sConcurrentTickThread;
@@ -23,6 +62,8 @@ struct ConcurrentTickState {
     wasm_mvp_runtime::Result result = wasm_mvp_runtime::Result::RuntimeFailure;
     wasm_mvp_runtime::TickOutput output{0xdeadbeef, 0};
 };
+
+wasm_mvp_runtime::V2TickOutput sV2Output;
 
 k_timepoint_t deadline() {
     return sys_timepoint_calc(K_MSEC(CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS));
@@ -57,6 +98,51 @@ void insertBytes(std::vector<uint8_t>& module, size_t offset,
     module.insert(module.begin() + static_cast<std::ptrdiff_t>(offset), bytes);
 }
 
+void appendLebU32(std::vector<uint8_t>& output, uint32_t value) {
+    do {
+        uint8_t byte = value & 0x7fu;
+        value >>= 7u;
+        if (value != 0) {
+            byte |= 0x80u;
+        }
+        output.push_back(byte);
+    } while (value != 0);
+}
+
+std::vector<uint8_t> minimalV2Module(const std::vector<uint8_t>& tickInstructions,
+                                     const std::vector<uint8_t>& initInstructions = {}) {
+    std::vector<uint8_t> module = {
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x19, 0x04, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+        0x60, 0x09, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x00,
+        0x60, 0x00, 0x00, 0x60, 0x01, 0x7f, 0x00,
+        0x02, 0x29, 0x02, 0x07, 0x72, 0x67, 0x62, 0x78, 0x5f, 0x76, 0x32,
+        0x09, 0x70, 0x61, 0x72, 0x61, 0x6d, 0x5f, 0x75, 0x33, 0x32, 0x00, 0x00,
+        0x07, 0x72, 0x67, 0x62, 0x78, 0x5f, 0x76, 0x32,
+        0x09, 0x73, 0x65, 0x74, 0x5f, 0x73, 0x70, 0x61, 0x6e, 0x38, 0x00, 0x01,
+        0x03, 0x03, 0x02, 0x02, 0x03,
+        0x07, 0x19, 0x02, 0x09, 0x72, 0x67, 0x62, 0x78, 0x5f, 0x69, 0x6e, 0x69, 0x74,
+        0x00, 0x02, 0x09, 0x72, 0x67, 0x62, 0x78, 0x5f, 0x74, 0x69, 0x63, 0x6b, 0x00, 0x03,
+    };
+
+    std::vector<uint8_t> initBody = {0x00};
+    initBody.insert(initBody.end(), initInstructions.begin(), initInstructions.end());
+    initBody.push_back(0x0b);
+    std::vector<uint8_t> tickBody = {0x00};
+    tickBody.insert(tickBody.end(), tickInstructions.begin(), tickInstructions.end());
+    tickBody.push_back(0x0b);
+
+    std::vector<uint8_t> codePayload = {0x02};
+    appendLebU32(codePayload, initBody.size());
+    codePayload.insert(codePayload.end(), initBody.begin(), initBody.end());
+    appendLebU32(codePayload, tickBody.size());
+    codePayload.insert(codePayload.end(), tickBody.begin(), tickBody.end());
+    module.push_back(0x0a);
+    appendLebU32(module, codePayload.size());
+    module.insert(module.end(), codePayload.begin(), codePayload.end());
+    return module;
+}
+
 std::array<uint8_t, sizeof(kWasmMvpModule)> infiniteLoopModule() {
     auto module = moduleCopy();
     // loop { br 0 }, followed by unreachable nops to preserve the body size.
@@ -89,6 +175,132 @@ ZTEST(wasm_mvp_runtime, test_actual_wasm3_parse_compile_link_and_call) {
     expectGoodActivationAndTick(500, kExpectedMagenta);
     expectGoodActivationAndTick(1000, kExpectedCyan);
     expectGoodActivationAndTick(UINT32_MAX, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_cpptest_v2_matches_legacy_effect_across_state_and_parameters) {
+    zassert_equal(wasm_mvp_runtime::startV2(kCppTestV2Module, sizeof(kCppTestV2Module), deadline()),
+                  wasm_mvp_runtime::Result::Completed);
+
+    wasm_mvp_runtime::V2TickInputs inputs;
+    inputs.params[0] = 50;
+    inputs.params[1] = 0x00ff40ff;
+    inputs.params[2] = 0;
+
+    uint32_t timeMs = 0;
+    zassert_equal(wasm_mvp_runtime::tickV2(17, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    timeMs += 17;
+    expectV2Frame(sV2Output, timeMs, inputs.params[1], false);
+
+    inputs.params[0] = 100;
+    inputs.params[1] = 0x00102080;
+    zassert_equal(wasm_mvp_runtime::tickV2(25, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    timeMs += 50;
+    expectV2Frame(sV2Output, timeMs, inputs.params[1], false);
+
+    inputs.params[2] = 1;
+    zassert_equal(wasm_mvp_runtime::tickV2(0, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    expectV2Frame(sV2Output, timeMs, inputs.params[1], true);
+
+    wasm_mvp_runtime::stop();
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_and_mvp_profiles_reject_each_others_modules) {
+    zassert_equal(wasm_mvp_runtime::start(kCppTestV2Module, sizeof(kCppTestV2Module), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    zassert_equal(wasm_mvp_runtime::startV2(kWasmMvpModule, sizeof(kWasmMvpModule), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_rejects_imported_globals) {
+    std::array<uint8_t, sizeof(kCppTestV2Module) + 7> importedGlobal{};
+    std::copy_n(kCppTestV2Module, 78, importedGlobal.begin());
+    const std::array<uint8_t, 7> globalImport = {0x01, 'x', 0x01, 'g', 0x03, 0x7f, 0x00};
+    std::copy(globalImport.begin(), globalImport.end(), importedGlobal.begin() + 78);
+    std::copy(kCppTestV2Module + 78, kCppTestV2Module + sizeof(kCppTestV2Module),
+              importedGlobal.begin() + 85);
+    importedGlobal[36] = 0x30;  // import section grows from 41 to 48 bytes
+    importedGlobal[37] = 0x03;  // two function imports plus one global import
+    zassert_equal(wasm_mvp_runtime::startV2(importedGlobal.data(), importedGlobal.size(), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_requires_init_export) {
+    std::array<uint8_t, sizeof(kCppTestV2Module)> missingInit{};
+    std::copy_n(kCppTestV2Module, missingInit.size(), missingInit.begin());
+    missingInit[101] = 'x';  // rgbx_init -> rgbx_inix
+    zassert_equal(wasm_mvp_runtime::startV2(missingInit.data(), missingInit.size(), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_checks_init_signature_before_call) {
+    auto badInitSignature = minimalV2Module({});
+    badInitSignature[81] = 0x03;  // rgbx_init changes from ()->() to (i32)->()
+    zassert_equal(wasm_mvp_runtime::startV2(badInitSignature.data(), badInitSignature.size(),
+                                            deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_rejects_wrong_import_signatures) {
+    std::array<uint8_t, sizeof(kCppTestV2Module)> wrongParamSignature{};
+    std::copy_n(kCppTestV2Module, wrongParamSignature.size(), wrongParamSignature.begin());
+    wrongParamSignature[57] = 0x03;  // param_u32 changes from (i32)->i32 to (i32)->void
+    zassert_equal(wasm_mvp_runtime::startV2(wrongParamSignature.data(),
+                                            wrongParamSignature.size(), deadline()),
+                  wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_admission_budget_aborts_infinite_init) {
+    const auto infiniteInit = minimalV2Module({}, {0x03, 0x40, 0x0c, 0x00, 0x0b});
+    const auto result =
+        wasm_mvp_runtime::startV2(infiniteInit.data(), infiniteInit.size(), deadline());
+    zassert_true(result == wasm_mvp_runtime::Result::CpuBudgetExceeded ||
+                     result == wasm_mvp_runtime::Result::WallBackstopExceeded,
+                 "infinite init returned unexpected result %u", static_cast<unsigned int>(result));
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_host_import_limits_trap_without_committing_output) {
+    std::vector<uint8_t> badSpanInstructions;
+    for (uint32_t argument = 0; argument < 9; ++argument) {
+        badSpanInstructions.push_back(0x41);  // i32.const
+        badSpanInstructions.push_back(argument == 0 ? 0x08 : 0x00);
+    }
+    badSpanInstructions.insert(badSpanInstructions.end(), {0x10, 0x01});  // call set_span8
+
+    auto partialFrameInstructions = badSpanInstructions;
+    partialFrameInstructions[1] = 0x00;  // one valid first span, then an incomplete return
+
+    std::vector<uint8_t> excessParamInstructions;
+    for (size_t call = 0; call < 17; ++call) {
+        excessParamInstructions.insert(excessParamInstructions.end(),
+                                       {0x41, 0x00, 0x10, 0x00, 0x1a});
+    }
+
+    for (const auto& module : {minimalV2Module(badSpanInstructions),
+                               minimalV2Module(partialFrameInstructions),
+                               minimalV2Module(excessParamInstructions)}) {
+        zassert_equal(wasm_mvp_runtime::startV2(module.data(), module.size(), deadline()),
+                      wasm_mvp_runtime::Result::Completed);
+        wasm_mvp_runtime::V2TickInputs inputs;
+        wasm_mvp_runtime::V2TickOutput output;
+        output.pixels.fill(0xdeadbeef);
+        output.goodMoment = false;
+        zassert_equal(wasm_mvp_runtime::tickV2(0, inputs, deadline(), output),
+                      wasm_mvp_runtime::Result::Trap);
+        for (uint32_t pixel : output.pixels) {
+            zassert_equal(pixel, 0xdeadbeef, "rejected host call committed output");
+        }
+        zassert_false(output.goodMoment);
+        expectGoodActivationAndTick(0, kExpectedCyan);
+    }
 }
 
 ZTEST(wasm_mvp_runtime, test_malformed_module_fails_then_good_module_recovers) {

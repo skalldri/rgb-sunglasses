@@ -29,6 +29,22 @@ constexpr uint32_t kMaxFillCallsPerTick = 1;
 constexpr uint32_t kMaxFunctions = 8;
 constexpr uint16_t kMaxLocalsPerFunction = 32;
 constexpr int kPollMs = MAX(1, MIN(CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS, 10));
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+constexpr char kV2ImportModule[] = "rgbx_v2";
+constexpr char kV2ParamU32Import[] = "param_u32";
+constexpr char kV2SetSpan8Import[] = "set_span8";
+constexpr char kV2InitExport[] = "rgbx_init";
+constexpr uint32_t kMaxV2Globals = 8;
+constexpr uint32_t kMaxV2ParamCallsPerTick = 16;
+constexpr uint32_t kV2PixelsPerSpan = 8;
+constexpr uint32_t kV2SpanCallsPerTick = kV2PixelCount / kV2PixelsPerSpan;
+static_assert(kV2PixelCount % kV2PixelsPerSpan == 0);
+
+enum class RuntimeProfile : uint8_t {
+    Mvp,
+    V2,
+};
+#endif
 
 enum class SharedStatus : uint32_t {
     Empty,
@@ -64,6 +80,14 @@ struct SharedMailbox {
     uint32_t fillCallCount;
     SharedStatus status;
     RequestKind requestKind;
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+    RuntimeProfile profile;
+    uint32_t params[kV2ParameterCount];
+    uint32_t pendingPixels[kV2PixelCount];
+    uint32_t committedPixels[kV2PixelCount];
+    uint32_t paramCallCount;
+    uint32_t setSpanCallCount;
+#endif
 #if defined(CONFIG_ZTEST)
     uintptr_t faultAddress;
 #endif
@@ -97,6 +121,12 @@ BUILD_ASSERT(CONFIG_APP_WASM3_MVP_THREAD_PRIORITY >= 0 &&
              "CONFIG_APP_WASM3_MVP_THREAD_PRIORITY must be preemptible");
 BUILD_ASSERT(CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS > CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS,
              "the Wasm wall backstop must exceed its CPU budget");
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+BUILD_ASSERT(CONFIG_APP_WASM3_V2_ADMISSION_CPU_BUDGET_MS > CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS,
+             "v2 admission may be slower than one steady-state tick");
+BUILD_ASSERT(CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS > CONFIG_APP_WASM3_V2_ADMISSION_CPU_BUDGET_MS,
+             "the wall backstop must exceed the v2 admission CPU budget");
+#endif
 #if !defined(CONFIG_SCHED_THREAD_USAGE)
 #error "wasm_mvp_runtime requires CONFIG_SCHED_THREAD_USAGE for CPU accounting"
 #endif
@@ -142,9 +172,9 @@ enum class HandshakeAction : uint8_t {
     PostRequest,
 };
 
-TickVerdict waitForSandbox(k_timepoint_t deadline, HandshakeAction action, uint32_t& cpuCycles,
-                           uint32_t& wallCycles) {
-    const TickBudgetLimits limits{k_ms_to_cyc_ceil64(CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS)};
+TickVerdict waitForSandbox(k_timepoint_t deadline, HandshakeAction action, uint32_t cpuBudgetMs,
+                           uint32_t& cpuCycles, uint32_t& wallCycles) {
+    const TickBudgetLimits limits{k_ms_to_cyc_ceil64(cpuBudgetMs)};
     const uint32_t startCycles = k_cycle_get_32();
     const uint64_t startExecution = sandboxExecutionCycles();
 
@@ -206,9 +236,9 @@ Result resultFromSharedStatus(SharedStatus status) {
 }
 
 bool modulePolicyAllows(IM3Module module) {
-    if (module->numFuncImports != 1 || module->numFunctions > kMaxFunctions ||
-        module->startFunction >= 0 || module->hasTable || module->memoryDeclared ||
-        module->memoryImported || module->numDataSegments != 0 || module->numElementSegments != 0) {
+    if (module->numFunctions > kMaxFunctions || module->startFunction >= 0 || module->hasTable ||
+        module->memoryDeclared || module->memoryImported || module->numDataSegments != 0 ||
+        module->numElementSegments != 0) {
         return false;
     }
 
@@ -218,6 +248,35 @@ bool modulePolicyAllows(IM3Module module) {
         }
     }
 
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+    if (sShared.profile == RuntimeProfile::V2) {
+        if (module->numFuncImports != 2 || module->numGlobals > kMaxV2Globals) {
+            return false;
+        }
+
+        bool foundParamU32 = false;
+        bool foundSetSpan8 = false;
+        for (uint32_t i = 0; i < module->numFuncImports; ++i) {
+            const M3ImportInfo& import = module->functions[i].import;
+            if (import.moduleUtf8 == nullptr || import.fieldUtf8 == nullptr ||
+                std::strcmp(import.moduleUtf8, kV2ImportModule) != 0) {
+                return false;
+            }
+            if (std::strcmp(import.fieldUtf8, kV2ParamU32Import) == 0 && !foundParamU32) {
+                foundParamU32 = true;
+            } else if (std::strcmp(import.fieldUtf8, kV2SetSpan8Import) == 0 && !foundSetSpan8) {
+                foundSetSpan8 = true;
+            } else {
+                return false;
+            }
+        }
+        return foundParamU32 && foundSetSpan8;
+    }
+#endif
+
+    if (module->numFuncImports != 1 || module->numGlobals != 0) {
+        return false;
+    }
     const M3ImportInfo& import = module->functions[0].import;
     return import.moduleUtf8 != nullptr && import.fieldUtf8 != nullptr &&
            std::strcmp(import.moduleUtf8, kImportModule) == 0 &&
@@ -265,6 +324,9 @@ const void* fillHost(IM3Runtime runtime, IM3ImportContext context, uint64_t* sta
 
     auto* shared = static_cast<SharedMailbox*>(const_cast<void*>(_ctx->userdata));
     if (shared == nullptr || shared->requestGeneration == 0 ||
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+        shared->profile != RuntimeProfile::Mvp ||
+#endif
         ++shared->fillCallCount > kMaxFillCallsPerTick) {
         if (shared != nullptr) {
             shared->status = SharedStatus::HostImportRejected;
@@ -275,6 +337,66 @@ const void* fillHost(IM3Runtime runtime, IM3ImportContext context, uint64_t* sta
     shared->pendingColor = color;
     m3ApiSuccess();
 }
+
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+const void* paramU32Host(IM3Runtime runtime, IM3ImportContext context, uint64_t* stack,
+                         void* memory) {
+    uint64_t* _sp = stack;
+    void* _mem = memory;
+    IM3ImportContext _ctx = context;
+    m3ApiReturnType(uint32_t) m3ApiGetArg(uint32_t, id);
+    (void)runtime;
+    (void)_mem;
+
+    auto* shared = static_cast<SharedMailbox*>(const_cast<void*>(_ctx->userdata));
+    if (shared == nullptr || shared->profile != RuntimeProfile::V2 ||
+        shared->requestGeneration == 0 || id >= kV2ParameterCount ||
+        ++shared->paramCallCount > kMaxV2ParamCallsPerTick) {
+        if (shared != nullptr) {
+            shared->status = SharedStatus::HostImportRejected;
+        }
+        return m3Err_trapAbort;
+    }
+
+    m3ApiReturn(shared->params[id]);
+}
+
+const void* setSpan8Host(IM3Runtime runtime, IM3ImportContext context, uint64_t* stack,
+                         void* memory) {
+    uint64_t* _sp = stack;
+    void* _mem = memory;
+    IM3ImportContext _ctx = context;
+    m3ApiGetArg(uint32_t, firstPixel);
+    m3ApiGetArg(uint32_t, color0);
+    m3ApiGetArg(uint32_t, color1);
+    m3ApiGetArg(uint32_t, color2);
+    m3ApiGetArg(uint32_t, color3);
+    m3ApiGetArg(uint32_t, color4);
+    m3ApiGetArg(uint32_t, color5);
+    m3ApiGetArg(uint32_t, color6);
+    m3ApiGetArg(uint32_t, color7);
+    (void)runtime;
+    (void)_mem;
+
+    auto* shared = static_cast<SharedMailbox*>(const_cast<void*>(_ctx->userdata));
+    if (shared == nullptr || shared->profile != RuntimeProfile::V2 ||
+        shared->requestGeneration == 0 || shared->setSpanCallCount >= kV2SpanCallsPerTick ||
+        firstPixel != shared->setSpanCallCount * kV2PixelsPerSpan) {
+        if (shared != nullptr) {
+            shared->status = SharedStatus::HostImportRejected;
+        }
+        return m3Err_trapAbort;
+    }
+
+    const uint32_t colors[kV2PixelsPerSpan] = {color0, color1, color2, color3,
+                                               color4, color5, color6, color7};
+    for (size_t i = 0; i < kV2PixelsPerSpan; ++i) {
+        shared->pendingPixels[firstPixel + i] = colors[i] & 0x00ffffffu;
+    }
+    ++shared->setSpanCallCount;
+    m3ApiSuccess();
+}
+#endif
 
 void sandboxEntry(void* p1, void* p2, void* p3) {
     auto* shared = static_cast<SharedMailbox*>(p1);
@@ -319,7 +441,19 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
         return;
     }
 
-    result = m3_LinkRawFunctionEx(module, kImportModule, kFillImport, "v(i)", fillHost, shared);
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+    if (shared->profile == RuntimeProfile::V2) {
+        result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2ParamU32Import, "i(i)",
+                                      paramU32Host, shared);
+        if (result == m3Err_none) {
+            result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2SetSpan8Import,
+                                          "v(iiiiiiiii)", setSpan8Host, shared);
+        }
+    } else
+#endif
+    {
+        result = m3_LinkRawFunctionEx(module, kImportModule, kFillImport, "v(i)", fillHost, shared);
+    }
     if (result != m3Err_none) {
         shared->status = SharedStatus::LinkFailed;
         k_sem_give(&sDoneSem);
@@ -347,6 +481,25 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
         return;
     }
 
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+    if (shared->profile == RuntimeProfile::V2) {
+        IM3Function initFunction = nullptr;
+        result = m3_FindFunction(&initFunction, runtime, kV2InitExport);
+        if (result != m3Err_none || m3_GetArgCount(initFunction) != 0 ||
+            m3_GetRetCount(initFunction) != 0) {
+            shared->status = SharedStatus::ExportLookupFailed;
+            k_sem_give(&sDoneSem);
+            return;
+        }
+        result = m3_CallV(initFunction);
+        if (result != m3Err_none) {
+            shared->status = SharedStatus::TickTrapped;
+            k_sem_give(&sDoneSem);
+            return;
+        }
+    }
+#endif
+
     shared->status = SharedStatus::Ready;
     k_sem_give(&sDoneSem);
 
@@ -370,9 +523,27 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
         shared->fillCallCount = 0;
         shared->pendingColor = 0;
         shared->status = SharedStatus::Empty;
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+        if (shared->profile == RuntimeProfile::V2) {
+            std::memset(shared->pendingPixels, 0, sizeof(shared->pendingPixels));
+            shared->paramCallCount = 0;
+            shared->setSpanCallCount = 0;
+        }
+#endif
 
         result = m3_CallV(tickFunction, static_cast<int32_t>(shared->requestElapsedMs));
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+        if (shared->profile == RuntimeProfile::V2 && result == m3Err_none &&
+            shared->setSpanCallCount == kV2SpanCallsPerTick) {
+            std::memcpy(shared->committedPixels, shared->pendingPixels,
+                        sizeof(shared->committedPixels));
+            shared->completedGeneration = generation;
+            shared->status = SharedStatus::TickCompleted;
+        } else if (shared->profile == RuntimeProfile::Mvp && result == m3Err_none &&
+                   shared->fillCallCount == 1) {
+#else
         if (result == m3Err_none && shared->fillCallCount == 1) {
+#endif
             shared->committedColor = shared->pendingColor;
             shared->completedGeneration = generation;
             shared->status = SharedStatus::TickCompleted;
@@ -385,10 +556,8 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
 
 }  // namespace
 
-Result start(const uint8_t* module, size_t moduleSize, k_timepoint_t deadline) {
-    RuntimeLockGuard lock;
-    stopLocked();
-
+namespace {
+Result startLocked(const uint8_t* module, size_t moduleSize, k_timepoint_t deadline) {
     if (module == nullptr || moduleSize == 0 || moduleSize > sizeof(sShared.module)) {
         return Result::InvalidModule;
     }
@@ -426,8 +595,14 @@ Result start(const uint8_t* module, size_t moduleSize, k_timepoint_t deadline) {
     sSandboxAlive = true;
     uint32_t cpuCycles = 0;
     uint32_t wallCycles = 0;
-    const TickVerdict verdict =
-        waitForSandbox(deadline, HandshakeAction::StartThread, cpuCycles, wallCycles);
+    uint32_t admissionCpuBudgetMs = CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS;
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+    if (sShared.profile == RuntimeProfile::V2) {
+        admissionCpuBudgetMs = CONFIG_APP_WASM3_V2_ADMISSION_CPU_BUDGET_MS;
+    }
+#endif
+    const TickVerdict verdict = waitForSandbox(deadline, HandshakeAction::StartThread,
+                                               admissionCpuBudgetMs, cpuCycles, wallCycles);
     recordMemoryHighWater();
 
     Result result = resultFromVerdict(verdict);
@@ -452,10 +627,30 @@ Result start(const uint8_t* module, size_t moduleSize, k_timepoint_t deadline) {
     }
     return Result::Completed;
 }
+}  // namespace
+
+Result start(const uint8_t* module, size_t moduleSize, k_timepoint_t deadline) {
+    RuntimeLockGuard lock;
+    stopLocked();
+    return startLocked(module, moduleSize, deadline);
+}
+
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+Result startV2(const uint8_t* module, size_t moduleSize, k_timepoint_t deadline) {
+    RuntimeLockGuard lock;
+    stopLocked();
+    sShared.profile = RuntimeProfile::V2;
+    return startLocked(module, moduleSize, deadline);
+}
+#endif
 
 Result tick(uint32_t elapsedMs, k_timepoint_t deadline, TickOutput& output) {
     RuntimeLockGuard lock;
-    if (!sReady || !sSandboxAlive) {
+    if (!sReady || !sSandboxAlive
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+        || sShared.profile != RuntimeProfile::Mvp
+#endif
+    ) {
         return Result::NotReady;
     }
 
@@ -473,7 +668,8 @@ Result tick(uint32_t elapsedMs, k_timepoint_t deadline, TickOutput& output) {
     uint32_t cpuCycles = 0;
     uint32_t wallCycles = 0;
     const TickVerdict verdict =
-        waitForSandbox(deadline, HandshakeAction::PostRequest, cpuCycles, wallCycles);
+        waitForSandbox(deadline, HandshakeAction::PostRequest, CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS,
+                       cpuCycles, wallCycles);
     recordMemoryHighWater();
 
     Result result = resultFromVerdict(verdict);
@@ -495,6 +691,57 @@ Result tick(uint32_t elapsedMs, k_timepoint_t deadline, TickOutput& output) {
     stopLocked();
     return result;
 }
+
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+Result tickV2(uint32_t dtMs, const V2TickInputs& inputs, k_timepoint_t deadline,
+              V2TickOutput& output) {
+    RuntimeLockGuard lock;
+    if (!sReady || !sSandboxAlive || sShared.profile != RuntimeProfile::V2) {
+        return Result::NotReady;
+    }
+
+    uint32_t generation = sNextGeneration++;
+    if (generation == 0) {
+        generation = sNextGeneration++;
+    }
+    sShared.requestElapsedMs = dtMs;
+    sShared.requestGeneration = generation;
+    sShared.completedGeneration = 0;
+    std::memcpy(sShared.params, inputs.params.data(), sizeof(sShared.params));
+    std::memset(sShared.committedPixels, 0, sizeof(sShared.committedPixels));
+    sShared.status = SharedStatus::Empty;
+    sShared.requestKind = RequestKind::Tick;
+
+    uint32_t cpuCycles = 0;
+    uint32_t wallCycles = 0;
+    const TickVerdict verdict =
+        waitForSandbox(deadline, HandshakeAction::PostRequest, CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS,
+                       cpuCycles, wallCycles);
+    recordMemoryHighWater();
+
+    Result result = resultFromVerdict(verdict);
+    if (result == Result::Completed) {
+        result = resultFromSharedStatus(sShared.status);
+    }
+    if (result == Result::Completed && sShared.completedGeneration == generation &&
+        sShared.status == SharedStatus::TickCompleted) {
+        std::memcpy(output.pixels.data(), sShared.committedPixels, sizeof(sShared.committedPixels));
+        output.goodMoment = true;
+        output.arenaHighWater = m3_GetFixedHeapHighWater();
+        output.cpuTimeUs = k_cyc_to_us_near32(cpuCycles);
+        output.wallTimeUs = k_cyc_to_us_near32(wallCycles);
+        return Result::Completed;
+    }
+
+    if (result == Result::Completed) {
+        result = Result::Trap;
+    }
+    LOG_ERR("Wasm v2 sandbox tick failed: %s (cpu %u us, wall %u us)", describe(result),
+            k_cyc_to_us_near32(cpuCycles), k_cyc_to_us_near32(wallCycles));
+    stopLocked();
+    return result;
+}
+#endif
 
 void stop() {
     RuntimeLockGuard lock;
@@ -543,7 +790,8 @@ Result triggerMemoryFaultForTest(k_timepoint_t deadline) {
     uint32_t cpuCycles = 0;
     uint32_t wallCycles = 0;
     const TickVerdict verdict =
-        waitForSandbox(deadline, HandshakeAction::PostRequest, cpuCycles, wallCycles);
+        waitForSandbox(deadline, HandshakeAction::PostRequest, CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS,
+                       cpuCycles, wallCycles);
     const Result result = resultFromVerdict(verdict);
     stopLocked();
     return result;
