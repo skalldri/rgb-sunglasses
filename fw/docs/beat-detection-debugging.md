@@ -181,6 +181,63 @@ a single clip routinely differs from the best SHARED value across clips, and
 only the latter is shippable — `phase3_table.py` reports both, plus the
 "max regret" of a shared setting versus each clip's own optimum.
 
+## Self-noise false positives — parameter tuning CANNOT fix them (measured 2026-08-23)
+
+Two on-device captures with **no music playing** — walking around a quiet house
+(`fw/sim/scenarios/walk-no-music-1`) and head rolls side to side
+(`fw/sim/scenarios/head-roll-no-music`), both ~30 s, AGC live but parked at
+0x3c (+10 dB) throughout — showed 15–23% of frames beat-flagged. Band-0 fires
+at ~3.4/s, the same rate as real music, so downstream rate-filtering can't
+help either. These two scenarios are the standing negative corpus: any future
+detector/AGC change should be scored against them alongside the music clips.
+
+Do not re-attempt the parameter route; it was swept and eliminated:
+
+- **These are genuine acoustic onsets, not marginal noise.** Band-0 flux at
+  fire: p50 ≈ 1.5, max 5.5 — the same magnitude as music onsets (>1.0). A
+  body-mounted mic hears footsteps, floor rumble and frame creak loudly.
+- **`floor` × `alpha` grid** (recomputed offline from the sidecars' recorded
+  flux/mean/sigma — exact for mode 0, no replay needed): even `floor=2.0`
+  (25× default; music already degrades at 0.12) leaves ~100 fires/min while
+  walking. `alpha=3.5` (the pre-Phase-3 muted-detector value) still leaves
+  80–95/min and drops recall on an RMS-matched soft click track to 26%. No
+  point in the grid separates the classes. Mode 1 is no better: `sf_delta=1.5`
+  still fires ~150–180/min.
+- **The noise gate cannot be raised into this.** Walking-house ambience sits
+  at ~0.001 input-referred smoothed RMS — the very level where a 0.001 gate
+  was already measured gating 52.9% of normal-volume music frames (see the
+  gate history above). The distributions overlap; there is no threshold.
+- **A sustained-energy "music present" gate is inverted.** Walking shows 49%
+  band-0 flux-activity duty and ~6× the band-0 energy of a soft click track —
+  self-noise looks MORE sustained than quiet music, not less.
+- **An IMU motion veto does not work for walking.** Fires land equally in
+  low-motion and high-motion frames (footstep sound arrives via floor/air
+  between IMU-visible strides; 25 Hz sampling misses impact transients).
+  Head-roll creaks correlate only 2.3× (r ≈ 0.17) — a discount, not a fix.
+- **A broadband-coincidence veto is too weak**: bands 1/2/3 co-spike at only
+  41%/18%/10% of band-0 fires (and it would cost snares on real music).
+
+**What the AGC does and doesn't contribute** (measured by replaying the
+walking WAV rescaled −10/−20 dB, i.e. as if the AGC had never amplified the
+quiet house): bands 1–3 fires collapse 188 → 79 → 9 — those are quiet
+creak/rustle events pushed over the log-compression knee by the +10 dB — but
+band 0 is gain-invariant (108 → 107 → 91), exactly as the log-flux design
+intends. The +10 dB itself comes from `targetLow=0.002`: a quiet-but-not-silent
+room (above the gate, below targetLow) ratchets gain up, and gain only ever
+comes down via the near-clip attack path or the 10 s silence park. Lowering
+`targetLow` (~0.0008) would therefore roughly halve total self-noise fires —
+but it cannot touch band 0, which is the only band the built-in beat feed
+consumes (`kColorBeatBand = 0` in `audio_animations_sound.cpp`), and it trades
+against quiet-music sensitivity, which is unmeasurable until the corpus above
+is re-recorded. Score both sides before shipping any `targetLow` change.
+
+**The real fix is temporal structure, not thresholds.** The false fires are
+refractory-limited bursts (median inter-fire 128 ms ≈ the 5-frame refractory —
+decay re-triggers) plus irregular events with no stable tempo grid; music
+beats are grid-locked. That is the Phase 5 beat-grid work. Until then the
+detector's current defaults stand: every "improvement" against these captures
+measurably damages music detection.
+
 ## Interpreting compare.py
 
 - Frames are paired **positionally** (device CSV row k ↔ host replay frame k):

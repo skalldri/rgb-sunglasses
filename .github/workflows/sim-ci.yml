@@ -50,6 +50,10 @@ jobs:
           fw/sim/rgbx-sim run hello  --scenario head-roll     --no-build --json > /dev/null
           fw/sim/rgbx-sim run hello  --scenario dance         --no-build --json > /dev/null
           fw/sim/rgbx-sim run cpptest --scenario silence      --no-build --json > /dev/null
+          # Device captures (real WAV + IMU keyframes) — the beat detector's
+          # negative corpus (no music playing; see fw/docs/beat-detection-debugging.md).
+          fw/sim/rgbx-sim run hello  --scenario walk-no-music-1    --no-build --json > /dev/null
+          fw/sim/rgbx-sim run hello  --scenario head-roll-no-music --no-build --json > /dev/null
 
       - name: Fault paths — Crash traps, Hang hits the backstop
         run: |
