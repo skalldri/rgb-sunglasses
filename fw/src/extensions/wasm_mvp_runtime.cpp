@@ -32,11 +32,15 @@ constexpr int kPollMs = MAX(1, MIN(CONFIG_APP_WASM3_MVP_CPU_BUDGET_MS, 10));
 #if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
 constexpr char kV2ImportModule[] = "rgbx_v2";
 constexpr char kV2ParamU32Import[] = "param_u32";
+constexpr char kV2InputU32Import[] = "input_u32";
+constexpr char kV2SetGoodMomentImport[] = "set_good_moment";
+constexpr char kV2DebugU32Import[] = "debug_u32";
 constexpr char kV2SetSpan8Import[] = "set_span8";
 constexpr char kV2SetLumaSpan8Import[] = "set_luma_span8";
 constexpr char kV2InitExport[] = "rgbx_init";
 constexpr uint32_t kMaxV2Globals = 8;
 constexpr uint32_t kMaxV2ParamCallsPerTick = 16;
+constexpr uint32_t kMaxV2InputCallsPerTick = 64;
 constexpr uint32_t kV2PixelsPerSpan = 8;
 constexpr uint32_t kV2SpanCallsPerTick = kV2PixelCount / kV2PixelsPerSpan;
 static_assert(kV2PixelCount % kV2PixelsPerSpan == 0);
@@ -90,11 +94,27 @@ struct SharedMailbox {
 #if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
     RuntimeProfile profile;
     V2SpanEncoding spanEncoding;
+    bool inputImported;
+    bool goodMomentImported;
+    bool debugImported;
     uint32_t params[kV2ParameterCount];
+    char paramStrings[kV2StringParameterCount][kV2StringParameterSize];
+    int32_t accelMilli[kV2ImuAxisCount];
+    int32_t gyroMilli[kV2ImuAxisCount];
+    uint32_t audioBandQ16[kV2AudioBandCount];
+    uint32_t audioDisplayQ16[kV2AudioDisplayBucketCount];
+    uint32_t audioBeatMask;
+    uint32_t buttonsPressed;
+    uint32_t capabilities;
     uint32_t pendingPixels[kV2PixelCount];
     uint32_t committedPixels[kV2PixelCount];
     uint32_t paramCallCount;
+    uint32_t inputCallCount;
     uint32_t setSpanCallCount;
+    uint32_t goodMomentCallCount;
+    uint32_t goodMoment;
+    V2Diagnostic diagnostics[kV2DiagnosticCount];
+    uint32_t diagnosticCount;
 #endif
 #if defined(CONFIG_ZTEST)
     uintptr_t faultAddress;
@@ -134,6 +154,8 @@ BUILD_ASSERT(CONFIG_APP_WASM3_V2_ADMISSION_CPU_BUDGET_MS > CONFIG_APP_WASM3_MVP_
              "v2 admission may be slower than one steady-state tick");
 BUILD_ASSERT(CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS > CONFIG_APP_WASM3_V2_ADMISSION_CPU_BUDGET_MS,
              "the wall backstop must exceed the v2 admission CPU budget");
+BUILD_ASSERT(CONFIG_APP_WASM3_MVP_MODULE_MAX_SIZE == RGBX_V2_MODULE_MAX_BYTES,
+             "the runtime and released RGBX v2 SDK module limits must match");
 #endif
 #if !defined(CONFIG_SCHED_THREAD_USAGE)
 #error "wasm_mvp_runtime requires CONFIG_SCHED_THREAD_USAGE for CPU accounting"
@@ -258,11 +280,15 @@ bool modulePolicyAllows(IM3Module module) {
 
 #if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
     if (sShared.profile == RuntimeProfile::V2) {
-        if (module->numFuncImports != 2 || module->numGlobals > kMaxV2Globals) {
+        if (module->numFuncImports < 2 || module->numFuncImports > 5 ||
+            module->numGlobals > kMaxV2Globals) {
             return false;
         }
 
         bool foundParamU32 = false;
+        bool foundInputU32 = false;
+        bool foundGoodMoment = false;
+        bool foundDebugU32 = false;
         V2SpanEncoding spanEncoding = V2SpanEncoding::None;
         for (uint32_t i = 0; i < module->numFuncImports; ++i) {
             const M3ImportInfo& import = module->functions[i].import;
@@ -272,6 +298,13 @@ bool modulePolicyAllows(IM3Module module) {
             }
             if (std::strcmp(import.fieldUtf8, kV2ParamU32Import) == 0 && !foundParamU32) {
                 foundParamU32 = true;
+            } else if (std::strcmp(import.fieldUtf8, kV2InputU32Import) == 0 && !foundInputU32) {
+                foundInputU32 = true;
+            } else if (std::strcmp(import.fieldUtf8, kV2SetGoodMomentImport) == 0 &&
+                       !foundGoodMoment) {
+                foundGoodMoment = true;
+            } else if (std::strcmp(import.fieldUtf8, kV2DebugU32Import) == 0 && !foundDebugU32) {
+                foundDebugU32 = true;
             } else if (std::strcmp(import.fieldUtf8, kV2SetSpan8Import) == 0 &&
                        spanEncoding == V2SpanEncoding::None) {
                 spanEncoding = V2SpanEncoding::Rgb24;
@@ -286,6 +319,9 @@ bool modulePolicyAllows(IM3Module module) {
             return false;
         }
         sShared.spanEncoding = spanEncoding;
+        sShared.inputImported = foundInputU32;
+        sShared.goodMomentImported = foundGoodMoment;
+        sShared.debugImported = foundDebugU32;
         return true;
     }
 #endif
@@ -307,6 +343,57 @@ bool compiledModulePolicyAllows(IM3Module module) {
     }
     return true;
 }
+
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+bool readSectionU32(const uint8_t* bytes, size_t size, size_t& offset, uint32_t& value) {
+    value = 0;
+    for (uint32_t index = 0; index < 5; ++index) {
+        if (offset >= size) {
+            return false;
+        }
+        const uint8_t byte = bytes[offset++];
+        if (index == 4 && (byte & 0xf0u) != 0) {
+            return false;
+        }
+        value |= static_cast<uint32_t>(byte & 0x7fu) << (index * 7u);
+        if ((byte & 0x80u) == 0) {
+            if (index > 0 && value < (1u << (index * 7u))) {
+                return false;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool v2SectionProfileAllows(const uint8_t* bytes, size_t size) {
+    constexpr uint8_t kMagic[] = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+    if (size < sizeof(kMagic) || std::memcmp(bytes, kMagic, sizeof(kMagic)) != 0) {
+        return false;
+    }
+
+    size_t offset = sizeof(kMagic);
+    uint8_t lastSection = 0;
+    uint32_t seen = 0;
+    while (offset < size) {
+        const uint8_t section = bytes[offset++];
+        const bool allowed = section == 1 || section == 2 || section == 3 || section == 6 ||
+                             section == 7 || section == 10;
+        if (!allowed || section <= lastSection) {
+            return false;
+        }
+        lastSection = section;
+        uint32_t payloadSize = 0;
+        if (!readSectionU32(bytes, size, offset, payloadSize) || payloadSize > size - offset) {
+            return false;
+        }
+        seen |= 1u << section;
+        offset += payloadSize;
+    }
+    constexpr uint32_t kRequired = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 7) | (1u << 10);
+    return offset == size && (seen & kRequired) == kRequired;
+}
+#endif
 
 void stopLocked() {
     sReady = false;
@@ -375,6 +462,150 @@ const void* paramU32Host(IM3Runtime runtime, IM3ImportContext context, uint64_t*
     }
 
     m3ApiReturn(shared->params[id]);
+}
+
+const void* inputU32Host(IM3Runtime runtime, IM3ImportContext context, uint64_t* stack,
+                         void* memory) {
+    uint64_t* _sp = stack;
+    void* _mem = memory;
+    IM3ImportContext _ctx = context;
+    m3ApiReturnType(uint32_t) m3ApiGetArg(uint32_t, kindValue);
+    m3ApiGetArg(uint32_t, index);
+    (void)runtime;
+    (void)_mem;
+
+    auto* shared = static_cast<SharedMailbox*>(const_cast<void*>(_ctx->userdata));
+    if (shared == nullptr || shared->profile != RuntimeProfile::V2 || !shared->inputImported ||
+        shared->requestGeneration == 0 || ++shared->inputCallCount > kMaxV2InputCallsPerTick) {
+        if (shared != nullptr) {
+            shared->status = SharedStatus::HostImportRejected;
+        }
+        return m3Err_trapAbort;
+    }
+
+    uint32_t value = 0;
+    const auto kind = static_cast<V2InputKind>(kindValue);
+    switch (kind) {
+        case V2InputKind::AudioBandQ16:
+            if ((shared->capabilities & RGBX_V2_CAPABILITY_AUDIO) == 0) {
+                goto rejected;
+            }
+            if (index < kV2AudioBandCount) {
+                value = shared->audioBandQ16[index];
+                break;
+            }
+            goto rejected;
+        case V2InputKind::AudioDisplayQ16:
+            if ((shared->capabilities & RGBX_V2_CAPABILITY_AUDIO) == 0) {
+                goto rejected;
+            }
+            if (index < kV2AudioDisplayBucketCount) {
+                value = shared->audioDisplayQ16[index];
+                break;
+            }
+            goto rejected;
+        case V2InputKind::AudioBeatMask:
+            if ((shared->capabilities & RGBX_V2_CAPABILITY_AUDIO) == 0) {
+                goto rejected;
+            }
+            if (index == 0) {
+                value = shared->audioBeatMask;
+                break;
+            }
+            goto rejected;
+        case V2InputKind::ButtonsPressed:
+            if ((shared->capabilities & RGBX_V2_CAPABILITY_BUTTONS) == 0) {
+                goto rejected;
+            }
+            if (index == 0) {
+                value = shared->buttonsPressed;
+                break;
+            }
+            goto rejected;
+        case V2InputKind::AccelMilli:
+            if ((shared->capabilities & RGBX_V2_CAPABILITY_IMU) == 0) {
+                goto rejected;
+            }
+            if (index < kV2ImuAxisCount) {
+                value = static_cast<uint32_t>(shared->accelMilli[index]);
+                break;
+            }
+            goto rejected;
+        case V2InputKind::GyroMilli:
+            if ((shared->capabilities & RGBX_V2_CAPABILITY_IMU) == 0) {
+                goto rejected;
+            }
+            if (index < kV2ImuAxisCount) {
+                value = static_cast<uint32_t>(shared->gyroMilli[index]);
+                break;
+            }
+            goto rejected;
+        case V2InputKind::StringLength:
+        case V2InputKind::StringByteSum:
+            if (index < kV2StringParameterCount) {
+                const char* string = shared->paramStrings[index];
+                for (size_t i = 0; i < kV2StringParameterSize && string[i] != '\0'; ++i) {
+                    if (kind == V2InputKind::StringLength) {
+                        ++value;
+                    } else {
+                        value += static_cast<uint8_t>(string[i]);
+                    }
+                }
+                break;
+            }
+            goto rejected;
+        default:
+            goto rejected;
+    }
+
+    m3ApiReturn(value);
+
+rejected:
+    shared->status = SharedStatus::HostImportRejected;
+    return m3Err_trapAbort;
+}
+
+const void* setGoodMomentHost(IM3Runtime runtime, IM3ImportContext context, uint64_t* stack,
+                              void* memory) {
+    uint64_t* _sp = stack;
+    void* _mem = memory;
+    IM3ImportContext _ctx = context;
+    m3ApiGetArg(uint32_t, value);
+    (void)runtime;
+    (void)_mem;
+
+    auto* shared = static_cast<SharedMailbox*>(const_cast<void*>(_ctx->userdata));
+    if (shared == nullptr || shared->profile != RuntimeProfile::V2 || !shared->goodMomentImported ||
+        shared->requestGeneration == 0 || value > 1 || ++shared->goodMomentCallCount > 1) {
+        if (shared != nullptr) {
+            shared->status = SharedStatus::HostImportRejected;
+        }
+        return m3Err_trapAbort;
+    }
+    shared->goodMoment = value;
+    m3ApiSuccess();
+}
+
+const void* debugU32Host(IM3Runtime runtime, IM3ImportContext context, uint64_t* stack,
+                         void* memory) {
+    uint64_t* _sp = stack;
+    void* _mem = memory;
+    IM3ImportContext _ctx = context;
+    m3ApiGetArg(uint32_t, tag);
+    m3ApiGetArg(uint32_t, value);
+    (void)runtime;
+    (void)_mem;
+
+    auto* shared = static_cast<SharedMailbox*>(const_cast<void*>(_ctx->userdata));
+    if (shared == nullptr || shared->profile != RuntimeProfile::V2 || !shared->debugImported ||
+        shared->requestGeneration == 0 || shared->diagnosticCount >= kV2DiagnosticCount) {
+        if (shared != nullptr) {
+            shared->status = SharedStatus::HostImportRejected;
+        }
+        return m3Err_trapAbort;
+    }
+    shared->diagnostics[shared->diagnosticCount++] = {tag, value};
+    m3ApiSuccess();
 }
 
 const void* setSpan8Host(IM3Runtime runtime, IM3ImportContext context, uint64_t* stack,
@@ -495,6 +726,14 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
     }
 
     IM3Module module = nullptr;
+#if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
+    if (shared->profile == RuntimeProfile::V2 &&
+        !v2SectionProfileAllows(shared->module, shared->moduleSize)) {
+        shared->status = SharedStatus::PolicyRejected;
+        k_sem_give(&sDoneSem);
+        return;
+    }
+#endif
     M3Result result = m3_ParseModule(environment, &module, shared->module, shared->moduleSize);
     if (result != m3Err_none) {
         shared->status = SharedStatus::ParseFailed;
@@ -502,8 +741,8 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
         return;
     }
 
-    // Inspect before m3_LoadModule(), which may execute a start function. The
-    // embedded-only profile has one exact import and no memory, table, data,
+    // Inspect before m3_LoadModule(), which may execute a start function. Each
+    // profile has an exact bounded import set and no memory, table, data,
     // element, or implicit-start surface.
     if (!modulePolicyAllows(module)) {
         shared->status = SharedStatus::PolicyRejected;
@@ -522,6 +761,18 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
     if (shared->profile == RuntimeProfile::V2) {
         result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2ParamU32Import, "i(i)",
                                       paramU32Host, shared);
+        if (result == m3Err_none && shared->inputImported) {
+            result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2InputU32Import, "i(ii)",
+                                          inputU32Host, shared);
+        }
+        if (result == m3Err_none && shared->goodMomentImported) {
+            result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2SetGoodMomentImport, "v(i)",
+                                          setGoodMomentHost, shared);
+        }
+        if (result == m3Err_none && shared->debugImported) {
+            result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2DebugU32Import, "v(ii)",
+                                          debugU32Host, shared);
+        }
         if (result == m3Err_none && shared->spanEncoding == V2SpanEncoding::Rgb24) {
             result = m3_LinkRawFunctionEx(module, kV2ImportModule, kV2SetSpan8Import,
                                           "v(iiiiiiiii)", setSpan8Host, shared);
@@ -607,14 +858,19 @@ void sandboxEntry(void* p1, void* p2, void* p3) {
         if (shared->profile == RuntimeProfile::V2) {
             std::memset(shared->pendingPixels, 0, sizeof(shared->pendingPixels));
             shared->paramCallCount = 0;
+            shared->inputCallCount = 0;
             shared->setSpanCallCount = 0;
+            shared->goodMomentCallCount = 0;
+            shared->goodMoment = shared->goodMomentImported ? 0 : 1;
+            shared->diagnosticCount = 0;
         }
 #endif
 
         result = m3_CallV(tickFunction, static_cast<int32_t>(shared->requestElapsedMs));
 #if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
         if (shared->profile == RuntimeProfile::V2 && result == m3Err_none &&
-            shared->setSpanCallCount == kV2SpanCallsPerTick) {
+            shared->setSpanCallCount == kV2SpanCallsPerTick &&
+            (!shared->goodMomentImported || shared->goodMomentCallCount == 1)) {
             std::memcpy(shared->committedPixels, shared->pendingPixels,
                         sizeof(shared->committedPixels));
             shared->completedGeneration = generation;
@@ -788,6 +1044,18 @@ Result tickV2(uint32_t dtMs, const V2TickInputs& inputs, k_timepoint_t deadline,
     sShared.requestGeneration = generation;
     sShared.completedGeneration = 0;
     std::memcpy(sShared.params, inputs.params.data(), sizeof(sShared.params));
+    std::memcpy(sShared.paramStrings, inputs.paramStrings.data(), sizeof(sShared.paramStrings));
+    for (size_t i = 0; i < kV2StringParameterCount; ++i) {
+        sShared.paramStrings[i][kV2StringParameterSize - 1] = '\0';
+    }
+    std::memcpy(sShared.accelMilli, inputs.accelMilli.data(), sizeof(sShared.accelMilli));
+    std::memcpy(sShared.gyroMilli, inputs.gyroMilli.data(), sizeof(sShared.gyroMilli));
+    std::memcpy(sShared.audioBandQ16, inputs.audioBandQ16.data(), sizeof(sShared.audioBandQ16));
+    std::memcpy(sShared.audioDisplayQ16, inputs.audioDisplayQ16.data(),
+                sizeof(sShared.audioDisplayQ16));
+    sShared.audioBeatMask = inputs.audioBeatMask;
+    sShared.buttonsPressed = inputs.buttonsPressed;
+    sShared.capabilities = inputs.capabilities & RGBX_V2_CAPABILITY_ALL;
     std::memset(sShared.committedPixels, 0, sizeof(sShared.committedPixels));
     sShared.status = SharedStatus::Empty;
     sShared.requestKind = RequestKind::Tick;
@@ -806,7 +1074,10 @@ Result tickV2(uint32_t dtMs, const V2TickInputs& inputs, k_timepoint_t deadline,
     if (result == Result::Completed && sShared.completedGeneration == generation &&
         sShared.status == SharedStatus::TickCompleted) {
         std::memcpy(output.pixels.data(), sShared.committedPixels, sizeof(sShared.committedPixels));
-        output.goodMoment = true;
+        output.goodMoment = sShared.goodMoment != 0;
+        output.diagnosticCount = sShared.diagnosticCount;
+        std::memcpy(output.diagnostics.data(), sShared.diagnostics,
+                    sShared.diagnosticCount * sizeof(V2Diagnostic));
         output.arenaHighWater = m3_GetFixedHeapHighWater();
         output.cpuTimeUs = k_cyc_to_us_near32(cpuCycles);
         output.wallTimeUs = k_cyc_to_us_near32(wallCycles);

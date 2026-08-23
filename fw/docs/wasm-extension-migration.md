@@ -24,9 +24,10 @@ on this path.
 
 The production profile does not define `CONFIG_APP_WASM3_V2_PROTOTYPE`, and
 its ELF contains no v2 runtime or import symbols. The explicit verification
-build with the palette/luma ABI and 2 KiB value/module buffers uses 845,316 of
-900,608 flash bytes and 435,488 of 450,560 RAM bytes, leaving 55,292 flash bytes
-and 15,072 RAM bytes free. That is below both the 64 KiB flash and 24 KiB RAM
+build with the palette/luma plus input/lifecycle ABI and 2 KiB value/module
+buffers uses 847,240 of 900,608 flash bytes and 436,416 of 450,560 RAM bytes,
+leaving 53,368 flash bytes and 14,144 RAM bytes free. That is below both the
+64 KiB flash and 24 KiB RAM
 stop-loss limits, so no board configuration enables this test-only path and no
 device was flashed.
 
@@ -103,6 +104,18 @@ good-moment value, or diagnostics.
 This slice remains memoryless. Bounded linear memory, retained-frame scheduling,
 and the stateful Fluid profile are separate follow-ups and are not implied by
 the input snapshot contract.
+
+The focused `CONFIG_APP_WASM3_V2_PROTOTYPE` host implements this contract in
+the existing `K_USER` sandbox. The per-tick capability mask is copied from the
+admitted package metadata and checked before every sensor read. Before Wasm3
+parses a v2 module, a bounded section scan admits only Type, Import, Function,
+Global, Export, and Code in canonical order; custom, DataCount, tag, unknown,
+duplicate, and out-of-order sections fail closed. All 33 ARM/QEMU cases pass.
+They synthesize the full five-import
+module in the test itself, exercise every input class and both good-moment
+values, and prove invalid selectors, missing or duplicate lifecycle signals,
+call-quota overruns, diagnostic overflow, and wrong optional signatures fail
+without committing any output.
 
 ## What counts as complete
 

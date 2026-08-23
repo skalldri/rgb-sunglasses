@@ -129,6 +129,22 @@ k_timepoint_t deadline() {
     return sys_timepoint_calc(K_MSEC(CONFIG_APP_WASM3_MVP_WALL_BACKSTOP_MS));
 }
 
+void expectGoodActivationAndTick(uint32_t elapsedMs, uint32_t expectedColor);
+
+void expectV2TrapWithoutCommit(const wasm_mvp_runtime::V2TickInputs& inputs) {
+    sV2Output.pixels.fill(0xdeadbeefu);
+    sV2Output.goodMoment = false;
+    sV2Output.diagnosticCount = 3;
+    zassert_equal(wasm_mvp_runtime::tickV2(0, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Trap);
+    for (uint32_t pixel : sV2Output.pixels) {
+        zassert_equal(pixel, 0xdeadbeefu, "rejected signal call committed output");
+    }
+    zassert_false(sV2Output.goodMoment);
+    zassert_equal(sV2Output.diagnosticCount, 3, "rejected generation changed diagnostics");
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
 void expectGoodActivationAndTick(uint32_t elapsedMs, uint32_t expectedColor) {
     zassert_equal(wasm_mvp_runtime::start(kWasmMvpModule, sizeof(kWasmMvpModule), deadline()),
                   wasm_mvp_runtime::Result::Completed);
@@ -240,6 +256,7 @@ void appendSection(FixedBytes<ModuleCapacity>& module, uint8_t id,
 }
 
 FixedBytes<2048> sLumaSpanModule;
+FixedBytes<2048> sInputSignalsModule;
 
 void buildLumaSpanV2Module(FixedBytes<2048>& module, bool invalidLuma) {
     module.bytes.fill(0);
@@ -298,6 +315,122 @@ void buildLumaSpanV2Module(FixedBytes<2048>& module, bool invalidLuma) {
                      0x0b, 0x0b});            // end loop; end function
 
     FixedBytes<192> code;
+    code.push(0x02);
+    appendLebU32(code, initBody.size);
+    code.append(initBody);
+    appendLebU32(code, tickBody.size);
+    code.append(tickBody);
+    appendSection(module, 0x0a, code);
+}
+
+void buildInputSignalsV2Module(FixedBytes<2048>& module, uint32_t firstInputKind = 0,
+                               uint32_t goodMomentCalls = 1, uint32_t extraInputCalls = 0,
+                               uint32_t diagnosticCalls = 4, bool wrongInputSignature = false,
+                               bool wrongGoodMomentSignature = false,
+                               bool wrongDebugSignature = false, uint32_t firstInputIndex = 0) {
+    module.bytes.fill(0);
+    module.size = 0;
+    module.append({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00});
+
+    static FixedBytes<96> types;
+    types.bytes.fill(0);
+    types.size = 0;
+    types.append({0x07, 0x60, 0x01, 0x7f, 0x01, 0x7f,  // param_u32: i(i)
+                  0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,  // input_u32: i(ii)
+                  0x60, 0x01, 0x7f, 0x00,              // set_good_moment: v(i)
+                  0x60, 0x02, 0x7f, 0x7f, 0x00,        // debug_u32: v(ii)
+                  0x60, 0x09});                        // set_span8: v(9*i32)
+    for (size_t i = 0; i < 9; ++i) {
+        types.push(0x7f);
+    }
+    types.append({0x00, 0x60, 0x00, 0x00, 0x60, 0x01, 0x7f, 0x00});
+    appendSection(module, 0x01, types);
+
+    static FixedBytes<192> imports;
+    imports.bytes.fill(0);
+    imports.size = 0;
+    imports.push(0x05);
+    appendName(imports, "rgbx_v2");
+    appendName(imports, "param_u32");
+    imports.append({0x00, 0x00});
+    appendName(imports, "rgbx_v2");
+    appendName(imports, "input_u32");
+    imports.append({0x00, static_cast<uint8_t>(wrongInputSignature ? 0 : 1)});
+    appendName(imports, "rgbx_v2");
+    appendName(imports, "set_good_moment");
+    imports.append({0x00, static_cast<uint8_t>(wrongGoodMomentSignature ? 0 : 2)});
+    appendName(imports, "rgbx_v2");
+    appendName(imports, "debug_u32");
+    imports.append({0x00, static_cast<uint8_t>(wrongDebugSignature ? 0 : 3)});
+    appendName(imports, "rgbx_v2");
+    appendName(imports, "set_span8");
+    imports.append({0x00, 0x04});
+    appendSection(module, 0x02, imports);
+
+    static FixedBytes<8> functions;
+    functions.bytes.fill(0);
+    functions.size = 0;
+    functions.append({0x02, 0x05, 0x06});
+    appendSection(module, 0x03, functions);
+
+    static FixedBytes<48> exports;
+    exports.bytes.fill(0);
+    exports.size = 0;
+    exports.push(0x02);
+    appendName(exports, "rgbx_init");
+    exports.append({0x00, 0x05});
+    appendName(exports, "rgbx_tick");
+    exports.append({0x00, 0x06});
+    appendSection(module, 0x07, exports);
+
+    static FixedBytes<8> initBody;
+    initBody.bytes.fill(0);
+    initBody.size = 0;
+    initBody.append({0x00, 0x0b});
+    static FixedBytes<1024> tickBody;
+    tickBody.bytes.fill(0);
+    tickBody.size = 0;
+    tickBody.append({0x01, 0x09, 0x7f});  // nine i32 locals at indices 1..9
+    constexpr uint32_t kinds[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    constexpr uint32_t indices[] = {0, 19, 0, 0, 0, 2, 0, 0};
+    for (uint32_t i = 0; i < 8; ++i) {
+        appendPositiveI32Const(tickBody, i == 0 ? firstInputKind : kinds[i]);
+        if (!wrongInputSignature) {
+            appendPositiveI32Const(tickBody, i == 0 ? firstInputIndex : indices[i]);
+        }
+        tickBody.append({0x10, 0x01, static_cast<uint8_t>(0x21), static_cast<uint8_t>(i + 1)});
+    }
+    for (uint32_t i = 0; i < extraInputCalls; ++i) {
+        appendPositiveI32Const(tickBody, 2);
+        if (!wrongInputSignature) {
+            appendPositiveI32Const(tickBody, 0);
+        }
+        tickBody.append({0x10, 0x01, 0x1a});
+    }
+    for (uint32_t i = 0; i < goodMomentCalls; ++i) {
+        appendPositiveI32Const(tickBody, 0);
+        tickBody.append({0x10, 0x00, 0x10, 0x02});
+    }
+    constexpr uint8_t diagnosticLocals[] = {3, 5, 7, 8, 1};
+    for (uint32_t i = 0; i < diagnosticCalls; ++i) {
+        appendPositiveI32Const(tickBody, 10 + i);
+        tickBody.append({0x20, diagnosticLocals[i % 5], 0x10, 0x03});
+    }
+    appendPositiveI32Const(tickBody, 0);
+    tickBody.append({0x21, 0x09, 0x03, 0x40});  // local.set 9; loop
+    tickBody.append({0x20, 0x09});              // first pixel
+    for (uint8_t local = 1; local <= 8; ++local) {
+        tickBody.append({0x20, local});
+    }
+    tickBody.append({0x10, 0x04, 0x20, 0x09});
+    appendPositiveI32Const(tickBody, 8);
+    tickBody.append({0x6a, 0x22, 0x09});
+    appendPositiveI32Const(tickBody, 480);
+    tickBody.append({0x49, 0x0d, 0x00, 0x0b, 0x0b});
+
+    static FixedBytes<1100> code;
+    code.bytes.fill(0);
+    code.size = 0;
     code.push(0x02);
     appendLebU32(code, initBody.size);
     code.append(initBody);
@@ -461,6 +594,150 @@ ZTEST(wasm_mvp_runtime, test_plasma_v2_matches_registry_effect_with_bounded_math
     wasm_mvp_runtime::stop();
 }
 
+ZTEST(wasm_mvp_runtime, test_v2_input_and_lifecycle_signals_commit_atomically) {
+    buildInputSignalsV2Module(sInputSignalsModule);
+    zassert_true(sInputSignalsModule.size <= CONFIG_APP_WASM3_MVP_MODULE_MAX_SIZE);
+    zassert_equal(wasm_mvp_runtime::startV2(sInputSignalsModule.bytes.data(),
+                                            sInputSignalsModule.size, deadline()),
+                  wasm_mvp_runtime::Result::Completed);
+
+    wasm_mvp_runtime::V2TickInputs inputs;
+    inputs.params[0] = 0;
+    inputs.capabilities = RGBX_V2_CAPABILITY_ALL;
+    inputs.audioBandQ16[0] = 0x00112233u;
+    inputs.audioDisplayQ16[19] = 0x00445566u;
+    inputs.audioBeatMask = 0x0fu;
+    inputs.buttonsPressed = 0x1bu;
+    inputs.accelMilli[0] = -1234;
+    inputs.gyroMilli[2] = 5678;
+    inputs.paramStrings[0][0] = 'A';
+    inputs.paramStrings[0][1] = 'B';
+
+    zassert_equal(wasm_mvp_runtime::tickV2(17, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    const uint32_t expected[] = {inputs.audioBandQ16[0],
+                                 inputs.audioDisplayQ16[19],
+                                 inputs.audioBeatMask,
+                                 inputs.buttonsPressed,
+                                 static_cast<uint32_t>(inputs.accelMilli[0]),
+                                 static_cast<uint32_t>(inputs.gyroMilli[2]),
+                                 2u,
+                                 static_cast<uint32_t>('A' + 'B')};
+    for (size_t pixel = 0; pixel < sV2Output.pixels.size(); ++pixel) {
+        zassert_equal(sV2Output.pixels[pixel], expected[pixel % 8] & 0x00ffffffu,
+                      "input pixel %zu differs", pixel);
+    }
+    zassert_false(sV2Output.goodMoment);
+    zassert_equal(sV2Output.diagnosticCount, 4);
+    zassert_equal(sV2Output.diagnostics[0].tag, 10);
+    zassert_equal(sV2Output.diagnostics[0].value, inputs.audioBeatMask);
+    zassert_equal(sV2Output.diagnostics[1].tag, 11);
+    zassert_equal(sV2Output.diagnostics[1].value, static_cast<uint32_t>(inputs.accelMilli[0]));
+    zassert_equal(sV2Output.diagnostics[2].tag, 12);
+    zassert_equal(sV2Output.diagnostics[2].value, 2);
+    zassert_equal(sV2Output.diagnostics[3].tag, 13);
+    zassert_equal(sV2Output.diagnostics[3].value, static_cast<uint32_t>('A' + 'B'));
+
+    inputs.params[0] = 1;
+    zassert_equal(wasm_mvp_runtime::tickV2(17, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    zassert_true(sV2Output.goodMoment);
+    wasm_mvp_runtime::stop();
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_optional_signal_imports_fail_closed) {
+    struct RejectedModule {
+        uint32_t firstInputKind;
+        uint32_t goodMomentCalls;
+        uint32_t extraInputCalls;
+        uint32_t diagnosticCalls;
+    };
+    constexpr RejectedModule cases[] = {
+        {8, 1, 0, 4},   // unknown input kind
+        {0, 0, 0, 4},   // imported good-moment signal not emitted
+        {0, 2, 0, 4},   // duplicate good-moment signal
+        {0, 1, 57, 4},  // 8 baseline + 57 exceeds the 64-call input quota
+        {0, 1, 0, 5},   // diagnostics exceed the four-record mailbox
+    };
+    for (const auto& rejected : cases) {
+        buildInputSignalsV2Module(sInputSignalsModule, rejected.firstInputKind,
+                                  rejected.goodMomentCalls, rejected.extraInputCalls,
+                                  rejected.diagnosticCalls);
+        zassert_equal(wasm_mvp_runtime::startV2(sInputSignalsModule.bytes.data(),
+                                                sInputSignalsModule.size, deadline()),
+                      wasm_mvp_runtime::Result::Completed);
+        wasm_mvp_runtime::V2TickInputs inputs;
+        inputs.params[0] = 1;
+        inputs.capabilities = RGBX_V2_CAPABILITY_ALL;
+        expectV2TrapWithoutCommit(inputs);
+    }
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_optional_import_signatures_are_exact) {
+    for (const auto& signatures : {
+             std::array<bool, 3>{true, false, false},
+             std::array<bool, 3>{false, true, false},
+             std::array<bool, 3>{false, false, true},
+         }) {
+        buildInputSignalsV2Module(sInputSignalsModule, 0, 1, 0, 4, signatures[0], signatures[1],
+                                  signatures[2]);
+        zassert_equal(wasm_mvp_runtime::startV2(sInputSignalsModule.bytes.data(),
+                                                sInputSignalsModule.size, deadline()),
+                      wasm_mvp_runtime::Result::InvalidModule);
+    }
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_input_indices_are_exactly_bounded) {
+    struct InvalidSelector {
+        uint32_t kind;
+        uint32_t index;
+    };
+    constexpr InvalidSelector selectors[] = {
+        {RGBX_V2_INPUT_AUDIO_BAND_Q16, RGBX_V2_AUDIO_BAND_COUNT},
+        {RGBX_V2_INPUT_AUDIO_DISPLAY_Q16, RGBX_V2_AUDIO_DISPLAY_BUCKET_COUNT},
+        {RGBX_V2_INPUT_AUDIO_BEAT_MASK, 1},
+        {RGBX_V2_INPUT_BUTTONS_PRESSED, 1},
+        {RGBX_V2_INPUT_ACCEL_MILLI, RGBX_V2_IMU_AXIS_COUNT},
+        {RGBX_V2_INPUT_GYRO_MILLI, RGBX_V2_IMU_AXIS_COUNT},
+        {RGBX_V2_INPUT_STRING_LENGTH, RGBX_V2_MAX_STRING_PARAMS},
+        {RGBX_V2_INPUT_STRING_BYTE_SUM, RGBX_V2_MAX_STRING_PARAMS},
+    };
+    for (const auto& selector : selectors) {
+        buildInputSignalsV2Module(sInputSignalsModule, selector.kind, 1, 0, 4, false, false, false,
+                                  selector.index);
+        zassert_equal(wasm_mvp_runtime::startV2(sInputSignalsModule.bytes.data(),
+                                                sInputSignalsModule.size, deadline()),
+                      wasm_mvp_runtime::Result::Completed);
+        wasm_mvp_runtime::V2TickInputs inputs;
+        inputs.params[0] = 1;
+        inputs.capabilities = RGBX_V2_CAPABILITY_ALL;
+        expectV2TrapWithoutCommit(inputs);
+    }
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_input_kinds_require_manifest_capabilities) {
+    struct MissingCapability {
+        uint32_t kind;
+        uint32_t capabilities;
+    };
+    constexpr MissingCapability cases[] = {
+        {RGBX_V2_INPUT_AUDIO_BAND_Q16, RGBX_V2_CAPABILITY_BUTTONS | RGBX_V2_CAPABILITY_IMU},
+        {RGBX_V2_INPUT_BUTTONS_PRESSED, RGBX_V2_CAPABILITY_IMU | RGBX_V2_CAPABILITY_AUDIO},
+        {RGBX_V2_INPUT_ACCEL_MILLI, RGBX_V2_CAPABILITY_BUTTONS | RGBX_V2_CAPABILITY_AUDIO},
+    };
+    for (const auto& missing : cases) {
+        buildInputSignalsV2Module(sInputSignalsModule, missing.kind);
+        zassert_equal(wasm_mvp_runtime::startV2(sInputSignalsModule.bytes.data(),
+                                                sInputSignalsModule.size, deadline()),
+                      wasm_mvp_runtime::Result::Completed);
+        wasm_mvp_runtime::V2TickInputs inputs;
+        inputs.params[0] = 1;
+        inputs.capabilities = missing.capabilities;
+        expectV2TrapWithoutCommit(inputs);
+    }
+}
+
 ZTEST(wasm_mvp_runtime, test_v2_and_mvp_profiles_reject_each_others_modules) {
     zassert_equal(wasm_mvp_runtime::start(kCppTestV2Module, sizeof(kCppTestV2Module), deadline()),
                   wasm_mvp_runtime::Result::InvalidModule);
@@ -480,6 +757,38 @@ ZTEST(wasm_mvp_runtime, test_v2_rejects_imported_globals) {
     importedGlobal[37] = 0x03;  // two function imports plus one global import
     zassert_equal(wasm_mvp_runtime::startV2(importedGlobal.data(), importedGlobal.size(), deadline()),
                   wasm_mvp_runtime::Result::InvalidModule);
+    expectGoodActivationAndTick(0, kExpectedCyan);
+}
+
+ZTEST(wasm_mvp_runtime, test_v2_rejects_sections_outside_exact_profile) {
+    const auto base = minimalV2Module({});
+    const auto expectRejected = [](const std::vector<uint8_t>& module) {
+        zassert_equal(wasm_mvp_runtime::startV2(module.data(), module.size(), deadline()),
+                      wasm_mvp_runtime::Result::InvalidModule);
+    };
+
+    auto module = base;
+    module.insert(module.begin() + 8, {0x00, 0x01, 0x00});
+    expectRejected(module);
+
+    for (uint8_t section : {0x0c, 0x0d, 0x0e}) {
+        module = base;
+        module.insert(module.end(), {section, 0x01, 0x00});
+        expectRejected(module);
+    }
+
+    module = base;
+    module.insert(module.end(), {0x06, 0x01, 0x00});
+    expectRejected(module);
+
+    module = base;
+    module.insert(module.end(), {0x06, 0x80});
+    expectRejected(module);
+
+    module = base;
+    module[9] |= 0x80u;
+    module.insert(module.begin() + 10, 0x00);
+    expectRejected(module);
     expectGoodActivationAndTick(0, kExpectedCyan);
 }
 
