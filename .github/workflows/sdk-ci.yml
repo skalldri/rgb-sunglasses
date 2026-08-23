@@ -157,7 +157,10 @@ jobs:
             echo "configure succeeded with node v12.22.9 — the version gate did not fire"
             exit 1
           fi
-          if ! grep -q "is too old" "$RUNNER_TEMP/oldnode.log"; then
+          # CMake hard-wraps message() text at ~78 columns, and where it wraps
+          # depends on the runner's path lengths — so match against the log
+          # with its whitespace flattened, never line by line.
+          if ! tr '\n' ' ' < "$RUNNER_TEMP/oldnode.log" | tr -s ' ' | grep -q "is too old"; then
             echo "configure failed, but not with the version-gate message:"
             cat "$RUNNER_TEMP/oldnode.log"
             exit 1
