@@ -90,18 +90,11 @@ returning slowly: `gx` peaked +6.6…+8.2 rad/s on left yaws, `gy` +10.6…+13.9
 nose-down pitches, `gz` +5.4…+6.6 on left rolls — each with the slow return
 reading the opposite sign.
 
-That result depends on the operator having swept the intended way, so it was
-cross-checked independently. For a rigid body a fixed world vector obeys
-`d(a)/dt = −ω × a`, so the accelerometer's own gravity reading predicts what the
-gyro must report. Over well-conditioned samples (rate low enough for a central
-difference at 25 Hz, and ω not parallel to gravity) the measured and predicted
-derivatives agreed with median cosine similarity 0.92 (X), 0.91 (Y), 0.89 (Z).
-The gyro triad is therefore right-handed with respect to the accelerometer axes,
-which pins the polarity by the right-hand rule regardless of how the motions were
-performed.
+Those signs were then cross-checked against the accelerometer's own gravity
+reading — a test that does not depend on the motions having been performed as
+intended — agreeing with median cosine similarity 0.92 (X), 0.91 (Y), 0.89 (Z).
+The gyro triad is therefore right-handed with respect to the accelerometer axes
+above, which pins the polarity by the right-hand rule.
 
-Note that yaw performed with the head upright puts ω parallel to gravity, where
-`ω × a = 0` and this cross-check carries **no** information about X — the X figure
-above comes from rotations taken while the crown axis was off-vertical. A repeat
-of this exercise should include at least one X-axis rotation with the glasses
-tipped, or it will silently fail to test that axis.
+Method, and the two ways it silently produces a false negative: `fw/CLAUDE.md`,
+"Validating the IMU coordinate frame on hardware".
