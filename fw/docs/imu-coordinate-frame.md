@@ -23,15 +23,13 @@ Coordinates are given for the glasses **worn normally, head upright and level**.
 
 | Axis        | Points toward…            | Anatomical | Rotation about it (gyro) |
 | ----------- | ------------------------- | ---------- | ------------------------ |
-| **+X** (red)   | the crown / straight up   | superior   | **yaw** — turning the head left/right ("no") |
-| **+Y** (green) | out the **left** temple   | wearer's left | **pitch** — nodding up/down ("yes") |
-| **+Z** (blue)  | out the **back** of the head | posterior | **roll** — bringing an ear toward a shoulder |
+| **+X** (red)   | the crown / straight up   | superior   | **yaw** — "no". Positive = turning **left** |
+| **+Y** (green) | out the **left** temple   | wearer's left | **pitch** — "yes". Positive = nose **down** |
+| **+Z** (blue)  | out the **back** of the head | posterior | **roll** — ear to shoulder. Positive = crown tips **left** |
 
 This is a **right-handed** triad (X × Y = Z). Gyro output for each axis is the
 angular rate about the corresponding accelerometer axis, positive per the
-right-hand rule. The gyro *polarity* (which physical rotation direction reads
-positive) has not been bench-verified here — confirm on-device before relying on
-a specific sign.
+right-hand rule.
 
 ### Annotated views
 
@@ -64,3 +62,46 @@ the floor:
 Top-up — the same top view with the head tipped back the other way:
 
 ![Top-up view of the head, IMU axes annotated](images/imu/Top-up-annotated.jpg)
+
+## Bench verification
+
+Both the accelerometer frame and the gyro polarity were verified on Proto0
+hardware (2026-08-24, fw v3.4.0-stable) with the on-device capture path —
+`capture start <seconds>`, whose `.csv` sidecar logs raw `ax,ay,az,gx,gy,gz` at
+25 Hz. The axis directions above are measured, not inferred.
+
+**Accelerometer.** The glasses were held stationary in six orientations; the axis
+pointing up reads +1 g. Every reading matched the table (m/s²):
+
+| Orientation (as worn) | ax | ay | az |
+| --------------------- | ------ | ------ | ------ |
+| Upright, level        | **+9.95** | +0.83 | −0.01 |
+| Upside down           | **−9.61** | −0.49 | −0.72 |
+| Right temple down     | −0.10 | **+9.78** | −0.14 |
+| Left temple down      | −0.18 | **−9.84** | −0.52 |
+| Face down             | +0.01 | +0.21 | **+9.87** |
+| Face up               | +0.29 | −0.19 | **−9.84** |
+
+Off-axis terms are hand-held pose error (≤ 6°); every vector magnitude fell in
+9.65–9.98 m/s², i.e. 1.00 g.
+
+**Gyroscope.** Measured directly by sweeping briskly in the named direction and
+returning slowly: `gx` peaked +6.6…+8.2 rad/s on left yaws, `gy` +10.6…+13.9 on
+nose-down pitches, `gz` +5.4…+6.6 on left rolls — each with the slow return
+reading the opposite sign.
+
+That result depends on the operator having swept the intended way, so it was
+cross-checked independently. For a rigid body a fixed world vector obeys
+`d(a)/dt = −ω × a`, so the accelerometer's own gravity reading predicts what the
+gyro must report. Over well-conditioned samples (rate low enough for a central
+difference at 25 Hz, and ω not parallel to gravity) the measured and predicted
+derivatives agreed with median cosine similarity 0.92 (X), 0.91 (Y), 0.89 (Z).
+The gyro triad is therefore right-handed with respect to the accelerometer axes,
+which pins the polarity by the right-hand rule regardless of how the motions were
+performed.
+
+Note that yaw performed with the head upright puts ω parallel to gravity, where
+`ω × a = 0` and this cross-check carries **no** information about X — the X figure
+above comes from rotations taken while the crown axis was off-vertical. A repeat
+of this exercise should include at least one X-axis rotation with the glasses
+tipped, or it will silently fail to test that axis.

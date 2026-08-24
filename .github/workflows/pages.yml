@@ -26,6 +26,7 @@ on:
       - 'fw/docs/proto0-user-guide.md'
       - 'fw/docs/proto0-assembly-guide.md'
       - 'fw/docs/proto0-hardware-guide.md'
+      - 'fw/docs/imu-coordinate-frame.md'
       - 'fw/docs/developer-setup.md'
       - 'fw/docs/images/**'
       # The extension simulator ships at /sim — redeploy when it (or the

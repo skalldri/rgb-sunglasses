@@ -98,6 +98,12 @@ DOCS = [
         "title": "Proto0 Hardware Hacker's Guide",
         "desc": "Nitty-gritty Proto0 hardware details: JTAG / TagConnect, jumpers, and connectors.",
     },
+    {
+        "src": "fw/docs/imu-coordinate-frame.md",
+        "out": "imu-coordinate-frame",
+        "title": "IMU Coordinate Frame",
+        "desc": "Which way the Proto0 BMI270's accelerometer and gyroscope axes point on the wearer's head, with annotated photos.",
+    },
 ]
 
 # The /docs landing page — auto-generated from DOCS (one card per doc).
