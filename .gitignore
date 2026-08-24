@@ -23,6 +23,7 @@ site/recovery/
 site/proto0-user-guide/
 site/proto0-assembly-guide/
 site/proto0-hardware-guide/
+site/imu-coordinate-frame/
 site/developer-setup/
 # The extension simulator bundle (vite build output copied in by pages.yml).
 site/sim/
