@@ -1,4 +1,5 @@
 #include <extensions/rgbx_package.h>
+#include <rgbx/rgbx_v2.h>
 #include <zcbor_common.h>
 #include <zcbor_decode.h>
 
@@ -6,6 +7,28 @@
 #include <limits>
 
 namespace rgbx_package {
+
+// The container-format limits (this header) and the RGBX v2 admission profile
+// (<rgbx/rgbx_v2.h>) are declared in separate headers. Where they describe the
+// same quantity they must not drift, so tie them together at compile time
+// wherever the parser is built:
+//   * the parameter and string-parameter tables the device stores must hold
+//     every slot the v2 profile admits;
+//   * a string default's storage is the v2 slot size minus its NUL.
+// kMaxWasmBytes is the container's hard format cap and stays larger than the
+// v2 memoryless ceiling on purpose: the active policy narrows the accepted
+// module to RGBX_V2_MODULE_MAX_BYTES through Policy.maxWasmBytes, and that
+// ceiling must fit inside the format cap. This is the reconciliation of the
+// 2048 profile ceiling against the 8192 format cap.
+static_assert(kMaxParams == RGBX_V2_MAX_PARAMS,
+              "device parameter table must match the v2 profile parameter count");
+static_assert(kMaxStringParams == RGBX_V2_MAX_STRING_PARAMS,
+              "device string-parameter table must match the v2 profile count");
+static_assert(kMaxStringValueLen + 1 == RGBX_V2_STRING_PARAM_SIZE,
+              "device string storage must match the v2 profile slot size");
+static_assert(RGBX_V2_MODULE_MAX_BYTES <= kMaxWasmBytes,
+              "the v2 module ceiling must fit within the container format cap");
+
 namespace {
 
 constexpr uint8_t kMagic[] = {'R', 'G', 'B', 'X'};

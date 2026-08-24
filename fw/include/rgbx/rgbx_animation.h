@@ -1,4 +1,7 @@
 /**
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * @file rgbx_animation.h
  * @brief Header-only C++ convenience wrapper over the flat C extension ABI
  *        in rgbx_api.h.

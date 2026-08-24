@@ -60,9 +60,16 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # must stay in sync with fw/sim/scripts/install-toolchain.sh, which is the
 # fallback path (cached download) for containers built before this layer and
 # for CI.
-RUN curl -fsSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-linux.tar.gz \
-        | tar -xz -C /opt \
-    && mv /opt/wasi-sdk-33.0-x86_64-linux /opt/wasi-sdk-33.0
+# The image ships the VERIFIED ARCHIVE, not an extracted tree. The installer
+# treats /opt as a verified-archive candidate: it re-hashes this archive
+# against its own pin and extracts clang from it on first use, so trust always
+# flows from bytes that match the pin rather than from a tree written into a
+# layer. Keep this digest in sync with WASI_SDK_SHA256_X86_64_LINUX in
+# fw/sim/scripts/install-toolchain.sh.
+RUN curl -fsSL -o /opt/wasi-sdk-33.0-x86_64-linux.tar.gz \
+        https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-linux.tar.gz \
+    && echo "0ba8b5bfaeb2adf3f29bab5841d76cf5318ab8e1642ea195f88baba1abd47bce  /opt/wasi-sdk-33.0-x86_64-linux.tar.gz" \
+        | sha256sum -c -
 
 # Android command-line tools + core SDK packages.
 # NDK and cmake are intentionally excluded — they are too large to put in the

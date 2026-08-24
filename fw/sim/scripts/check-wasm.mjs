@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Stuart Alldritt
 // Post-link gate for simulator extension modules — the wasm analog of the
 // device's llext symbol resolution (resolve_exports() in extension_host.cpp).
 //

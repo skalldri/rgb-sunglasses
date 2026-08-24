@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * Simulator shim for <zephyr/llext/symbol.h>.
  *
  * On the device, EXPORT_SYMBOL(x) records `x` in the ELF's llext export table

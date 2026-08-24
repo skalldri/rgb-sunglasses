@@ -1,15 +1,17 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Stuart Alldritt
 # rgbx-sdk — CMake entry point for standalone rgbx extension builds.
 #
 # Consumed by include() of this file's absolute path AFTER project(), with
-# one of the SDK's toolchain files (cmake/toolchains/arm-llext.cmake or
-# wasm.cmake) passed at configure time. See the rgbx-extension-template
+# one of the SDK's toolchain files (cmake/toolchains/arm-llext.cmake,
+# wasm.cmake, or rgbx-v2.cmake) passed at configure time. See the rgbx-extension-template
 # repo's CMakeLists.txt for the canonical consumption pattern.
 #
 # PUBLIC CONTRACT — keep append-only. The monorepo's registry CI builds every
 # community extension against the *release's* SDK using exactly this surface,
 # so a breaking change here breaks extensions that were green yesterday:
-#   rgbx_add_extension(<name> SOURCES <single .c or .cpp>)
-#   RGBX_TARGET            ("arm" | "wasm", set by the toolchain file)
+#   rgbx_add_extension(<name> SOURCES <single .c or .cpp> [MANIFEST <json>])
+#   RGBX_TARGET            ("arm" | "wasm" | "rgbx-v2", set by the toolchain file)
 #   RGBX_SDK_SOURCE_DIR    (consumer-side override: use a local SDK tree)
 #   RGBX_STRICT_TOOLCHAIN  (make toolchain-pin deviations fatal; CI sets it)
 #
@@ -31,7 +33,7 @@
 get_filename_component(_RGBX_SDK_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
 if(NOT DEFINED RGBX_TARGET)
-    message(FATAL_ERROR "rgbx-sdk: RGBX_TARGET is not set — configure with one of the SDK's toolchain files (cmake/toolchains/arm-llext.cmake or wasm.cmake)")
+    message(FATAL_ERROR "rgbx-sdk: RGBX_TARGET is not set; configure with one of the SDK's toolchain files")
 endif()
 
 # Read RGBX_STRICT_TOOLCHAIN unconditionally: the toolchain files only touch
@@ -48,7 +50,7 @@ if(CMAKE_BUILD_TYPE)
     message(WARNING "rgbx-sdk: CMAKE_BUILD_TYPE='${CMAKE_BUILD_TYPE}' appends optimization flags after the SDK's pinned -O2; unset it for reproducible builds")
 endif()
 
-if(RGBX_TARGET STREQUAL "wasm")
+if(RGBX_TARGET STREQUAL "wasm" OR RGBX_TARGET STREQUAL "rgbx-v2")
     find_program(RGBX_NODE node)
     if(NOT RGBX_NODE)
         message(FATAL_ERROR "rgbx-sdk: node not found — Node.js (>= 20) is required to run the wasm module gate (check-wasm.mjs)")
@@ -81,7 +83,7 @@ if(RGBX_TARGET STREQUAL "wasm")
     endif()
 endif()
 
-# rgbx_add_extension(<name> SOURCES <tu>)
+# rgbx_add_extension(<name> SOURCES <tu> [MANIFEST <json>])
 #
 # One extension = one translation unit (matching the device build and the
 # on-device single-TU convention). Produces:
@@ -90,8 +92,10 @@ endif()
 #          table, section layout, 24 KB llext heap fit)
 #   wasm: <build>/<name>.wasm    (TU + sim shims, reactor model, rgbx exports
 #          -> check-wasm.mjs gate: zero imports + required exports)
+#   rgbx-v2: <build>/<name>.wasm + <build>/<name>.rgbx (freestanding guest,
+#          deterministic memoryless post-link, exact ABI gate, canonical package)
 function(rgbx_add_extension name)
-    cmake_parse_arguments(ARG "" "" "SOURCES" ${ARGN})
+    cmake_parse_arguments(ARG "" "MANIFEST" "SOURCES" ${ARGN})
     list(LENGTH ARG_SOURCES _n_sources)
     if(NOT _n_sources EQUAL 1)
         message(FATAL_ERROR "rgbx_add_extension(${name}): exactly one source file required (one extension = one translation unit); got ${_n_sources}")
@@ -173,7 +177,64 @@ function(rgbx_add_extension name)
             COMMAND "${RGBX_NODE}" "${_RGBX_SDK_ROOT}/wasm/check-wasm.mjs" "$<TARGET_FILE:${name}>"
             COMMENT "Gating ${name}.wasm (zero imports + required exports)"
             VERBATIM)
+    elseif(RGBX_TARGET STREQUAL "rgbx-v2")
+        if(NOT ARG_MANIFEST)
+            message(FATAL_ERROR "rgbx_add_extension(${name}): the rgbx-v2 target requires MANIFEST <json>")
+        endif()
+        get_filename_component(_manifest "${ARG_MANIFEST}" ABSOLUTE)
+        if(NOT EXISTS "${_manifest}")
+            message(FATAL_ERROR "rgbx_add_extension(${name}): manifest not found: ${_manifest}")
+        endif()
+        if(NOT EXISTS "${_RGBX_SDK_ROOT}/wasm-v2/prepare-rgbx-v2.mjs")
+            message(FATAL_ERROR "rgbx-sdk: '${_RGBX_SDK_ROOT}' has no wasm-v2 tooling; use a packaged SDK from an RGBX v2 firmware release")
+        endif()
+
+        add_executable(${name}_raw "${_src}")
+        set_target_properties(${name}_raw PROPERTIES OUTPUT_NAME "${name}.raw")
+        target_include_directories(${name}_raw PRIVATE "${_RGBX_SDK_ROOT}/include")
+        target_compile_options(${name}_raw PRIVATE -Wall -Wextra -Werror)
+        target_link_options(${name}_raw PRIVATE
+            -nostdlib
+            -Wl,--no-entry
+            -Wl,--allow-undefined
+            -Wl,--fatal-warnings
+            -Wl,--gc-sections
+            -Wl,--compress-relocations
+            -Wl,--strip-all
+            -Wl,--export=rgbx_init
+            -Wl,--export=rgbx_tick)
+
+        set(_wasm "${CMAKE_CURRENT_BINARY_DIR}/${name}.wasm")
+        set(_rgbx "${CMAKE_CURRENT_BINARY_DIR}/${name}.rgbx")
+        # The gate and the packager both read the release's admission profile
+        # and toolchain pins out of sdk-manifest.json, and both refuse to run
+        # without it: neither tool keeps a fallback copy of a device limit.
+        set(_sdk_manifest "${_RGBX_SDK_ROOT}/sdk-manifest.json")
+        if(NOT EXISTS "${_sdk_manifest}")
+            message(FATAL_ERROR "rgbx-sdk: '${_RGBX_SDK_ROOT}' has no sdk-manifest.json; use a packaged SDK from an RGBX v2 firmware release")
+        endif()
+        add_custom_command(
+            OUTPUT "${_wasm}" "${_rgbx}"
+            COMMAND "${RGBX_NODE}" "${_RGBX_SDK_ROOT}/wasm-v2/prepare-rgbx-v2.mjs"
+                    "$<TARGET_FILE:${name}_raw>" "${_wasm}"
+            COMMAND "${CMAKE_COMMAND}" -E env
+                    "RGBX_SDK_MANIFEST=${_sdk_manifest}"
+                    "${RGBX_NODE}" "${_RGBX_SDK_ROOT}/wasm-v2/check-rgbx-v2.mjs"
+                    "${_wasm}"
+            COMMAND "${CMAKE_COMMAND}" -E env
+                    "RGBX_SDK_MANIFEST=${_sdk_manifest}"
+                    "RGBX_SOURCE_FILE=${_src}"
+                    "${RGBX_NODE}" "${_RGBX_SDK_ROOT}/wasm-v2/package-rgbx.mjs"
+                    "${_manifest}" "${_wasm}" "${_rgbx}"
+            DEPENDS ${name}_raw "${_src}" "${_manifest}" "${_sdk_manifest}"
+                    "${_RGBX_SDK_ROOT}/wasm-v2/prepare-rgbx-v2.mjs"
+                    "${_RGBX_SDK_ROOT}/wasm-v2/check-rgbx-v2.mjs"
+                    "${_RGBX_SDK_ROOT}/wasm-v2/package-rgbx.mjs"
+                    "${_RGBX_SDK_ROOT}/wasm-v2/rgbx-v2-policy.mjs"
+            COMMENT "Preparing, gating, and packaging ${name}.rgbx"
+            VERBATIM)
+        add_custom_target(${name}_rgbx ALL DEPENDS "${_wasm}" "${_rgbx}")
     else()
-        message(FATAL_ERROR "rgbx-sdk: unknown RGBX_TARGET '${RGBX_TARGET}' (expected 'arm' or 'wasm')")
+        message(FATAL_ERROR "rgbx-sdk: unknown RGBX_TARGET '${RGBX_TARGET}'")
     endif()
 endfunction()

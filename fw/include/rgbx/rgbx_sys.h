@@ -1,4 +1,7 @@
 /**
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * @file rgbx_sys.h
  * @brief Declarations for the system functions an extension is allowed to
  * call — include this instead of hand-writing a prototype.

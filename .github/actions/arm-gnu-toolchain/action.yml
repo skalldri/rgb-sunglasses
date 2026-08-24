@@ -9,6 +9,14 @@ description: >-
   whole-dir save from a job that also installed this (~1 GB extracted)
   toolchain would bloat the wasi cache entry.
 
+  Third-party actions are pinned by commit SHA, not by tag: a tag can be
+  repointed, and a cached compiler is the last place to accept a moving
+  target. The cache key includes the installer's own hash so that changing a
+  version or a digest pin cannot be satisfied from an entry saved under the
+  previous pin. That is defence in depth rather than the guarantee: the
+  installer refuses to use a restored tree that does not carry the digest it
+  was verified against.
+
 runs:
   using: composite
   steps:
@@ -17,10 +25,12 @@ runs:
       shell: bash
       run: echo "version=$(grep -oP 'ARM_TOOLCHAIN_VERSION="\K[^"]+' fw/sdk/scripts/install-arm-toolchain.sh)" >> "$GITHUB_OUTPUT"
 
-    - uses: actions/cache@v4
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-        path: ~/.cache/rgb-sunglasses/arm-gnu-toolchain-${{ steps.toolchain-key.outputs.version }}
-        key: arm-gnu-${{ steps.toolchain-key.outputs.version }}
+        # Cache the verified distribution archive, which is the installer's
+        # trust anchor; the extracted tree is re-derived from it each run.
+        path: ~/.cache/rgb-sunglasses/arm-gnu-toolchain-*.tar.xz
+        key: arm-gnu-${{ steps.toolchain-key.outputs.version }}-${{ hashFiles('fw/sdk/scripts/install-arm-toolchain.sh') }}
 
     - name: Install ARM toolchain (cached)
       shell: bash

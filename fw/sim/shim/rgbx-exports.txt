@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Stuart Alldritt
 # The wasm export surface of an rgbx extension module — every symbol the
 # simulator host may look up, exported via -Wl,--export-if-defined so absent
 # optional exports don't fail the link. Single source of truth: both

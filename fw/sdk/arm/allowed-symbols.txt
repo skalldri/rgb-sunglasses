@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Stuart Alldritt
 # The SUPPORTED symbol surface for .llext extensions — the subset of the
 # firmware's export table that extensions may rely on. Sources: Zephyr's
 # subsys/llext/llext_export.c (string/memory functions), lib/os/printk.c

@@ -1,0 +1,17 @@
+rgbx-sdk
+Copyright (c) 2026 Stuart Alldritt
+
+This software is licensed under the MIT License (see the LICENSE file), with
+one exception noted below.
+
+Apache-2.0 component
+--------------------
+The file arm/shim/include/zephyr/llext/symbol.h is a derivative of the Zephyr
+Project's include/zephyr/llext/symbol.h (as shipped in Nordic Connect SDK
+v3.1.1), Copyright (c) 2023 Intel Corporation, licensed under the Apache
+License, Version 2.0. Its struct llext_const_symbol layout and the
+LL_EXTENSION_BUILD form of the EXPORT_SYMBOL macro are adapted from that file
+so that an extension built against this SDK emits the export-table bytes the
+on-device loader reads. That file carries its own Apache-2.0 SPDX identifier
+and retains the Intel copyright notice; the remainder of this SDK is original
+and MIT-licensed.

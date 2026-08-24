@@ -30,41 +30,66 @@ runs:
         fi
         echo "version=$v" >> "$GITHUB_OUTPUT"
 
-    # The cache path is version-scoped, matching ./arm-gnu-toolchain. It must
-    # be: ./sim-wasm-toolchain caches the whole of ~/.cache/rgb-sunglasses under
-    # a wasi-sdk-<v> key, and pages.yml runs it immediately before this action —
-    # so an unversioned ~/.cache/rgb-sunglasses/doxygen would be swept into the
-    # wasi entry. A later version bump would then miss its own key, restore the
-    # STALE binary from the wasi cache, skip the download (the binary exists),
-    # and die at the verify step below — blocking the only workflow that
-    # deploys Pages, for a reason nothing in the diff points at.
+    # Cache the verified distribution ARCHIVE, not the extracted binary, and
+    # matching the toolchain installers, re-verify and re-extract it every run.
+    # Trust then comes from bytes that hash to the pin on every run rather than
+    # from a binary a cache write could have replaced. The cache path is
+    # version-scoped, matching ./arm-gnu-toolchain: ./sim-wasm-toolchain caches
+    # the whole of ~/.cache/rgb-sunglasses under a wasi-sdk-<v> key and pages.yml
+    # runs it immediately before this action, so an unversioned entry would be
+    # swept into the wasi entry and a later version bump would miss its own key.
     - name: Cache Doxygen
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-        path: ~/.cache/rgb-sunglasses/doxygen-${{ steps.pin.outputs.version }}
+        path: ~/.cache/rgb-sunglasses/doxygen-${{ steps.pin.outputs.version }}.linux.bin.tar.gz
         key: doxygen-${{ steps.pin.outputs.version }}-linux-x86_64
 
     - name: Install Doxygen
       shell: bash
       env:
         DOXYGEN_VERSION: ${{ steps.pin.outputs.version }}
+        # SHA-256 of doxygen-1.12.0.linux.bin.tar.gz, computed from the release
+        # asset at github.com/doxygen/doxygen/releases/tag/Release_1_12_0 .
+        # Update it in lockstep with DOXYGEN_VERSION in build-docs.sh; the
+        # verify step below fails closed on any mismatch, so an unpinned or
+        # substituted tarball cannot reach the docs build.
+        DOXYGEN_SHA256: "3c42c3f3fb206732b503862d9c9c11978920a8214f223a3950bbf2520be5f647"
       run: |
         set -euo pipefail
-        dest="$HOME/.cache/rgb-sunglasses/doxygen-${DOXYGEN_VERSION}"
-        if [ ! -x "$dest/bin/doxygen" ]; then
-          mkdir -p "$dest"
+        cache_root="$HOME/.cache/rgb-sunglasses"
+        archive="$cache_root/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
+        dest="$cache_root/doxygen-${DOXYGEN_VERSION}"
+        mkdir -p "$cache_root"
+
+        # The archive is trusted only while its bytes still hash to the pin.
+        verify_archive() {
+          echo "${DOXYGEN_SHA256}  ${archive}" | sha256sum -c - >/dev/null 2>&1
+        }
+
+        # Download (or re-download) only if no cached archive verifies. A
+        # cache-restored archive whose hash matches the pin is reused as-is; one
+        # that fails or is absent is fetched fresh and verified before use.
+        if ! verify_archive; then
           # Release tags spell the version with underscores (1.12.0 -> 1_12_0),
           # while the asset filename keeps the dots.
           tag="Release_${DOXYGEN_VERSION//./_}"
-          # The tarball's top-level dir is doxygen-<version>/; strip it so the
-          # binary always lands at $dest/bin/doxygen.
+          tmp="$(mktemp)"
           # Retries are generous on purpose: on a cache miss this download is a
           # hard dependency of the Pages deploy (see the comment on the docs
           # step in pages.yml).
-          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
-            "https://github.com/doxygen/doxygen/releases/download/${tag}/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
-            | tar -xz -C "$dest" --strip-components=1
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tmp" \
+            "https://github.com/doxygen/doxygen/releases/download/${tag}/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
+          echo "${DOXYGEN_SHA256}  ${tmp}" | sha256sum -c -
+          mv -f "$tmp" "$archive"
         fi
+
+        # Re-extract from the verified archive every run, replacing whatever was
+        # there, so the binary on PATH is always freshly unpacked from pinned
+        # bytes. The tarball's top-level dir is doxygen-<version>/; strip it so
+        # the binary always lands at $dest/bin/doxygen.
+        rm -rf "$dest"
+        mkdir -p "$dest"
+        tar -xz -C "$dest" --strip-components=1 -f "$archive"
         echo "$dest/bin" >> "$GITHUB_PATH"
 
     - name: Verify the pinned version is what actually runs

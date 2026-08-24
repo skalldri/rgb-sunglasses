@@ -1,9 +1,11 @@
-#include <animations/wasm_mvp_module.h>
 #include <animations/plasma_v2_module.h>
+#include <animations/wasm_mvp_module.h>
+#include <extensions/rgbx_package.h>
+#include <extensions/rgbx_package_psa.h>
 #include <extensions/wasm_mvp_runtime.h>
+#include <psa/crypto.h>
+#include <rgbx/rgbx_api.h>
 #include <zephyr/ztest.h>
-
-#include "wasm3_security_modules.h"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +17,9 @@
 #include <vector>
 
 #include "cpptest_v2_module.h"
+#include "plasma_v2_sdk_module.h"
+#include "rgbx_v2_test_package.h"
+#include "wasm3_security_modules.h"
 
 namespace {
 
@@ -497,7 +502,87 @@ void concurrentTickEntry(void* p1, void* p2, void* p3) {
 
 }  // namespace
 
-ZTEST_SUITE(wasm_mvp_runtime, nullptr, nullptr, nullptr, nullptr, nullptr);
+void* wasmMvpSuiteSetup() {
+    // The end-to-end test verifies the package digest with PSA SHA-256.
+    zassert_equal(psa_crypto_init(), PSA_SUCCESS, "PSA Crypto init failed");
+    return nullptr;
+}
+
+ZTEST_SUITE(wasm_mvp_runtime, nullptr, wasmMvpSuiteSetup, nullptr, nullptr, nullptr);
+
+ZTEST(wasm_mvp_runtime, test_release_sdk_package_is_parsed_then_executed_on_device) {
+    // One SDK-built artifact, proven both parseable and executable: admit the
+    // exact bytes the SDK produced through the real on-device CBOR parser and
+    // PSA SHA-256 verifier, then run the module those bytes carry on the real
+    // Wasm3 sandbox. Neither half is a reimplementation of the other.
+    const std::vector<uint8_t> package(std::begin(kRgbxV2TestPackage),
+                                       std::end(kRgbxV2TestPackage));
+    const rgbx_package::Policy policy = {
+        .rgbxAbi = RGBX_V2_ABI_VERSION,
+        .firmwareAbi = RGBX_ABI_VERSION,
+        .width = RGBX_V2_WIDTH,
+        .height = RGBX_V2_HEIGHT,
+        .allowedCapabilities = RGBX_V2_CAPABILITY_ALL,
+        .maxMemoryBytes = 0,
+        .maxBudgetClass = 0,
+        // The runtime stores the module in a fixed buffer; the profile ceiling,
+        // not the container format cap, is what governs here.
+        .maxWasmBytes = RGBX_V2_MODULE_MAX_BYTES,
+    };
+    rgbx_package::PackageView view{};
+    const rgbx_package::Result admitted = rgbx_package::validate(
+        package.data(), package.size(), policy, rgbx_package::verifySha256Psa, nullptr, view);
+    zassert_equal(admitted, rgbx_package::Result::Ok, "real parser rejected the SDK package: %s",
+                  rgbx_package::describe(admitted));
+
+    // The recorded source digest is the SHA-256 of the exact compiled source.
+    uint8_t expectedSourceDigest[rgbx_package::kDigestSize];
+    const char* hex = RGBX_V2_TEST_SOURCE_SHA256;
+    zassert_equal(std::strlen(hex), sizeof(expectedSourceDigest) * 2,
+                  "source digest hex has the wrong length");
+    for (size_t i = 0; i < sizeof(expectedSourceDigest); ++i) {
+        const auto nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        const int hi = nibble(hex[i * 2]);
+        const int lo = nibble(hex[i * 2 + 1]);
+        zassert_true(hi >= 0 && lo >= 0, "non-hex digest character");
+        expectedSourceDigest[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    zassert_true(view.metadata.hasSourceDigest);
+    zassert_mem_equal(view.metadata.sourceDigest, expectedSourceDigest, rgbx_package::kDigestSize,
+                      "source digest is not the SHA-256 of the compiled source");
+
+    // The module must fit the runtime's fixed buffer. Headroom is small today,
+    // so assert the fit rather than assume it.
+    zassert_true(view.wasmSize <= CONFIG_APP_WASM3_MVP_MODULE_MAX_SIZE,
+                 "module payload %zu exceeds the runtime buffer %d", view.wasmSize,
+                 CONFIG_APP_WASM3_MVP_MODULE_MAX_SIZE);
+
+    // Execute the extracted module on the real sandbox.
+    zassert_equal(wasm_mvp_runtime::startV2(view.wasm, view.wasmSize, deadline()),
+                  wasm_mvp_runtime::Result::Completed, "sandbox rejected the SDK module");
+    wasm_mvp_runtime::V2TickInputs inputs;
+    inputs.params[0] = 0x00abcdefu;
+    // The package declares the buttons capability and the guest reads it, so
+    // granting it is part of the end-to-end contract.
+    inputs.capabilities = RGBX_V2_CAPABILITY_BUTTONS;
+    inputs.buttonsPressed = 0;
+    const uint32_t dt = 17;
+    zassert_equal(wasm_mvp_runtime::tickV2(dt, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed, "SDK module tick did not complete");
+
+    // The guest paints every pixel with (param0 ^ dt ^ buttons) & 0x00ffffff.
+    const uint32_t expected = (inputs.params[0] ^ dt ^ inputs.buttonsPressed) & 0x00ffffffu;
+    for (size_t pixel = 0; pixel < wasm_mvp_runtime::kV2PixelCount; ++pixel) {
+        zassert_equal(sV2Output.pixels[pixel], expected, "pixel %zu is 0x%06x, expected 0x%06x",
+                      pixel, sV2Output.pixels[pixel], expected);
+    }
+    wasm_mvp_runtime::stop();
+}
 
 ZTEST(wasm_mvp_runtime, test_actual_wasm3_parse_compile_link_and_call) {
     expectGoodActivationAndTick(0, kExpectedCyan);
@@ -591,6 +676,21 @@ ZTEST(wasm_mvp_runtime, test_plasma_v2_matches_registry_effect_with_bounded_math
                   wasm_mvp_runtime::Result::Completed);
     expectPlasmaFrame(sV2Output, timeMs, inputs);
 
+    wasm_mvp_runtime::stop();
+}
+
+ZTEST(wasm_mvp_runtime, test_release_sdk_plasma_output_is_admitted_and_matches) {
+    zassert_equal(
+        wasm_mvp_runtime::startV2(kPlasmaV2SdkModule, sizeof(kPlasmaV2SdkModule), deadline()),
+        wasm_mvp_runtime::Result::Completed);
+    wasm_mvp_runtime::V2TickInputs inputs;
+    inputs.params[0] = 50;
+    inputs.params[1] = 0x00ff40ff;
+    inputs.params[2] = 0;
+    inputs.params[3] = 0;
+    zassert_equal(wasm_mvp_runtime::tickV2(17, inputs, deadline(), sV2Output),
+                  wasm_mvp_runtime::Result::Completed);
+    expectPlasmaFrame(sV2Output, 17, inputs);
     wasm_mvp_runtime::stop();
 }
 

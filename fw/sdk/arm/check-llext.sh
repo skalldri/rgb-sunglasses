@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Stuart Alldritt
 # Post-link gate for ARM .llext extension builds — the standalone analog of
 # the device's llext symbol resolution and region checks. Catches at build
 # time the whole class of "compiles fine, silently fails to load on device"

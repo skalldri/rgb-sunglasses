@@ -13,6 +13,16 @@ on:
     paths:
       - 'fw/sdk/**'
       - 'fw/include/rgbx/**'
+      # The RGBX v2 admission profile is declared in the ABI header above and
+      # bound to these constants; check-policy-sync.mjs reads both, so a
+      # firmware-only edit has to reach this gate.
+      - 'fw/src/extensions/wasm_mvp_runtime.cpp'
+      # The freshness job cmp's these committed fixtures against bytes rebuilt
+      # from the SDK, so an edit to any of them must run this job.
+      - 'fw/tests/extensions/rgbx_package/src/rgbx_v2_test_package.h'
+      - 'fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.h'
+      - 'fw/src/animations/plasma_v2.c'
+      - 'fw/src/animations/plasma_v2.LICENSE'
       - 'fw/sim/shim/**'
       - 'fw/sim/scripts/**'
       - 'fw/sim/build-extensions.sh'
@@ -33,6 +43,16 @@ on:
     paths:
       - 'fw/sdk/**'
       - 'fw/include/rgbx/**'
+      # The RGBX v2 admission profile is declared in the ABI header above and
+      # bound to these constants; check-policy-sync.mjs reads both, so a
+      # firmware-only edit has to reach this gate.
+      - 'fw/src/extensions/wasm_mvp_runtime.cpp'
+      # The freshness job cmp's these committed fixtures against bytes rebuilt
+      # from the SDK, so an edit to any of them must run this job.
+      - 'fw/tests/extensions/rgbx_package/src/rgbx_v2_test_package.h'
+      - 'fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.h'
+      - 'fw/src/animations/plasma_v2.c'
+      - 'fw/src/animations/plasma_v2.LICENSE'
       - 'fw/sim/shim/**'
       - 'fw/sim/scripts/**'
       - 'fw/sim/build-extensions.sh'
@@ -53,9 +73,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
 
@@ -68,7 +88,8 @@ jobs:
 
       - name: Verify SDK license payload
         run: |
-          cmp fw/sdk/LICENSE.Apache-2.0 "$SDK_DIR/LICENSE.Apache-2.0"
+          cmp fw/sdk/LICENSE "$SDK_DIR/LICENSE"
+          cmp fw/sdk/NOTICE "$SDK_DIR/NOTICE"
           fw/sdk/package-sdk.sh --version 0.0.0-ci --output "$RUNNER_TEMP/rgbx-sdk-second"
           cmp "$SDK_TARBALL" "$RUNNER_TEMP/rgbx-sdk-second/rgbx-sdk-0.0.0-ci.tar.gz"
           python3 fw/sdk/tests/check-sdk-archive.py "$SDK_TARBALL"
@@ -186,6 +207,72 @@ jobs:
           node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/hello.wasm" fw/sim/out/wasm/hello.wasm
           node fw/sdk/tests/compare-wasm-exports.mjs "$RUNNER_TEMP/b-wasm/cpptest.wasm" fw/sim/out/wasm/cpptest.wasm
 
+      - name: Build deterministic device RGBX v2 package via the SDK
+        run: |
+          # Both toolchain installers must reject an archive whose digest does
+          # not match, on the download path they actually use. Prove it here
+          # against a fixture rather than trusting that the code reads right.
+          printf 'toolchain digest fixture\n' > "$RUNNER_TEMP/digest-fixture"
+          fixture_sha="$(sha256sum "$RUNNER_TEMP/digest-fixture" | cut -d' ' -f1)"
+          for installer in fw/sim/scripts/install-toolchain.sh \
+                           fw/sdk/scripts/install-arm-toolchain.sh; do
+            "$installer" --verify-archive "$RUNNER_TEMP/digest-fixture" "$fixture_sha"
+            if "$installer" --verify-archive "$RUNNER_TEMP/digest-fixture" \
+                0000000000000000000000000000000000000000000000000000000000000000; then
+              echo "$installer accepted the wrong archive digest"
+              exit 1
+            fi
+          done
+
+          # The SDK's admission profile, the ABI header it was read from, and
+          # the firmware's own constants must still describe one profile.
+          node fw/sdk/tests/check-policy-sync.mjs "$GITHUB_WORKSPACE" \
+              "$SDK_DIR/sdk-manifest.json"
+
+          # Two independent build directories must agree byte for byte, and
+          # the gate must admit the module each of them produced.
+          for build_dir in "$RUNNER_TEMP/b-rgbx-v2-a" "$RUNNER_TEMP/b-rgbx-v2-b"; do
+            cmake -S fw/sdk/tests/consumer -B "$build_dir" \
+              -DRGBX_SDK_SOURCE_DIR="$SDK_DIR" -DRGBX_TARGET=rgbx-v2 \
+              -DRGBX_STRICT_TOOLCHAIN=ON
+            cmake --build "$build_dir"
+          done
+          for name in rgbx_v2_test plasma_v2_sdk_test; do
+            cmp "$RUNNER_TEMP/b-rgbx-v2-a/$name.wasm" \
+                "$RUNNER_TEMP/b-rgbx-v2-b/$name.wasm"
+            cmp "$RUNNER_TEMP/b-rgbx-v2-a/$name.rgbx" \
+                "$RUNNER_TEMP/b-rgbx-v2-b/$name.rgbx"
+            RGBX_SDK_MANIFEST="$SDK_DIR/sdk-manifest.json" \
+                node "$SDK_DIR/wasm-v2/check-rgbx-v2.mjs" \
+                "$RUNNER_TEMP/b-rgbx-v2-a/$name.wasm"
+          done
+
+          # One rejection per admission dimension of the gate, and one per
+          # manifest field the firmware later trusts.
+          node fw/sdk/tests/test-rgbx-v2-tools.mjs "$SDK_DIR" \
+              "$RUNNER_TEMP/b-rgbx-v2-a/rgbx_v2_test.wasm" \
+              "$RUNNER_TEMP/b-rgbx-v2-a/rgbx_v2_test.rgbx" \
+              fw/sdk/tests/consumer/rgbx_v2_test.json \
+              "$GITHUB_WORKSPACE/fw/sdk/tests/consumer/rgbx_v2_test.c"
+
+          # The firmware suites admit these exact bytes through the real
+          # device parsers, so a change in the compiler, the post-link gate,
+          # or the package builder has to show up as a diff here.
+          node fw/sdk/tests/bytes-to-header.mjs \
+              "$RUNNER_TEMP/b-rgbx-v2-a/plasma_v2_sdk_test.wasm" \
+              "$RUNNER_TEMP/plasma_v2_sdk_module.h" kPlasmaV2SdkModule MIT \
+              "Copyright (c) 2026 Stuart Alldritt" \
+              "fw/src/animations/plasma_v2.LICENSE"
+          cmp "$RUNNER_TEMP/plasma_v2_sdk_module.h" \
+              fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.h
+          node fw/sdk/tests/bytes-to-header.mjs \
+              "$RUNNER_TEMP/b-rgbx-v2-a/rgbx_v2_test.rgbx" \
+              "$RUNNER_TEMP/rgbx_v2_test_package.h" kRgbxV2TestPackage MIT \
+              "Copyright (c) 2026 Stuart Alldritt" \
+              "fw/sdk/LICENSE"
+          cmp "$RUNNER_TEMP/rgbx_v2_test_package.h" \
+              fw/tests/extensions/rgbx_package/src/rgbx_v2_test_package.h
+
   # Warnings-are-errors gate for the extension API docs published at
   # https://rgb-sunglasses.autom8ed.com/api. The SAME build runs in pages.yml
   # with the SAME pinned Doxygen action, so a doc regression is caught here at
@@ -198,7 +285,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # PROJECT_NUMBER comes from `git describe` against the fw-v* tags,
           # which a shallow clone doesn't have.

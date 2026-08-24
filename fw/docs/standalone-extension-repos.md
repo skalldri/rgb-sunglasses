@@ -152,14 +152,24 @@ with which firmware" can never be asked.
 
 ```
 rgbx-sdk-<fw-version>/
-  sdk-manifest.json          { "sdkVersion", "fwRelease", "abiVersion",
-                               "armToolchain": "arm-gnu-13.2.Rel1", "wasiSdk": "33.0" }
+  sdk-manifest.json          the SDK's provenance record and policy carrier:
+                             version and firmware release, ABI versions, the
+                             RGBX v2 admission profile copied from rgbx_v2.h,
+                             every toolchain pinned by version AND by the
+                             SHA-256 of its distribution archive per host, and
+                             the SHA-256 of every shipped file
+  LICENSE                    MIT; the SDK is MIT-licensed, matching the
+                             rgbx-extension-template and rgbx-plasma repos
+  NOTICE                     attribution for the one Apache-2.0 file
+                             (arm/shim/include/zephyr/llext/symbol.h)
   include/rgbx/rgbx_api.h    copied verbatim from fw/include/rgbx/
   include/rgbx/rgbx_animation.h
   include/rgbx/rgbx_sys.h    declarations for the allowed-symbols surface, so an
                              author never hand-writes a prototype (issue #351)
+  include/rgbx/rgbx_v2.h     device WebAssembly imports, limits, and exports
   arm/
-    shim/include/zephyr/llext/symbol.h   EXPORT_SYMBOL -> .exported_sym entry (new, §4)
+    shim/include/zephyr/llext/symbol.h   EXPORT_SYMBOL -> .exported_sym entry;
+                                         Apache-2.0 (adapted from Zephyr)
     shim/include/zephyr/kernel.h         forwards to <rgbx/rgbx_sys.h>
     allowed-symbols.txt                  strcpy strncpy strlen strcmp strncmp
                                          memcmp memcpy memset printk
@@ -173,12 +183,20 @@ rgbx-sdk-<fw-version>/
                                          into every module; ABI drift fails the build
     check-wasm.mjs                       copied from fw/sim/scripts/ (zero-import +
                                          required-export gate; needs Node >= 20)
+  wasm-v2/
+    prepare-rgbx-v2.mjs                  deterministic memoryless post-link
+    check-rgbx-v2.mjs                    exact import/export/resource + tick oracle
+    package-rgbx.mjs                     canonical CBOR + RGBX envelope + SHA-256
+    rgbx-v2-policy.mjs                   loads the admission profile out of
+                                         sdk-manifest.json; the two tools above
+                                         hold no limits of their own
   cmake/
     rgbx-sdk-config.cmake                package entry point; defines rgbx_add_extension()
     toolchains/arm-llext.cmake           arm-none-eabi toolchain file with the §4 flags;
                                          warns on unpinned compiler version, FATAL_ERROR
                                          under -DRGBX_STRICT_TOOLCHAIN=ON (CI sets it)
     toolchains/wasm.cmake                wasi-sdk clang toolchain file
+    toolchains/rgbx-v2.cmake             freestanding device Wasm profile
   scripts/
     install-arm-toolchain.sh             download pinned Arm GNU Toolchain to
                                          ~/.cache/rgb-sunglasses, print its root
@@ -196,10 +214,43 @@ rgbx-sdk-<fw-version>/
   required rgbx symbols + `rgbx_good_moment` + `rgbx_sim_log_buf`/`_len`
   (mirroring `fw/sim/build-extensions.sh`) → `.wasm` → POST_BUILD
   `check-wasm.mjs`.
+- **rgbx-v2**: compile one freestanding TU with the release-pinned wasi-sdk,
+  expose only `rgbx_init` and `rgbx_tick`, strip unused linker table/memory
+  declarations, reject modules outside the firmware's memoryless profile,
+  execute one complete-frame Node oracle under a wall deadline and V8 resource
+  limits, and seal the module plus its canonical manifest into `<name>.rgbx`.
+  This target requires `MANIFEST <json>` and produces both the reviewed
+  `.wasm` and the device package.
 
-The SDK ships **no build step of its own** — shim sources compile inside the
-consuming project under that project's toolchain. The two-toolchain problem is
-solved by presets in the template (§6), not by a superbuild.
+**Where the v2 limits live.** Nothing in this document, in the SDK's tools, or
+in the firmware admission path states a limit of its own. `RGBX_V2_*` in
+`include/rgbx/rgbx_v2.h` declares each one once: the module ceiling
+(`RGBX_V2_MODULE_MAX_BYTES`), the function, global, local and import counts,
+the per-tick host-call budgets, and the admitted section-id set. The firmware
+static_asserts its constants against those macros, `package-sdk.sh` copies
+them into `sdk-manifest.json`, and the post-link gate and package builder read
+them back from there. `fw/sdk/tests/check-policy-sync.mjs` fails if any link
+of that chain drifts, so quote the macro name here rather than a number.
+
+The SDK ships **no build step of its own** (sources compile inside the
+consuming project under that project's selected toolchain). The multi-toolchain
+problem is solved by presets in the template (section 6), not by a superbuild.
+
+**RGBX v2 release boundary:** standalone repositories consume SDK release
+assets, never a mutable firmware branch. The v2 header, compiler profile,
+post-link gate, and package builder become externally consumable only after the
+corresponding firmware changes merge and an operator-approved `fw-v*` release
+publishes the exact `rgbx-sdk` tarball and digest. Template and effect PRs then
+update their two-line release pin. An ad-hoc CI artifact is validation evidence,
+not a supported SDK dependency.
+
+The SDK gate builds both a minimal public-header consumer and the reviewed
+integer/Q15 Plasma conformance source in two independent build directories and
+requires byte-identical Wasm and RGBX packages. The generated Plasma module is
+also bound to a checked header and executed by the ARM/QEMU firmware suite,
+which proves that the release compiler's output is admitted by Wasm3 and still
+matches the legacy per-pixel oracle rather than only passing a Node-side shape
+check.
 
 **Consumption mechanism (implementation amendment):** the template downloads
 and extracts the SDK **before `project()`** via `file(DOWNLOAD ...

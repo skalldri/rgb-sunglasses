@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * Simulator-side support code compiled into every extension .wasm module.
  *
  * Provides printk()/vprintk(): the Zephyr symbols the device exports to

@@ -1,4 +1,18 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Copyright (c) 2023 Intel Corporation
+ * Copyright (c) 2026 Stuart Alldritt
+ *
+ * Derived from the Zephyr Project's include/zephyr/llext/symbol.h, which is
+ * licensed Apache-2.0 and carries "Copyright (c) 2023 Intel Corporation".
+ * The struct layout and the LL_EXTENSION_BUILD form of EXPORT_SYMBOL below
+ * are reproduced from it so an extension built against this SDK emits the
+ * bytes the on-device loader reads; the rest of this file is original and
+ * the Stuart Alldritt copyright above covers it. The rest of the SDK is
+ * MIT-licensed; this one Zephyr-derived file stays Apache-2.0, and the
+ * archive's NOTICE records that origin.
+ *
  * Standalone-SDK shim for <zephyr/llext/symbol.h> — ARM .llext builds only.
  *
  * Emits the exact on-wire structure the Zephyr llext loader consumes

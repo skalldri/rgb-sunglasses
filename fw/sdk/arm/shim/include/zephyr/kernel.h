@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * Standalone-SDK shim for <zephyr/kernel.h> — ARM .llext builds only.
  *
  * Exists so that source written against the real Zephyr header (the in-repo

@@ -2,7 +2,8 @@
  * @file rgbx_v2.h
  * @brief RGBX v2 memoryless WebAssembly guest ABI.
  *
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
  *
  * This header describes guest imports and export annotations only. It exposes
  * no Zephyr types, native pointers, WASI, libc, filesystem, network, or BLE
@@ -39,6 +40,47 @@
 #define RGBX_V2_DIAGNOSTIC_COUNT 4u
 /** @brief Maximum Wasm payload bytes in the released memoryless profile. */
 #define RGBX_V2_MODULE_MAX_BYTES 2048u
+
+/*
+ * Admission profile.
+ *
+ * Every structural limit the host applies to a memoryless RGBX v2 module is
+ * declared once, here. The firmware admission path static_asserts its own
+ * constants against these macros, the SDK packager copies them verbatim into
+ * sdk-manifest.json, and the SDK's post-link gate reads them back out of that
+ * manifest, so the three cannot describe different profiles without a build
+ * failure or a gate failure.
+ */
+
+/** @brief Maximum functions, imported plus defined, in one module. */
+#define RGBX_V2_MAX_FUNCTIONS 8u
+/** @brief Maximum globals a module may define. Imported globals are refused. */
+#define RGBX_V2_MAX_GLOBALS 8u
+/** @brief Maximum locals declared by one function body. */
+#define RGBX_V2_MAX_LOCALS_PER_FUNCTION 32u
+/** @brief Fewest host imports a module may declare. */
+#define RGBX_V2_MIN_IMPORTS 2u
+/** @brief Most host imports a module may declare. */
+#define RGBX_V2_MAX_IMPORTS 5u
+/** @brief Maximum rgbx_v2_param_u32() calls admitted in one tick. */
+#define RGBX_V2_MAX_PARAM_CALLS_PER_TICK 16u
+/** @brief Maximum rgbx_v2_input_u32() calls admitted in one tick. */
+#define RGBX_V2_MAX_INPUT_CALLS_PER_TICK 64u
+/** @brief Span calls that cover one complete frame exactly once. */
+#define RGBX_V2_SPAN_CALLS_PER_TICK (RGBX_V2_PIXEL_COUNT / RGBX_V2_PIXELS_PER_SPAN)
+
+/*
+ * Section-id bitmasks: bit N is set when standard WebAssembly section id N
+ * belongs to the set. Admitted ids are type(1), import(2), function(3),
+ * global(6), export(7) and code(10); every other id, including custom(0),
+ * table(4), memory(5), start(8), element(9) and data(11), is refused. The
+ * required set is the same list without the optional global section.
+ */
+/** @brief Bitmask of WebAssembly section ids the profile admits. */
+#define RGBX_V2_SECTION_ALLOWED_MASK 0x04ceu
+/** @brief Bitmask of WebAssembly section ids every module must carry. */
+#define RGBX_V2_SECTION_REQUIRED_MASK 0x048eu
+
 /** @brief Permission bit for pressed-button snapshots. */
 #define RGBX_V2_CAPABILITY_BUTTONS (1u << 0)
 /** @brief Permission bit for accelerometer and gyroscope snapshots. */
