@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
 # Assemble the rgbx-sdk distribution tarball — everything a standalone
 # extension repo needs to build both a device .llext and a simulator .wasm,
 # with no Zephyr/west/monorepo checkout. Attached to every fw-v* release by
@@ -17,6 +19,7 @@
 #     include/rgbx/            ABI headers, verbatim
 #     arm/                     shims + allowed-symbols.txt + check-llext.sh
 #     wasm/                    sim shims + check-wasm.mjs
+#     wasm-v2/                 device Wasm post-link, ABI gate, package builder
 #     cmake/                   rgbx-sdk-config.cmake + toolchain files
 #     scripts/                 pinned toolchain installers
 
@@ -56,15 +59,15 @@ if [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ ]]; then
     exit 2
 fi
 
-abi_version="$(grep -o '#define RGBX_ABI_VERSION [0-9]*' "$REPO_ROOT/fw/include/rgbx/rgbx_api.h" | grep -o '[0-9]*$')"
-arm_toolchain="$(grep -o 'ARM_TOOLCHAIN_VERSION="[^"]*"' "$SDK_DIR/scripts/install-arm-toolchain.sh" | cut -d'"' -f2)"
-wasi_sdk="$(grep -o 'WASI_SDK_VERSION="[^"]*"' "$REPO_ROOT/fw/sim/scripts/install-toolchain.sh" | cut -d'"' -f2)"
-# The llext heap limit comes from the board .conf (CONFIG_LLEXT_HEAP_SIZE,
-# in KB) — stamped into the SDK so check-llext.sh always gates against the
-# firmware release the SDK ships with, never a hand-copied constant.
+# Every pin the SDK records (ABI versions, toolchain versions and their
+# distribution digests, the RGBX v2 admission profile, the llext heap limit)
+# is extracted from the file that owns it by write-sdk-manifest.py, which runs
+# once the tree is assembled so it can also record each shipped file's SHA-256.
+# The llext heap limit reaches check-llext.sh as a plain file because that gate
+# runs without a JSON parser.
 heap_kb="$(grep -o '^CONFIG_LLEXT_HEAP_SIZE=[0-9]*' "$REPO_ROOT/fw/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf" | grep -o '[0-9]*$')"
-if [ -z "$abi_version" ] || [ -z "$arm_toolchain" ] || [ -z "$wasi_sdk" ] || [ -z "$heap_kb" ]; then
-    echo "error: failed to extract abi/toolchain/heap pins from source files" >&2
+if [ -z "$heap_kb" ]; then
+    echo "error: failed to extract CONFIG_LLEXT_HEAP_SIZE from the proto0 board configuration" >&2
     exit 1
 fi
 heap_limit=$((heap_kb * 1024))
@@ -76,8 +79,9 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/rgbx-sdk-$VERSION"
 
-mkdir -p "$root/include/rgbx" "$root/arm" "$root/wasm/shim" "$root/cmake" "$root/scripts"
-cp "$SDK_DIR/LICENSE.Apache-2.0" "$root/LICENSE.Apache-2.0"
+mkdir -p "$root/include/rgbx" "$root/arm" "$root/wasm/shim" "$root/wasm-v2" "$root/cmake" "$root/scripts"
+cp "$SDK_DIR/LICENSE" "$root/LICENSE"
+cp "$SDK_DIR/NOTICE" "$root/NOTICE"
 
 # ABI headers — the contract, verbatim.
 cp "$REPO_ROOT/fw/include/rgbx/"*.h "$root/include/rgbx/"
@@ -96,6 +100,10 @@ cp "$REPO_ROOT/fw/sim/shim/sim_shim.c" "$REPO_ROOT/fw/sim/shim/abi_offsets.c" \
    "$REPO_ROOT/fw/sim/shim/rgbx-exports.txt" "$root/wasm/shim/"
 cp "$REPO_ROOT/fw/sim/scripts/check-wasm.mjs" "$root/wasm/"
 
+# Device WebAssembly side: deterministic linker-output normalization, exact
+# memoryless ABI gate, and canonical RGBX container construction.
+cp "$SDK_DIR/wasm-v2/"*.mjs "$root/wasm-v2/"
+
 # CMake package + toolchain installers.
 cp "$SDK_DIR/cmake/rgbx-sdk-config.cmake" "$root/cmake/"
 mkdir -p "$root/cmake/toolchains"
@@ -104,21 +112,17 @@ cp "$SDK_DIR/scripts/install-arm-toolchain.sh" "$root/scripts/"
 cp "$REPO_ROOT/fw/sim/scripts/install-toolchain.sh" "$root/scripts/install-wasi-sdk.sh"
 chmod +x "$root/scripts/"*.sh "$root/arm/check-llext.sh"
 
-cat > "$root/sdk-manifest.json" <<EOF
-{
-  "sdkVersion": "$VERSION",
-  "fwRelease": "fw-v$VERSION",
-  "abiVersion": $abi_version,
-  "armToolchain": "arm-gnu-$arm_toolchain",
-  "wasiSdk": "$wasi_sdk",
-  "llextHeapBytes": $heap_limit
-}
-EOF
+python3 "$SDK_DIR/write-sdk-manifest.py" "$REPO_ROOT" "$root" "$VERSION"
 
 tarball="$OUTPUT/rgbx-sdk-$VERSION.tar.gz"
 source_date_epoch="${SOURCE_DATE_EPOCH:-0}"
 python3 "$SDK_DIR/create-reproducible-archive.py" "$root" "$tarball" "$source_date_epoch"
 
-sha256="$(sha256sum "$tarball" | cut -d' ' -f1)"
+# shasum is the macOS spelling; the SDK gate has to run on either host.
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256="$(sha256sum "$tarball" | cut -d' ' -f1)"
+else
+    sha256="$(shasum -a 256 "$tarball" | cut -d' ' -f1)"
+fi
 echo "built $tarball"
 echo "sha256: $sha256"

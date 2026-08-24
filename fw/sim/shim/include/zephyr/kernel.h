@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * Simulator shim for <zephyr/kernel.h>.
  *
  * Exists so that source written against the real Zephyr header compiles

@@ -31,6 +31,10 @@ target_sources(app PRIVATE
   src/main.cpp
   ${FW_ROOT}/src/extensions/wasm_mvp_runtime.cpp
   ${FW_ROOT}/src/extensions/sandbox_fatal_handler.cpp
+  # The end-to-end test admits a real SDK package through these before running
+  # its module, proving one artifact is both parseable and executable.
+  ${FW_ROOT}/src/extensions/rgbx_package.cpp
+  ${FW_ROOT}/src/extensions/rgbx_package_psa.cpp
 )
 
 target_include_directories(app PRIVATE
@@ -38,4 +42,14 @@ target_include_directories(app PRIVATE
   ${FW_ROOT}/include
   ${FW_ROOT}/third_party/wasm3
   ${FW_ROOT}/third_party/wasm3/source
+  # The committed package fixture is shared with the rgbx_package suite so there
+  # is one generated artifact, regenerated and cmp'd by CI.
+  ${FW_ROOT}/tests/extensions/rgbx_package/src
 )
+
+# The end-to-end test asserts the package's recorded source digest is the
+# SHA-256 of the exact source the SDK consumer compiled.
+set(_rgbx_v2_test_source ${FW_ROOT}/sdk/tests/consumer/rgbx_v2_test.c)
+file(SHA256 ${_rgbx_v2_test_source} _rgbx_v2_test_source_sha256)
+target_compile_definitions(app PRIVATE
+  RGBX_V2_TEST_SOURCE_SHA256="${_rgbx_v2_test_source_sha256}")

@@ -1,0 +1,18 @@
+{
+  "extensionId": "rgbx_v2_test",
+  "displayName": "RGBX v2 SDK Test",
+  "version": [0, 0, 0],
+  "rgbxAbi": 2,
+  "minimumFirmwareAbi": 1,
+  "geometry": [40, 12],
+  "capabilities": ["buttons"],
+  "memoryMaxBytes": 0,
+  "budgetClass": 0,
+  "sourceLanguage": "c",
+  "compilerId": "wasi-sdk",
+  "compilerVersion": "33.0",
+  "sourceFile": "rgbx_v2_test.c",
+  "parameters": [
+    { "name": "Color", "type": "color", "default": 16711935 }
+  ]
+}

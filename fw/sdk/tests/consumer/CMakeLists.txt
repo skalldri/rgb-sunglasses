@@ -24,17 +24,31 @@ if(NOT DEFINED RGBX_TARGET)
 endif()
 if(RGBX_TARGET STREQUAL "arm")
     set(CMAKE_TOOLCHAIN_FILE "${RGBX_SDK_SOURCE_DIR}/cmake/toolchains/arm-llext.cmake")
-else()
+elseif(RGBX_TARGET STREQUAL "wasm")
     set(CMAKE_TOOLCHAIN_FILE "${RGBX_SDK_SOURCE_DIR}/cmake/toolchains/wasm.cmake")
+elseif(RGBX_TARGET STREQUAL "rgbx-v2")
+    set(CMAKE_TOOLCHAIN_FILE "${RGBX_SDK_SOURCE_DIR}/cmake/toolchains/rgbx-v2.cmake")
+else()
+    message(FATAL_ERROR "RGBX_TARGET must be arm, wasm, or rgbx-v2")
 endif()
 
 project(rgbx_sdk_consumer C CXX)
 
 include("${RGBX_SDK_SOURCE_DIR}/cmake/rgbx-sdk-config.cmake")
 
-get_filename_component(_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
-rgbx_add_extension(hello SOURCES "${_repo_root}/fw/extensions/hello/hello.c")
-rgbx_add_extension(cpptest SOURCES "${_repo_root}/fw/extensions/cpptest/cpptest.cpp")
-# Exercises the issue #295 export surface (libm, __aeabi_uldivmod, memmove)
-# so the gate's ACCEPT side is proven, not just its reject side.
-rgbx_add_extension(mathtest SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mathtest.c")
+if(RGBX_TARGET STREQUAL "rgbx-v2")
+    get_filename_component(_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
+    rgbx_add_extension(rgbx_v2_test
+        SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/rgbx_v2_test.c"
+        MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/rgbx_v2_test.json")
+    rgbx_add_extension(plasma_v2_sdk_test
+        SOURCES "${_repo_root}/fw/src/animations/plasma_v2.c"
+        MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/plasma_v2.json")
+else()
+    get_filename_component(_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
+    rgbx_add_extension(hello SOURCES "${_repo_root}/fw/extensions/hello/hello.c")
+    rgbx_add_extension(cpptest SOURCES "${_repo_root}/fw/extensions/cpptest/cpptest.cpp")
+    # Exercises the issue #295 export surface (libm, __aeabi_uldivmod, memmove)
+    # so the gate's ACCEPT side is proven, not just its reject side.
+    rgbx_add_extension(mathtest SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/mathtest.c")
+endif()

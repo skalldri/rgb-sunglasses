@@ -17,10 +17,12 @@ runs:
       shell: bash
       run: echo "version=$(grep -oP 'WASI_SDK_VERSION="\K[^"]+' fw/sim/scripts/install-toolchain.sh)" >> "$GITHUB_OUTPUT"
 
-    - uses: actions/cache@v4
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-        path: ~/.cache/rgb-sunglasses/wasi-sdk-${{ steps.toolchain-key.outputs.version }}
-        key: wasi-sdk-scoped-${{ steps.toolchain-key.outputs.version }}
+        # Cache the verified distribution archive, which is the installer's
+        # trust anchor; the extracted tree is re-derived from it each run.
+        path: ~/.cache/rgb-sunglasses/wasi-sdk-*.tar.gz
+        key: wasi-sdk-scoped-${{ steps.toolchain-key.outputs.version }}-${{ hashFiles('fw/sim/scripts/install-toolchain.sh') }}
 
     - name: Install wasi-sdk (cached)
       shell: bash

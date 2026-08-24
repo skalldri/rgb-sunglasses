@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Stuart Alldritt
 # Toolchain file for building rgbx extensions to WebAssembly for the
 # hardware-free simulator (https://rgb-sunglasses.autom8ed.com/sim/).
 # Mirrors fw/sim/build-extensions.sh flag-for-flag.
@@ -23,13 +25,23 @@ if(NOT EXISTS "${_rgbx_wasi_install}")
     message(FATAL_ERROR "rgbx-sdk: no wasi-sdk install script found — this toolchain file must run from a packaged SDK tree (package-sdk.sh output) or the monorepo checkout")
 endif()
 
-execute_process(
-    COMMAND "${_rgbx_wasi_install}"
-    OUTPUT_VARIABLE _rgbx_wasi_root
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE _rgbx_wasi_rc)
-if(NOT _rgbx_wasi_rc EQUAL 0)
-    message(FATAL_ERROR "rgbx-sdk: failed to resolve/install wasi-sdk (install script exited ${_rgbx_wasi_rc})")
+# The installer re-extracts wasi-sdk from a pin-verified archive on every call
+# (its integrity model; see install-toolchain.sh). CMake re-reads this toolchain
+# file for each try_compile, so cache the resolved root in the environment: the
+# first evaluation does the verified extraction, and the try_compile children
+# inherit the path and reuse that one verified tree within this configure run.
+if(DEFINED ENV{_RGBX_WASI_SDK_ROOT})
+    set(_rgbx_wasi_root "$ENV{_RGBX_WASI_SDK_ROOT}")
+else()
+    execute_process(
+        COMMAND "${_rgbx_wasi_install}"
+        OUTPUT_VARIABLE _rgbx_wasi_root
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _rgbx_wasi_rc)
+    if(NOT _rgbx_wasi_rc EQUAL 0)
+        message(FATAL_ERROR "rgbx-sdk: failed to resolve/install wasi-sdk (install script exited ${_rgbx_wasi_rc})")
+    endif()
+    set(ENV{_RGBX_WASI_SDK_ROOT} "${_rgbx_wasi_root}")
 endif()
 
 set(CMAKE_C_COMPILER "${_rgbx_wasi_root}/bin/clang")

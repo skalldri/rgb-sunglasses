@@ -1,4 +1,7 @@
 /**
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * @file rgbx_api.h
  * @brief The RGB Sunglasses animation-extension ABI (flat C, version 1).
  *

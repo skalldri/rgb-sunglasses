@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * Compile-time proof that the wasm32 layout of the rgbx ABI structs matches
  * the device's ARM EABI layout (both are ILP32 with natural alignment).
  *

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Stuart Alldritt
 # Toolchain file for building rgbx .llext extensions with a generic ARM
 # cross-compiler — no Zephyr SDK, EDK, or west required. Pass via
 # -DCMAKE_TOOLCHAIN_FILE (the template's presets do this).
@@ -15,13 +17,24 @@ set(CMAKE_SYSTEM_PROCESSOR arm)
 # bare-metal executable and fail (no crt0/nosys in a freestanding build).
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-execute_process(
-    COMMAND "${CMAKE_CURRENT_LIST_DIR}/../../scripts/install-arm-toolchain.sh"
-    OUTPUT_VARIABLE _rgbx_arm_root
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE _rgbx_arm_rc)
-if(NOT _rgbx_arm_rc EQUAL 0)
-    message(FATAL_ERROR "rgbx-sdk: failed to resolve/install the ARM toolchain (install-arm-toolchain.sh exited ${_rgbx_arm_rc})")
+# The installer re-extracts the toolchain from a pin-verified archive on every
+# call (its integrity model; see install-arm-toolchain.sh). CMake re-reads this
+# toolchain file for each try_compile, so cache the resolved root in the
+# environment: the first evaluation does the verified extraction, and the
+# try_compile children inherit the path and reuse that one verified tree within
+# this configure run.
+if(DEFINED ENV{_RGBX_ARM_TOOLCHAIN_ROOT})
+    set(_rgbx_arm_root "$ENV{_RGBX_ARM_TOOLCHAIN_ROOT}")
+else()
+    execute_process(
+        COMMAND "${CMAKE_CURRENT_LIST_DIR}/../../scripts/install-arm-toolchain.sh"
+        OUTPUT_VARIABLE _rgbx_arm_root
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _rgbx_arm_rc)
+    if(NOT _rgbx_arm_rc EQUAL 0)
+        message(FATAL_ERROR "rgbx-sdk: failed to resolve/install the ARM toolchain (install-arm-toolchain.sh exited ${_rgbx_arm_rc})")
+    endif()
+    set(ENV{_RGBX_ARM_TOOLCHAIN_ROOT} "${_rgbx_arm_root}")
 endif()
 
 # Probe both triple prefixes: arm-none-eabi (the pinned Arm GNU Toolchain)

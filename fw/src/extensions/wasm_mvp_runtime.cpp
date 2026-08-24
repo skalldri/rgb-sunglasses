@@ -38,12 +38,29 @@ constexpr char kV2DebugU32Import[] = "debug_u32";
 constexpr char kV2SetSpan8Import[] = "set_span8";
 constexpr char kV2SetLumaSpan8Import[] = "set_luma_span8";
 constexpr char kV2InitExport[] = "rgbx_init";
-constexpr uint32_t kMaxV2Globals = 8;
-constexpr uint32_t kMaxV2ParamCallsPerTick = 16;
-constexpr uint32_t kMaxV2InputCallsPerTick = 64;
-constexpr uint32_t kV2PixelsPerSpan = 8;
+// Every structural limit below is the ABI header's declared admission profile,
+// not a second opinion about it. The published SDK's post-link gate reads the
+// same numbers out of sdk-manifest.json, which the packager copies from that
+// header, so host and gate cannot drift apart silently.
+constexpr uint32_t kMaxV2Imports = RGBX_V2_MAX_IMPORTS;
+constexpr uint32_t kMinV2Imports = RGBX_V2_MIN_IMPORTS;
+constexpr uint32_t kMaxV2Globals = RGBX_V2_MAX_GLOBALS;
+constexpr uint32_t kMaxV2ParamCallsPerTick = RGBX_V2_MAX_PARAM_CALLS_PER_TICK;
+constexpr uint32_t kMaxV2InputCallsPerTick = RGBX_V2_MAX_INPUT_CALLS_PER_TICK;
+constexpr uint32_t kV2PixelsPerSpan = RGBX_V2_PIXELS_PER_SPAN;
 constexpr uint32_t kV2SpanCallsPerTick = kV2PixelCount / kV2PixelsPerSpan;
+constexpr uint32_t kV2SectionAllowedMask = RGBX_V2_SECTION_ALLOWED_MASK;
+constexpr uint32_t kV2SectionRequiredMask = RGBX_V2_SECTION_REQUIRED_MASK;
 static_assert(kV2PixelCount % kV2PixelsPerSpan == 0);
+static_assert(kV2SpanCallsPerTick == RGBX_V2_SPAN_CALLS_PER_TICK);
+static_assert(kMaxV2ParamCallsPerTick == RGBX_V2_MAX_PARAMS,
+              "one tick may read each numeric parameter slot at most once");
+static_assert(kMaxFunctions == RGBX_V2_MAX_FUNCTIONS,
+              "the runtime and released SDK function ceilings must match");
+static_assert(kMaxLocalsPerFunction == RGBX_V2_MAX_LOCALS_PER_FUNCTION,
+              "the runtime and released SDK locals ceilings must match");
+static_assert((kV2SectionRequiredMask & ~kV2SectionAllowedMask) == 0,
+              "a required section id must also be an admitted section id");
 
 enum class RuntimeProfile : uint8_t {
     Mvp,
@@ -280,7 +297,7 @@ bool modulePolicyAllows(IM3Module module) {
 
 #if defined(CONFIG_APP_WASM3_V2_PROTOTYPE)
     if (sShared.profile == RuntimeProfile::V2) {
-        if (module->numFuncImports < 2 || module->numFuncImports > 5 ||
+        if (module->numFuncImports < kMinV2Imports || module->numFuncImports > kMaxV2Imports ||
             module->numGlobals > kMaxV2Globals) {
             return false;
         }
@@ -377,8 +394,8 @@ bool v2SectionProfileAllows(const uint8_t* bytes, size_t size) {
     uint32_t seen = 0;
     while (offset < size) {
         const uint8_t section = bytes[offset++];
-        const bool allowed = section == 1 || section == 2 || section == 3 || section == 6 ||
-                             section == 7 || section == 10;
+        const bool allowed =
+            section < 32 && (kV2SectionAllowedMask & (1u << section)) != 0;
         if (!allowed || section <= lastSection) {
             return false;
         }
@@ -390,8 +407,7 @@ bool v2SectionProfileAllows(const uint8_t* bytes, size_t size) {
         seen |= 1u << section;
         offset += payloadSize;
     }
-    constexpr uint32_t kRequired = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 7) | (1u << 10);
-    return offset == size && (seen & kRequired) == kRequired;
+    return offset == size && (seen & kV2SectionRequiredMask) == kV2SectionRequiredMask;
 }
 #endif
 

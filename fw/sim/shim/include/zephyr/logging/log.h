@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Stuart Alldritt
+ *
  * Simulator shim for <zephyr/logging/log.h> — just enough for the WASM
  * build of audio_dsp.cpp (LOG_MODULE_REGISTER + level macros as no-ops;
  * the only call site is a CONFIG_DEBUG-gated LOG_DBG that is compiled out
