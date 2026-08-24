@@ -42,9 +42,9 @@ jobs:
     name: Build iOS (simulator, unsigned)
     runs-on: [self-hosted, macOS, ARM64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: "npm"
@@ -113,7 +113,7 @@ jobs:
           xcrun simctl shutdown "$DEVICE_ID" || true
 
       - name: Upload iOS simulator build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rgb-sunglasses-ios-sim-${{ github.sha }}
           path: |
