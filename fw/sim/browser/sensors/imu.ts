@@ -9,21 +9,49 @@
 
 import type { ImuProvider, ImuSample } from "../../core/providers";
 
+/** One recorded IMU delivery, stamped with the sim time it was sampled at. */
+export interface ImuTracePoint {
+  tMs: number;
+  sample: ImuSample;
+}
+
+/** ~12 s at the host's 25 Hz sample-and-hold — comfortably more than the
+ * strip charts' window, small enough to never matter. */
+const TRACE_MAX_POINTS = 300;
+
 /**
  * Pass-through provider that remembers the last sample it handed to the
  * host, so the readout shows what the extension saw regardless of which
  * source produced it (manual or scenario). Indirects through a getter —
  * the same pattern as TappedAudioProvider — so it can be assigned to
  * SimHost.imuProvider once and the source swapped underneath.
+ *
+ * Also keeps a short sim-time-stamped history of every delivered sample for
+ * the strip charts: the host only calls sampleAt() on its 25 Hz grid, so
+ * recording here (rather than polling `last` on a UI timer) captures every
+ * sample exactly once, and the trace freezes with the sim when paused.
  */
 export class TappedImuProvider implements ImuProvider {
   last: ImuSample = { accel: [0, 0, 9.81], gyro: [0, 0, 0] };
+  readonly trace: ImuTracePoint[] = [];
 
   constructor(private readonly inner: () => ImuProvider) {}
 
   sampleAt(tMs: number): ImuSample {
     const sample = this.inner().sampleAt(tMs);
     this.last = sample;
+    const lastT = this.trace.length > 0 ? this.trace[this.trace.length - 1].tMs : -Infinity;
+    if (tMs < lastT) {
+      // Host restart (extension switch, scenario Play/Restart): the sim clock
+      // rebased to 0, so a stitched-together trace would be nonsense.
+      this.trace.length = 0;
+    }
+    if (this.trace.length === 0 || tMs > lastT) {
+      this.trace.push({ tMs, sample });
+      if (this.trace.length > TRACE_MAX_POINTS) {
+        this.trace.splice(0, this.trace.length - TRACE_MAX_POINTS);
+      }
+    }
     return sample;
   }
 }

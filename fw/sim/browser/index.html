@@ -154,6 +154,16 @@
               <button id="imu-permission" class="btn">Grant motion access</button>
               <div class="hint">Needed on iOS. Android grants this automatically.</div>
             </div>
+            <!-- Not .field: stays live (undimmed) while a scenario overrides
+                 the manual sources — replay is what the charts are for. -->
+            <div class="imu-charts">
+              <canvas id="imu-chart-accel"></canvas>
+              <canvas id="imu-chart-gyro"></canvas>
+              <div class="imu-chart-legend">
+                <span class="axis-x">X</span><span class="axis-y">Y</span
+                ><span class="axis-z">Z</span> · last 8 s of sim time
+              </div>
+            </div>
             <div class="readout" id="imu-readout"></div>
           </div>
         </div>

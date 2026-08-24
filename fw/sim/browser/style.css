@@ -351,6 +351,40 @@ input[type="range"] {
   margin-top: 4px;
 }
 
+/* ---------------- IMU strip charts ---------------- */
+
+.imu-charts {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.imu-charts canvas {
+  display: block;
+  width: 100%;
+  height: 64px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.imu-chart-legend {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+
+.imu-chart-legend span {
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+/* Trace colors are fixed (not --accent, which is retinted live from the
+ * framebuffer) so axis identity never drifts with the animation's hue. */
+.imu-chart-legend .axis-x { color: #ff6b6b; }
+.imu-chart-legend .axis-y { color: #56d364; }
+.imu-chart-legend .axis-z { color: #59a5ff; }
+
 /* ---------------- scenario playback ---------------- */
 
 .scenario-actions {
