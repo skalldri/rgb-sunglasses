@@ -19,6 +19,7 @@ import {
 import { SimHost } from "../core/host";
 import type { FaultInfo, TickOutcome } from "../core/host";
 import { GlassesRenderer } from "./render/glasses";
+import { ImuStripChart } from "./imuChart";
 import {
   AudioSourceKind,
   AudioSources,
@@ -112,6 +113,8 @@ const els = {
   scenarioStatus: must<HTMLElement>("scenario-status"),
   audioCard: must<HTMLElement>("audio-card"),
   imuCard: must<HTMLElement>("imu-card"),
+  imuChartAccel: must<HTMLCanvasElement>("imu-chart-accel"),
+  imuChartGyro: must<HTMLCanvasElement>("imu-chart-gyro"),
 };
 
 const renderer = new GlassesRenderer(els.canvas);
@@ -124,6 +127,12 @@ const imu = new ImuManager();
 const scenarioPlayer = new ScenarioPlayer();
 const audioTap = new TappedAudioProvider(() => scenarioPlayer.audioProvider ?? audio.provider);
 const imuTap = new TappedImuProvider(() => scenarioPlayer.imuProvider ?? imu);
+// Accel autoscales out from ±2 g (gravity always in frame); gyro from
+// ±2 rad/s (~115°/s, brisk head motion).
+const imuChartAccel = new ImuStripChart(els.imuChartAccel, "accel", "m/s²", 2 * 9.81,
+  (s) => s.accel);
+const imuChartGyro = new ImuStripChart(els.imuChartGyro, "gyro", "rad/s", 2,
+  (s) => s.gyro);
 
 let host: SimHost | null = null;
 let running = false;
@@ -1165,6 +1174,16 @@ async function boot(): Promise<void> {
     updateScenarioStatus();
     consolePanel.flush();
   }, 200);
+
+  // The IMU strip charts get their own rAF loop: 25 Hz data on a 200 ms
+  // timer would stutter. draw() dirty-checks, so frames with no new samples
+  // (paused sim, hidden Inputs tab) cost two early returns.
+  const drawImuCharts = () => {
+    imuChartAccel.draw(imuTap.trace);
+    imuChartGyro.draw(imuTap.trace);
+    requestAnimationFrame(drawImuCharts);
+  };
+  requestAnimationFrame(drawImuCharts);
 }
 
 void boot();
