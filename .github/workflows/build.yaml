@@ -36,7 +36,7 @@ jobs:
         run: df -h
 
       - name: Checkout (GitHub)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Keep the checked-in interpreter snapshot pinned and reviewable. This
       # test is deliberately offline: it verifies the source/license manifest
@@ -48,7 +48,7 @@ jobs:
         run: bash fw/scripts/tests/test_wasm3_security.sh
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -92,7 +92,7 @@ jobs:
         run: cp fw/size.json fw/baseline-size.json
       - name: Cache size baseline (main)
         if: github.event_name == 'push'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: fw/baseline-size.json
           key: fw-size-baseline-main-${{ github.run_id }}
@@ -102,7 +102,7 @@ jobs:
       # diff step then reports absolute numbers only.
       - name: Restore size baseline (PR)
         if: github.event_name == 'pull_request'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: fw/baseline-size.json
           key: fw-size-baseline-main-${{ github.run_id }}
@@ -120,7 +120,7 @@ jobs:
       - name: Post size comment (PR)
         if: github.event_name == 'pull_request'
         continue-on-error: true
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const fs = require('fs');
@@ -145,19 +145,19 @@ jobs:
                 { owner, repo, issue_number, body });
             }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dfu_application_proto0.zip
           path: ${{ github.workspace }}/fw/build/dfu_application.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: llext-edk.tar.xz
           path: ${{ github.workspace }}/fw/build/fw/zephyr/llext-edk.tar.xz
 
       # Prebuilt in-repo animation extensions (issue #163). Glob only *.llext —
       # fw/build/extensions/ also holds the extracted EDK tree.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: extensions-proto0
           path: ${{ github.workspace }}/fw/build/extensions/*.llext
@@ -167,7 +167,7 @@ jobs:
       # never touches the root-owned fw/build tree.
       - name: Package rgbx-sdk (CI artifact)
         run: fw/sdk/package-sdk.sh --version 0.0.0-ci --output ${{ github.workspace }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: rgbx-sdk
           path: ${{ github.workspace }}/rgbx-sdk-0.0.0-ci.tar.gz
@@ -183,10 +183,10 @@ jobs:
         run: df -h
 
       - name: Checkout (GitHub)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -215,7 +215,7 @@ jobs:
           # Fix ownership so the upload-artifact action can read all remaining files.
           sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/fw/twister-out-ci" || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: twister-out-ci
           path: ${{ github.workspace }}/fw/twister-out-ci
@@ -231,7 +231,7 @@ jobs:
           sudo rm -rf "${{ github.workspace }}/fw/twister-out-ci"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: ${{ github.workspace }}/fw/coverage-zephyr.info
           disable_search: true
@@ -250,10 +250,10 @@ jobs:
       packages: write
     steps:
       - name: Checkout (GitHub)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -281,10 +281,10 @@ jobs:
       run:
         working-directory: fw
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -301,7 +301,7 @@ jobs:
             --cov-report=term-missing
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: fw/coverage-python.xml
           flags: python

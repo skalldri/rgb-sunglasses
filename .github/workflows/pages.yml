@@ -61,21 +61,21 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # The API docs stamp PROJECT_NUMBER from `git describe` against the
           # fw-v* tags, which a shallow clone doesn't have.
           fetch-depth: 0
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
         with:
           # Enable Pages (source = GitHub Actions) if it isn't already, so the
           # first deploy can't fail on a repo where Pages was never turned on.
           enablement: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
@@ -133,10 +133,15 @@ jobs:
           cp -r fw/build/doxygen/html site/api
 
       - name: Upload site artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./site
+          # v4 stopped bundling dotfiles by default. Nothing in site/ needs one
+          # today, but the failure mode is silent — a future .nojekyll or
+          # .well-known/ would just be missing from the deploy with no error —
+          # so keep the pre-v4 behaviour explicit rather than by luck.
+          include-hidden-files: true
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
