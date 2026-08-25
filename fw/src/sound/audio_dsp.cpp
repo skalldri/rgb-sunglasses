@@ -3,7 +3,8 @@
 #include "audio_dsp.h"
 
 #include <arm_math.h>
-#include <math.h>   /* log1pf */
+#include <math.h> /* log1pf */
+#include <sound/audio_param_table.h>
 #include <string.h> /* memset */
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -38,70 +39,47 @@ namespace {
 class DefaultAudioDspConfigProvider : public AudioDspConfigProvider {
    public:
     float getFluxGamma() override { return fluxGamma_; }
-    void setFluxGamma(float value) override { fluxGamma_ = std::clamp(value, 1.0f, 100000.0f); }
+    void setFluxGamma(float value) override {
+        fluxGamma_ = audioParamClampF<kAudioParamFluxGamma>(value);
+    }
 
     float getBeatFluxFloor() override { return beatFluxFloor_; }
     void setBeatFluxFloor(float value) override {
-        beatFluxFloor_ = std::clamp(value, 0.0f, 1.0f);
+        beatFluxFloor_ = audioParamClampF<kAudioParamBeatFluxFloor>(value);
     }
 
     float getBeatAlpha() override { return beatAlpha_; }
-    void setBeatAlpha(float value) override { beatAlpha_ = std::clamp(value, 0.1f, 20.0f); }
+    void setBeatAlpha(float value) override {
+        beatAlpha_ = audioParamClampF<kAudioParamBeatAlpha>(value);
+    }
 
     uint32_t getBeatRefractoryFrames() override { return beatRefractoryFrames_; }
     void setBeatRefractoryFrames(uint32_t value) override {
         /* Clamped to fit the uint8_t per-band refractory counter below. */
-        beatRefractoryFrames_ = std::clamp<uint32_t>(value, 0, 255);
+        beatRefractoryFrames_ = audioParamClampU<kAudioParamBeatRefractoryFrames>(value);
     }
 
     float getSfDelta() override { return sfDelta_; }
-    void setSfDelta(float value) override { sfDelta_ = std::clamp(value, 0.0f, 2.0f); }
+    void setSfDelta(float value) override {
+        sfDelta_ = audioParamClampF<kAudioParamSfDelta>(value);
+    }
 
     uint32_t getThresholdMode() override { return thresholdMode_; }
     void setThresholdMode(uint32_t value) override {
-        thresholdMode_ = std::clamp<uint32_t>(value, AUDIO_THRESHOLD_MODE_MEAN_SIGMA,
-                                              AUDIO_THRESHOLD_MODE_MEDIAN_DELTA);
+        thresholdMode_ = audioParamClampU<kAudioParamThresholdMode>(value);
     }
 
    private:
-    /* Defaults (and clamp ranges) mirror the BT-backed AudioConfig in audio_config.cpp. */
-    float fluxGamma_ = 1000.0f;
-    /* Retuned 0.005 -> 0.08 (issue #264, post-Phase-3). The floor was measured
-     * as PROVABLY INERT at the old operating point — identical fire counts
-     * across 0.005..0.105 — and that is no longer true, because Phase 3 dropped
-     * alpha 3.5 -> 0.3. A much lower adaptive threshold lets small noise-flux
-     * events through, and an absolute floor is exactly the right tool against
-     * them: it is scale-fixed, so it bites on quiet-room noise without touching
-     * real music, whose band-0 onset flux is >1.0.
-     *
-     * Measured over the corpus (with the gate at its new 0.0006): raising the
-     * floor to 0.08 cut quiet-room beats from 4 to 1 per 40 s with ZERO change
-     * to any music clip's F-score. Above 0.08 it starts clipping real beats
-     * (worst-clip music F 0.291 -> 0.278 at 0.12), so this is the peak, not an
-     * arbitrary safe-looking number. */
-    float beatFluxFloor_ = 0.08f;
-    /* Retuned 3.5 -> 0.3 in Phase 3 (issue #264). 3.5 was never measured — it
-     * mutes the detector on steady music, because the beats sit in the flux
-     * history and inflate sigma.
-     *
-     * This value is shared by ALL FOUR bands (it is read once per frame, not
-     * per band), so it was validated on all four rather than on band 0 alone.
-     * F at alpha=0.3 vs each (clip, band) pair's own optimum, over the 3-clip
-     * corpus, gives a max regret of 0.036 — lower than alpha=0.2 (0.042) or
-     * 0.5 (0.079), so 0.3 is the best single value for the whole bank, not
-     * just for bass. Per-band F at 0.3 (base60/loud30/newbase):
-     *   band 0  0.294 / 0.289 / 0.352     band 1  0.222 / 0.201 / 0.277
-     *   band 2  0.199 / 0.276 / 0.187     band 3  0.175 / 0.108 / 0.250
-     * versus 0.014 / 0.000 / 0.129 (band 0) at the old 3.5 — every band
-     * improves. Firing stays clear of saturation: 3.3-4.0 fires/s against the
-     * ~5.2/s ceiling the 5-frame refractory imposes.
-     *
-     * A per-band alpha would buy at most 0.036 F and add four tuning knobs;
-     * not worth it until the Phase 5 beat-grid work changes the picture. */
-    float beatAlpha_ = 0.3f;
-    uint32_t beatRefractoryFrames_ = 5;
-    float sfDelta_ = 0.10f;
-    uint32_t thresholdMode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
+    /* Defaults and clamp ranges both come from audio_param_table.h, which is also where the
+     * derivation of each retuned value is written down. This provider is what native_sim tests
+     * and any not-yet-bound build see; the BT/settings-backed AudioConfig (audio_config.cpp)
+     * reads the same table, so the two cannot disagree. */
+    float fluxGamma_ = audioParamDefaultF<kAudioParamFluxGamma>();
+    float beatFluxFloor_ = audioParamDefaultF<kAudioParamBeatFluxFloor>();
+    float beatAlpha_ = audioParamDefaultF<kAudioParamBeatAlpha>();
+    uint32_t beatRefractoryFrames_ = audioParamDefaultU<kAudioParamBeatRefractoryFrames>();
+    float sfDelta_ = audioParamDefaultF<kAudioParamSfDelta>();
+    uint32_t thresholdMode_ = audioParamDefaultU<kAudioParamThresholdMode>();
 };
 
 DefaultAudioDspConfigProvider sDefaultProvider;

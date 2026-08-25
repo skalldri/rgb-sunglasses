@@ -33,7 +33,9 @@
  *    BEAT_GAIN        recording's PDM gain register value (default 0x28);
  *                     sim mode starts from here
  *    BEAT_TARGET_LOW/BEAT_TARGET_HIGH/BEAT_RATE_LIMIT
- *                     AGC sim params (defaults 0.005/0.008/10)
+ *                     AGC sim params (defaults now come from audio_param_table.h:
+ *                     0.002 / 0.05 / 10 — this line used to say 0.005/0.008/10,
+ *                     stale since the Phase 2 retune)
  *    BEAT_BUCKETS     "1" appends the 20 display-bucket energies per D-line
  *
  * native_sim links the host glibc (EXTERNAL_LIBC), so getenv/fopen/printf
@@ -42,6 +44,7 @@
  * fw/tools/beat_lab/compare.py applies a relative tolerance.
  */
 #include <math.h>
+#include <sound/audio_param_table.h> /* shared D-line/#PARAMS format — single source of truth */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,7 +52,7 @@
 
 #include "agc_controller.h" /* the REAL firmware AGC policy, compiled in for sim mode */
 #include "audio_dsp.h"
-#include "audio_tap_format.h" /* shared D-line/#PARAMS format — single source of truth */
+#include "audio_tap_format.h"
 
 /* Terminates the native_sim process with the given exit code (a plain return
  * from main() would leave the simulated kernel idling forever). Declared here
@@ -58,28 +61,33 @@ extern "C" void posix_exit(int exit_code);
 
 namespace {
 
-float clampf(float v, float lo, float hi) { return fminf(fmaxf(v, lo), hi); }
-
-/* Env-driven provider mirroring DefaultAudioDspConfigProvider's defaults AND
- * clamps — the device silently clamps out-of-range values (AudioConfig and the
- * default provider agree on the ranges), so the replay must clamp identically
- * or a parameter sweep could report a "best" value the hardware cannot run. */
+/* Env-driven provider taking its defaults AND clamps from audio_param_table.h — the same
+ * header the firmware compiles. The device silently clamps out-of-range values, so the replay
+ * must clamp identically or a parameter sweep could report a "best" value the hardware cannot
+ * run.
+ *
+ * This used to be a hand-written copy and had already drifted in shape: it clamped with
+ * fminf/fmaxf, which returns the LOW BOUND for NaN where the device's std::clamp returned NaN.
+ * Sharing the table removes that class of divergence entirely. */
 class EnvConfigProvider : public AudioDspConfigProvider {
    public:
     float getFluxGamma() override { return gamma_; }
-    void setFluxGamma(float v) override { gamma_ = clampf(v, 1.0f, 100000.0f); }
+    void setFluxGamma(float v) override { gamma_ = audioParamClampF<kAudioParamFluxGamma>(v); }
     float getBeatFluxFloor() override { return floor_; }
-    void setBeatFluxFloor(float v) override { floor_ = clampf(v, 0.0f, 1.0f); }
+    void setBeatFluxFloor(float v) override {
+        floor_ = audioParamClampF<kAudioParamBeatFluxFloor>(v);
+    }
     float getBeatAlpha() override { return alpha_; }
-    void setBeatAlpha(float v) override { alpha_ = clampf(v, 0.1f, 20.0f); }
+    void setBeatAlpha(float v) override { alpha_ = audioParamClampF<kAudioParamBeatAlpha>(v); }
     uint32_t getBeatRefractoryFrames() override { return refractory_; }
-    void setBeatRefractoryFrames(uint32_t v) override { refractory_ = v > 255 ? 255 : v; }
+    void setBeatRefractoryFrames(uint32_t v) override {
+        refractory_ = audioParamClampU<kAudioParamBeatRefractoryFrames>(v);
+    }
     float getSfDelta() override { return sfDelta_; }
-    void setSfDelta(float v) override { sfDelta_ = clampf(v, 0.0f, 2.0f); }
+    void setSfDelta(float v) override { sfDelta_ = audioParamClampF<kAudioParamSfDelta>(v); }
     uint32_t getThresholdMode() override { return thresholdMode_; }
     void setThresholdMode(uint32_t v) override {
-        thresholdMode_ =
-            v > AUDIO_THRESHOLD_MODE_MEDIAN_DELTA ? AUDIO_THRESHOLD_MODE_MEDIAN_DELTA : v;
+        thresholdMode_ = audioParamClampU<kAudioParamThresholdMode>(v);
     }
 
     void loadFromEnv() {
@@ -116,12 +124,12 @@ class EnvConfigProvider : public AudioDspConfigProvider {
         *out = strtof(s, nullptr);
         return true;
     }
-    float gamma_ = 1000.0f;
-    float floor_ = 0.08f; /* post-Phase-3 retune — mirrors DefaultAudioDspConfigProvider */
-    float alpha_ = 0.3f; /* Phase 3 retune — mirrors DefaultAudioDspConfigProvider */
-    uint32_t refractory_ = 5;
-    float sfDelta_ = 0.10f;
-    uint32_t thresholdMode_ = AUDIO_THRESHOLD_MODE_MEAN_SIGMA;
+    float gamma_ = audioParamDefaultF<kAudioParamFluxGamma>();
+    float floor_ = audioParamDefaultF<kAudioParamBeatFluxFloor>();
+    float alpha_ = audioParamDefaultF<kAudioParamBeatAlpha>();
+    uint32_t refractory_ = audioParamDefaultU<kAudioParamBeatRefractoryFrames>();
+    float sfDelta_ = audioParamDefaultF<kAudioParamSfDelta>();
+    uint32_t thresholdMode_ = audioParamDefaultU<kAudioParamThresholdMode>();
 };
 
 EnvConfigProvider sEnvProvider;
@@ -147,19 +155,25 @@ class EnvAgcProvider : public AgcConfigProvider {
     }
 
     float getTargetLow() override { return tlow_; }
-    void setTargetLow(float v) override { tlow_ = clampf(v, 0.001f, 0.1f); }
+    void setTargetLow(float v) override { tlow_ = audioParamClampF<kAudioParamAgcTargetLow>(v); }
     float getTargetHigh() override { return thigh_; }
     /* Floor 0.02 mirrors the firmware's semantic-migration clamp (see
      * AudioConfig::setTargetHigh). */
-    void setTargetHigh(float v) override { thigh_ = clampf(v, 0.02f, 0.5f); }
+    void setTargetHigh(float v) override { thigh_ = audioParamClampF<kAudioParamAgcTargetHigh>(v); }
     uint32_t getRateLimitFrames() override { return rate_; }
-    void setRateLimitFrames(uint32_t v) override { rate_ = v < 1 ? 1 : (v > 100 ? 100 : v); }
+    void setRateLimitFrames(uint32_t v) override {
+        rate_ = audioParamClampU<kAudioParamAgcRateLimitFrames>(v);
+    }
     uint32_t getAttackFrames() override { return attack_; }
-    void setAttackFrames(uint32_t v) override { attack_ = v < 1 ? 1 : (v > 20 ? 20 : v); }
+    void setAttackFrames(uint32_t v) override {
+        attack_ = audioParamClampU<kAudioParamAgcAttackFrames>(v);
+    }
     uint32_t getReleaseFrames() override { return release_; }
-    void setReleaseFrames(uint32_t v) override { release_ = v < 1 ? 1 : (v > 100 ? 100 : v); }
+    void setReleaseFrames(uint32_t v) override {
+        release_ = audioParamClampU<kAudioParamAgcReleaseFrames>(v);
+    }
     float getNoiseGateRms() override { return gate_; }
-    void setNoiseGateRms(float v) override { gate_ = clampf(v, 0.0f, 0.02f); }
+    void setNoiseGateRms(float v) override { gate_ = audioParamClampF<kAudioParamNoiseGateRms>(v); }
 
    private:
     static bool envFloat(const char *name, float *out) {
@@ -177,16 +191,17 @@ class EnvAgcProvider : public AgcConfigProvider {
             set((uint32_t)strtoul(s, nullptr, 10));
         }
     }
-    /* Defaults MUST track DefaultAgcConfigProvider in sound.cpp — a stale copy
-     * here makes `--agc sim` simulate a policy no board runs (PR #279 review:
-     * the old 0.008 targetHigh made the sim ratchet gain to the floor on music
-     * the real firmware holds steady on). */
-    float tlow_ = 0.002f;
-    float thigh_ = 0.05f;
-    uint32_t rate_ = 10;
-    uint32_t attack_ = 3;
-    uint32_t release_ = 15;
-    float gate_ = 0.0006f; /* post-Phase-3 retune — mirrors DefaultAgcConfigProvider */
+    /* Defaults and clamps come from audio_param_table.h, the same header the firmware
+     * compiles, so they can no longer go stale by hand — which used to matter a great deal
+     * here: `--agc sim` simulating a policy no board runs is exactly the PR #279 review
+     * finding (a stale 0.008 targetHigh made the sim ratchet gain to the floor on music the
+     * real firmware holds steady on). */
+    float tlow_ = audioParamDefaultF<kAudioParamAgcTargetLow>();
+    float thigh_ = audioParamDefaultF<kAudioParamAgcTargetHigh>();
+    uint32_t rate_ = audioParamDefaultU<kAudioParamAgcRateLimitFrames>();
+    uint32_t attack_ = audioParamDefaultU<kAudioParamAgcAttackFrames>();
+    uint32_t release_ = audioParamDefaultU<kAudioParamAgcReleaseFrames>();
+    float gate_ = audioParamDefaultF<kAudioParamNoiseGateRms>();
 };
 
 /* ── D-line emission — field order comes from the shared audio_tap_format.h,
