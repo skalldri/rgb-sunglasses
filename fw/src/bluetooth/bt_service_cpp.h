@@ -981,6 +981,98 @@ class BtGattAutoCharacteristicExt
 };
 
 /**
+ * @brief Read-only characteristic that serves bytes straight from rodata.
+ *
+ * WHY THIS EXISTS RATHER THAN BtGattAutoReadOnlyCharacteristic<..., Blob, kBlob>.
+ *
+ * The typed characteristics keep their value in a `storage_` member initialised from the
+ * NTTP default, which is correct for anything writable or notifiable but puts a COPY of a
+ * compile-time constant in RAM. Measured on the 346-byte audio parameter blob: it landed in
+ * `datas`, costing 346 B of RAM plus the same again in flash for the initialiser, to hold
+ * bytes that already existed in rodata and can never change.
+ *
+ * This serves the rodata directly, so the object costs a pointer, a length and the usual
+ * attribute scaffolding. Reads still fragment correctly — bt_gatt_attr_read honours `offset`
+ * — so a blob larger than the negotiated MTU works via ATT_READ_BLOB. (BtGattServer's own
+ * metadata blob already did exactly this ad hoc; this is that pattern made reusable.)
+ *
+ * Not suitable for anything that changes at runtime: there is no storage to change.
+ */
+template <StringLiteral Description>
+class BtGattRodataBlobCharacteristic : public BtGattAttrProviderBase {
+   public:
+    BtGattRodataBlobCharacteristic(const uint8_t *data, uint16_t size)
+        : data_(data), size_(size) {}
+
+    static constexpr const char *getDescription() { return Description.value; }
+    static constexpr bt_gatt_cpf getCpf() {
+        return bt_gatt_cpf{.format = BLE_GATT_CPF_FORMAT_STRUCT};
+    }
+
+    void assignAutoUuid(const bt_uuid_128 &serviceUuid, uint16_t characteristicId) {
+        characteristic_uuid_ = composeAutoCharacteristicUuid(serviceUuid, characteristicId);
+    }
+
+    constexpr auto getAttrsTuple() {
+        return std::make_tuple(
+            bt_gatt_attr{
+                .uuid = &kChrcUuid.uuid,
+                .read = bt_gatt_attr_read_chrc,
+                .write = NULL,
+                .user_data = &characteristic_,
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            },
+            bt_gatt_attr{
+                .uuid = &characteristic_uuid_.uuid,
+                .read = readBlob,
+                .write = NULL,
+                .user_data = this,
+                .handle = 0,
+                /* _AUTHEN to match every other characteristic on this device: the security
+                 * floor is L4, and a read-only blob is not a reason to open a hole in it. */
+                .perm = BT_GATT_PERM_READ_AUTHEN,
+            },
+            bt_gatt_attr{
+                .uuid = &kCudUuid.uuid,
+                .read = bt_gatt_attr_read_cud,
+                .write = NULL,
+                .user_data = const_cast<void *>(static_cast<const void *>(&Description.value)),
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            },
+            bt_gatt_attr{
+                .uuid = &kCpfUuid.uuid,
+                .read = bt_gatt_attr_read_cpf,
+                .write = NULL,
+                .user_data = &cpf_,
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            });
+    }
+
+   private:
+    static ssize_t readBlob(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+                            uint16_t len, uint16_t offset) {
+        bt_conn_activity_note();
+        auto *self = reinterpret_cast<BtGattRodataBlobCharacteristic *>(
+            const_cast<struct bt_gatt_attr *>(attr)->user_data);
+        return bt_gatt_attr_read(conn, attr, buf, len, offset, self->data_, self->size_);
+    }
+
+    static constexpr bt_uuid_16 kChrcUuid = BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
+    static constexpr bt_uuid_16 kCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
+    static constexpr bt_uuid_16 kCpfUuid = BT_UUID_INIT_16(BT_UUID_GATT_CPF_VAL);
+
+    const uint8_t *data_;
+    uint16_t size_;
+    bt_uuid_128 characteristic_uuid_{};
+    bt_gatt_chrc characteristic_ =
+        BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, BT_GATT_CHRC_READ);
+    bt_gatt_cpf cpf_ = getCpf();
+};
+
+/**
  * @brief Auto-UUID characteristic wrapper over @ref BtGattCharacteristicCommon.
  *
  * UUID is assigned by @ref BtGattServer via @ref assignAutoUuid.

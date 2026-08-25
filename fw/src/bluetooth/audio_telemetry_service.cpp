@@ -90,31 +90,6 @@ static_assert(AUDIO_TELEMETRY_UNNEGOTIATED_ATT_PAYLOAD ==
  *
  * Read-only and never persisted: it is derived entirely from compile-time constants, so a
  * stored copy could only ever be a stale duplicate of the image's own table. */
-struct AudioParamRangesValue {
-    uint8_t bytes[kAudioParamBlobSize];
-};
-
-template <>
-struct BtGattCpfTraits<AudioParamRangesValue> {
-    static constexpr bool kSupported = true;
-    static constexpr bt_gatt_cpf kValue = {
-        .format = BLE_GATT_CPF_FORMAT_STRUCT,
-    };
-};
-
-constexpr AudioParamRangesValue audioParamRangesValue() {
-    AudioParamRangesValue v{};
-    for (size_t i = 0; i < kAudioParamBlobSize; i++) {
-        v.bytes[i] = kAudioParamBlob[i];
-    }
-    return v;
-}
-
-/* 346 bytes exceeds the negotiated MTU on a degraded link, which is fine here and NOT fine
- * for the stream: reads fragment via ATT_READ_BLOB (the framework's read() honours `offset`),
- * where bt_gatt_notify() cannot. That asymmetry is the whole reason the telemetry frame is
- * tiered and this is not. */
-
 namespace {
 
 /* Slot 9: 1 = core config, 2 = audio config, 4 = mcuboot updater, 5 = battery,
@@ -163,9 +138,12 @@ TelemetryControlCharacteristic telemetryControl;
 BtGattAutoReadNotifyCharacteristic<"Audio Telemetry", AudioTelemetryPacked, AudioTelemetryPacked{}>
     audioTelemetry;
 
-BtGattAutoReadOnlyCharacteristic<"Audio Param Ranges", AudioParamRangesValue,
-                                 audioParamRangesValue()>
-    audioParamRanges;
+/* Served straight from rodata rather than through a typed characteristic: the typed ones keep
+ * a `storage_` copy of the NTTP default, which put all 346 bytes of this compile-time constant
+ * into RAM (measured: `datas` grew by 412 B). BtGattRodataBlobCharacteristic costs a pointer
+ * and a length instead. Reads still fragment via ATT_READ_BLOB, so it works at MTU 23. */
+BtGattRodataBlobCharacteristic<"Audio Param Ranges"> audioParamRanges(kAudioParamBlob.data(),
+                                                                     kAudioParamBlobSize);
 
 BtGattServer audioTelemetryServer(audioTelemetryPrimaryService, telemetryControl, audioTelemetry,
                                   audioParamRanges);
