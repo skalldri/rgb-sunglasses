@@ -124,6 +124,27 @@ class AgcController {
 
     float smoothedRms() const { return smoothed_; }
 
+    /**
+     * @brief Input-referred noise-floor estimate: how quiet this room actually is.
+     *
+     * Asymmetric min-tracker — snaps down instantly, recovers over ~5 minutes — so a
+     * momentary loud passage cannot raise it, but moving to a genuinely louder room
+     * eventually does. Input-referred for the same reason the noise gate is: the room does
+     * not get louder because the AGC turned up.
+     *
+     * This is the highest-value number the tuning screen can show. `noiseGateRms`'s default
+     * was derived offline from exactly this measurement (quiet-room p95 0.00049 vs
+     * normal-volume music p5 0.00061 — a 1.25x margin), and without it a venue operator is
+     * setting that gate blind. Tracked even while frozen: it is a measurement, not a
+     * control action.
+     *
+     * Zero until the first frame has been ingested.
+     */
+    float noiseFloor() const { return noise_floor_; }
+
+    /** Frames since the last gain step — how settled the AGC currently is. */
+    uint32_t framesSinceStep() const { return frames_since_step_; }
+
    private:
     float history_[kHistoryLen] = {};
     uint8_t history_idx_ = 0;
@@ -132,4 +153,14 @@ class AgcController {
     uint32_t release_run_ = 0;
     uint32_t silent_frames_ = 0;
     uint32_t frames_since_step_ = 0;
+    float noise_floor_ = 0.0f;
+    /* Frames ingested since reset, saturating at kHistoryLen. The noise floor is seeded
+     * only once the smoothing window has actually FILLED.
+     *
+     * Seeding earlier is a trap worth naming: smoothed_ is a mean over a window that starts
+     * full of zeros, so for the first ~1 s it reads far below the real room level. A
+     * min-tracker seeded from that latches the artificially low value and then needs its
+     * full ~5 minute rise time to climb out — reporting a silent room the whole way. Caught
+     * by test_noise_floor_drops_immediately_but_rises_slowly. */
+    uint32_t frames_ingested_ = 0;
 };
