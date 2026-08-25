@@ -175,6 +175,47 @@ describe("useAudioPresets", () => {
             expect(savePresets).toHaveBeenCalled();
         });
 
+        it("persists the NEW list, not an empty one", () => {
+            // Persistence used to read the list out of a setState updater. React does not promise
+            // to run that synchronously, so on device savePresets wrote `[]` while the UI reported
+            // success — a Pixel 9 Pro produced {"version":1,"presets":[]} on disk.
+            //
+            // Be honest about what this test does and does not do: jest's act() flushes updaters
+            // synchronously, so it would have PASSED against the buggy code too. The real fix is
+            // structural — persistence now reads from a ref and never from an updater. What this
+            // pins is the contract (the persisted list is the new one), so a future refactor back
+            // toward updater-derived state at least has to change a test that says otherwise.
+            // The original defect was only observable on device.
+            const { result } = setup();
+            act(() => {
+                result.current.saveCurrentAs("Warehouse", 1234);
+            });
+
+            const written = (savePresets as jest.Mock).mock.calls.at(-1)![0] as { name: string }[];
+            expect(written).toHaveLength(1);
+            expect(written[0].name).toBe("Warehouse");
+        });
+
+        it("persists the reduced list when deleting", () => {
+            const { result } = setup();
+            act(() => {
+                result.current.saveCurrentAs("One", 1);
+            });
+            act(() => {
+                result.current.saveCurrentAs("Two", 2);
+            });
+            expect((savePresets as jest.Mock).mock.calls.at(-1)![0]).toHaveLength(2);
+
+            const id = result.current.saved.find(p => p.name === "One")!.id;
+            act(() => {
+                result.current.deletePreset(id);
+            });
+
+            const written = (savePresets as jest.Mock).mock.calls.at(-1)![0] as { name: string }[];
+            expect(written).toHaveLength(1);
+            expect(written[0].name).toBe("Two");
+        });
+
         it("overwrites a same-named preset rather than accumulating duplicates", async () => {
             const { result } = setup();
             act(() => {

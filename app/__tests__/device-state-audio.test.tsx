@@ -487,6 +487,24 @@ describe("AudioTuningScreen", () => {
             );
         });
 
+        it("saves from the keyboard's done key, not just the Save button", async () => {
+            // On a real phone the on-screen keyboard covers the Save button outright — the name
+            // field sits at the bottom of a bottom-anchored sheet, which is exactly where the
+            // keyboard lands (found on a Pixel 9 Pro). The sheet now avoids the keyboard, and
+            // submitting from the keyboard saves directly, which is the natural gesture anyway.
+            mockBluetooth(buildDevice());
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            fireEvent.changeText(getByTestId("preset-save-name"), "From Keyboard");
+            await act(async () => {
+                fireEvent(getByTestId("preset-save-name"), "submitEditing");
+            });
+
+            await waitFor(() => expect(getByText('Saved "From Keyboard"')).toBeTruthy());
+            expect(savePresets).toHaveBeenCalled();
+        });
+
         it("saves the current values under a name", async () => {
             mockBluetooth(buildDevice());
             const { getByTestId, getByText } = render(<AudioTuningScreen />);

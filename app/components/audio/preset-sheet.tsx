@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import {
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    TextInput,
+    View,
+} from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import { AppButton } from "@/components/ui/app-button";
@@ -50,121 +59,134 @@ export function PresetSheet({
 
     return (
         <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-            <Pressable style={[styles.backdrop, { backgroundColor: c.overlay }]} onPress={onClose}>
-                <Pressable
-                    style={[styles.sheet, { backgroundColor: c.surface, borderColor: c.border }]}
-                    onPress={() => {}}
-                    testID="preset-sheet"
-                >
-                    <ThemedText type="heading">Presets</ThemedText>
-                    <ThemedText type="caption" style={{ color: c.textSecondary }}>
-                        Starting points, not answers — the room decides.
-                    </ThemedText>
+            {/* Without this the on-screen keyboard covers the Save button outright — the one
+                keyboard on the whole Audio Tuning flow would make its own confirm button
+                unreachable. Found on a Pixel 9 Pro; the name field sits at the bottom of a
+                bottom-anchored sheet, which is exactly where the keyboard lands. */}
+            <KeyboardAvoidingView
+                style={styles.fill}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+            >
+                <Pressable style={[styles.backdrop, { backgroundColor: c.overlay }]} onPress={onClose}>
+                    <Pressable
+                        style={[styles.sheet, { backgroundColor: c.surface, borderColor: c.border }]}
+                        onPress={() => {}}
+                        testID="preset-sheet"
+                    >
+                        <ThemedText type="heading">Presets</ThemedText>
+                        <ThemedText type="caption" style={{ color: c.textSecondary }}>
+                            Starting points, not answers — the room decides.
+                        </ThemedText>
 
-                    <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-                        {presets.map((preset, index) => {
-                            const changes = changeCounts[preset.id] ?? 0;
-                            const isA = slotA === preset.id;
-                            const isB = slotB === preset.id;
+                        <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+                            {presets.map((preset, index) => {
+                                const changes = changeCounts[preset.id] ?? 0;
+                                const isA = slotA === preset.id;
+                                const isB = slotB === preset.id;
 
-                            return (
-                                <View key={preset.id}>
-                                    {index > 0 ? <Divider /> : null}
-                                    <View style={styles.row} testID={`preset-row-${preset.id}`}>
-                                        <View style={styles.rowText}>
-                                            <ThemedText style={styles.presetName}>{preset.name}</ThemedText>
-                                            {preset.blurb ? (
-                                                <ThemedText type="caption" style={{ color: c.textSecondary }}>
-                                                    {preset.blurb}
+                                return (
+                                    <View key={preset.id}>
+                                        {index > 0 ? <Divider /> : null}
+                                        <View style={styles.row} testID={`preset-row-${preset.id}`}>
+                                            <View style={styles.rowText}>
+                                                <ThemedText style={styles.presetName}>{preset.name}</ThemedText>
+                                                {preset.blurb ? (
+                                                    <ThemedText type="caption" style={{ color: c.textSecondary }}>
+                                                        {preset.blurb}
+                                                    </ThemedText>
+                                                ) : null}
+                                                <ThemedText type="caption" style={{ color: c.textMuted }}>
+                                                    {changes === 0
+                                                        ? "Already applied"
+                                                        : `Changes ${changes} setting${changes === 1 ? "" : "s"}`}
                                                 </ThemedText>
-                                            ) : null}
-                                            <ThemedText type="caption" style={{ color: c.textMuted }}>
-                                                {changes === 0
-                                                    ? "Already applied"
-                                                    : `Changes ${changes} setting${changes === 1 ? "" : "s"}`}
-                                            </ThemedText>
+                                            </View>
+
+                                            <View style={styles.rowActions}>
+                                                <SlotButton
+                                                    label="A"
+                                                    active={isA}
+                                                    onPress={() => onAssignSlot("A", preset.id)}
+                                                    testID={`preset-slot-a-${preset.id}`}
+                                                />
+                                                <SlotButton
+                                                    label="B"
+                                                    active={isB}
+                                                    onPress={() => onAssignSlot("B", preset.id)}
+                                                    testID={`preset-slot-b-${preset.id}`}
+                                                />
+                                                <Pressable
+                                                    accessibilityRole="button"
+                                                    accessibilityLabel={`Apply ${preset.name}`}
+                                                    disabled={busy || changes === 0}
+                                                    hitSlop={8}
+                                                    onPress={() => onApply(preset)}
+                                                    testID={`preset-apply-${preset.id}`}
+                                                    style={[
+                                                        styles.applyButton,
+                                                        {
+                                                            backgroundColor: c.primary,
+                                                            opacity: busy || changes === 0 ? 0.35 : 1,
+                                                        },
+                                                    ]}
+                                                >
+                                                    <ThemedText style={{ color: c.onPrimary, fontWeight: "600" }}>
+                                                        Apply
+                                                    </ThemedText>
+                                                </Pressable>
+                                            </View>
                                         </View>
 
-                                        <View style={styles.rowActions}>
-                                            <SlotButton
-                                                label="A"
-                                                active={isA}
-                                                onPress={() => onAssignSlot("A", preset.id)}
-                                                testID={`preset-slot-a-${preset.id}`}
-                                            />
-                                            <SlotButton
-                                                label="B"
-                                                active={isB}
-                                                onPress={() => onAssignSlot("B", preset.id)}
-                                                testID={`preset-slot-b-${preset.id}`}
-                                            />
+                                        {!preset.builtIn ? (
                                             <Pressable
                                                 accessibilityRole="button"
-                                                accessibilityLabel={`Apply ${preset.name}`}
-                                                disabled={busy || changes === 0}
+                                                accessibilityLabel={`Delete ${preset.name}`}
                                                 hitSlop={8}
-                                                onPress={() => onApply(preset)}
-                                                testID={`preset-apply-${preset.id}`}
-                                                style={[
-                                                    styles.applyButton,
-                                                    {
-                                                        backgroundColor: c.primary,
-                                                        opacity: busy || changes === 0 ? 0.35 : 1,
-                                                    },
-                                                ]}
+                                                onPress={() => onDelete(preset.id)}
+                                                testID={`preset-delete-${preset.id}`}
                                             >
-                                                <ThemedText style={{ color: c.onPrimary, fontWeight: "600" }}>
-                                                    Apply
+                                                <ThemedText type="caption" style={{ color: c.danger }}>
+                                                    Delete
                                                 </ThemedText>
                                             </Pressable>
-                                        </View>
+                                        ) : null}
                                     </View>
+                                );
+                            })}
+                        </ScrollView>
 
-                                    {!preset.builtIn ? (
-                                        <Pressable
-                                            accessibilityRole="button"
-                                            accessibilityLabel={`Delete ${preset.name}`}
-                                            hitSlop={8}
-                                            onPress={() => onDelete(preset.id)}
-                                            testID={`preset-delete-${preset.id}`}
-                                        >
-                                            <ThemedText type="caption" style={{ color: c.danger }}>
-                                                Delete
-                                            </ThemedText>
-                                        </Pressable>
-                                    ) : null}
-                                </View>
-                            );
-                        })}
-                    </ScrollView>
+                        <Divider />
+                        <ThemedText type="caption" style={{ color: c.textSecondary }}>
+                            Save what the glasses are set to right now
+                        </ThemedText>
+                        <View style={styles.saveRow}>
+                            <TextInput
+                                value={name}
+                                onChangeText={setName}
+                                placeholder={suggestedName}
+                                placeholderTextColor={c.textMuted}
+                                returnKeyType="done"
+                                onSubmitEditing={() => {
+                                    if (!busy && name.trim().length > 0) onSave(name.trim());
+                                }}
+                                testID="preset-save-name"
+                                style={[
+                                    styles.nameInput,
+                                    { color: c.textPrimary, borderColor: c.border, backgroundColor: c.surfaceAlt },
+                                ]}
+                            />
+                            <AppButton
+                                title="Save"
+                                disabled={busy || name.trim().length === 0}
+                                onPress={() => onSave(name.trim())}
+                                testID="preset-save"
+                            />
+                        </View>
 
-                    <Divider />
-                    <ThemedText type="caption" style={{ color: c.textSecondary }}>
-                        Save what the glasses are set to right now
-                    </ThemedText>
-                    <View style={styles.saveRow}>
-                        <TextInput
-                            value={name}
-                            onChangeText={setName}
-                            placeholder={suggestedName}
-                            placeholderTextColor={c.textMuted}
-                            testID="preset-save-name"
-                            style={[
-                                styles.nameInput,
-                                { color: c.textPrimary, borderColor: c.border, backgroundColor: c.surfaceAlt },
-                            ]}
-                        />
-                        <AppButton
-                            title="Save"
-                            disabled={busy || name.trim().length === 0}
-                            onPress={() => onSave(name.trim())}
-                            testID="preset-save"
-                        />
-                    </View>
-
-                    <AppButton title="Done" variant="ghost" onPress={onClose} />
+                        <AppButton title="Done" variant="ghost" onPress={onClose} />
+                    </Pressable>
                 </Pressable>
-            </Pressable>
+            </KeyboardAvoidingView>
         </Modal>
     );
 }
@@ -204,6 +226,7 @@ function SlotButton({
 }
 
 const styles = StyleSheet.create({
+    fill: { flex: 1 },
     backdrop: { flex: 1, justifyContent: "flex-end" },
     sheet: {
         maxHeight: "88%",

@@ -54,8 +54,26 @@ export function useAudioPresets({ currentValues, writeParam }: UseAudioPresetsOp
     const writeRef = useRef(writeParam);
     writeRef.current = writeParam;
 
+    /* The authoritative list lives in a ref, with React state mirroring it for rendering.
+     *
+     * Persistence must NOT read the list out of a setState updater: React does not promise to
+     * invoke the updater synchronously, so `savePresets` would run before the new list existed
+     * and write an empty array. That is not theoretical — it shipped and was caught on a Pixel
+     * 9 Pro, which wrote `{"version":1,"presets":[]}` after a save that the UI reported as
+     * successful. Jest did not catch it because the test environment flushes updaters
+     * synchronously (the class of bug app/CLAUDE.md warns is invisible to mocked tests). */
+    const savedRef = useRef<AudioPreset[]>([]);
+
+    const commitSaved = useCallback((next: AudioPreset[]): boolean => {
+        savedRef.current = next;
+        setSaved(next);
+        return savePresets(next);
+    }, []);
+
     useEffect(() => {
-        setSaved(loadPresets());
+        const loaded = loadPresets();
+        savedRef.current = loaded;
+        setSaved(loaded);
     }, []);
 
     const allPresets = useMemo(() => [...BUILT_IN_PRESETS, ...saved], [saved]);
@@ -147,31 +165,27 @@ export function useAudioPresets({ currentValues, writeParam }: UseAudioPresetsOp
         return { applied, failed };
     }, [undoStack]);
 
-    const saveCurrentAs = useCallback((name: string, now: number): AudioPreset | null => {
-        const preset = presetFromValues(name, valuesRef.current, now);
-        if (Object.keys(preset.values).length === 0) return null;
+    const saveCurrentAs = useCallback(
+        (name: string, now: number): AudioPreset | null => {
+            const preset = presetFromValues(name, valuesRef.current, now);
+            if (Object.keys(preset.values).length === 0) return null;
 
-        let next: AudioPreset[] = [];
-        setSaved(prev => {
             // Same name overwrites rather than accumulating near-duplicates nobody can tell apart.
-            const without = prev.filter(p => p.name !== name);
-            next = [...without, preset];
-            return next;
-        });
-        savePresets(next);
-        return preset;
-    }, []);
+            const without = savedRef.current.filter(p => p.name !== name);
+            commitSaved([...without, preset]);
+            return preset;
+        },
+        [commitSaved],
+    );
 
-    const deletePreset = useCallback((id: string) => {
-        let next: AudioPreset[] = [];
-        setSaved(prev => {
-            next = prev.filter(p => p.id !== id);
-            return next;
-        });
-        savePresets(next);
-        setSlotA(prev => (prev === id ? null : prev));
-        setSlotB(prev => (prev === id ? null : prev));
-    }, []);
+    const deletePreset = useCallback(
+        (id: string) => {
+            commitSaved(savedRef.current.filter(p => p.id !== id));
+            setSlotA(prev => (prev === id ? null : prev));
+            setSlotB(prev => (prev === id ? null : prev));
+        },
+        [commitSaved],
+    );
 
     /** Apply whichever of A/B is not currently the closer match — the one-tap compare. */
     const swapAB = useCallback(async (): Promise<ApplyResult | null> => {
