@@ -105,6 +105,9 @@ target_sources_ifdef(CONFIG_ANIMATION_BEAT    app PRIVATE src/animations/beat_an
 target_sources_ifdef(CONFIG_ANIMATION_FFT_BARS app PRIVATE src/animations/fft_bars_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_GLIM_PLAYER app PRIVATE src/animations/glim_player_animation.cpp)
 target_sources_ifdef(CONFIG_ANIMATION_MATRIX_CODE app PRIVATE src/animations/matrix_code_animation.cpp)
+target_sources_ifdef(CONFIG_APP_AUDIO_TELEMETRY app PRIVATE src/sound/audio_telemetry.cpp)
+target_sources_ifdef(CONFIG_APP_AUDIO_TELEMETRY app PRIVATE
+                     src/bluetooth/audio_telemetry_service.cpp)
 target_sources_ifdef(CONFIG_APP_CAPTURE app PRIVATE src/sound/capture.cpp)
 target_sources_ifdef(CONFIG_APP_CAPTURE app PRIVATE src/bluetooth/capture_service.cpp)
 target_sources_ifdef(CONFIG_IMU app PRIVATE src/imu/imu.cpp)

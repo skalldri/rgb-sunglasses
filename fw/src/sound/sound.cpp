@@ -7,6 +7,9 @@
 #endif
 #include <math.h> /* sqrtf */
 #include <sound/audio_param_table.h>
+#if defined(CONFIG_APP_AUDIO_TELEMETRY)
+#include <sound/audio_telemetry.h>
+#endif
 #include <stdio.h> /* snprintf (fmt_fixed4) */
 #include <stdlib.h>
 #include <string.h> /* memcpy (audio tap) */
@@ -687,6 +690,30 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
                     result.seq);
             }
         }
+
+#if defined(CONFIG_APP_AUDIO_TELEMETRY)
+        /* Live telemetry for the app's Audio Tuning meters.
+         *
+         * Placed HERE deliberately: after the noise gate has suppressed beats and after
+         * agc_apply_gain() has landed, so what the phone sees is what the animations see
+         * and the gain reported is the one now in the register. Reporting the pre-gate
+         * beats would show the user a detector firing merrily while their glasses sat
+         * dark, which is the exact confusion this screen exists to end.
+         *
+         * Cheap when nobody is streaming: one atomic read and return. */
+        {
+            AudioDspConfigProvider *dsp_cfg = audio_dsp_get_config_provider();
+            const float input_ref =
+                s_agc_controller.smoothedRms() *
+                audio_dsp_gain_amplitude_ratio((int)AgcController::kGainPark - (int)s_agc_gain);
+            audio_telemetry_publish(&result, input_ref, s_latest_rms,
+                                    (float)s_latest_peak / 32768.0f, s_agc_controller.noiseFloor(),
+                                    (int8_t)((int)s_agc_gain - (int)AgcController::kGainPark),
+                                    s_agc_controller.framesSinceStep(), s_agc_silent, agc.clipped,
+                                    s_agc_frozen, dsp_cfg->getThresholdMode(),
+                                    dsp_cfg->getBeatAlpha(), dsp_cfg->getBeatFluxFloor());
+        }
+#endif
 
         // Publish result; drop oldest if the queue is full
         if (k_msgq_put(&audio_result_q, &result, K_NO_WAIT) == -ENOMSG) {
@@ -2799,6 +2826,68 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_agc,
 #endif
                                SHELL_SUBCMD_SET_END);
 
+#if defined(CONFIG_APP_AUDIO_TELEMETRY)
+/* On-device oracle for the BLE telemetry stream.
+ *
+ * Exists because everything the app shows is quantised and arrives over a link that can
+ * silently degrade: without a serial-side view there is no way to tell "the meters are
+ * wrong" from "the meters are right and the room really is like that". This reads the same
+ * accumulator the notifier does, so a mismatch between this and the app is a transport
+ * problem, and agreement means the transport is fine and the DSP is what to look at.
+ *
+ * Note it CONSUMES a frame (take() clears the window), so running it while the app is
+ * streaming steals that frame from the phone. That is fine for debugging and would be
+ * confusing to discover by accident, hence this comment. */
+static int cmd_sound_telemetry_status(const struct shell *shell, size_t argc, char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    shell_print(shell, "Telemetry: %s", audio_telemetry_is_active() ? "streaming" : "idle");
+
+    struct audio_telemetry_frame f;
+    const bool fresh = audio_telemetry_take(&f);
+
+    char b1[16], b2[16], b3[16], b4[16];
+    shell_print(shell, "  seq %u | %s | dropped %u | clips %u", f.seq,
+                fresh ? "fresh" : "STALE (nothing new since last take)", f.dropped,
+                f.clip_count);
+    shell_print(shell, "  gain %+d steps (%s%d.%u dB) | settled %u frames", f.gain_steps,
+                f.gain_steps < 0 ? "-" : "", abs(f.gain_steps) / 2,
+                (unsigned)((abs(f.gain_steps) % 2) * 5), f.frames_since_step);
+    shell_print(shell, "  rms in-ref %s | inst %s | peak %s | noise floor %s",
+                fmt_fixed4(f.rms_input_referred, b1, sizeof(b1)),
+                fmt_fixed4(f.rms_instant, b2, sizeof(b2)),
+                fmt_fixed4(f.peak, b3, sizeof(b3)),
+                fmt_fixed4(f.noise_floor, b4, sizeof(b4)));
+    shell_print(shell, "  flags:%s%s%s | mode %u | beats 0x%x",
+                f.silent ? " SILENT" : "", f.clipped ? " CLIP" : "",
+                f.agc_frozen ? " FROZEN" : "", f.threshold_mode, f.beat_mask);
+
+    for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+        char fb[16], tb[16];
+        shell_print(shell, "  band %d: flux %s | fires at %s", b,
+                    fmt_fixed4(f.flux[b], fb, sizeof(fb)),
+                    fmt_fixed4(f.threshold[b], tb, sizeof(tb)));
+    }
+    return 0;
+}
+
+/* Drive the accumulator with no phone attached, so the pack path can be exercised without
+ * needing a subscriber. */
+static int cmd_sound_telemetry_sim(const struct shell *shell, size_t argc, char **argv) {
+    ARG_UNUSED(argc);
+    const bool on = (strcmp(argv[1], "on") == 0);
+    if (on) {
+        audio_telemetry_reset();
+    }
+    audio_telemetry_set_active(on);
+    shell_print(shell, "Telemetry accumulation %s", on ? "forced ON" : "OFF");
+    shell_print(shell,
+                "  (gates the accumulator only; the BLE stream still needs a control write)");
+    return 0;
+}
+#endif /* CONFIG_APP_AUDIO_TELEMETRY */
+
 // Subcommands for "sound dsp" (beat-detection parameters)
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_dsp,
                                SHELL_CMD_ARG(params, NULL, "Print beat-detection parameters", cmd_sound_dsp_params, 0, 0),
@@ -2806,19 +2895,33 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_dsp,
                                SHELL_SUBCMD_SET_END);
 // clang-format on
 
-// Subcommands for "sound"
-SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound,
-#if defined(CONFIG_VM3011)
-                               SHELL_CMD(vm, &sub_sound_vm, "VM3011 Commands", NULL),
-#endif
-                               SHELL_CMD(mic, &sub_sound_mic, "Mic Commands", NULL),
-                               SHELL_CMD(agc, &sub_sound_agc, "AGC Commands", NULL),
-                               SHELL_CMD(dsp, &sub_sound_dsp, "Beat-detection DSP parameters", NULL),
-                               SHELL_CMD(rms, NULL, "Print current RMS level", cmd_sound_rms),
-#if defined(CONFIG_APP_AUDIO_DEBUG)
-                               SHELL_CMD_ARG(dump, NULL, "Stream per-frame analysis: <frames> [buckets]", cmd_sound_dump, 2, 1),
-#endif
+#if defined(CONFIG_APP_AUDIO_TELEMETRY)
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_sound_telemetry,
+                               SHELL_CMD_ARG(status, NULL, "Print the latest telemetry frame",
+                                             cmd_sound_telemetry_status, 0, 0),
+                               SHELL_CMD_ARG(sim, NULL, "Force accumulation on/off: <on|off>",
+                                             cmd_sound_telemetry_sim, 2, 0),
                                SHELL_SUBCMD_SET_END);
+#endif
+
+// Subcommands for "sound"
+SHELL_STATIC_SUBCMD_SET_CREATE(
+    sub_sound,
+#if defined(CONFIG_VM3011)
+    SHELL_CMD(vm, &sub_sound_vm, "VM3011 Commands", NULL),
+#endif
+    SHELL_CMD(mic, &sub_sound_mic, "Mic Commands", NULL),
+    SHELL_CMD(agc, &sub_sound_agc, "AGC Commands", NULL),
+    SHELL_CMD(dsp, &sub_sound_dsp, "Beat-detection DSP parameters", NULL),
+    SHELL_CMD(rms, NULL, "Print current RMS level", cmd_sound_rms),
+#if defined(CONFIG_APP_AUDIO_TELEMETRY)
+    SHELL_CMD(telemetry, &sub_sound_telemetry, "Live BLE telemetry stream", NULL),
+#endif
+#if defined(CONFIG_APP_AUDIO_DEBUG)
+    SHELL_CMD_ARG(dump, NULL, "Stream per-frame analysis: <frames> [buckets]", cmd_sound_dump, 2,
+                  1),
+#endif
+    SHELL_SUBCMD_SET_END);
 
 /* Creating root (level 0) command "sound" */
 SHELL_CMD_REGISTER(sound, &sub_sound, "Sound commands", NULL);

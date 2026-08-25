@@ -873,6 +873,15 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
 
     const T &value() const { return storage_; }
 
+    /* Whether a central currently has notifications enabled on this characteristic.
+     *
+     * notify() already no-ops when nobody is subscribed, so this is not needed to send
+     * safely. It exists for producers that must STOP DOING WORK when the last subscriber
+     * goes away — the audio telemetry stream holds the connection interval up while it
+     * runs, and continuing to hold it for an app that has backgrounded would drain the
+     * battery with nobody watching. */
+    bool isSubscribed() const { return sendNotifications_; }
+
    protected:
     bt_uuid_128 characteristic_uuid_{};
 

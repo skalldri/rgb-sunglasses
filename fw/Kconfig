@@ -92,6 +92,48 @@ config IMU
 	  animations can consume the data without knowing about the driver.
 	  Proto0 only — the legacy DK board (dk-support branch) has no BMI270.
 
+config APP_AUDIO_TELEMETRY
+	bool "Live audio telemetry over BLE"
+	depends on AUDIO && BT
+	default y
+	help
+	  Streams quantised AGC + beat-detection state to the companion app so
+	  the Audio Tuning screen can show live meters. AGC and beat detection
+	  have to be tuned at the venue, and the serial shell is not reachable
+	  with the glasses on someone's face.
+
+	  Deliberately independent of APP_AUDIO_DEBUG: venue tuning happens on a
+	  SHIPPING image, and that symbol is default n and costs ~33 KB of
+	  appcore RAM.
+
+	  Adds exactly one notifiable characteristic. Android caps GATT
+	  notification registrations at ~15 per app and this device is already
+	  near that — see the comment at the top of fw/src/sound/audio_config.cpp
+	  for what happened last time that budget was exhausted.
+
+config APP_AUDIO_TELEMETRY_DEFAULT_RATE_HZ
+	int "Default telemetry send rate, in Hz"
+	default 8
+	range 1 32
+	depends on APP_AUDIO_TELEMETRY
+	help
+	  Used when the app requests rate 0. Analysis runs at 31.25 Hz; 8 Hz is
+	  plenty for a meter and keeps the link at the MEDIUM connection interval
+	  rather than FAST, which costs far less radio duty. The app raises this
+	  only for the calibration wizard's tap-along step, which needs an
+	  undecimated frame history.
+
+config APP_AUDIO_TELEMETRY_MAX_HOLD_S
+	int "Maximum telemetry watchdog hold, in seconds"
+	default 300
+	depends on APP_AUDIO_TELEMETRY
+	help
+	  Upper bound on how long a single control write can keep the stream
+	  alive without the app re-arming it. The watchdog is what stops a phone
+	  that backgrounded, walked out of range, or went into a pocket from
+	  leaving the device notifying into a void and holding the connection
+	  interval up until the battery dies.
+
 config APP_CAPTURE
 	bool "Background audio + IMU capture worker"
 	depends on AUDIO && FILE_SYSTEM

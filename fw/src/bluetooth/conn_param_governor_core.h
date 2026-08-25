@@ -33,6 +33,12 @@
  *  - outbound notifies deliberately do NOT count as activity - device-
  *    originated traffic queues fine at slow intervals and must not hold the
  *    link fast
+ *  - an explicit telemetry STREAM is the one device-originated exception, and
+ *    it needs its own trigger precisely BECAUSE of the rule above: a live meter
+ *    is not "traffic that queues fine", it is useless if it arrives late. A
+ *    stream holds MEDIUM, or FAST when its rate is high enough that MEDIUM's
+ *    30-45 ms interval could not carry it. The hold is explicit and edge-driven
+ *    so it can never outlive the stream that asked for it
  *
  * Anti-ping-pong: transitions fire on trigger EDGES only (a level never
  * re-requests), and any two requests are separated by at least
@@ -55,12 +61,14 @@ enum class ParamSet : uint8_t {
 const char *param_set_to_string(ParamSet set);
 
 enum class Trigger : uint8_t {
-    CONNECTED,     // link reached the required security level
-    DISCONNECTED,  // link dropped - resets all state
-    ACTIVITY,      // inbound ATT op or non-DFU SMP command observed
-    DFU_STARTED,   // MGMT_EVT_OP_IMG_MGMT_DFU_STARTED (or first upload chunk)
-    DFU_STOPPED,   // MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED / _PENDING
-    TIMER,         // scheduled re-evaluation (next_eval_in_ms elapsed)
+    CONNECTED,       // link reached the required security level
+    DISCONNECTED,    // link dropped - resets all state
+    ACTIVITY,        // inbound ATT op or non-DFU SMP command observed
+    DFU_STARTED,     // MGMT_EVT_OP_IMG_MGMT_DFU_STARTED (or first upload chunk)
+    DFU_STOPPED,     // MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED / _PENDING
+    STREAM_STARTED,  // device-originated telemetry stream began (see streamHold())
+    STREAM_STOPPED,  // ...and ended
+    TIMER,           // scheduled re-evaluation (next_eval_in_ms elapsed)
 };
 
 struct Config {
@@ -95,13 +103,25 @@ public:
     // k_work_delayable handler plus the BT thread's connect/disconnect path).
     Decision step(Trigger trigger, const Inputs &in);
 
+    // Record the telemetry stream's desired rate. Call before stepping
+    // STREAM_STARTED; ignored while no stream is active. A rate at or above
+    // kStreamFastRateHz cannot be carried by MEDIUM's 30-45 ms interval, so it
+    // asks for FAST instead.
+    void setStreamRateHz(uint8_t rate_hz) { stream_rate_hz_ = rate_hz; }
+
     // Introspection for the bt_state shell command, the grant-mismatch check
     // in le_param_updated(), and the tests.
     ParamSet target() const { return target_; }
     bool dfuActive() const { return dfu_active_; }
     bool connected() const { return connected_; }
+    bool streamActive() const { return stream_active_; }
 
-private:
+    // At or above this send rate, one notify per connection event no longer
+    // fits MEDIUM (30-45 ms), so the stream needs FAST. Below it, MEDIUM is
+    // both sufficient and far cheaper on radio duty.
+    static constexpr uint8_t kStreamFastRateHz = 20;
+
+   private:
     // What the state machine wants given the current inputs; pure, no side
     // effects. Recomputed on every step so a spacing-deferred transition is
     // re-derived from live state instead of replayed stale.
@@ -111,6 +131,8 @@ private:
     ParamSet target_ = ParamSet::NONE;
     bool connected_ = false;
     bool dfu_active_ = false;
+    bool stream_active_ = false;
+    uint8_t stream_rate_hz_ = 0;
     // Uptime of the last actually-emitted request; INT64_MIN so the first
     // request after a connect is never spacing-deferred.
     int64_t last_request_ms_ = INT64_MIN;

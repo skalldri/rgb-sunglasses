@@ -209,9 +209,14 @@ enum GovEventBit : uint32_t {
     GOV_EVT_DISCONNECTED = BIT(1),
     GOV_EVT_DFU_STARTED = BIT(2),
     GOV_EVT_DFU_STOPPED = BIT(3),
+    GOV_EVT_STREAM_STARTED = BIT(4),
+    GOV_EVT_STREAM_STOPPED = BIT(5),
 };
 
 static atomic_t s_gov_pending_events;
+/* Rate the stream asked for, read by the work handler when it processes the start edge.
+ * Atomic because bt_conn_stream_hold() is callable from any thread. */
+static atomic_t s_gov_stream_rate_hz;
 // 1 while the governor's target is SLOW: lets the per-ATT-op hot path skip
 // waking the governor unless an activity boost is actually possible.
 static atomic_t s_gov_target_slow;
@@ -308,6 +313,16 @@ static void gov_work_handler(struct k_work *work) {
     if (events & GOV_EVT_DFU_STOPPED) {
         gov_apply(s_governor.step(gov::Trigger::DFU_STOPPED, in));
     }
+    /* Stop before start: if both coalesced into one batch the stream was restarted, and
+     * ending the batch active is the correct ground truth (same reasoning as the
+     * connect/disconnect reconstruction above). */
+    if (events & GOV_EVT_STREAM_STOPPED) {
+        gov_apply(s_governor.step(gov::Trigger::STREAM_STOPPED, in));
+    }
+    if (events & GOV_EVT_STREAM_STARTED) {
+        s_governor.setStreamRateHz((uint8_t)atomic_get(&s_gov_stream_rate_hz));
+        gov_apply(s_governor.step(gov::Trigger::STREAM_STARTED, in));
+    }
     if (events & GOV_EVT_DISCONNECTED) {
         gov_apply(s_governor.step(gov::Trigger::DISCONNECTED, in));
     }
@@ -359,6 +374,16 @@ static struct mgmt_callback s_gov_img_cb = {
                 MGMT_EVT_OP_IMG_MGMT_DFU_PENDING,
 };
 #endif /* CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS */
+
+void bt_conn_stream_hold(bool active, uint8_t rate_hz) {
+    if (active) {
+        atomic_set(&s_gov_stream_rate_hz, (atomic_val_t)rate_hz);
+        gov_submit_event(GOV_EVT_STREAM_STARTED);
+    } else {
+        atomic_set(&s_gov_stream_rate_hz, 0);
+        gov_submit_event(GOV_EVT_STREAM_STOPPED);
+    }
+}
 
 void bt_conn_activity_note(void) {
     const int64_t now = k_uptime_get();
