@@ -19,6 +19,7 @@ export default function DeviceStateLayout() {
       <Stack.Screen name="index" />
       <Stack.Screen name="battery" />
       <Stack.Screen name="capture" />
+      <Stack.Screen name="audio" />
       <Stack.Screen name="[serviceUuid]" />
     </Stack>
   );

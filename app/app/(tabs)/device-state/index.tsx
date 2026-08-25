@@ -1,4 +1,5 @@
 import { BatteryCard } from "@/components/battery-card";
+import { AudioTuningCard } from "@/components/audio-tuning-card";
 import { CaptureCard } from "@/components/capture-card";
 import { CharacteristicBoolean } from "@/components/characteristic-boolean";
 import { WriteErrorIndicator } from "@/components/characteristic-write-error";
@@ -12,7 +13,7 @@ import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { Section } from "@/components/ui/section";
-import { getServiceName, UUID_BATTERY_SERVICE, UUID_CAPTURE_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
+import { getServiceName, UUID_AUDIO_CONFIG_SERVICE, UUID_BATTERY_SERVICE, UUID_CAPTURE_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
@@ -78,6 +79,10 @@ export default function DeviceStateMenuScreen() {
             // would be a "Capture Control" number box, which is a foot-gun rather than a
             // control: writing 1 starts a recording.
             service.uuid !== UUID_CAPTURE_SERVICE &&
+            // Audio gets its own tile + screen (AudioTuningCard). Rendered generically it is
+            // 14 unlabelled number boxes with no ranges, units or help — unusable at a venue,
+            // which is the entire reason the dedicated screen exists.
+            service.uuid !== UUID_AUDIO_CONFIG_SERVICE &&
             selectedDevice?.serviceDisplayNames?.[service.uuid] == null
     );
     const hasBatteryService = visibleServices.some(service => service.uuid === UUID_BATTERY_SERVICE);
@@ -155,6 +160,7 @@ export default function DeviceStateMenuScreen() {
 
                     {/* Self-hides on firmware without the capture service. */}
                     <CaptureCard style={styles.card} />
+                    <AudioTuningCard style={styles.card} />
 
                     {firmwareService && (
                         <Card style={styles.card}>
