@@ -175,6 +175,32 @@ struct BtGattSlotIndex {
 using BtGattSlotUpNext = BtGattSlotIndex<BLE_GATT_CPF_FORMAT_SLOT_UP_NEXT>;
 using BtGattSlotNowPlaying = BtGattSlotIndex<BLE_GATT_CPF_FORMAT_SLOT_NOW_PLAYING>;
 
+/**
+ * @brief Opt-in for the standard Valid Range descriptor (0x2906).
+ *
+ * DEFAULT OFF, and keyed on the characteristic's own `Self` type, so adding this cost nothing
+ * to the ~80 characteristics that do not specialise it — a blanket application would add one
+ * bt_gatt_attr (~24 B) plus an 8-byte value to every animation parameter that has no
+ * meaningful range, and this image has already had an attribute table overflow an image slot
+ * once (CONFIG_APP_BT_METADATA_CHARACTERISTIC exists because of it).
+ *
+ * The value is "lower inclusive followed by upper inclusive, each encoded in the format the
+ * characteristic's CPF descriptor declares" (Bluetooth Core, Valid Range). So a float32
+ * characteristic carries 8 bytes of two IEEE-754 LE floats, and a uint32 one carries two LE
+ * uint32s — NOT a generic numeric encoding. Specialisations must therefore agree with
+ * BtGattCpfTraits<T> for the same characteristic, which is what the audio service's ztest
+ * checks rather than assuming.
+ *
+ * Why bother when the companion app reads the bulk blob instead: this makes the device
+ * self-describing to any generic BLE tool — nRF Connect, LightBlue, a web-bluetooth debugger
+ * — which will render a parameter's valid range without knowing anything about this project.
+ * That is real diagnostic value at a venue when the companion app is the thing misbehaving.
+ */
+template <typename Self>
+struct BtGattValidRangeTraits {
+    static constexpr bool kSupported = false;
+};
+
 template <typename T>
 struct BtGattCpfTraits {
     static constexpr bool kSupported = false;

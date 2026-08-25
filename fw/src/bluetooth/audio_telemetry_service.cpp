@@ -26,6 +26,7 @@
 #include <zephyr/logging/log.h>
 
 #include "sound/audio_telemetry.h"
+#include "sound/audio_param_blob.h"
 #include "sound/audio_telemetry_codec.h"
 #include "sound/audio_telemetry_control.h"
 
@@ -77,6 +78,43 @@ static_assert(AUDIO_TELEMETRY_UNNEGOTIATED_ATT_PAYLOAD ==
                   BtGattNotifyTraits<BtGattDropdownList<32>>::kGuaranteedSafeNotifyLen,
               "the telemetry codec and bt_gatt_traits.h disagree on the unnegotiated ATT floor");
 
+/* Slot 2: the bulk parameter metadata the Audio Tuning screen's sliders need — range,
+ * default, step, unit and enum labels for all 14 tunables, in one read.
+ *
+ * It lives HERE rather than on the audio config service (2) for the same reason the stream
+ * does: that service's every characteristic is notify=false because it once exhausted
+ * Android's ~15-registration budget, and it is the service the app enumerates parameter by
+ * parameter. Adding a 346-byte blob to it would be read on every discovery of every
+ * parameter-bearing screen. Here it is read once, on the tuning screen's focus, by a client
+ * that already wants the telemetry service.
+ *
+ * Read-only and never persisted: it is derived entirely from compile-time constants, so a
+ * stored copy could only ever be a stale duplicate of the image's own table. */
+struct AudioParamRangesValue {
+    uint8_t bytes[kAudioParamBlobSize];
+};
+
+template <>
+struct BtGattCpfTraits<AudioParamRangesValue> {
+    static constexpr bool kSupported = true;
+    static constexpr bt_gatt_cpf kValue = {
+        .format = BLE_GATT_CPF_FORMAT_STRUCT,
+    };
+};
+
+constexpr AudioParamRangesValue audioParamRangesValue() {
+    AudioParamRangesValue v{};
+    for (size_t i = 0; i < kAudioParamBlobSize; i++) {
+        v.bytes[i] = kAudioParamBlob[i];
+    }
+    return v;
+}
+
+/* 346 bytes exceeds the negotiated MTU on a degraded link, which is fine here and NOT fine
+ * for the stream: reads fragment via ATT_READ_BLOB (the framework's read() honours `offset`),
+ * where bt_gatt_notify() cannot. That asymmetry is the whole reason the telemetry frame is
+ * tiered and this is not. */
+
 namespace {
 
 /* Slot 9: 1 = core config, 2 = audio config, 4 = mcuboot updater, 5 = battery,
@@ -125,7 +163,12 @@ TelemetryControlCharacteristic telemetryControl;
 BtGattAutoReadNotifyCharacteristic<"Audio Telemetry", AudioTelemetryPacked, AudioTelemetryPacked{}>
     audioTelemetry;
 
-BtGattServer audioTelemetryServer(audioTelemetryPrimaryService, telemetryControl, audioTelemetry);
+BtGattAutoReadOnlyCharacteristic<"Audio Param Ranges", AudioParamRangesValue,
+                                 audioParamRangesValue()>
+    audioParamRanges;
+
+BtGattServer audioTelemetryServer(audioTelemetryPrimaryService, telemetryControl, audioTelemetry,
+                                  audioParamRanges);
 BT_GATT_SERVER_REGISTER(audioTelemetryServerStatic, audioTelemetryServer);
 
 /* ── Stream state ────────────────────────────────────────────────────────────

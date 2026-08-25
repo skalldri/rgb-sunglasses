@@ -750,20 +750,51 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
                 .perm = BT_GATT_PERM_READ,
             });
 
-        if constexpr (Notify) {
-            auto notifyAttrs = std::make_tuple(bt_gatt_attr{
-                .uuid = &kGattCccUuid.uuid,
-                .read = bt_gatt_attr_read_ccc,
-                .write = bt_gatt_attr_write_ccc,
-                .user_data = &ccc_data_,
+        /* Valid Range (0x2906), only for characteristics that opt in via
+         * BtGattValidRangeTraits. Emitted BEFORE the CCC so a notifiable characteristic's
+         * CCC keeps its position relative to the value handle, which is what a central that
+         * caches handles across a reconnect depends on. */
+        if constexpr (BtGattValidRangeTraits<Self>::kSupported) {
+            auto rangeAttrs = std::make_tuple(bt_gatt_attr{
+                .uuid = &kGattValidRangeUuid.uuid,
+                .read = readValidRange,
+                .write = NULL,
+                .user_data = const_cast<void *>(
+                    static_cast<const void *>(BtGattValidRangeTraits<Self>::kBytes)),
                 .handle = 0,
-                .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                .perm = BT_GATT_PERM_READ,
             });
 
-            return std::tuple_cat(baseAttrs, notifyAttrs);
+            if constexpr (Notify) {
+                return std::tuple_cat(baseAttrs, rangeAttrs, ccAttrs());
+            } else {
+                return std::tuple_cat(baseAttrs, rangeAttrs);
+            }
+        } else if constexpr (Notify) {
+            return std::tuple_cat(baseAttrs, ccAttrs());
         } else {
             return baseAttrs;
         }
+    }
+
+    auto ccAttrs() {
+        return std::make_tuple(bt_gatt_attr{
+            .uuid = &kGattCccUuid.uuid,
+            .read = bt_gatt_attr_read_ccc,
+            .write = bt_gatt_attr_write_ccc,
+            .user_data = &ccc_data_,
+            .handle = 0,
+            .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+        });
+    }
+
+    /* The attribute struct carries no length, so the size travels in the trait rather than
+     * being inferred from the buffer — a wrong length here would silently truncate the upper
+     * bound and read as a much narrower range to any tool that honours it. */
+    static ssize_t readValidRange(bt_conn *conn, const bt_gatt_attr *attr, void *buf, uint16_t len,
+                                  uint16_t offset) {
+        return bt_gatt_attr_read(conn, attr, buf, len, offset, attr->user_data,
+                                 BtGattValidRangeTraits<Self>::kSize);
     }
 
     void notify() {
@@ -890,6 +921,8 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
     static constexpr bt_uuid_16 kGattCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
     static constexpr bt_uuid_16 kGattCpfUuid = BT_UUID_INIT_16(BT_UUID_GATT_CPF_VAL);
     static constexpr bt_uuid_16 kGattCccUuid = BT_UUID_INIT_16(BT_UUID_GATT_CCC_VAL);
+    static constexpr bt_uuid_16 kGattValidRangeUuid =
+        BT_UUID_INIT_16(BT_UUID_VALID_RANGE_VAL);
 
     T storage_ = Default;
     bool sendNotifications_ = false;
