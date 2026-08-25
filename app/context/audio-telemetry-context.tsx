@@ -111,6 +111,19 @@ export type AudioTelemetryContextValue = {
   getSummarySnapshot: () => TelemetrySummary;
   getStatus: () => TelemetryStatus;
   subscribeStatus: (listener: () => void) => () => void;
+  /**
+   * Ask for a different tier/rate — used only by the calibration wizard's tap-along step,
+   * which needs UNDECIMATED tier-2 frames.
+   *
+   * Both halves matter. The refractory is counted in analysis frames, so replaying a
+   * decimated window would model a longer refractory than the device applies; and evaluating
+   * a different alpha needs the raw mean/sigma that only tier 2 carries, because the resolved
+   * threshold on the wire has the floor folded in and cannot be inverted back.
+   *
+   * Passing null restores the screen's default. The request is remembered, so the watchdog
+   * re-arm keeps asking for the same thing rather than silently dropping back.
+   */
+  requestStream: (tier: TelemetryTier | null, rateHz?: number) => void;
 };
 
 const AudioTelemetryContext =
@@ -142,6 +155,17 @@ export function AudioTelemetryProvider({
    * without a reference the bars would sit invisibly low at normal listening levels and slam
    * to full on a loud track. Decays slowly so the display does not re-scale on every frame. */
   const bucketRefRef = React.useRef(BUCKET_REF_SEED);
+  /* What we are currently asking the device for. Every control write reads THIS, never the
+   * module constants — otherwise the 30 s watchdog re-arm silently reverts a wizard step that
+   * raised the tier/rate, mid-recording. */
+  const requestRef = React.useRef<{ tier: TelemetryTier; rateHz: number }>({
+    tier: REQUESTED_TIER,
+    rateHz: REQUESTED_RATE_HZ,
+  });
+  /* Assigned by arm() while armed, cleared on teardown. */
+  const writeControlRef = React.useRef<
+    ((tier: TelemetryTier, rateHz: number) => void) | null
+  >(null);
   /* Reused across frames so the notify path allocates nothing. */
   const bucketScratchRef = React.useRef<number[]>(
     new Array(AUDIO_NUM_DISPLAY_BUCKETS).fill(0),
@@ -468,6 +492,21 @@ export function AudioTelemetryProvider({
     }, [setStatus]),
   );
 
+  const requestStream = React.useCallback((tier: TelemetryTier | null, rateHz?: number) => {
+    const next = {
+      tier: tier ?? REQUESTED_TIER,
+      rateHz: rateHz ?? REQUESTED_RATE_HZ,
+    };
+    if (next.tier === requestRef.current.tier && next.rateHz === requestRef.current.rateHz) {
+      return; // no edge, no write — the device treats a repeat as a hold extension
+    }
+    requestRef.current = next;
+    /* Drop the history: a window spanning a rate change mixes two frame spacings, and the
+     * replay counts refractory in frames. Better to start the recording clean. */
+    resetTelemetryRing(ringRef.current);
+    writeControlRef.current?.(next.tier, next.rateHz);
+  }, []);
+
   /* EMPTY deps, deliberately: every member is a ref, a shared value or a stable callback, so
    * this object must never change identity. If it did, it would re-render every consumer of
    * the telemetry context on whatever caused the change — which is the exact failure mode
@@ -480,6 +519,7 @@ export function AudioTelemetryProvider({
       getSummarySnapshot,
       getStatus,
       subscribeStatus,
+      requestStream,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],

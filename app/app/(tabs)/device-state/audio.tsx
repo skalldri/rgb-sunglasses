@@ -477,6 +477,23 @@ function AudioTuningScreen() {
                     sensitivity={{ mode, key: sensitivityKey as "beatAlpha" | "beatSfDelta" }}
                 />
 
+                {/* The wizard is a pushed route, not a modal: it holds attention for ~30 s in a
+                    loud room and needs an unambiguous Cancel at every point. */}
+                <Pressable
+                    testID="audio-open-wizard"
+                    onPress={() => router.push("/(tabs)/device-state/audio-calibrate")}
+                    accessibilityRole="button"
+                    style={[styles.wizardButton, { backgroundColor: c.surface, borderColor: c.border }]}
+                >
+                    <View style={{ flex: 1 }}>
+                        <ThemedText type="defaultSemiBold">✨  Tune it for me</ThemedText>
+                        <ThemedText type="caption" style={{ color: c.textSecondary }}>
+                            Measures the room, then fits everything to it. About a minute.
+                        </ThemedText>
+                    </View>
+                    <IconSymbol name="chevron.right" size={16} color={c.textMuted} />
+                </Pressable>
+
                 <SegmentedControl<Mode>
                     options={[
                         { label: "Simple", value: "simple" },
@@ -854,6 +871,16 @@ const BEAT_FEEL_OPTIONS = BEAT_FEEL_PRESETS.map(p => ({ label: p.label, blurb: p
 const ADAPT_SPEED_OPTIONS = ADAPT_SPEED_PRESETS.map(p => ({ label: p.label, blurb: p.blurb }));
 
 const styles = StyleSheet.create({
+    wizardButton: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: Spacing.md,
+        minHeight: 56,
+        paddingHorizontal: Spacing.md,
+        paddingVertical: Spacing.sm,
+        borderRadius: Radii.md,
+        borderWidth: StyleSheet.hairlineWidth,
+    },
     screen: { flex: 1 },
     header: { flexDirection: "row", alignItems: "center", paddingHorizontal: Spacing.lg, height: 44 },
     back: { flexDirection: "row", alignItems: "center", gap: Spacing.xs },
