@@ -66,8 +66,10 @@ enum class Trigger : uint8_t {
     ACTIVITY,        // inbound ATT op or non-DFU SMP command observed
     DFU_STARTED,     // MGMT_EVT_OP_IMG_MGMT_DFU_STARTED (or first upload chunk)
     DFU_STOPPED,     // MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED / _PENDING
-    STREAM_STARTED,  // device-originated telemetry stream began (see streamHold())
-    STREAM_STOPPED,  // ...and ended
+    // Device-originated telemetry stream started/stopped. The wiring derives WHICH from the
+    // requested rate rather than queueing two separate bits - see Inputs::stream_rate_hz.
+    STREAM_STARTED,
+    STREAM_STOPPED,
     TIMER,           // scheduled re-evaluation (next_eval_in_ms elapsed)
 };
 
@@ -80,6 +82,11 @@ struct Config {
 struct Inputs {
     int64_t now_ms;            // current uptime
     int64_t last_activity_ms;  // uptime of the newest inbound ATT/SMP op
+    // Telemetry stream's requested send rate, 0 when no stream is running. Carried here
+    // rather than latched by a setter so there is no call-ordering contract to get wrong,
+    // and so it is re-derived from live state on every step instead of replayed - the same
+    // principle the rest of this core follows (desired() is recomputed, never replayed).
+    uint8_t stream_rate_hz;
 };
 
 struct Decision {
@@ -102,12 +109,6 @@ public:
     // must serialize calls (bluetooth.cpp funnels everything through one
     // k_work_delayable handler plus the BT thread's connect/disconnect path).
     Decision step(Trigger trigger, const Inputs &in);
-
-    // Record the telemetry stream's desired rate. Call before stepping
-    // STREAM_STARTED; ignored while no stream is active. A rate at or above
-    // kStreamFastRateHz cannot be carried by MEDIUM's 30-45 ms interval, so it
-    // asks for FAST instead.
-    void setStreamRateHz(uint8_t rate_hz) { stream_rate_hz_ = rate_hz; }
 
     // Introspection for the bt_state shell command, the grant-mismatch check
     // in le_param_updated(), and the tests.
@@ -132,7 +133,6 @@ public:
     bool connected_ = false;
     bool dfu_active_ = false;
     bool stream_active_ = false;
-    uint8_t stream_rate_hz_ = 0;
     // Uptime of the last actually-emitted request; INT64_MIN so the first
     // request after a connect is never spacing-deferred.
     int64_t last_request_ms_ = INT64_MIN;

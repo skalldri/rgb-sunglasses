@@ -37,7 +37,7 @@ ParamSet Governor::desired(Trigger trigger, const Inputs &in) const {
     // that clock, so without this a live meter would sink to SLOW and start arriving in
     // 165 ms clumps while the user is dragging a slider against it.
     if (stream_active_) {
-        return stream_rate_hz_ >= kStreamFastRateHz ? ParamSet::FAST : ParamSet::MEDIUM;
+        return in.stream_rate_hz >= kStreamFastRateHz ? ParamSet::FAST : ParamSet::MEDIUM;
     }
 
     // Clamp a last-activity stamp from before the connect (or a torn/unset
@@ -73,7 +73,6 @@ Decision Governor::step(Trigger trigger, const Inputs &in) {
             connected_ = true;
             dfu_active_ = false;
             stream_active_ = false;
-            stream_rate_hz_ = 0;
             target_ = ParamSet::NONE;
             // First request after a connect must never be spacing-deferred.
             last_request_ms_ = INT64_MIN;
@@ -86,7 +85,6 @@ Decision Governor::step(Trigger trigger, const Inputs &in) {
             // set would resurrect the hold on the next connect, pinning the radio
             // fast for a subscriber that no longer exists.
             stream_active_ = false;
-            stream_rate_hz_ = 0;
             target_ = ParamSet::NONE;
             last_request_ms_ = INT64_MIN;
             return {ParamSet::NONE, nullptr, 0};
@@ -105,7 +103,6 @@ Decision Governor::step(Trigger trigger, const Inputs &in) {
 
         case Trigger::STREAM_STOPPED:
             stream_active_ = false;
-            stream_rate_hz_ = 0;
             break;
 
         case Trigger::ACTIVITY:

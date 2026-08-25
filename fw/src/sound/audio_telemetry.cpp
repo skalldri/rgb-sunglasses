@@ -41,7 +41,7 @@ bool s_agc_frozen;
 bool s_clipped_sticky; /* OR over the window: a clip is an event, not a level */
 
 bool s_have_new;      /* a frame has arrived since the last take() */
-uint8_t s_dropped;    /* wrapping; sends that carried no new frame, or that failed */
+uint8_t s_dropped;    /* wrapping; ticks the DSP had no new frame for */
 uint8_t s_clip_count; /* wrapping; clip events since reset */
 
 /* The fire line the detector ACTUALLY applied, resolved for the current mode and then
@@ -51,14 +51,21 @@ uint8_t s_clip_count; /* wrapping; clip events since reset */
  * honest line without knowing which mode produced it, and without re-deriving a formula
  * that would silently drift from audio_dsp.cpp. Runs at take() time, on the workqueue,
  * because the DSP thread has no business doing arithmetic it does not need. */
-float resolve_threshold(int band) {
-    /* Mode 1 stores the already-resolved threshold in band_sigma; mode 0 stores raw
+float resolve_threshold(float mean, float sigma, uint32_t mode, float alpha, float floor_v) {
+    /* Mode 1 stores the already-resolved threshold in the sigma slot; mode 0 stores raw
      * mean/stddev and the fire test is mean + alpha*sigma. The two slots are deliberately
-     * mode-dependent — see the struct comment in audio_dsp.h. */
-    const float t = (s_threshold_mode == AUDIO_THRESHOLD_MODE_MEDIAN_DELTA)
-                        ? s_result.band_sigma[band]
-                        : s_result.band_mean[band] + s_alpha * s_result.band_sigma[band];
-    return t > s_beat_flux_floor ? t : s_beat_flux_floor;
+     * mode-dependent — see the struct comment in audio_dsp.h.
+     *
+     * MUST TRACK audio_dsp.cpp's detector (the `thr`/fire-test block in
+     * audio_dsp_process): this is a second derivation of the same fire line, and a new
+     * threshold mode or a change to the floor rule updates the detector while silently
+     * leaving the meter drawing the old formula — the app would show a line that beats
+     * visibly cross without firing, which is the exact confusion this stream exists to
+     * end. Exporting band_threshold[] from audio_analysis_result is the real fix; it is
+     * deferred because that struct's layout is frozen for msgq/tap/extension-ABI
+     * compatibility (audio_dsp.h) and costs ~96 B of always-on RAM across its instances. */
+    const float t = (mode == AUDIO_THRESHOLD_MODE_MEDIAN_DELTA) ? sigma : mean + alpha * sigma;
+    return t > floor_v ? t : floor_v;
 }
 
 }  // namespace
@@ -105,6 +112,11 @@ bool audio_telemetry_take(struct audio_telemetry_frame *out) {
         return false;
     }
 
+    /* Copied out under the lock, used after it. */
+    uint32_t mode;
+    float alpha;
+    float floor_v;
+
     k_spinlock_key_t key = k_spin_lock(&s_lock);
 
     const bool had_new = s_have_new;
@@ -115,7 +127,10 @@ bool audio_telemetry_take(struct audio_telemetry_frame *out) {
         s_dropped++;
     }
 
-    memset(out, 0, sizeof(*out));
+    /* No memset: every field below is assigned unconditionally, so zeroing first was pure
+     * dead work — and it ran with interrupts off, contended against the DSP thread's 32 ms
+     * deadline. Only padding would have depended on it, and nothing compares this struct
+     * bytewise (the service compares the PACKED bytes, after quantisation). */
     out->seq = (uint16_t)(s_result.seq & 0xFFFF);
     out->dropped = s_dropped;
     out->gain_steps = s_gain_steps;
@@ -136,7 +151,6 @@ bool audio_telemetry_take(struct audio_telemetry_frame *out) {
             beats |= (uint8_t)(1u << b);
         }
         out->flux[b] = s_result.band_flux[b];
-        out->threshold[b] = resolve_threshold(b);
         out->mean[b] = s_result.band_mean[b];
         out->sigma[b] = s_result.band_sigma[b];
     }
@@ -146,14 +160,25 @@ bool audio_telemetry_take(struct audio_telemetry_frame *out) {
         out->buckets[i] = s_result.display_bucket_energy[i];
     }
 
+    mode = s_threshold_mode;
+    alpha = s_alpha;
+    floor_v = s_beat_flux_floor;
+
     /* Window closed. The next publish() sees !s_have_new and starts a fresh fold — which is
-     * what clears the beat flags, via audio_frame_fold's firstInBatch. The event flags that
-     * this file owns are cleared here; the cumulative clip_count is not, because that is the
+     * what clears the beat flags, via audio_frame_fold's firstInBatch. The event flags this
+     * file owns are cleared here; the cumulative clip_count is not, because that is the
      * long-run signal rather than a per-window one. */
     s_have_new = false;
     s_clipped_sticky = false;
 
     k_spin_unlock(&s_lock, key);
+
+    /* Deliberately OUTSIDE the lock: this reads only the locals and the caller's own frame,
+     * so holding the DSP thread off for four branch+FMA+clamp sequences bought nothing. */
+    for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
+        out->threshold[b] = resolve_threshold(out->mean[b], out->sigma[b], mode, alpha, floor_v);
+    }
+
     return had_new;
 }
 
@@ -183,11 +208,5 @@ void audio_telemetry_reset(void) {
     s_have_new = false;
     s_dropped = 0;
     s_clip_count = 0;
-    k_spin_unlock(&s_lock, key);
-}
-
-void audio_telemetry_note_send_failure(void) {
-    k_spinlock_key_t key = k_spin_lock(&s_lock);
-    s_dropped++;
     k_spin_unlock(&s_lock, key);
 }

@@ -49,9 +49,34 @@
 #define AUDIO_TELEMETRY_TIER_SPECTRUM 3
 #define AUDIO_TELEMETRY_TIER_MAX AUDIO_TELEMETRY_TIER_SPECTRUM
 
-#define AUDIO_TELEMETRY_SIZE_METERS 20
-#define AUDIO_TELEMETRY_SIZE_STATS 28
-#define AUDIO_TELEMETRY_SIZE_SPECTRUM 48
+/* Byte offsets. Named once and used by BOTH pack and unpack, with the tier sizes DERIVED
+ * from them rather than written out independently.
+ *
+ * The in-repo round-trip test would catch a transposition made in one direction only, but
+ * the app decodes this format independently from the doc comment above — an external
+ * decoder has nothing to round-trip against. Naming the offsets gives that doc exact
+ * symbols to cite and makes the layout single-definition on this side. */
+#define AUDIO_TELEMETRY_OFF_HEADER 0
+#define AUDIO_TELEMETRY_OFF_FLAGS 1
+#define AUDIO_TELEMETRY_OFF_SEQ 2       /* uint16 LE */
+#define AUDIO_TELEMETRY_OFF_DROPPED 4
+#define AUDIO_TELEMETRY_OFF_GAIN 5      /* int8, 0.5 dB steps from the park */
+#define AUDIO_TELEMETRY_OFF_RMS_IN 6
+#define AUDIO_TELEMETRY_OFF_RMS_INST 7
+#define AUDIO_TELEMETRY_OFF_PEAK 8
+#define AUDIO_TELEMETRY_OFF_NOISE 9
+#define AUDIO_TELEMETRY_OFF_CLIPS 10
+#define AUDIO_TELEMETRY_OFF_SINCE_STEP 11
+#define AUDIO_TELEMETRY_OFF_FLUX 12
+#define AUDIO_TELEMETRY_OFF_THRESHOLD (AUDIO_TELEMETRY_OFF_FLUX + AUDIO_NUM_BANDS)
+#define AUDIO_TELEMETRY_OFF_MEAN (AUDIO_TELEMETRY_OFF_THRESHOLD + AUDIO_NUM_BANDS)
+#define AUDIO_TELEMETRY_OFF_SIGMA (AUDIO_TELEMETRY_OFF_MEAN + AUDIO_NUM_BANDS)
+#define AUDIO_TELEMETRY_OFF_BUCKETS (AUDIO_TELEMETRY_OFF_SIGMA + AUDIO_NUM_BANDS)
+
+#define AUDIO_TELEMETRY_SIZE_METERS (AUDIO_TELEMETRY_OFF_THRESHOLD + AUDIO_NUM_BANDS)
+#define AUDIO_TELEMETRY_SIZE_STATS (AUDIO_TELEMETRY_OFF_BUCKETS)
+#define AUDIO_TELEMETRY_SIZE_SPECTRUM \
+    (AUDIO_TELEMETRY_OFF_BUCKETS + AUDIO_NUM_DISPLAY_BUCKETS)
 
 /* The ATT floor this format is built around: MTU 23 - 3 bytes of notify header. */
 #define AUDIO_TELEMETRY_UNNEGOTIATED_ATT_PAYLOAD 20
@@ -68,13 +93,13 @@
  * independently, so pin the relationship here rather than trusting two hand-maintained
  * lists to agree. Each tier is a prefix of the next, so every size is the previous one
  * plus exactly the fields that tier adds. */
-static_assert(AUDIO_TELEMETRY_SIZE_METERS == 12 + 2 * AUDIO_NUM_BANDS,
-              "meters tier size disagrees with its field layout");
-static_assert(AUDIO_TELEMETRY_SIZE_STATS == AUDIO_TELEMETRY_SIZE_METERS + 2 * AUDIO_NUM_BANDS,
-              "stats tier must be the meters tier plus mean[] and sigma[]");
-static_assert(AUDIO_TELEMETRY_SIZE_SPECTRUM ==
-                  AUDIO_TELEMETRY_SIZE_STATS + AUDIO_NUM_DISPLAY_BUCKETS,
-              "spectrum tier must be the stats tier plus the display buckets");
+/* The sizes are now DERIVED from the offsets, so asserting one against the other would be
+ * tautological. Pin the wire contract instead: these are the numbers an external decoder
+ * hard-codes, and they must not move without a version bump. */
+static_assert(AUDIO_TELEMETRY_SIZE_METERS == 20, "meters tier is a wire constant");
+static_assert(AUDIO_TELEMETRY_SIZE_STATS == 28, "stats tier is a wire constant");
+static_assert(AUDIO_TELEMETRY_SIZE_SPECTRUM == 48, "spectrum tier is a wire constant");
+static_assert(AUDIO_TELEMETRY_OFF_FLUX == 12, "flux offset is a wire constant");
 /* The whole point of the meters tier: it must survive a link that never negotiated an
  * MTU. If this ever fails, the fix is to shrink the tier, not to raise the constant. */
 static_assert(AUDIO_TELEMETRY_SIZE_METERS <= AUDIO_TELEMETRY_UNNEGOTIATED_ATT_PAYLOAD,
@@ -88,7 +113,9 @@ static_assert(AUDIO_TELEMETRY_VERSION <= 0x0F, "version must fit the header's hi
  * units. */
 struct audio_telemetry_frame {
     uint16_t seq;      /* low 16 bits of the analysis frame counter */
-    uint8_t dropped;   /* wrapping count of sends that carried no new frame or failed */
+    /* Wrapping count of ticks the DSP had no new frame for. NOT a transport counter — a
+     * failed notify is invisible to the firmware (notify() returns no status). */
+    uint8_t dropped;
     int8_t gain_steps; /* PDM gain relative to the 0 dB park, in 0.5 dB register steps */
 
     float rms_input_referred; /* smoothed, input-referred - the noise gate's own comparand */
@@ -153,24 +180,20 @@ static inline uint8_t audio_telemetry_q_log(float v) {
 /**
  * @brief Inverse of audio_telemetry_q_log().
  *
- * Deliberately a loop of multiplies rather than powf(): float pow is compiled out
- * firmware-wide (see audio_dsp_gain_amplitude_ratio(), which exists for the same reason).
- * The per-step constants are literally the same numbers, because one quantiser step and
- * one PDM gain register step are both 0.5 dB — that is not a coincidence worth hiding.
+ * Not powf(): float pow is compiled out firmware-wide, which is why
+ * audio_dsp_gain_amplitude_ratio() exists in the form it does.
  */
 static inline float audio_telemetry_dq_log(uint8_t q) {
     if (q == 0) {
         return 0.0f;
     }
-    const float kStepUp = 1.0592537f;   /* 10^(1/40) = 10^0.025 */
-    const float kStepDown = 0.9440609f; /* 10^-0.025 */
-    const int steps = (int)q - 200;
-    const int n = steps > 0 ? steps : -steps;
-    float v = 1.0f;
-    for (int i = 0; i < n; i++) {
-        v *= (steps > 0) ? kStepUp : kStepDown;
-    }
-    return v;
+    /* Delegates to the ladder audio_dsp.h calls "the single authoritative encoding" of
+     * 0.5 dB per step, rather than re-deriving it. One quantiser step and one PDM gain
+     * register step are the same 0.5 dB, so q-200 IS a step count — for q >= 1 this is
+     * bit-for-bit what a local copy of the constants would produce. Acknowledging a
+     * duplication does not prevent it drifting; calling the function does, and a precision
+     * fix there now reaches the meters instead of silently leaving them a few percent off. */
+    return audio_dsp_gain_amplitude_ratio((int)q - 200);
 }
 
 /** @brief Wire size of a tier, or 0 if the tier is not a payload tier. */
@@ -218,7 +241,7 @@ static inline size_t audio_telemetry_pack(const struct audio_telemetry_frame *f,
 
     memset(out, 0, size);
 
-    out[0] = (uint8_t)((AUDIO_TELEMETRY_VERSION << 4) | (tier & 0x0F));
+    out[AUDIO_TELEMETRY_OFF_HEADER] = (uint8_t)((AUDIO_TELEMETRY_VERSION << 4) | (tier & 0x0F));
 
     uint8_t flags = 0;
     if (f->silent)
@@ -230,49 +253,50 @@ static inline size_t audio_telemetry_pack(const struct audio_telemetry_frame *f,
     if (f->threshold_mode)
         flags |= AUDIO_TELEMETRY_FLAG_THRESHOLD_MODE;
     flags |= (uint8_t)((f->beat_mask & 0x0F) << AUDIO_TELEMETRY_BEAT_SHIFT);
-    out[1] = flags;
+    out[AUDIO_TELEMETRY_OFF_FLAGS] = flags;
 
-    out[2] = (uint8_t)(f->seq & 0xFF); /* little-endian, matching every other characteristic */
-    out[3] = (uint8_t)(f->seq >> 8);
-    out[4] = f->dropped;
-    out[5] = (uint8_t)f->gain_steps; /* lossless: the register step IS 0.5 dB */
-    out[6] = audio_telemetry_q_log(f->rms_input_referred);
-    out[7] = audio_telemetry_q_log(f->rms_instant);
-    out[8] = audio_telemetry_q_log(f->peak);
-    out[9] = audio_telemetry_q_log(f->noise_floor);
-    out[10] = f->clip_count;
-    out[11] = f->frames_since_step;
+    /* little-endian, matching every other characteristic on this device */
+    out[AUDIO_TELEMETRY_OFF_SEQ] = (uint8_t)(f->seq & 0xFF);
+    out[AUDIO_TELEMETRY_OFF_SEQ + 1] = (uint8_t)(f->seq >> 8);
+    out[AUDIO_TELEMETRY_OFF_DROPPED] = f->dropped;
+    out[AUDIO_TELEMETRY_OFF_GAIN] = (uint8_t)f->gain_steps; /* lossless: the step IS 0.5 dB */
+    out[AUDIO_TELEMETRY_OFF_RMS_IN] = audio_telemetry_q_log(f->rms_input_referred);
+    out[AUDIO_TELEMETRY_OFF_RMS_INST] = audio_telemetry_q_log(f->rms_instant);
+    out[AUDIO_TELEMETRY_OFF_PEAK] = audio_telemetry_q_log(f->peak);
+    out[AUDIO_TELEMETRY_OFF_NOISE] = audio_telemetry_q_log(f->noise_floor);
+    out[AUDIO_TELEMETRY_OFF_CLIPS] = f->clip_count;
+    out[AUDIO_TELEMETRY_OFF_SINCE_STEP] = f->frames_since_step;
 
     for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
-        out[12 + b] = audio_telemetry_q_log(f->flux[b]);
-        out[16 + b] = audio_telemetry_q_log(f->threshold[b]);
+        out[AUDIO_TELEMETRY_OFF_FLUX + b] = audio_telemetry_q_log(f->flux[b]);
+        out[AUDIO_TELEMETRY_OFF_THRESHOLD + b] = audio_telemetry_q_log(f->threshold[b]);
     }
     if (tier == AUDIO_TELEMETRY_TIER_METERS) {
         return size;
     }
 
     for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
-        out[20 + b] = audio_telemetry_q_log(f->mean[b]);
-        out[24 + b] = audio_telemetry_q_log(f->sigma[b]);
+        out[AUDIO_TELEMETRY_OFF_MEAN + b] = audio_telemetry_q_log(f->mean[b]);
+        out[AUDIO_TELEMETRY_OFF_SIGMA + b] = audio_telemetry_q_log(f->sigma[b]);
     }
     if (tier == AUDIO_TELEMETRY_TIER_STATS) {
         return size;
     }
 
     for (int i = 0; i < AUDIO_NUM_DISPLAY_BUCKETS; i++) {
-        out[28 + i] = audio_telemetry_q_log(f->buckets[i]);
+        out[AUDIO_TELEMETRY_OFF_BUCKETS + i] = audio_telemetry_q_log(f->buckets[i]);
     }
     return size;
 }
 
 /** @brief Version nibble of a packed frame. */
 static inline uint8_t audio_telemetry_packed_version(const uint8_t *buf) {
-    return (uint8_t)(buf[0] >> 4);
+    return (uint8_t)(buf[AUDIO_TELEMETRY_OFF_HEADER] >> 4);
 }
 
 /** @brief Tier nibble of a packed frame — what was ACTUALLY sent, not what was asked for. */
 static inline uint8_t audio_telemetry_packed_tier(const uint8_t *buf) {
-    return (uint8_t)(buf[0] & 0x0F);
+    return (uint8_t)(buf[AUDIO_TELEMETRY_OFF_HEADER] & 0x0F);
 }
 
 /**
@@ -298,41 +322,42 @@ static inline bool audio_telemetry_unpack(const uint8_t *buf, size_t len,
 
     memset(f, 0, sizeof(*f));
 
-    const uint8_t flags = buf[1];
+    const uint8_t flags = buf[AUDIO_TELEMETRY_OFF_FLAGS];
     f->silent = (flags & AUDIO_TELEMETRY_FLAG_SILENT) != 0;
     f->clipped = (flags & AUDIO_TELEMETRY_FLAG_CLIPPED) != 0;
     f->agc_frozen = (flags & AUDIO_TELEMETRY_FLAG_AGC_FROZEN) != 0;
     f->threshold_mode = (flags & AUDIO_TELEMETRY_FLAG_THRESHOLD_MODE) ? 1 : 0;
     f->beat_mask = (uint8_t)((flags >> AUDIO_TELEMETRY_BEAT_SHIFT) & 0x0F);
 
-    f->seq = (uint16_t)(buf[2] | ((uint16_t)buf[3] << 8));
-    f->dropped = buf[4];
-    f->gain_steps = (int8_t)buf[5];
-    f->rms_input_referred = audio_telemetry_dq_log(buf[6]);
-    f->rms_instant = audio_telemetry_dq_log(buf[7]);
-    f->peak = audio_telemetry_dq_log(buf[8]);
-    f->noise_floor = audio_telemetry_dq_log(buf[9]);
-    f->clip_count = buf[10];
-    f->frames_since_step = buf[11];
+    f->seq = (uint16_t)(buf[AUDIO_TELEMETRY_OFF_SEQ] |
+                        ((uint16_t)buf[AUDIO_TELEMETRY_OFF_SEQ + 1] << 8));
+    f->dropped = buf[AUDIO_TELEMETRY_OFF_DROPPED];
+    f->gain_steps = (int8_t)buf[AUDIO_TELEMETRY_OFF_GAIN];
+    f->rms_input_referred = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_RMS_IN]);
+    f->rms_instant = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_RMS_INST]);
+    f->peak = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_PEAK]);
+    f->noise_floor = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_NOISE]);
+    f->clip_count = buf[AUDIO_TELEMETRY_OFF_CLIPS];
+    f->frames_since_step = buf[AUDIO_TELEMETRY_OFF_SINCE_STEP];
 
     for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
-        f->flux[b] = audio_telemetry_dq_log(buf[12 + b]);
-        f->threshold[b] = audio_telemetry_dq_log(buf[16 + b]);
+        f->flux[b] = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_FLUX + b]);
+        f->threshold[b] = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_THRESHOLD + b]);
     }
     if (tier == AUDIO_TELEMETRY_TIER_METERS) {
         return true;
     }
 
     for (int b = 0; b < AUDIO_NUM_BANDS; b++) {
-        f->mean[b] = audio_telemetry_dq_log(buf[20 + b]);
-        f->sigma[b] = audio_telemetry_dq_log(buf[24 + b]);
+        f->mean[b] = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_MEAN + b]);
+        f->sigma[b] = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_SIGMA + b]);
     }
     if (tier == AUDIO_TELEMETRY_TIER_STATS) {
         return true;
     }
 
     for (int i = 0; i < AUDIO_NUM_DISPLAY_BUCKETS; i++) {
-        f->buckets[i] = audio_telemetry_dq_log(buf[28 + i]);
+        f->buckets[i] = audio_telemetry_dq_log(buf[AUDIO_TELEMETRY_OFF_BUCKETS + i]);
     }
     return true;
 }

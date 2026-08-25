@@ -27,6 +27,7 @@
 
 #include "sound/audio_telemetry.h"
 #include "sound/audio_telemetry_codec.h"
+#include "sound/audio_telemetry_control.h"
 
 LOG_MODULE_REGISTER(audio_telemetry_bt, LOG_LEVEL_INF);
 
@@ -65,6 +66,17 @@ struct BtGattNotifyTraits<AudioTelemetryPacked> {
     }
 };
 
+/* The codec's ATT-floor constant and the framework's are two independent derivations of the
+ * same 20 (MTU 23 minus the 3-byte notify header, issue #115). Neither header can include
+ * the other — the codec stays C-compatible and free of BT headers, and the framework's copy
+ * is scoped inside a C++ traits struct — but this file sees both, so tie them here. Without
+ * it, raising one and not the other silently sizes payloads against a floor that no longer
+ * holds, and the failure mode is a dropped notify with no error: exactly what both comments
+ * were written about. */
+static_assert(AUDIO_TELEMETRY_UNNEGOTIATED_ATT_PAYLOAD ==
+                  BtGattNotifyTraits<BtGattDropdownList<32>>::kGuaranteedSafeNotifyLen,
+              "the telemetry codec and bt_gatt_traits.h disagree on the unnegotiated ATT floor");
+
 namespace {
 
 /* Slot 9: 1 = core config, 2 = audio config, 4 = mcuboot updater, 5 = battery,
@@ -80,15 +92,13 @@ BtGattPrimaryService<kAudioTelemetryServiceUuid> audioTelemetryPrimaryService;
  *
  *   [ 7:0]  tier     0 = off, 1 = meters, 2 = +raw stats, 3 = +spectrum
  *   [15:8]  rate_hz  0 => Kconfig default; clamped to [1, kMaxRateHz]
- *   [23:16] hold_s   0 => kDefaultHoldS; clamped to [kMinHoldS, Kconfig max]
+ *   [23:16] hold_s   0 => kDefaultHoldS; clamped to [kMinHoldS, 255] (8-bit field)
  *   [31:24] reserved MUST be zero
+ *
+ * ORDERING: subscribe to Audio Telemetry BEFORE writing a non-zero tier here. Arming an
+ * unsubscribed characteristic is rejected with an ATT error rather than accepted and
+ * silently voided.
  */
-constexpr uint32_t kTierMask = 0x000000FFu;
-constexpr uint32_t kRateShift = 8;
-constexpr uint32_t kHoldShift = 16;
-constexpr uint32_t kReservedMask = 0xFF000000u;
-
-constexpr uint8_t kMaxRateHz = 32; /* the analysis rate itself — asking for more is a lie */
 constexpr uint16_t kMinHoldS = 5;
 
 /* The watchdog is a hard requirement, not polish. A phone that backgrounds, walks out of
@@ -118,12 +128,24 @@ BtGattAutoReadNotifyCharacteristic<"Audio Telemetry", AudioTelemetryPacked, Audi
 BtGattServer audioTelemetryServer(audioTelemetryPrimaryService, telemetryControl, audioTelemetry);
 BT_GATT_SERVER_REGISTER(audioTelemetryServerStatic, audioTelemetryServer);
 
-/* ── Stream state, owned by the workqueue ────────────────────────────────── */
+/* ── Stream state ────────────────────────────────────────────────────────────
+ *
+ * Written from TWO contexts, not one: the tick (system workqueue) and onWriteChecked (BT RX
+ * workqueue). That is safe here only because both are COOPERATIVE on a uniprocessor and
+ * neither blocks inside its critical window — so neither can be preempted mid-update by the
+ * other. That argument, not the absence of a lock, is what makes this correct, and it is
+ * exactly what a future change would invalidate: a preemptible workqueue, an SMP target, or
+ * a blocking call added to either path all break it silently. Add a lock if any of those
+ * change.
+ *
+ * There is deliberately no separate "holding the link" flag. It would have to agree with
+ * s_tier at all times, and two flags that must agree eventually disagree — an early return
+ * added to onWriteChecked that set one without the other would leave the radio pinned with
+ * no stream, or a stream running at SLOW. `s_tier != OFF` IS the condition. */
 
 uint8_t s_tier = AUDIO_TELEMETRY_TIER_OFF;
 uint8_t s_rate_hz = CONFIG_APP_AUDIO_TELEMETRY_DEFAULT_RATE_HZ;
 int64_t s_hold_until_ms;
-bool s_holding_link;
 
 /* Smallest ATT MTU across connected links, or 0 if none.
  *
@@ -148,21 +170,14 @@ uint16_t min_conn_mtu() {
 void telemetry_tick(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(telemetry_work, telemetry_tick);
 
-void release_link_hold() {
-    if (s_holding_link) {
-        bt_conn_stream_hold(false, 0);
-        s_holding_link = false;
-    }
-}
-
 void stop_stream(const char *why) {
     if (s_tier == AUDIO_TELEMETRY_TIER_OFF) {
-        return;
+        return; /* already stopped — and therefore already not holding the link */
     }
     LOG_INF("telemetry stream stopped (%s)", why);
     s_tier = AUDIO_TELEMETRY_TIER_OFF;
     audio_telemetry_set_active(false);
-    release_link_hold();
+    bt_conn_stream_hold(false, 0);
 }
 
 void telemetry_tick(struct k_work *work) {
@@ -181,13 +196,30 @@ void telemetry_tick(struct k_work *work) {
         return;
     }
     if (!audioTelemetry.isSubscribed()) {
+        /* The app unsubscribed (screen blurred, backgrounded). Stop promptly rather than
+         * waiting out the watchdog — this is what stops the radio being held for a
+         * subscriber that no longer exists. An arm-before-subscribe start can no longer
+         * reach this path: onWriteChecked rejects it up front. */
         stop_stream("unsubscribed");
         return;
     }
 
     struct audio_telemetry_frame frame;
-    const bool fresh = audio_telemetry_take(&frame);
-    ARG_UNUSED(fresh); /* a stale repeat is still sent; `dropped` is how the app sees it */
+    if (!audio_telemetry_take(&frame)) {
+        /* The DSP produced nothing since the last tick, so this frame is a repeat. Sending
+         * it would cost up to 40 log10f calls, a TX buffer and up to 51 B of airtime to
+         * deliver data the app must discard — and the framework's bytes-changed guard
+         * cannot suppress it, because take() bumped `dropped` (packed at byte 4), so
+         * consecutive stale frames always differ. The app learns about the gap from
+         * `dropped` on the NEXT fresh frame, which is strictly more useful.
+         *
+         * Rare at the 8 Hz default (needs a DSP stall); systematic at the 32 Hz
+         * calibration rate, where the 31 ms tick period beats the 32 ms production
+         * period by roughly one tick per second. */
+        k_work_reschedule(&telemetry_work,
+                          K_MSEC(1000u / (s_rate_hz > 0 ? s_rate_hz : 1u)));
+        return;
+    }
 
     /* Clamp the tier to what this link can actually carry. bt_gatt_notify() cannot
      * fragment, so an over-length frame is dropped outright — on a stale-GATT link stuck at
@@ -217,66 +249,64 @@ void telemetry_tick(struct k_work *work) {
 }  // namespace
 
 int TelemetryControlCharacteristic::onWriteChecked(const uint32_t &control) {
-    if ((control & kReservedMask) != 0) {
-        /* Refuse rather than ignore: reserved bits are how a future field gets added, and
-         * silently accepting them now would make that field unusable. Per fw/CLAUDE.md,
-         * refusing a write means an ATT error — never "success plus a corrective notify",
-         * which the app's optimistic update would paper over. */
-        LOG_WRN("telemetry control 0x%08x sets reserved bits", control);
-        return -EINVAL;
+    /* Decode/default/clamp lives in audio_telemetry_control.h so it can be tested without
+     * standing up a BT stack — see the ordering note in the control-word comment above for
+     * the one rule this function adds on top. */
+    const struct audio_telemetry_control req = audio_telemetry_control_parse(
+        control, CONFIG_APP_AUDIO_TELEMETRY_DEFAULT_RATE_HZ, kDefaultHoldS, kMinHoldS,
+        CONFIG_APP_AUDIO_TELEMETRY_MAX_HOLD_S);
+
+    if (!req.valid) {
+        /* Refusing a write means an ATT error, never "success plus a corrective notify" —
+         * the app's optimistic update lands after the response and would paper over it
+         * (fw/CLAUDE.md). */
+        LOG_WRN("rejecting telemetry control 0x%08x", control);
+        return req.error;
     }
 
-    const uint8_t tier = (uint8_t)(control & kTierMask);
-    if (tier > AUDIO_TELEMETRY_TIER_MAX) {
-        LOG_WRN("unknown telemetry tier %u", tier);
-        return -EINVAL;
-    }
-
-    if (tier == AUDIO_TELEMETRY_TIER_OFF) {
+    if (req.tier == AUDIO_TELEMETRY_TIER_OFF) {
         stop_stream("app request");
         (void)k_work_cancel_delayable(&telemetry_work);
         return 0;
     }
 
-    uint8_t rate = (uint8_t)((control >> kRateShift) & 0xFF);
-    if (rate == 0) {
-        rate = CONFIG_APP_AUDIO_TELEMETRY_DEFAULT_RATE_HZ;
-    }
-    if (rate > kMaxRateHz) {
-        rate = kMaxRateHz;
-    }
-
-    uint16_t hold_s = (uint16_t)((control >> kHoldShift) & 0xFF);
-    if (hold_s == 0) {
-        hold_s = kDefaultHoldS;
-    }
-    if (hold_s < kMinHoldS) {
-        hold_s = kMinHoldS;
-    }
-    if (hold_s > CONFIG_APP_AUDIO_TELEMETRY_MAX_HOLD_S) {
-        hold_s = CONFIG_APP_AUDIO_TELEMETRY_MAX_HOLD_S;
+    if (!audioTelemetry.isSubscribed()) {
+        /* SUBSCRIBE BEFORE ARMING. Enforced here so the app finds out synchronously, from
+         * its own write, instead of silently getting a stream that never delivers.
+         *
+         * The alternative was worse than a race: ATT transactions serialize on one bearer,
+         * so a central that writes control first CANNOT get its CCCD write in before the
+         * first tick runs — the tick's unsubscribe check would then kill an ACKed stream
+         * deterministically, and cccCfgChanged re-arms nothing, so the late subscription
+         * would land on a dead stream. An app polling the documented hold_s/2 re-arm loop
+         * would recover after ~30 s of blank meters; one waiting for a first frame would
+         * hang forever with no error to act on. */
+        LOG_WRN("telemetry armed before subscribing; rejecting");
+        return -EACCES;
     }
 
     const bool was_off = (s_tier == AUDIO_TELEMETRY_TIER_OFF);
     const uint8_t prev_rate = s_rate_hz;
 
-    s_tier = tier;
-    s_rate_hz = rate;
-    s_hold_until_ms = k_uptime_get() + (int64_t)hold_s * 1000;
+    s_tier = req.tier;
+    s_rate_hz = req.rate_hz;
+    s_hold_until_ms = k_uptime_get() + (int64_t)req.hold_s * 1000;
 
     if (was_off) {
         /* Drop anything left over from a previous session so the first frame the app sees
          * is this session's, not a ghost of the last one. */
         audio_telemetry_reset();
         audio_telemetry_set_active(true);
-        LOG_INF("telemetry stream started: tier %u, %u Hz, hold %u s", tier, rate, hold_s);
+        LOG_INF("telemetry stream started: tier %u, %u Hz, hold %u s", req.tier, req.rate_hz,
+                req.hold_s);
     }
 
-    if (!s_holding_link || rate != prev_rate) {
+    if (was_off || req.rate_hz != prev_rate) {
         /* Edge-driven, never per frame. Re-asserted on a rate change because the governor
-         * picks MEDIUM or FAST from the rate. */
-        bt_conn_stream_hold(true, rate);
-        s_holding_link = true;
+         * picks MEDIUM or FAST from it. `was_off` replaces a separate holding flag: the
+         * hold is asserted exactly when the stream starts and released only by
+         * stop_stream(), so `s_tier != OFF` already answers "are we holding". */
+        bt_conn_stream_hold(true, req.rate_hz);
     }
 
     k_work_reschedule(&telemetry_work, K_NO_WAIT);

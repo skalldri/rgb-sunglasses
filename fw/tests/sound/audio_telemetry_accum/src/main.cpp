@@ -167,17 +167,6 @@ ZTEST(audio_telemetry_accum, test_dropped_counts_sends_that_carried_nothing_new)
     zassert_equal(out.dropped, 2);
 }
 
-ZTEST(audio_telemetry_accum, test_send_failures_are_counted_too) {
-    setup_active();
-
-    struct audio_telemetry_frame out;
-    audio_telemetry_note_send_failure();
-    audio_telemetry_note_send_failure();
-    publish(make_result(1));
-    zassert_true(audio_telemetry_take(&out));
-    zassert_equal(out.dropped, 2, "a notify that failed is a gap the app should see");
-}
-
 /* ── Gating ──────────────────────────────────────────────────────────────── */
 
 ZTEST(audio_telemetry_accum, test_publish_is_a_no_op_while_inactive) {

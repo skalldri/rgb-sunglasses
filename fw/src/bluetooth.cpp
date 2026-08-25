@@ -209,8 +209,13 @@ enum GovEventBit : uint32_t {
     GOV_EVT_DISCONNECTED = BIT(1),
     GOV_EVT_DFU_STARTED = BIT(2),
     GOV_EVT_DFU_STOPPED = BIT(3),
-    GOV_EVT_STREAM_STARTED = BIT(4),
-    GOV_EVT_STREAM_STOPPED = BIT(5),
+    /* ONE bit, not a start/stop pair. Two bits could coalesce into a single batch (both
+     * control writes landing while the sysworkq is stalled), and draining them in a fixed
+     * order would then end in the wrong state — the same failure the CONNECTED/DISCONNECTED
+     * reconstruction below exists to avoid. The requested rate is last-write-wins in
+     * arrival order by construction, so it is the ground truth: nonzero means a stream is
+     * running, zero means it is not. */
+    GOV_EVT_STREAM_CHANGED = BIT(4),
 };
 
 static atomic_t s_gov_pending_events;
@@ -278,6 +283,7 @@ static void gov_apply(const gov::Decision &decision) {
 static void gov_work_handler(struct k_work *work) {
     gov::Inputs in;
     in.now_ms = k_uptime_get();
+    in.stream_rate_hz = (uint8_t)atomic_get(&s_gov_stream_rate_hz);
     K_SPINLOCK(&s_gov_state_lock) {
         in.last_activity_ms = s_gov_last_activity_ms;
     }
@@ -313,15 +319,12 @@ static void gov_work_handler(struct k_work *work) {
     if (events & GOV_EVT_DFU_STOPPED) {
         gov_apply(s_governor.step(gov::Trigger::DFU_STOPPED, in));
     }
-    /* Stop before start: if both coalesced into one batch the stream was restarted, and
-     * ending the batch active is the correct ground truth (same reasoning as the
-     * connect/disconnect reconstruction above). */
-    if (events & GOV_EVT_STREAM_STOPPED) {
-        gov_apply(s_governor.step(gov::Trigger::STREAM_STOPPED, in));
-    }
-    if (events & GOV_EVT_STREAM_STARTED) {
-        s_governor.setStreamRateHz((uint8_t)atomic_get(&s_gov_stream_rate_hz));
-        gov_apply(s_governor.step(gov::Trigger::STREAM_STARTED, in));
+    if (events & GOV_EVT_STREAM_CHANGED) {
+        /* Re-derived from the live rate rather than from which bit(s) were queued, so any
+         * coalescing of writes still ends in the state the last one asked for. */
+        gov_apply(s_governor.step(in.stream_rate_hz != 0 ? gov::Trigger::STREAM_STARTED
+                                                         : gov::Trigger::STREAM_STOPPED,
+                                  in));
     }
     if (events & GOV_EVT_DISCONNECTED) {
         gov_apply(s_governor.step(gov::Trigger::DISCONNECTED, in));
@@ -376,13 +379,12 @@ static struct mgmt_callback s_gov_img_cb = {
 #endif /* CONFIG_MCUMGR_MGMT_NOTIFICATION_HOOKS */
 
 void bt_conn_stream_hold(bool active, uint8_t rate_hz) {
-    if (active) {
-        atomic_set(&s_gov_stream_rate_hz, (atomic_val_t)rate_hz);
-        gov_submit_event(GOV_EVT_STREAM_STARTED);
-    } else {
-        atomic_set(&s_gov_stream_rate_hz, 0);
-        gov_submit_event(GOV_EVT_STREAM_STOPPED);
-    }
+    /* The atomic carries both facts — running, and how fast — so the handler never has to
+     * infer the state from queued bits. A rate of 0 while active would be meaningless, so
+     * it is normalised to 1 rather than silently reading as "stopped". */
+    atomic_set(&s_gov_stream_rate_hz,
+               active ? (atomic_val_t)(rate_hz != 0 ? rate_hz : 1) : (atomic_val_t)0);
+    gov_submit_event(GOV_EVT_STREAM_CHANGED);
 }
 
 void bt_conn_activity_note(void) {

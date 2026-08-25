@@ -138,12 +138,29 @@ class AgcController {
      * setting that gate blind. Tracked even while frozen: it is a measurement, not a
      * control action.
      *
-     * Zero until the first frame has been ingested.
+     * Zero until the smoothing window has filled (kHistoryLen frames, ~1 s).
      */
     float noiseFloor() const { return noise_floor_; }
 
     /** Frames since the last gain step — how settled the AGC currently is. */
     uint32_t framesSinceStep() const { return frames_since_step_; }
+
+    /**
+     * @brief Smoothed RMS normalised back to the 0 dB park — the quantity the noise gate
+     * actually compares, and what a meter should display.
+     *
+     * This is computed once per frame inside update() anyway; exposing it removes three
+     * hand-written copies of `smoothedRms() * audio_dsp_gain_amplitude_ratio(park - gain)`
+     * (this class, the telemetry publish site, and the shell status command — the last of
+     * which spelled the park as a magic 0x28) and one redundant run of the ratio loop per
+     * frame on the DSP thread.
+     *
+     * Safe to read between frames: notifyGainChange() rescales the window by the same
+     * factor the gain moved, so the product is gain-invariant across a step.
+     *
+     * Zero until the first frame has been ingested.
+     */
+    float inputReferredRms() const { return input_referred_; }
 
    private:
     float history_[kHistoryLen] = {};
@@ -153,6 +170,7 @@ class AgcController {
     uint32_t release_run_ = 0;
     uint32_t silent_frames_ = 0;
     uint32_t frames_since_step_ = 0;
+    float input_referred_ = 0.0f;
     float noise_floor_ = 0.0f;
     /* Frames ingested since reset, saturating at kHistoryLen. The noise floor is seeded
      * only once the smoothing window has actually FILLED.

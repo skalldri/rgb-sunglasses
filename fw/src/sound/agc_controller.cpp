@@ -27,6 +27,7 @@ AgcDecision AgcController::update(AgcConfigProvider &cfg, float rms, int16_t pea
      * open, resurrecting the noise-beat failure this gate exists to stop. */
     float input_ref =
         smoothed_ * audio_dsp_gain_amplitude_ratio((int)kGainPark - (int)current_gain);
+    input_referred_ = input_ref;
     /* Asymmetric min-tracker on the input-referred level: instant down, ~5 min up
      * (1e-4 per frame at 31.25 fps is a ~320 s time constant). Down-fast is what makes it
      * a FLOOR rather than an average — one quiet moment is evidence about the room, one
@@ -123,6 +124,15 @@ void AgcController::notifyGainChange(int steps) {
             history_[i] = 0.0f;
         }
         smoothed_ = 0.0f;
+        /* The noise floor has to un-seed with the window it was measured from. Leaving
+         * frames_ingested_ saturated here would let the very next update() take a floor
+         * reading over 31 zeros and one real frame — about 1/32 of the truth — and because
+         * the tracker only ever snaps DOWN instantly, it would then need its full ~5 minute
+         * rise (≈12 minutes to within 10%) to climb back. reset() already clears these two
+         * for exactly this reason; this path simply predates the tracker. */
+        noise_floor_ = 0.0f;
+        input_referred_ = 0.0f;
+        frames_ingested_ = 0;
         return;
     }
     float amp = audio_dsp_gain_amplitude_ratio(steps);
@@ -143,5 +153,6 @@ void AgcController::reset() {
     silent_frames_ = 0;
     frames_since_step_ = 0;
     noise_floor_ = 0.0f;
+    input_referred_ = 0.0f;
     frames_ingested_ = 0;
 }

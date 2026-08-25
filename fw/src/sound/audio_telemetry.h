@@ -57,9 +57,13 @@ void audio_telemetry_publish(const struct audio_analysis_result *result, float r
 /**
  * @brief Take and clear the pending snapshot.
  *
- * @return true if a new frame has arrived since the last take. When false, `out` still holds
- *         the last known state and `dropped` has been incremented — a consumer that sends
- *         anyway is reporting stale data, and the dropped counter is how the app can tell.
+ * @return true if a new analysis frame arrived since the last take. When false, `out` still
+ *         holds the last known state and `dropped` has been incremented.
+ *
+ * `dropped` counts exactly one thing: TICKS THE DSP HAD NO NEW FRAME FOR. It is not a
+ * transport counter — a notify that fails (TX pool exhausted, or the brief unencrypted
+ * window during pairing) is invisible here, because the framework's notify() returns no
+ * status to observe. Do not document or read it as "frames the app did not receive".
  */
 bool audio_telemetry_take(struct audio_telemetry_frame *out);
 
@@ -71,9 +75,6 @@ bool audio_telemetry_is_active(void);
 
 /** @brief Drop all pending state (on stream start, so the first frame is not ancient). */
 void audio_telemetry_reset(void);
-
-/** @brief Note that a send failed, so the app sees the gap. */
-void audio_telemetry_note_send_failure(void);
 
 #ifdef __cplusplus
 }

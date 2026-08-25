@@ -125,7 +125,8 @@ config APP_AUDIO_TELEMETRY_DEFAULT_RATE_HZ
 
 config APP_AUDIO_TELEMETRY_MAX_HOLD_S
 	int "Maximum telemetry watchdog hold, in seconds"
-	default 300
+	default 255
+	range 5 255
 	depends on APP_AUDIO_TELEMETRY
 	help
 	  Upper bound on how long a single control write can keep the stream
@@ -133,6 +134,11 @@ config APP_AUDIO_TELEMETRY_MAX_HOLD_S
 	  that backgrounded, walked out of range, or went into a pocket from
 	  leaving the device notifying into a void and holding the connection
 	  interval up until the battery dies.
+
+	  Capped at 255 because the control word's hold field is 8 bits wide
+	  (see kHoldShift in audio_telemetry_service.cpp). A larger value here
+	  would be unreachable: the app cannot encode it, and a naive attempt
+	  spills into the reserved bits and is rejected outright.
 
 config APP_CAPTURE
 	bool "Background audio + IMU capture worker"

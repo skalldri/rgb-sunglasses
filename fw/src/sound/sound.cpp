@@ -700,13 +700,15 @@ void audio_dsp_thread_func(void *a, void *b, void *c) {
          * beats would show the user a detector firing merrily while their glasses sat
          * dark, which is the exact confusion this screen exists to end.
          *
-         * Cheap when nobody is streaming: one atomic read and return. */
-        {
+         * The is_active() gate belongs HERE, not only inside publish(): every argument
+         * below costs real work on a thread with a 32 ms deadline — three virtual config
+         * getters with clamps, and formerly a second run of the 40-iteration gain-ratio
+         * loop. Paying that every frame forever on a device nobody is streaming from is
+         * precisely what "cheap when idle" promised not to do. Idle now costs one atomic
+         * read and nothing else. */
+        if (audio_telemetry_is_active()) {
             AudioDspConfigProvider *dsp_cfg = audio_dsp_get_config_provider();
-            const float input_ref =
-                s_agc_controller.smoothedRms() *
-                audio_dsp_gain_amplitude_ratio((int)AgcController::kGainPark - (int)s_agc_gain);
-            audio_telemetry_publish(&result, input_ref, s_latest_rms,
+            audio_telemetry_publish(&result, s_agc_controller.inputReferredRms(), s_latest_rms,
                                     (float)s_latest_peak / 32768.0f, s_agc_controller.noiseFloor(),
                                     (int8_t)((int)s_agc_gain - (int)AgcController::kGainPark),
                                     s_agc_controller.framesSinceStep(), s_agc_silent, agc.clipped,
@@ -2535,8 +2537,7 @@ static int cmd_sound_agc_status(const struct shell *shell, size_t argc, char **a
     /* The gate operates on the INPUT-REFERRED level (smoothed RMS normalized to
      * 0 dB gain) — print that value too so operators tune against the number
      * the controller actually compares, not the output-domain smoothed RMS. */
-    float input_ref = s_agc_controller.smoothedRms() *
-                      audio_dsp_gain_amplitude_ratio((int)0x28 - (int)s_agc_gain);
+    float input_ref = s_agc_controller.inputReferredRms();
     char b3[16];
     shell_print(shell, "  Attack: %u frames | Release: %u frames | Gate: %s input-referred "
                        "(now %s) -> %s",
