@@ -48,9 +48,17 @@ uint8_t s_clip_count; /* wrapping; clip events since reset */
  * floored.
  *
  * Resolved here — once, on the device that owns the algorithm — so the app can plot one
- * honest line without knowing which mode produced it, and without re-deriving a formula
- * that would silently drift from audio_dsp.cpp. Runs at take() time, on the workqueue,
- * because the DSP thread has no business doing arithmetic it does not need. */
+ * honest line without knowing which mode produced it. Runs at take() time, on the workqueue,
+ * because the DSP thread has no business doing arithmetic it does not need.
+ *
+ * MUST TRACK audio_dsp.cpp's beat test (the `threshold` computed either side of the mode
+ * branch, and the floor applied at step 4d). This duplicates that formula instead of reading
+ * an exported band_threshold[] because the export would cost ~96 B of always-on RAM across
+ * the result queue and audio_dsp.h:95-97 freezes the struct layout for the msgq/tap/extension
+ * ABI. That trade is only safe while both sides are edited together — audio_dsp.cpp carries
+ * the matching pointer back here. Note `alpha` arrives via publish() rather than from the
+ * result, which is a second drift surface: it must be the same value the detector used for
+ * THIS frame, not the current config. */
 float resolve_threshold(float mean, float sigma, uint32_t mode, float alpha, float floor_v) {
     /* Mode 1 stores the already-resolved threshold in the sigma slot; mode 0 stores raw
      * mean/stddev and the fire test is mean + alpha*sigma. The two slots are deliberately
