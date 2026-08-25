@@ -84,8 +84,15 @@ function BandRow({
 }) {
   const telemetry = useAudioTelemetry();
 
+  /* Capture the SHARED VALUE, never the context. A worklet closes over its whole reference
+   * graph, and the context also holds the ring-buffer ref — which Reanimated then FREEZES,
+   * so pushTelemetryBytes' `ring.count++` is silently refused and no frame ever lands. That
+   * is not a crash: the stream runs, the device says "streaming", and the app sits on
+   * NO SIGNAL forever. Hardware-found 2026-08-25. */
+  const ratioValue = telemetry?.shared.bandRatio[band];
+
   const fillStyle = useAnimatedStyle(() => {
-    const r = telemetry ? telemetry.shared.bandRatio[band].value : 0;
+    const r = ratioValue ? ratioValue.value : 0;
     const pct = Math.min(r / RATIO_MAX, 1) * 100;
     return { width: `${pct}%` };
   });

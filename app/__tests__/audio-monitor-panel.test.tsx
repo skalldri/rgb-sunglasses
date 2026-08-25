@@ -1,0 +1,117 @@
+/**
+ * Tests for the monitor panel's degraded states.
+ *
+ * These are the branches that tell the user something about their CONNECTION rather than
+ * their audio, so a wrong one sends them off to fix a problem they do not have. Hardware-found
+ * 2026-08-25: before any frame arrived the panel claimed the link was running at its smallest
+ * packet size, when in truth nothing had been decoded at all.
+ */
+
+import { render } from "@testing-library/react-native";
+import React from "react";
+
+const focusState = { focused: true };
+jest.mock("expo-router", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- mock factories cannot close over imports
+  const ReactActual = require("react");
+  return {
+    useFocusEffect: (cb: () => void | (() => void)) => {
+      ReactActual.useEffect(
+        () => (focusState.focused ? cb() : undefined),
+        [cb],
+      );
+    },
+  };
+});
+
+import { MonitorPanel } from "@/components/audio/monitor-panel";
+import * as TelemetryContext from "@/context/audio-telemetry-context";
+import {
+  EMPTY_SUMMARY,
+  TELEMETRY_TIER_METERS,
+  TELEMETRY_TIER_SPECTRUM,
+  createTelemetryRing,
+  type TelemetrySummary,
+} from "@/services/audio-telemetry";
+
+function mockTelemetry(
+  summary: TelemetrySummary,
+  status: TelemetryContext.TelemetryStatus,
+) {
+  const ring = { current: createTelemetryRing(8) };
+  jest
+    .spyOn(TelemetryContext, "useAudioTelemetrySummary")
+    .mockReturnValue(summary);
+  jest
+    .spyOn(TelemetryContext, "useAudioTelemetryStatus")
+    .mockReturnValue(status);
+  jest.spyOn(TelemetryContext, "useAudioTelemetry").mockReturnValue({
+    ring,
+    shared: {
+      rmsInputDb: { value: -40 },
+      peakDb: { value: -12 },
+      noiseFloorDb: { value: -64 },
+      gainDb: { value: 6 },
+      bandRatio: [0, 1, 2, 3].map(() => ({ value: 0.5 })),
+      buckets: Array.from({ length: 20 }, () => ({ value: 0.3 })),
+      beatTick: { value: 0 },
+      beatBand: { value: 0 },
+      liveness: { value: 1 },
+    },
+    subscribeSummary: () => () => {},
+    getSummarySnapshot: () => summary,
+    getStatus: () => status,
+    subscribeStatus: () => () => {},
+    requestStream: jest.fn(),
+  } as unknown as TelemetryContext.AudioTelemetryContextValue);
+}
+
+const PROPS = { targetLow: 0.002, targetHigh: 0.05, noiseGate: 0.0006 };
+
+describe("MonitorPanel spectrum states", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it("does not blame the link before any frame has arrived", () => {
+    // The bug: tier is OFF until the first frame decodes, which is NOT the same as "this link
+    // cannot carry a spectrum". Claiming a degraded link here sends someone to re-pair a
+    // connection that is perfectly fine.
+    mockTelemetry(EMPTY_SUMMARY, "starting");
+    const { queryByTestId } = render(<MonitorPanel {...PROPS} />);
+    expect(queryByTestId("audio-monitor-no-spectrum")).toBeNull();
+    expect(queryByTestId("spectrum-bars")).not.toBeNull();
+  });
+
+  it("blames the link only when frames ARE arriving at a lower tier", () => {
+    // This is the real MTU-23 case: the firmware clamped the tier it could send, and the app
+    // should say so and point at re-pairing.
+    mockTelemetry(
+      { ...EMPTY_SUMMARY, frames: 40, live: true, tier: TELEMETRY_TIER_METERS },
+      "streaming",
+    );
+    const { getByTestId } = render(<MonitorPanel {...PROPS} />);
+    expect(getByTestId("audio-monitor-no-spectrum").props.children).toContain(
+      "smallest packet size",
+    );
+  });
+
+  it("shows the spectrum when the full tier is arriving", () => {
+    mockTelemetry(
+      {
+        ...EMPTY_SUMMARY,
+        frames: 40,
+        live: true,
+        tier: TELEMETRY_TIER_SPECTRUM,
+      },
+      "streaming",
+    );
+    const { queryByTestId } = render(<MonitorPanel {...PROPS} />);
+    expect(queryByTestId("audio-monitor-no-spectrum")).toBeNull();
+    expect(queryByTestId("spectrum-bars")).not.toBeNull();
+  });
+
+  it("tells the user to update firmware when the service is absent", () => {
+    mockTelemetry(EMPTY_SUMMARY, "unsupported");
+    const { getByTestId } = render(<MonitorPanel {...PROPS} />);
+    expect(getByTestId("audio-monitor-unsupported")).not.toBeNull();
+  });
+});

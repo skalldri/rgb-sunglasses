@@ -58,8 +58,10 @@ function Bucket({
   track: string;
 }) {
   const telemetry = useAudioTelemetry();
+  /* Shared value only — see band-headroom-bars.tsx for what capturing the context costs. */
+  const bucketValue = telemetry?.shared.buckets[index];
   const style = useAnimatedStyle(() => {
-    const v = telemetry ? telemetry.shared.buckets[index].value : 0;
+    const v = bucketValue ? bucketValue.value : 0;
     return { height: `${Math.max(2, Math.min(v, 1) * 100)}%` };
   });
   return (

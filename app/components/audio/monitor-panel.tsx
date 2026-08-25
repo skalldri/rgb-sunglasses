@@ -90,7 +90,14 @@ export const MonitorPanel = memo(function MonitorPanel({
   }
 
   const live = summary.live;
-  const hasSpectrum = summary.tier >= TELEMETRY_TIER_SPECTRUM;
+  /* Three states, not two. Before any frame arrives the tier is OFF, which is NOT the same as
+   * "this link cannot carry a spectrum" — claiming a degraded link while simply waiting for
+   * the first frame sends someone off to re-pair a connection that is fine. Hardware-found
+   * 2026-08-25: the panel accused the link of running at its smallest packet size while the
+   * real problem was that no frame had been decoded at all. */
+  const haveFrames = summary.frames > 0;
+  const spectrumDowngraded =
+    haveFrames && summary.tier < TELEMETRY_TIER_SPECTRUM;
 
   return (
     <View
@@ -126,9 +133,7 @@ export const MonitorPanel = memo(function MonitorPanel({
         </View>
       </View>
 
-      {hasSpectrum ? (
-        <SpectrumBars live={live} />
-      ) : (
+      {spectrumDowngraded ? (
         <ThemedText
           type="caption"
           style={{ color: colors.textMuted }}
@@ -137,6 +142,8 @@ export const MonitorPanel = memo(function MonitorPanel({
           Spectrum unavailable on this link — the connection is running at its
           smallest packet size. Re-pairing usually fixes it.
         </ThemedText>
+      ) : (
+        <SpectrumBars live={live && haveFrames} />
       )}
 
       <InputLevelMeter

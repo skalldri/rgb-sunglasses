@@ -25,7 +25,17 @@ import { TELEMETRY_DB_FLOOR, magnitudeToDb } from "@/services/audio-telemetry";
 const METER_MIN_DB = -80;
 const METER_MAX_DB = 0;
 
+/**
+ * Position along the meter track, 0-100.
+ *
+ * MUST be a worklet: it is called from useAnimatedStyle, which runs on the UI thread, and
+ * Reanimated throws "tried to synchronously call a non-worklet function" otherwise. Jest
+ * cannot catch this — react-native-reanimated is mocked in the test environment, so the
+ * animated-style callback runs as ordinary JS and a missing directive is invisible.
+ * Hardware-found, 2026-08-25.
+ */
 function pctFromDb(db: number): number {
+  'worklet';
   const clamped =
     db < METER_MIN_DB ? METER_MIN_DB : db > METER_MAX_DB ? METER_MAX_DB : db;
   return ((clamped - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB)) * 100;
@@ -58,15 +68,20 @@ export const InputLevelMeter = memo(function InputLevelMeter({
   const colors = useThemeColors();
   const telemetry = useAudioTelemetry();
 
+  /* Capture the SHARED VALUES, not the context object. A worklet closes over everything it
+   * references, and the context also holds a React ref and several plain callbacks — none of
+   * which belong on the UI thread. Pulling them out here keeps the closure to two shared
+   * values. */
+  const rmsInput = telemetry?.shared.rmsInputDb;
+  const peak = telemetry?.shared.peakDb;
+
   const fillStyle = useAnimatedStyle(() => {
-    const db = telemetry
-      ? telemetry.shared.rmsInputDb.value
-      : TELEMETRY_DB_FLOOR;
+    const db = rmsInput ? rmsInput.value : TELEMETRY_DB_FLOOR;
     return { width: `${pctFromDb(db)}%` };
   });
 
   const peakStyle = useAnimatedStyle(() => {
-    const db = telemetry ? telemetry.shared.peakDb.value : TELEMETRY_DB_FLOOR;
+    const db = peak ? peak.value : TELEMETRY_DB_FLOOR;
     return { left: `${pctFromDb(db)}%` };
   });
 

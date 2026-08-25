@@ -14,6 +14,7 @@ export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0006-56789abc0000": "Power Debug",
     "12345678-1234-5678-0007-56789abc0000": "Shuffle",
     "12345678-1234-5678-0008-56789abc0000": "Capture",
+    "12345678-1234-5678-0009-56789abc0000": "Audio Telemetry",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
