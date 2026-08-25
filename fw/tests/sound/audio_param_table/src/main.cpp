@@ -103,7 +103,8 @@ ZTEST(audio_param_table, test_types_match_history) {
 /* ── Structural invariants (also static_asserted; pinned here for the record) ─ */
 
 ZTEST(audio_param_table, test_structural_invariants) {
-    zassert_true(audioParamTableSelfCheck(), "table self-check failed");
+    zassert_true(audioParamTableSelfCheck(kAudioParams, kAudioParamCount),
+                 "table self-check failed");
 
     for (size_t i = 0; i < kAudioParamCount; i++) {
         const AudioParamSpec &p = kAudioParams[i];
@@ -246,6 +247,95 @@ ZTEST(audio_param_table, test_frame_period) {
     zassert_equal(kAudioParamFrameMs, 32u,
                   "frame period changed — every *Frames default and the app's ms conversion "
                   "must be revisited together");
+}
+
+/* ── The self-check is not vacuous ───────────────────────────────────────── */
+/*
+ * The static_assert in the header proves the check PASSES for the real table. It says
+ * nothing about whether the check would FAIL for a bad one — and a validator nobody has
+ * watched reject something is indistinguishable from `return true`. These feed it
+ * deliberately-malformed tables, one broken invariant at a time.
+ */
+
+namespace {
+
+/* A minimal valid table to mutate. Two entries, so the duplicate checks have something to
+ * compare. */
+constexpr AudioParamSpec kGoodPair[2] = {
+    {"audio/a", "A", AudioParamType::F32, 0.5f, 0.0f, 1.0f, 0.1f, "", nullptr},
+    {"audio/b", "B", AudioParamType::U32, 5.0f, 0.0f, 10.0f, 1.0f, "frames", nullptr},
+};
+
+/* Copy the good pair, apply one mutation, and report whether the check rejects it. */
+template <typename Mutate>
+bool rejects(Mutate mutate) {
+    AudioParamSpec t[2] = {kGoodPair[0], kGoodPair[1]};
+    mutate(t);
+    return !audioParamTableSelfCheck(t, 2);
+}
+
+}  // namespace
+
+ZTEST(audio_param_table, test_self_check_accepts_a_valid_table) {
+    /* The control: without this, every rejection test below could pass for the wrong
+     * reason (a check that rejects everything). */
+    zassert_true(audioParamTableSelfCheck(kGoodPair, 2));
+    zassert_true(audioParamTableSelfCheck(kAudioParams, kAudioParamCount));
+}
+
+ZTEST(audio_param_table, test_self_check_rejects_missing_identifiers) {
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].key = nullptr; }), "null key");
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].key = ""; }), "empty key");
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].label = nullptr; }), "null label");
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].label = ""; }), "empty label");
+    /* Dimensionless is "", never nullptr — the app formats this string directly. */
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].unit = nullptr; }), "null unit");
+}
+
+ZTEST(audio_param_table, test_self_check_rejects_a_default_outside_its_own_range) {
+    /* The failure that would actually reach a device: a virgin board booting on a value
+     * its own getter immediately clamps and rewrites. */
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].def = 2.0f; }), "above max");
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].def = -1.0f; }), "below min");
+}
+
+ZTEST(audio_param_table, test_self_check_rejects_a_useless_step) {
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].step = 0.0f; }), "zero step");
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].step = -0.1f; }), "negative step");
+    /* A step wider than the range gives a slider exactly one reachable position. */
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].step = 99.0f; }), "step exceeds range");
+}
+
+ZTEST(audio_param_table, test_self_check_rejects_mismatched_enum_labels) {
+    /* Labels present iff the type is ENUM — either direction is a bug: an ENUM without
+     * them renders as a raw number, and a non-ENUM with them implies a picker that the
+     * app will not draw. */
+    zassert_true(rejects([](AudioParamSpec *t) { t[0].enumLabels = "x\ny"; }),
+                 "labels on a non-enum");
+    zassert_true(rejects([](AudioParamSpec *t) { t[1].type = AudioParamType::ENUM; }),
+                 "enum with no labels");
+}
+
+ZTEST(audio_param_table, test_self_check_rejects_integer_bounds_that_do_not_survive_the_cast) {
+    /* Integer parameters are stored as float and cast on access. A bound that does not
+     * round-trip would make audioParamClampU() clamp to a different number than the table
+     * advertises — the app would draw one range and the device would enforce another. */
+    zassert_true(rejects([](AudioParamSpec *t) { t[1].min = -1.0f; }), "negative integer min");
+    zassert_true(rejects([](AudioParamSpec *t) { t[1].max = 10.5f; }), "fractional integer max");
+    zassert_true(rejects([](AudioParamSpec *t) { t[1].def = 5.5f; }), "fractional integer default");
+}
+
+ZTEST(audio_param_table, test_self_check_rejects_duplicates) {
+    /* A duplicate settings key silently collides two parameters in NVS; a duplicate CUD
+     * label makes them indistinguishable in the app. */
+    zassert_true(rejects([](AudioParamSpec *t) { t[1].key = "audio/a"; }), "duplicate key");
+    zassert_true(rejects([](AudioParamSpec *t) { t[1].label = "A"; }), "duplicate label");
+}
+
+ZTEST(audio_param_table, test_self_check_handles_degenerate_sizes) {
+    /* An empty table is vacuously valid; a single entry cannot have a duplicate. */
+    zassert_true(audioParamTableSelfCheck(kGoodPair, 0));
+    zassert_true(audioParamTableSelfCheck(kGoodPair, 1));
 }
 
 ZTEST(audio_param_table, test_str_eq_helper) {

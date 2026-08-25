@@ -315,11 +315,17 @@ constexpr uint32_t audioParamDefaultU() {
  * malformed entry cannot reach a device. Range VALUES are pinned separately, by
  * fw/tests/sound/audio_param_table, against the literals that were in the four
  * hand-written copies before this table replaced them.
+ *
+ * It takes the table as a PARAMETER rather than reading kAudioParams directly, so the
+ * test suite can feed it deliberately-malformed tables. Without that, the static_assert
+ * below proves only that the check passes for the real table — never that it would FAIL
+ * for a bad one, which is the property that actually matters. A self-check nobody has
+ * watched reject something is indistinguishable from `return true`.
  * ------------------------------------------------------------------------- */
 
-constexpr bool audioParamTableSelfCheck() {
-    for (size_t i = 0; i < kAudioParamCount; ++i) {
-        const AudioParamSpec &p = kAudioParams[i];
+constexpr bool audioParamTableSelfCheck(const AudioParamSpec *params, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        const AudioParamSpec &p = params[i];
 
         if (p.key == nullptr || p.key[0] == '\0') {
             return false;
@@ -363,10 +369,10 @@ constexpr bool audioParamTableSelfCheck() {
     /* Settings keys and CUD labels are both externally visible identifiers; a
      * duplicate in either would make two characteristics collide in NVS or be
      * indistinguishable in the app. */
-    for (size_t i = 0; i < kAudioParamCount; ++i) {
-        for (size_t j = i + 1; j < kAudioParamCount; ++j) {
-            const char *a = kAudioParams[i].key;
-            const char *b = kAudioParams[j].key;
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = i + 1; j < count; ++j) {
+            const char *a = params[i].key;
+            const char *b = params[j].key;
             size_t k = 0;
             while (a[k] != '\0' && a[k] == b[k]) {
                 ++k;
@@ -375,8 +381,8 @@ constexpr bool audioParamTableSelfCheck() {
                 return false;
             }
 
-            a = kAudioParams[i].label;
-            b = kAudioParams[j].label;
+            a = params[i].label;
+            b = params[j].label;
             k = 0;
             while (a[k] != '\0' && a[k] == b[k]) {
                 ++k;
@@ -390,4 +396,5 @@ constexpr bool audioParamTableSelfCheck() {
     return true;
 }
 
-static_assert(audioParamTableSelfCheck(), "kAudioParams failed its structural self-check");
+static_assert(audioParamTableSelfCheck(kAudioParams, kAudioParamCount),
+              "kAudioParams failed its structural self-check");
