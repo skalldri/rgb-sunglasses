@@ -4,6 +4,9 @@
 #include <sound/audio_param_table.h>
 #include <zephyr/logging/log.h>
 
+#include <tuple>
+#include <utility>
+
 LOG_MODULE_REGISTER(audio_config, LOG_LEVEL_INF);
 
 constexpr bt_uuid_128 kAudioConfigServiceUuid = BT_UUID_INIT_128(
@@ -102,10 +105,13 @@ BT_GATT_SERVER_REGISTER(audioConfigServerStatic, audioConfigServer);
  * key would move a parameter's NVS storage without moving its metadata, and a mismatched
  * label would mislabel it in the companion app.
  *
- * DECLARATION ORDER above is equally load-bearing and equally unguarded by the compiler:
- * BtGattServer assigns characteristic UUIDs positionally, so the Nth argument to
- * BtGattServer must be the Nth entry in kAudioParams. fw/tests/sound/audio_param_table
- * pins that order. */
+ * DECLARATION ORDER is separately load-bearing: BtGattServer assigns characteristic UUIDs
+ * positionally, so the Nth argument to the BtGattServer(...) call above must be the Nth entry
+ * in kAudioParams, and transposing two of those arguments would silently renumber every
+ * characteristic after them — breaking the cached handle->meaning mapping on every bonded
+ * phone. The per-name assertions below do NOT catch that (each variable's own key and label
+ * still match its own index after a transposition), so the argument order is pinned separately
+ * by audioServerOrderMatches<> further down. */
 static_assert(audioParamStrEq(kAudioParams[kAudioParamFluxGamma].key, "audio/flux_gamma"));
 static_assert(audioParamStrEq(kAudioParams[kAudioParamFluxGamma].label, "Flux Gamma"));
 static_assert(audioParamStrEq(kAudioParams[kAudioParamBeatFluxFloor].key, "audio/beat_flux_floor"));
@@ -157,6 +163,40 @@ static_assert(static_cast<uint32_t>(kAudioParams[kAudioParamThresholdMode].max) 
 /* The *Frames parameters are only meaningful against the analysis frame period. */
 static_assert(kAudioParamFrameMs == BLOCK_CAPTURE_TIME_MS,
               "audio_param_table.h frame period has drifted from sound.h");
+
+/* Pins the BtGattServer(...) ARGUMENT ORDER to kAudioParams, which the per-name assertions
+ * above cannot do.
+ *
+ * BtGattServer is variadic over its providers and every characteristic type carries a static
+ * constexpr getDescription() (bt_service_cpp.h), so the Nth provider's description can be
+ * compared against the Nth table label at compile time. Provider 0 is the primary-service
+ * declaration, hence the +1: characteristic index I is provider index I + 1.
+ *
+ * Transposing two arguments in the constructor call changes which type lands at a given
+ * provider index, so its description stops matching and this fails to build. That is the whole
+ * point — the alternative is discovering it as a field bug on already-bonded phones. */
+template <size_t I, typename Server>
+struct AudioServerProviderAt;
+
+template <size_t I, BtGattAttributeProvider... Providers>
+struct AudioServerProviderAt<I, BtGattServer<Providers...>> {
+    using type = std::tuple_element_t<I, std::tuple<Providers...>>;
+};
+
+template <size_t I>
+constexpr bool audioServerOrderMatches() {
+    using Provider = typename AudioServerProviderAt<I + 1, decltype(audioConfigServer)>::type;
+    return audioParamStrEq(Provider::getDescription(), kAudioParams[I].label);
+}
+
+template <size_t... Is>
+constexpr bool audioServerOrderMatchesAll(std::index_sequence<Is...>) {
+    return (audioServerOrderMatches<Is>() && ...);
+}
+
+static_assert(audioServerOrderMatchesAll(std::make_index_sequence<kAudioParamCount>{}),
+              "BtGattServer argument order has drifted from kAudioParams order — this would "
+              "renumber characteristic UUIDs and break every bonded app");
 
 // Each getter clamps to a sane range and writes the clamped value back, mirroring
 // CoreConfig::getBrightnessFactor() (fw/src/core_config.cpp) exactly.
@@ -405,4 +445,36 @@ float AudioConfig::getEnergyScale() const {
 void audio_dsp_bind_default_bt_dependencies() {
     audio_dsp_set_config_provider(&AudioConfig::getInstance());
     sound_set_agc_config_provider(&AudioConfig::getInstance());
+
+    /* Read every parameter once so a persisted out-of-range or non-finite value is corrected
+     * NOW rather than whenever its consumer happens to run.
+     *
+     * The getters clamp on read and write the clamped value back, which is the migration
+     * mechanism — but that only fires when something calls them. Twelve of these are read by
+     * the DSP thread every 32 ms frame, so they self-heal almost immediately. The two FFT
+     * parameters are read ONLY by FftBarsAnimation::tick(), i.e. only while that one animation
+     * is selected, so without this a bad persisted value for them would survive indefinitely
+     * (and be re-flushed to NVS by the settings debounce) on a device running any other
+     * animation. Cheap insurance: one read each, once, at bind time.
+     *
+     * This does NOT close the write-side window — a remote write still lands in storage_
+     * unvalidated and reads back verbatim until the next getter call, because
+     * BtGattPersistentCharacteristic uses the plain onWrite hook and the framework forbids
+     * defining both onWrite and onWriteChecked on one type. Rejecting non-finite writes at the
+     * ATT boundary needs that framework change and is deliberately out of scope here. */
+    AudioConfig &cfg = AudioConfig::getInstance();
+    (void)cfg.getFluxGamma();
+    (void)cfg.getBeatFluxFloor();
+    (void)cfg.getBeatAlpha();
+    (void)cfg.getBeatRefractoryFrames();
+    (void)cfg.getSfDelta();
+    (void)cfg.getThresholdMode();
+    (void)cfg.getTargetLow();
+    (void)cfg.getTargetHigh();
+    (void)cfg.getRateLimitFrames();
+    (void)cfg.getAttackFrames();
+    (void)cfg.getReleaseFrames();
+    (void)cfg.getNoiseGateRms();
+    (void)cfg.getSmoothingCoeff();
+    (void)cfg.getEnergyScale();
 }
