@@ -1,0 +1,543 @@
+import {
+  FRAME_MS,
+  GATE_MUSIC_MARGIN,
+  GATE_ROOM_MARGIN,
+  MAX_TAP_IRREGULARITY,
+  MIN_MUSIC_FRAMES,
+  MIN_ROOM_FRAMES,
+  MIN_TAPS,
+  MIN_TARGET_RATIO,
+  ROOM_TOO_LOUD_RMS,
+  TAP_MATCH_MS,
+  analyzeMusic,
+  analyzeRoom,
+  assessTaps,
+  classifyTempo,
+  matchTaps,
+  median,
+  percentile,
+  reconcileGate,
+  replayBeats,
+  sweepSensitivity,
+  type CalibrationWindow,
+} from "@/services/audio-calibration";
+import { AUDIO_NUM_BANDS } from "@/services/audio-telemetry";
+
+/** Build a window with per-frame control over the fields a given step reads. */
+function makeWindow(opts: {
+  frames: number;
+  rmsInput?: (f: number) => number;
+  flux?: (f: number, b: number) => number;
+  mean?: (f: number, b: number) => number;
+  sigma?: (f: number, b: number) => number;
+  clipped?: (f: number) => boolean;
+  thresholdMode?: 0 | 1;
+  hasStats?: boolean;
+  stepMs?: number;
+}): CalibrationWindow {
+  const stepMs = opts.stepMs ?? FRAME_MS;
+  const timeMs: number[] = [];
+  const rmsInput: number[] = [];
+  const clipped: boolean[] = [];
+  const beat: boolean[] = [];
+  const flux: number[] = [];
+  const mean: number[] = [];
+  const sigma: number[] = [];
+  for (let f = 0; f < opts.frames; f++) {
+    timeMs.push(f * stepMs);
+    rmsInput.push(opts.rmsInput?.(f) ?? 0.0005);
+    clipped.push(opts.clipped?.(f) ?? false);
+    beat.push(false);
+    for (let b = 0; b < AUDIO_NUM_BANDS; b++) {
+      flux.push(opts.flux?.(f, b) ?? 0);
+      mean.push(opts.mean?.(f, b) ?? 0);
+      sigma.push(opts.sigma?.(f, b) ?? 0);
+    }
+  }
+  return {
+    frames: opts.frames,
+    timeMs,
+    rmsInput,
+    clipped,
+    beat,
+    flux,
+    mean,
+    sigma,
+    thresholdMode: opts.thresholdMode ?? 0,
+    hasStats: opts.hasStats ?? true,
+  };
+}
+
+describe("percentile", () => {
+  it("interpolates between samples", () => {
+    expect(percentile([0, 10], 0.5)).toBeCloseTo(5, 9);
+    expect(percentile([0, 10, 20, 30], 0.5)).toBeCloseTo(15, 9);
+  });
+  it("handles the endpoints and degenerate inputs", () => {
+    expect(percentile([5, 1, 9], 0)).toBe(1);
+    expect(percentile([5, 1, 9], 1)).toBe(9);
+    expect(percentile([7], 0.9)).toBe(7);
+    expect(Number.isNaN(percentile([], 0.5))).toBe(true);
+  });
+  it("does not mutate its input", () => {
+    const input = [3, 1, 2];
+    percentile(input, 0.5);
+    expect(input).toEqual([3, 1, 2]);
+  });
+  it("median is the 50th percentile", () => {
+    expect(median([4, 1, 3, 2])).toBeCloseTo(2.5, 9);
+  });
+});
+
+describe("step 1 — listen to the room", () => {
+  it("measures a quiet room and proposes a floor above its loudest flux", () => {
+    const win = makeWindow({
+      frames: 100,
+      rmsInput: () => 0.0005,
+      flux: (f, b) => (b === 0 ? 0.01 + (f % 5) * 0.001 : 0),
+    });
+    const r = analyzeRoom(win);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.roomP95).toBeCloseTo(0.0005, 6);
+    // The floor must clear the room's own worst flux, or room noise fires beats.
+    expect(r.proposedFloor).toBeGreaterThan(r.quietFlux99);
+  });
+
+  it("refuses a room that is not quiet enough to measure", () => {
+    // The single most important refusal: measuring a noise floor during the support act
+    // produces a gate that mutes the headliner.
+    const win = makeWindow({
+      frames: 100,
+      rmsInput: () => ROOM_TOO_LOUD_RMS * 2,
+    });
+    const r = analyzeRoom(win);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe(
+      "It's not quiet enough to measure the room. Try again between songs.",
+    );
+  });
+
+  it("refuses too short a recording", () => {
+    const win = makeWindow({
+      frames: MIN_ROOM_FRAMES - 1,
+      rmsInput: () => 0.0005,
+    });
+    expect(analyzeRoom(win).ok).toBe(false);
+  });
+
+  it("clamps the proposed floor into the range the plan doc supports", () => {
+    const loud = makeWindow({
+      frames: 100,
+      rmsInput: () => 0.0005,
+      flux: (_f, b) => (b === 0 ? 5 : 0),
+    });
+    const r = analyzeRoom(loud);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Above 0.10 the plan doc records real beats being eaten, so the cap holds even when the
+    // measurement says otherwise.
+    expect(r.proposedFloor).toBeLessThanOrEqual(0.1);
+
+    const silent = makeWindow({
+      frames: 100,
+      rmsInput: () => 0.0005,
+      flux: () => 0,
+    });
+    const r2 = analyzeRoom(silent);
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(r2.proposedFloor).toBeGreaterThanOrEqual(0.02);
+  });
+});
+
+describe("step 2 — let the music play", () => {
+  /** A window whose RMS sweeps a realistic dynamic range. */
+  function musicWindow(over: Partial<Parameters<typeof makeWindow>[0]> = {}) {
+    return makeWindow({
+      frames: 200,
+      rmsInput: (f) => 0.01 + (f % 50) * 0.0008, // 0.010 .. 0.049
+      ...over,
+    });
+  }
+
+  it("fits a window around the music and keeps the AGC dead band", () => {
+    const r = analyzeMusic(musicWindow());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.targetHigh).toBeGreaterThanOrEqual(
+      r.targetLow * MIN_TARGET_RATIO - 1e-9,
+    );
+    expect(r.targetLow).toBeGreaterThanOrEqual(0.001);
+    expect(r.targetHigh).toBeLessThanOrEqual(0.5);
+  });
+
+  it("widens a too-narrow window rather than shipping one that oscillates", () => {
+    // Compressed music: p25 and p90 nearly equal, so the raw fit is far under 4x. Without the
+    // widening the AGC ping-pongs between attack and release forever.
+    const r = analyzeMusic(musicWindow({ rmsInput: () => 0.03 }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.widened).toBe(true);
+    expect(r.targetHigh / r.targetLow).toBeGreaterThanOrEqual(
+      MIN_TARGET_RATIO - 1e-6,
+    );
+  });
+
+  it("widens downward, not upward, so it never chases a clipping mic", () => {
+    const r = analyzeMusic(musicWindow({ rmsInput: () => 0.03 }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const unwidenedHigh = Math.min(0.03 * 1.1, 0.5);
+    expect(r.targetHigh).toBeCloseTo(unwidenedHigh, 6);
+    expect(r.targetLow).toBeLessThan(0.03 * 0.9);
+  });
+
+  it("pulls the ceiling down when the mic is clipping, and says so", () => {
+    const clean = analyzeMusic(musicWindow());
+    const clipping = analyzeMusic(musicWindow({ clipped: (f) => f % 4 === 0 }));
+    expect(clean.ok && clipping.ok).toBe(true);
+    if (!clean.ok || !clipping.ok) return;
+    expect(clipping.clipAdjusted).toBe(true);
+    expect(clipping.clipFraction).toBeCloseTo(0.25, 2);
+    expect(clipping.targetHigh).toBeLessThan(clean.targetHigh);
+  });
+
+  it("does not adjust for a trace of clipping", () => {
+    const r = analyzeMusic(musicWindow({ clipped: (f) => f === 0 }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.clipAdjusted).toBe(false);
+  });
+
+  it("refuses too short a recording", () => {
+    expect(analyzeMusic(makeWindow({ frames: MIN_MUSIC_FRAMES - 1 })).ok).toBe(
+      false,
+    );
+  });
+});
+
+describe("step 3 — gate reconciliation", () => {
+  it("uses the plan doc measurements and lands below quiet music", () => {
+    // The measured numbers: quiet-room p95 0.00049, normal-volume music p5 0.00061.
+    const g = reconcileGate(0.00049, 0.00061);
+    expect(g.noiseGate).toBeLessThan(0.00061);
+  });
+
+  it("warns on the plan doc room, because the gate cannot clear it", () => {
+    // Only a 1.25x gap between room and music, so the gate that keeps quiet music audible
+    // necessarily sits below the room's own noise. That is worth saying out loud rather than
+    // silently shipping a gate that lets crowd noise through between songs.
+    const g = reconcileGate(0.00049, 0.00061);
+    expect(g.noiseGate).toBeLessThan(0.00049);
+    expect(g.warning).toContain("nearly as loud");
+  });
+
+  it("stays quiet when the room is genuinely quiet", () => {
+    const g = reconcileGate(0.0002, 0.01);
+    expect(g.warning).toBeNull();
+    expect(g.noiseGate).toBeGreaterThan(0.0002);
+  });
+
+  it("re-creates the field bug with a generous margin, and does not with 1.15", () => {
+    // This is the test that pins the constant. A 1.6x room margin (the intuitive choice)
+    // lands ABOVE the music p5 and mutes normal-volume music, which is the original bug.
+    const roomP95 = 0.00049;
+    const musicP5 = 0.00061;
+    expect(1.6 * roomP95).toBeGreaterThan(musicP5); // the bug, if we had chosen 1.6
+    expect(GATE_ROOM_MARGIN * roomP95).toBeLessThan(musicP5); // what we chose
+  });
+
+  it("takes the music-derived bound when the room is nearly as loud, and warns", () => {
+    const g = reconcileGate(0.002, 0.0012);
+    expect(g.noiseGate).toBeCloseTo(GATE_MUSIC_MARGIN * 0.0012, 9);
+    expect(g.warning).toContain("background noise is nearly as loud");
+  });
+
+  it("clamps into the range the firmware accepts", () => {
+    expect(reconcileGate(1, 1).noiseGate).toBeLessThanOrEqual(0.004);
+    expect(reconcileGate(0, 0).noiseGate).toBeGreaterThanOrEqual(0.0002);
+  });
+});
+
+describe("step 4 — tap matching", () => {
+  it("recovers a perfect score despite a constant human offset", () => {
+    // Humans tap 20-80 ms early or late, consistently. We score AGREEMENT, not alignment,
+    // so a consistent offset must not push the fit toward a wrong sensitivity.
+    const beats = Array.from({ length: 16 }, (_, i) => i * 500);
+    const taps = beats.map((t) => t + 60);
+    const m = matchTaps(taps, beats);
+    expect(m.offsetMs).toBeCloseTo(60, 6);
+    expect(m.f).toBeCloseTo(1, 9);
+    expect(m.matched).toBe(16);
+  });
+
+  it("handles a negative offset (tapping early)", () => {
+    const beats = Array.from({ length: 16 }, (_, i) => i * 500);
+    const m = matchTaps(
+      beats.map((t) => t - 45),
+      beats,
+    );
+    expect(m.offsetMs).toBeCloseTo(-45, 6);
+    expect(m.f).toBeCloseTo(1, 9);
+  });
+
+  it("scores partial agreement", () => {
+    const beats = Array.from({ length: 10 }, (_, i) => i * 500);
+    const taps = beats.filter((_, i) => i % 2 === 0); // caught half
+    const m = matchTaps(taps, beats);
+    expect(m.recall).toBeCloseTo(1, 9); // every tap matched a beat
+    expect(m.precision).toBeCloseTo(0.5, 9); // half the beats went untapped
+  });
+
+  it("does not match beyond the radius, even consistently", () => {
+    // The offset removal is bounded at the match radius on purpose. Unbounded, it would slide
+    // the taps onto the beats however far away they started — so a user tapping the off-beat
+    // would score perfectly and the sweep would fit to the wrong sensitivity.
+    // 1000 ms spacing with a +240 ms offset, so the nearest beat is unambiguously the one
+    // BEFORE the tap (240 away, versus 760 to the next). At 500 ms spacing a +300 offset
+    // would really be -200 from the following beat, which measures something else.
+    const beats = Array.from({ length: 12 }, (_, i) => i * 1000);
+    const m = matchTaps(
+      beats.map((t) => t + 240),
+      beats,
+    );
+    expect(m.offsetMs).toBe(TAP_MATCH_MS); // clamped, not the raw 240
+    expect(m.matched).toBe(0);
+    expect(m.f).toBe(0);
+  });
+
+  it("does not absorb a half-beat shift into the offset", () => {
+    // This is the 'catching every other beat' failure. If the matcher hid it, classifyTempo
+    // would be the only thing left to notice, and the sweep would have already fit to it.
+    const beats = Array.from({ length: 12 }, (_, i) => i * 1000);
+    const m = matchTaps(
+      beats.map((t) => t + 400),
+      beats,
+    );
+    expect(m.f).toBeLessThan(0.5);
+  });
+
+  it("never matches one beat to two taps", () => {
+    // Double-counting would inflate F and pick an over-sensitive setting.
+    const m = matchTaps([0, 10, 20], [5]);
+    expect(m.matched).toBe(1);
+  });
+
+  it("is empty-safe", () => {
+    expect(matchTaps([], [1, 2]).f).toBe(0);
+    expect(matchTaps([1, 2], []).f).toBe(0);
+  });
+});
+
+describe("step 4 — tap quality gate", () => {
+  it("accepts steady taps and reports the tempo", () => {
+    const taps = Array.from({ length: 16 }, (_, i) => i * 500);
+    const q = assessTaps(taps);
+    expect(q.ok).toBe(true);
+    if (!q.ok) return;
+    expect(q.bpm).toBeCloseTo(120, 6);
+  });
+
+  it("refuses too few taps rather than fitting to them", () => {
+    const q = assessTaps(
+      Array.from({ length: MIN_TAPS - 1 }, (_, i) => i * 500),
+    );
+    expect(q.ok).toBe(false);
+    if (q.ok) return;
+    expect(q.reason).toContain("left the sensitivity alone");
+  });
+
+  it("refuses uneven taps", () => {
+    // Alternating 300/700 ms: a median of 500 that describes nothing.
+    const taps: number[] = [0];
+    for (let i = 1; i < 16; i++)
+      taps.push(taps[i - 1] + (i % 2 === 0 ? 300 : 700));
+    const q = assessTaps(taps);
+    expect(q.ok).toBe(false);
+    if (q.ok) return;
+    expect(q.reason).toContain("uneven");
+  });
+
+  it("tolerates human jitter below the irregularity limit", () => {
+    const taps: number[] = [0];
+    for (let i = 1; i < 20; i++)
+      taps.push(taps[i - 1] + 500 + (i % 3 === 0 ? 25 : -15));
+    const q = assessTaps(taps);
+    expect(q.ok).toBe(true);
+    if (!q.ok) return;
+    expect(q.irregularity).toBeLessThan(MAX_TAP_IRREGULARITY);
+  });
+});
+
+describe("step 4 — classic tempo failures", () => {
+  it("detects firing twice per beat and proposes a longer refractory", () => {
+    const r = classifyTempo(240, 120);
+    expect(r.kind).toBe("double");
+    if (r.kind !== "double") return;
+    // Just over half a beat: suppresses the extra hit without eating the next real one.
+    const beatMs = 500;
+    expect(r.proposedRefractoryFrames).toBe(
+      Math.round((0.55 * beatMs) / FRAME_MS),
+    );
+    expect(r.proposedRefractoryFrames * FRAME_MS).toBeGreaterThan(beatMs / 2);
+    expect(r.proposedRefractoryFrames * FRAME_MS).toBeLessThan(beatMs);
+  });
+
+  it("detects catching every other beat", () => {
+    expect(classifyTempo(60, 120).kind).toBe("half");
+  });
+
+  it("says nothing when the tempos agree", () => {
+    expect(classifyTempo(120, 120).kind).toBe("ok");
+    expect(classifyTempo(126, 120).kind).toBe("ok");
+  });
+
+  it("does not fire on ratios outside both bands", () => {
+    expect(classifyTempo(180, 120).kind).toBe("ok"); // 1.5x
+    expect(classifyTempo(360, 120).kind).toBe("ok"); // 3x
+  });
+});
+
+describe("step 4b — offline sweep", () => {
+  /**
+   * Build a window with a beat planted every `beatEveryFrames`, where a beat is a flux spike
+   * that clears mean + PLANTED_ALPHA*sigma but not much more. A correct sweep should recover
+   * an alpha near PLANTED_ALPHA: lower alphas fire on the between-beat noise, higher ones miss.
+   */
+  const PLANTED_ALPHA = 1.0;
+  function plantedWindow(beatEveryFrames = 16, frames = 400) {
+    return makeWindow({
+      frames,
+      mean: () => 0.1,
+      sigma: () => 0.1,
+      flux: (f, b) => {
+        if (b !== 0) return 0;
+        const onBeat = f % beatEveryFrames === 0;
+        // On a beat: comfortably above mean + 1.0*sigma (0.2). Off a beat: above mean + 0.5*sigma
+        // (0.15) but below the planted threshold, so an over-sensitive alpha fires on it.
+        return onBeat ? 0.28 : 0.17;
+      },
+    });
+  }
+
+  const CANDIDATES = Array.from({ length: 10 }, (_, i) => ({
+    sensitivity: i + 1,
+    paramValue: 0.2 + i * 0.2, // 0.2 .. 2.0
+  }));
+
+  it("recovers the planted optimum", () => {
+    const win = plantedWindow();
+    const beatFrames = 16;
+    const taps: number[] = [];
+    for (let f = 0; f < win.frames; f += beatFrames) taps.push(win.timeMs[f]);
+
+    const r = sweepSensitivity(win, taps, CANDIDATES, 0.05);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.best.f).toBeGreaterThan(0.9);
+    // The planted threshold sits at alpha 1.0; anything much lower fires on the noise floor.
+    expect(r.best.paramValue).toBeGreaterThan(0.7);
+    expect(r.best.paramValue).toBeLessThanOrEqual(1.1);
+  });
+
+  it("evaluates every candidate against every refractory", () => {
+    const win = plantedWindow();
+    const taps = [win.timeMs[0], win.timeMs[16], win.timeMs[32]];
+    const r = sweepSensitivity(win, taps, CANDIDATES, 0.05);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.evaluated).toBe(CANDIDATES.length * 4);
+  });
+
+  it("breaks ties toward the LESS sensitive setting", () => {
+    // A false fire strobes the lights on a hi-hat and looks broken; a miss looks lazy. When
+    // two settings score identically, the quieter one wins.
+    const win = makeWindow({
+      frames: 200,
+      mean: () => 0.1,
+      sigma: () => 0.1,
+      flux: (f, b) => (b === 0 && f % 16 === 0 ? 5 : 0), // clears every candidate alpha
+    });
+    const taps: number[] = [];
+    for (let f = 0; f < win.frames; f += 16) taps.push(win.timeMs[f]);
+    // Fed MOST-sensitive-first on purpose. In natural order the least sensitive candidate is
+    // seen first and wins on iteration order alone, so the test would pass with the tie-break
+    // deleted — it did, until this was reversed.
+    const r = sweepSensitivity(win, taps, [...CANDIDATES].reverse(), 0.05);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.best.sensitivity).toBe(1);
+  });
+
+  it("refuses without raw statistics", () => {
+    // Tier 1 carries no mean/sigma, so a "best" fitted from zeros would be meaningless.
+    const win = plantedWindow();
+    win.hasStats = false;
+    const r = sweepSensitivity(win, [0, 500], CANDIDATES, 0.05);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain("could not send the detail");
+  });
+
+  it("refuses when nothing matches the taps", () => {
+    const win = plantedWindow();
+    const r = sweepSensitivity(win, [1e9, 1e9 + 500], CANDIDATES, 0.05);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("replayBeats", () => {
+  it("honours the absolute floor", () => {
+    // A spike that clears the adaptive threshold but not the floor must not fire.
+    const win = makeWindow({
+      frames: 20,
+      mean: () => 0.001,
+      sigma: () => 0.001,
+      flux: (f, b) => (b === 0 && f === 5 ? 0.01 : 0),
+    });
+    expect(replayBeats(win, 1, 0, 0.005)).toHaveLength(1);
+    expect(replayBeats(win, 1, 0, 0.05)).toHaveLength(0);
+  });
+
+  it("suppresses hits inside the refractory window", () => {
+    const win = makeWindow({
+      frames: 20,
+      mean: () => 0.1,
+      sigma: () => 0.1,
+      flux: (_f, b) => (b === 0 ? 5 : 0), // every frame would fire
+    });
+    expect(replayBeats(win, 1, 0, 0.05)).toHaveLength(20);
+    // With a 4-frame refractory, roughly every 5th frame survives.
+    expect(replayBeats(win, 1, 4, 0.05)).toHaveLength(4);
+  });
+
+  it("resolves the threshold per mode, matching audio_dsp.cpp", () => {
+    // mode 0: mean + alpha*sigma. mode 1: median + delta, where band_mean carries the median
+    // and the parameter is added rather than scaled.
+    const base = { frames: 10, mean: () => 0.1, sigma: () => 0.1 };
+    const spike = (f: number, b: number) => (b === 0 && f === 5 ? 0.25 : 0);
+
+    const mode0 = makeWindow({ ...base, flux: spike, thresholdMode: 0 });
+    expect(replayBeats(mode0, 1.0, 0, 0)).toHaveLength(1); // 0.25 > 0.1 + 1.0*0.1
+    expect(replayBeats(mode0, 2.0, 0, 0)).toHaveLength(0); // 0.25 < 0.1 + 2.0*0.1
+
+    const mode1 = makeWindow({ ...base, flux: spike, thresholdMode: 1 });
+    expect(replayBeats(mode1, 0.1, 0, 0)).toHaveLength(1); // 0.25 > 0.1 + 0.1
+    expect(replayBeats(mode1, 0.2, 0, 0)).toHaveLength(0); // 0.25 < 0.1 + 0.2
+  });
+
+  it("applies the refractory per band, not globally", () => {
+    // Band 1 firing must not suppress band 0's next hit; the firmware tracks them separately.
+    const win = makeWindow({
+      frames: 10,
+      mean: () => 0.1,
+      sigma: () => 0.1,
+      flux: (f, b) => (b === 1 ? 5 : b === 0 && f === 3 ? 5 : 0),
+    });
+    const times = replayBeats(win, 1, 2, 0.05);
+    // Band 1 fires on frames 0,3,6,9. Band 0 also fires on frame 3 — already in the list.
+    expect(times).toContain(win.timeMs[3]);
+  });
+});
