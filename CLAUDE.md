@@ -68,21 +68,30 @@ command, which refuses to run without a battery present (the 2026-07-05 wedge wa
 likely aggravated by running VBUS-only when GO2P dropped the PD PHY). It exists to
 exercise the runtime PTCH-wedge recovery path — see `/debug-fw`'s symptom table.
 
-### NEVER switch phones on your own
+### Choosing which phone to use
 
-**The OnePlus 9 Pro (LE2125) is the phone to use. If two phones are reachable over
-ADB, that is not an invitation to pick one — never switch to the Pixel (or any other
-device) automatically.** Instructed 2026-08-12 after an agent found the OnePlus
-apparently absent, connected the Pixel instead, and started deploying to it.
+**Any connected phone is viable.** If a phone answers over ADB, it is fair game — do not
+stop and ask merely because a particular device is absent. Identify which phone is
+attached (`adb devices -l`, or the `device` field in any execbro result) and read the
+phone-specific notes in `app/CLAUDE.md` through that lens.
 
-If the OnePlus looks unavailable — not in `adb devices`, screen locked, app not
-installed — say so and ask. Do not treat "the other phone answers" as the fix. The
-tempting rationalisation to avoid: the Pixel has a spec-compliant BLE stack and so
-avoids the OnePlus's forget-and-re-pair dance after a GATT-changing reflash — that
-is a reason the Pixel is *easier*, not a reason it is the right device, and
-`/re-pair` exists precisely to make the OnePlus path routine. Verification done on
-the wrong phone also proves the wrong thing: the OnePlus is the strict device, so a
-result from the tolerant one does not carry over.
+The one real caveat is that **only a few phones have validated UI control paths**. The
+tap/scroll recipes differ per device — coordinate taps from a screenshot land high on the
+OnePlus 9 Pro and must use `tap(text=…, strategy="accessibility")` or the fiber-walk
+recipes, while the same coordinate taps are reliable on the Pixel 9 Pro. If you are on a
+phone with no validated recipe, prefer the accessibility strategy first and say so in your
+report rather than trusting a coordinate tap that silently missed.
+
+Phones also differ in BLE strictness, which changes what a result *proves* rather than
+whether you may use it. The OnePlus 9 Pro ignores Service Changed and wedges bonded
+reconnects at `ATT MTU: 23` after a board reboot or GATT-changing reflash (recover with
+`/re-pair`); the Pixel 9 Pro re-discovers on its own. So a pass on the OnePlus carries
+over to the Pixel, while a pass on the Pixel does not by itself prove the OnePlus path.
+When a change touches the GATT layout, say which phone you verified on and what that does
+and does not cover. When it does not touch GATT, either phone is a genuine result.
+
+Superseded 2026-08-24: this section previously required the OnePlus 9 Pro (LE2125)
+specifically and told agents to stop and ask if it was absent.
 
 ### NEVER reboot the shared Android phone on your own
 
