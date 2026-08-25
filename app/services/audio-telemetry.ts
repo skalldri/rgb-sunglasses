@@ -228,6 +228,39 @@ export function decodeTelemetryFrame(
   return frame;
 }
 
+/**
+ * Read just the spectrum buckets out of a payload, without building a whole frame object.
+ *
+ * The spectrum is display-only — it never enters the ring, because the calibration wizard
+ * replays flux/mean/sigma and nothing reads a stored spectrum back. This exists so the
+ * notification path can write the bars straight to shared values without hand-copying the
+ * bucket offset, which would be a second definition of the layout living in a UI file.
+ *
+ * @param out pre-allocated array of AUDIO_NUM_DISPLAY_BUCKETS, written in place.
+ * @returns the largest bucket magnitude, or -1 if this payload carries no spectrum.
+ */
+export function decodeBucketsInto(
+  bytes: Uint8Array | null | undefined,
+  out: number[],
+): number {
+  if (!bytes || bytes.length < TIER_SIZE_SPECTRUM) {
+    return -1;
+  }
+  if (bytes[OFF_HEADER] >> 4 !== AUDIO_TELEMETRY_VERSION) {
+    return -1;
+  }
+  if ((bytes[OFF_HEADER] & 0x0f) < TELEMETRY_TIER_SPECTRUM) {
+    return -1;
+  }
+  let max = 0;
+  for (let i = 0; i < AUDIO_NUM_DISPLAY_BUCKETS; i++) {
+    const v = dequantiseLog(bytes[OFF_BUCKETS + i]);
+    out[i] = v;
+    if (v > max) max = v;
+  }
+  return max;
+}
+
 /** Convenience for the monitor callback, which receives base64 from react-native-ble-plx. */
 export function decodeTelemetryFrameFromBase64(
   value?: string | null,

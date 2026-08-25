@@ -1,0 +1,177 @@
+import { memo } from "react";
+import { StyleSheet, View } from "react-native";
+
+import { BandHeadroomBars } from "@/components/audio/band-headroom-bars";
+import { BeatPulse } from "@/components/audio/beat-pulse";
+import { InputLevelMeter } from "@/components/audio/input-level-meter";
+import { SpectrumBars } from "@/components/audio/spectrum-bars";
+import { VerdictBanner } from "@/components/audio/verdict-banner";
+import { ThemedText } from "@/components/themed-text";
+import { Radii, Spacing } from "@/constants/theme";
+import {
+  useAudioTelemetry,
+  useAudioTelemetryStatus,
+  useAudioTelemetrySummary,
+} from "@/context/audio-telemetry-context";
+import { useThemeColors } from "@/hooks/use-theme-color";
+import { computeVerdict } from "@/services/audio-scoreboard";
+import {
+  AUDIO_NUM_BANDS,
+  TELEMETRY_TIER_SPECTRUM,
+  dequantiseLog,
+  ringIndex,
+} from "@/services/audio-telemetry";
+
+/**
+ * The sticky monitor: what the glasses are hearing, right now.
+ *
+ * Re-renders at most twice a second (the summary tick) regardless of the stream rate — the
+ * meters inside it animate off shared values on the UI thread and are not part of that.
+ *
+ * HONEST FREEZING: when the stream stalls, everything dims and says NO SIGNAL rather than
+ * decaying toward zero. A meter that drifts down on its own is lying about the room, and at a
+ * venue that lie costs someone ten minutes of tuning against a dead stream.
+ */
+
+interface Props {
+  targetLow: number | null;
+  targetHigh: number | null;
+  noiseGate: number | null;
+  testID?: string;
+}
+
+export const MonitorPanel = memo(function MonitorPanel({
+  targetLow,
+  targetHigh,
+  noiseGate,
+  testID = "audio-monitor",
+}: Props) {
+  const colors = useThemeColors();
+  const summary = useAudioTelemetrySummary();
+  const status = useAudioTelemetryStatus();
+  const telemetry = useAudioTelemetry();
+  const verdict = computeVerdict(summary);
+
+  /* Read the newest ratios straight off the ring for the accessibility labels. The bars
+   * themselves do not use these — they animate off shared values — so this costs one pass
+   * over four bytes per summary tick, not per frame. */
+  const ratios: number[] = [];
+  if (telemetry) {
+    const ring = telemetry.ring.current;
+    const i = ringIndex(ring, 0);
+    if (i >= 0) {
+      const base = i * AUDIO_NUM_BANDS;
+      for (let b = 0; b < AUDIO_NUM_BANDS; b++) {
+        const flux = dequantiseLog(ring.flux[base + b]);
+        const threshold = dequantiseLog(ring.threshold[base + b]);
+        ratios.push(threshold > 0 ? flux / threshold : 0);
+      }
+    }
+  }
+
+  if (status === "unsupported") {
+    return (
+      <View
+        testID={`${testID}-unsupported`}
+        style={[
+          styles.card,
+          { backgroundColor: colors.surface, borderColor: colors.border },
+        ]}
+      >
+        <ThemedText type="defaultSemiBold">
+          Live meters need newer firmware
+        </ThemedText>
+        <ThemedText type="caption" style={{ color: colors.textSecondary }}>
+          You can still tune everything below — this device just cannot show you
+          what it is hearing yet.
+        </ThemedText>
+      </View>
+    );
+  }
+
+  const live = summary.live;
+  const hasSpectrum = summary.tier >= TELEMETRY_TIER_SPECTRUM;
+
+  return (
+    <View
+      testID={testID}
+      style={[
+        styles.card,
+        { backgroundColor: colors.surface, borderColor: colors.border },
+      ]}
+    >
+      <View style={styles.headerRow}>
+        <BeatPulse
+          bpm={summary.bpm}
+          beatsPerSecond={summary.beatsPerSecond}
+          lastBeatBand={summary.lastBeatBand}
+          live={live}
+        />
+        <View
+          testID={`${testID}-pill`}
+          style={[
+            styles.pill,
+            {
+              backgroundColor: live ? colors.success : colors.surfaceAlt,
+              borderColor: colors.border,
+            },
+          ]}
+        >
+          <ThemedText
+            type="caption"
+            style={{ color: live ? colors.onPrimary : colors.textMuted }}
+          >
+            {live ? "LIVE" : "NO SIGNAL"}
+          </ThemedText>
+        </View>
+      </View>
+
+      {hasSpectrum ? (
+        <SpectrumBars live={live} />
+      ) : (
+        <ThemedText
+          type="caption"
+          style={{ color: colors.textMuted }}
+          testID={`${testID}-no-spectrum`}
+        >
+          Spectrum unavailable on this link — the connection is running at its
+          smallest packet size. Re-pairing usually fixes it.
+        </ThemedText>
+      )}
+
+      <InputLevelMeter
+        targetLow={targetLow}
+        targetHigh={targetHigh}
+        noiseGate={noiseGate}
+        rmsInputDb={summary.rmsInputDb}
+        gainDb={summary.gainDb}
+        headroomDb={summary.headroomDb}
+        live={live}
+      />
+
+      <BandHeadroomBars ratios={ratios} live={live} />
+
+      <VerdictBanner verdict={verdict} />
+    </View>
+  );
+});
+
+const styles = StyleSheet.create({
+  card: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radii.lg,
+    padding: Spacing.md,
+    gap: Spacing.md,
+  },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  pill: {
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 2,
+    borderRadius: Radii.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+});

@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AudioHelpSheet, type AudioHelpContent } from "@/components/audio/audio-help-sheet";
+import { MonitorPanel } from "@/components/audio/monitor-panel";
 import { PresetSheet } from "@/components/audio/preset-sheet";
 import { ParamChoiceRow } from "@/components/audio/param-choice-row";
 import { ParamSliderRow } from "@/components/audio/param-slider-row";
@@ -16,6 +17,7 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { UUID_AUDIO_CONFIG_SERVICE } from "@/constants/bluetooth";
 import { Radii, Spacing } from "@/constants/theme";
+import { AudioTelemetryProvider } from "@/context/audio-telemetry-context";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useAudioParamWriter, type AudioParamWriter } from "@/hooks/use-audio-param-writer";
 import { useAudioPresets } from "@/hooks/use-audio-presets";
@@ -66,7 +68,22 @@ const THRESHOLD_MODE_MEDIAN = 1;
  * documented in app/CLAUDE.md. If a stale value ever proves to be a real problem, the fix is a
  * ref-driven one-shot read, not a reactive effect.
  */
-export default function AudioTuningScreen() {
+/**
+ * The screen is wrapped in AudioTelemetryProvider rather than mounting the provider globally,
+ * so the notification subscription exists only while this route does. That matters more than
+ * it looks: this is the app's 12th concurrent GATT notification registration against
+ * Android's ~15 cap, and the provider also holds the device's connection interval at MEDIUM
+ * while streaming. Both must end when the user leaves.
+ */
+export default function AudioTuningRoute() {
+    return (
+        <AudioTelemetryProvider>
+            <AudioTuningScreen />
+        </AudioTelemetryProvider>
+    );
+}
+
+function AudioTuningScreen() {
     const router = useRouter();
     const c = useThemeColors();
     const { selectedDevice, writeServiceCharacteristic } = useBluetooth();
@@ -443,6 +460,16 @@ export default function AudioTuningScreen() {
                         Could not set {writeFailure.label}: {writeFailure.reason}
                     </ThemedText>
                 ) : null}
+
+                {/* The AGC window and the gate are drawn ON the level meter, so the meter needs
+                    the live values of those three parameters. They come from the same resolved
+                    table the sliders edit, which is what keeps the drawn window and the dragged
+                    slider showing the same number. */}
+                <MonitorPanel
+                    targetLow={valueOf("agcTargetLow")}
+                    targetHigh={valueOf("agcTargetHigh")}
+                    noiseGate={valueOf("agcNoiseGateRms")}
+                />
 
                 <SegmentedControl<Mode>
                     options={[
