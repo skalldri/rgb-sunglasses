@@ -15,6 +15,7 @@ import {
   SUMMARY_WINDOW_MS,
   TELEMETRY_TIER_OFF,
   TELEMETRY_TIER_SPECTRUM,
+  BAND_RATIO_MAX,
   createTelemetryRing,
   decodeBucketsInto,
   dequantiseLog,
@@ -27,7 +28,10 @@ import {
   type TelemetrySummary,
   type TelemetryTier,
 } from "@/services/audio-telemetry";
-import { decodeBytesFromBase64 } from "@/services/ble-value-codec";
+import {
+  decodeBytesFromBase64,
+  encodeUint32ToBase64,
+} from "@/services/ble-value-codec";
 
 /**
  * Live audio telemetry: subscription, control lifecycle, and the two render paths.
@@ -70,6 +74,8 @@ const SUMMARY_TICK_MS = 500;
 const ARM_RETRY_MS = 1500;
 /** Per-frame decay of the spectrum's normalisation reference (~2 s to halve at 8 Hz). */
 const BUCKET_REF_DECAY = 0.96;
+/** Starting reference, and what a re-arm resets to. */
+const BUCKET_REF_SEED = 0.01;
 /** Floor for that reference, so a silent room does not amplify quantisation noise to full. */
 const BUCKET_REF_MIN = 1e-3;
 
@@ -110,19 +116,15 @@ export type AudioTelemetryContextValue = {
 const AudioTelemetryContext =
   React.createContext<AudioTelemetryContextValue | null>(null);
 
-/** Ratio at which a band bar is drawn full. Above the fire line there is nothing more to say. */
-const BAND_RATIO_MAX = 1.5;
+/* BAND_RATIO_MAX is imported from the telemetry service — see its comment there for why it
+ * cannot live next to either consumer. */
 
+/* Packs the control word; the little-endian u32 -> base64 encode itself is delegated, so the
+ * byte-order convention lives in exactly one place for every characteristic on the device. */
 function encodeControl(tier: number, rateHz: number, holdS: number): string {
   const word =
     ((tier & 0xff) | ((rateHz & 0xff) << 8) | ((holdS & 0xff) << 16)) >>> 0;
-  const bytes = [
-    word & 0xff,
-    (word >> 8) & 0xff,
-    (word >> 16) & 0xff,
-    (word >> 24) & 0xff,
-  ];
-  return btoa(String.fromCharCode(...bytes));
+  return encodeUint32ToBase64(word);
 }
 
 export function AudioTelemetryProvider({
@@ -139,7 +141,7 @@ export function AudioTelemetryProvider({
   /* Running reference for normalising the spectrum. Buckets are absolute magnitudes, so
    * without a reference the bars would sit invisibly low at normal listening levels and slam
    * to full on a loud track. Decays slowly so the display does not re-scale on every frame. */
-  const bucketRefRef = React.useRef(0.01);
+  const bucketRefRef = React.useRef(BUCKET_REF_SEED);
   /* Reused across frames so the notify path allocates nothing. */
   const bucketScratchRef = React.useRef<number[]>(
     new Array(AUDIO_NUM_DISPLAY_BUCKETS).fill(0),
@@ -193,12 +195,27 @@ export function AudioTelemetryProvider({
       let subscription: { remove: () => void } | null = null;
       let rearmTimer: ReturnType<typeof setInterval> | null = null;
       let summaryTimer: ReturnType<typeof setInterval> | null = null;
-      let armTimer: ReturnType<typeof setTimeout> | null = null;
+      let armTimer: ReturnType<typeof setInterval> | null = null;
       let controlChar: {
         writeWithResponse?: (v: string) => Promise<unknown>;
       } | null = null;
 
       const superseded = () => generationRef.current !== generation;
+
+      const stopRearm = () => {
+        if (rearmTimer) {
+          clearInterval(rearmTimer);
+          rearmTimer = null;
+        }
+      };
+
+      /* Re-open the arm retry after a recoverable failure. Idempotent: an already-running
+       * retry is left alone rather than stacked, because arm() is also what clears it. */
+      const scheduleArmRetry = () => {
+        if (superseded() || armTimer) return;
+        subscription = null;
+        armTimer = setInterval(arm, ARM_RETRY_MS);
+      };
 
       /* Fire-and-forget write. ble-plx can throw SYNCHRONOUSLY once the link is gone, which
        * a bare .catch() would miss entirely — same rule as the scoped-read helper. */
@@ -273,7 +290,7 @@ export function AudioTelemetryProvider({
         }
       };
 
-      const arm = () => {
+      function arm() {
         if (superseded()) return;
         const device = deviceRef.current;
         const byService =
@@ -281,11 +298,33 @@ export function AudioTelemetryProvider({
         const streamInfo = byService?.[UUID_AUDIO_TELEMETRY];
         const controlInfo = byService?.[UUID_TELEMETRY_CONTROL];
 
-        if (!streamInfo || !controlInfo) {
-          /* Firmware without service 9. The screen still tunes; it just cannot show the
-           * room. Not an error — the app ships ahead of firmware by design. */
+        if (!byService) {
+          /* No device, or discovery has not produced this service yet. NOT terminal — say
+           * nothing and let the retry interval try again. */
+          if (!device?.characteristicsByService) return;
+          /* The device HAS finished discovering and this service is not on it: genuinely old
+           * firmware. Now it is safe to latch. */
           setStatus("unsupported");
+          if (armTimer) {
+            clearInterval(armTimer);
+            armTimer = null;
+          }
           return;
+        }
+        if (!streamInfo || !controlInfo) {
+          /* Service present but missing a characteristic — a firmware mismatch we cannot use.
+           * Terminal for the same reason as above. */
+          setStatus("unsupported");
+          if (armTimer) {
+            clearInterval(armTimer);
+            armTimer = null;
+          }
+          return;
+        }
+        /* Armed successfully: stop retrying. */
+        if (armTimer) {
+          clearInterval(armTimer);
+          armTimer = null;
         }
         controlChar = controlInfo.characteristic as typeof controlChar;
         setStatus("starting");
@@ -309,9 +348,32 @@ export function AudioTelemetryProvider({
               if (superseded()) return;
               if (error) {
                 const text = error?.message || String(error);
+                /* STOP RE-ARMING on any subscription end, expected or not.
+                 *
+                 * The re-arm interval kept firing every 30 s over a dead subscription,
+                 * extending the firmware's watchdog hold so the device carried on encoding
+                 * and notifying at 8-32 Hz into nothing — and the connection-parameter
+                 * governor kept holding the faster interval, which is precisely the battery
+                 * cost the stream-hold design exists to avoid. */
+                stopRearm();
+
                 /* remove() delivers OperationCancelled and a dropped link delivers a
-                 * disconnect error — both are how a subscription normally ends. */
-                if (/cancel/i.test(text) || /disconnect/i.test(text)) return;
+                 * disconnect error — both are how a subscription normally ends. A cancel is
+                 * our own teardown and needs nothing more. A disconnect can come back, so
+                 * re-open the arm retry: without it the meters stayed dead after a mid-focus
+                 * link drop even once the link returned, until the user blurred and
+                 * refocused. */
+                if (/cancel/i.test(text)) return;
+                if (/disconnect/i.test(text)) {
+                  setStatus("idle");
+                  scheduleArmRetry();
+                  return;
+                }
+                /* A hard error is NOT retried. Disconnects come back; an encryption or
+                 * permission failure does not, and retrying it every 1.5 s would hammer the
+                 * link for as long as the screen stays focused. Stopping here leaves a state
+                 * the focus effect recovers from on the next blur/focus, which is the
+                 * user-visible action that could plausibly change the outcome. */
                 console.error("Telemetry notification error:", error);
                 setStatus("error");
                 return;
@@ -328,6 +390,12 @@ export function AudioTelemetryProvider({
         }
 
         resetTelemetryRing(ringRef.current);
+        /* Reset the spectrum's normalisation reference alongside the ring. Left at a loud
+         * session's level it decays at 0.96/frame, which at 8 Hz is ~14-20 s of near-invisible
+         * bars in the next (quieter) session — the panel looks broken for the first quarter
+         * minute after opening the screen, which is exactly when the user is deciding whether
+         * to trust it. */
+        bucketRefRef.current = BUCKET_REF_SEED;
         safeWrite(
           encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
           "arm",
@@ -343,7 +411,7 @@ export function AudioTelemetryProvider({
             "re-arm",
           );
         }, REARM_MS);
-      };
+      }
 
       summaryTimer = setInterval(() => {
         if (superseded()) return;
@@ -357,17 +425,25 @@ export function AudioTelemetryProvider({
         summaryListeners.current.forEach((l) => l());
       }, SUMMARY_TICK_MS);
 
+      /* Keep retrying while the device simply has not finished discovering.
+       *
+       * One 1.5 s retry was not enough: discovery is ~170 sequential GATT reads, comfortably
+       * over that on a slow link, and `selectedDevice` is only populated once it completes.
+       * Focusing this screen mid-discovery therefore latched `unsupported` permanently and
+       * told the user their current firmware was too old, with no path back except blurring
+       * and refocusing. arm() now distinguishes "no device yet" (retry) from "device present,
+       * service absent" (genuinely unsupported), and only the latter is terminal. */
       if (deviceRef.current?.characteristicsByService) {
         arm();
       } else {
-        armTimer = setTimeout(arm, ARM_RETRY_MS);
+        armTimer = setInterval(arm, ARM_RETRY_MS);
       }
 
       return () => {
         /* Bump first: any callback still in flight from this pass becomes a no-op rather
          * than writing a stale frame into a ring the next pass has already reset. */
         generationRef.current++;
-        if (armTimer) clearTimeout(armTimer);
+        if (armTimer) clearInterval(armTimer);
         if (rearmTimer) clearInterval(rearmTimer);
         if (summaryTimer) clearInterval(summaryTimer);
 

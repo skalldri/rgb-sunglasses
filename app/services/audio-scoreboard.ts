@@ -58,7 +58,18 @@ function pct(fraction: number): number {
 }
 
 export function computeVerdict(s: TelemetrySummary): Verdict {
-  if (s.frames === 0) {
+  /* ORDER MATTERS HERE, and the discriminator is ageMs, not the frame count.
+   *
+   * When a stream dies at a venue the 10 s window drains to zero frames, so a bare
+   * `frames === 0` check first demoted the failure to the neutral "Not listening yet" —
+   * reporting a fresh start at exactly the moment the user needs to be told something broke.
+   * But `!live` first is equally wrong: a screen that has just opened is also not live.
+   *
+   * `ageMs` separates them without any new state. summarizeTelemetry only returns Infinity
+   * when the ring has never held a frame, and otherwise reports the true age of the newest
+   * one — which survives the window draining. Infinite age means "never started"; a finite
+   * age past the stale threshold means "was streaming, stopped". */
+  if (!Number.isFinite(s.ageMs)) {
     return {
       kind: "no-data",
       tone: "neutral",
@@ -74,6 +85,18 @@ export function computeVerdict(s: TelemetrySummary): Verdict {
       title: "No signal",
       detail:
         "The glasses stopped sending. These numbers are the last ones received.",
+    };
+  }
+
+  /* Live, but nothing in the window — not reachable via summarizeTelemetry (live implies a
+   * frame inside the stale threshold, which is far shorter than the window), so this is a
+   * guard against a future caller synthesising a summary rather than an observed state. */
+  if (s.frames === 0) {
+    return {
+      kind: "no-data",
+      tone: "neutral",
+      title: "Not listening yet",
+      detail: "Waiting for the glasses to send what they are hearing.",
     };
   }
 
@@ -107,7 +130,15 @@ export function computeVerdict(s: TelemetrySummary): Verdict {
     };
   }
 
-  if (s.beatsPerSecond > TOO_SENSITIVE_BPS) {
+  /* Same MIN_FRAMES guard as the insensitive arm below. Without it, the first few ticks
+   * after arming have a tiny span and sticky-OR'd beat flags, so beats-per-second spikes and
+   * the banner flashed "Turn Sensitivity down" at a correctly-tuned device before settling.
+   * A verdict that is wrong for the first second of every session teaches people to ignore
+   * the banner. */
+  if (
+    s.frames >= MIN_FRAMES_FOR_SENSITIVITY &&
+    s.beatsPerSecond > TOO_SENSITIVE_BPS
+  ) {
     return {
       kind: "too-sensitive",
       tone: "warning",
@@ -135,29 +166,5 @@ export function computeVerdict(s: TelemetrySummary): Verdict {
     tone: "good",
     title: "Looking good",
     detail: s.bpm ? `Steady beats at about ${s.bpm} BPM.` : "Steady beats.",
-  };
-}
-
-/** Compact stats for the scoreboard row under the verdict. Formatting only, no policy. */
-export type ScoreboardStats = {
-  beatsPerSecond: string;
-  bpm: string;
-  gain: string;
-  headroom: string;
-  noiseFloor: string;
-  muted: string;
-};
-
-export function formatScoreboard(s: TelemetrySummary): ScoreboardStats {
-  return {
-    beatsPerSecond: s.frames === 0 ? "—" : `${s.beatsPerSecond.toFixed(1)}/s`,
-    bpm: s.bpm === null ? "—" : `${s.bpm}`,
-    gain:
-      s.frames === 0
-        ? "—"
-        : `${s.gainDb >= 0 ? "+" : ""}${s.gainDb.toFixed(1)} dB`,
-    headroom: s.frames === 0 ? "—" : `${Math.round(s.headroomDb)} dB`,
-    noiseFloor: s.frames === 0 ? "—" : `${Math.round(s.noiseFloorDb)} dBFS`,
-    muted: s.frames === 0 ? "—" : `${pct(s.silentFraction)}%`,
   };
 }

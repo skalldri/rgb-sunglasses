@@ -24,6 +24,8 @@
  */
 
 import { Characteristic, Device, Subscription } from 'react-native-ble-plx';
+
+import { decodeBytesFromBase64 } from '@/services/ble-value-codec';
 import {
     UUID_MCUBOOT_UPDATER_CONTROL,
     UUID_MCUBOOT_UPDATER_DATA,
@@ -156,11 +158,11 @@ function uint8ArrayToBase64(data: Uint8Array): string {
     return btoa(binary);
 }
 
+/* Delegates to the shared decoder — see the note on the sibling copy. */
 function base64ToUint8Array(base64: string): Uint8Array {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
+    const bytes = decodeBytesFromBase64(base64);
+    if (!bytes) {
+        throw new Error('Invalid base64 payload');
     }
     return bytes;
 }

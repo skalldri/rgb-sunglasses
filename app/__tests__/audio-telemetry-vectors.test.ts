@@ -1,4 +1,10 @@
-import { decodeTelemetryFrame } from "@/services/audio-telemetry";
+import {
+  createTelemetryRing,
+  decodeTelemetryFrame,
+  dequantiseLog,
+  pushTelemetryBytes,
+  ringIndex,
+} from "@/services/audio-telemetry";
 import vectors from "./fixtures/audio-telemetry-vectors.json";
 
 /**
@@ -120,5 +126,100 @@ describe("firmware-generated wire vectors", () => {
     expect(t1.bytes[0] & 0x0f).toBe(1);
     expect(t2.bytes[0] & 0x0f).toBe(2);
     expect(t3.bytes[0] & 0x0f).toBe(3);
+  });
+});
+
+describe("firmware vectors through the PRODUCTION decoder", () => {
+  /**
+   * The tests above exercise decodeTelemetryFrame, which nothing on the notification path
+   * calls: the shipping path is pushTelemetryBytes, a separate hand-written parser that
+   * decodes straight into the ring so it can allocate nothing per frame. Verifying only the
+   * first meant the cross-check this PR advertises — "app decode verified against firmware
+   * encode" — covered a test-only function while the real decoder went unchecked.
+   *
+   * The shared OFF_* constants mean a wrong offset VALUE would still have been caught. What
+   * would not: a per-field mapping mistake in pushTelemetryBytes — a swapped pair, a field
+   * read with the wrong dequantiser. That is exactly what these assert.
+   */
+  it.each(VECTORS.map((v) => [`${v.name} (tier ${v.tier})`, v] as const))(
+    "pushes %s into the ring with every field intact",
+    (_name, v) => {
+      const ring = createTelemetryRing(8);
+      expect(pushTelemetryBytes(ring, new Uint8Array(v.bytes), 1000)).toBe(
+        true,
+      );
+
+      const i = ringIndex(ring, 0);
+      expect(i).toBeGreaterThanOrEqual(0);
+
+      // Lossless fields, read back out of the ring's own typed arrays.
+      expect(ring.seq[i]).toBe(v.expect.seq);
+      expect(ring.dropped[i]).toBe(v.expect.dropped);
+      expect(ring.gain[i]).toBe(v.expect.gainSteps);
+      expect(ring.clips[i]).toBe(v.expect.clipCount);
+      expect(ring.sinceStep[i]).toBe(v.expect.framesSinceStep);
+      expect(ring.tier[i]).toBe(v.tier);
+
+      // Flags, decomposed the way the consumers read them.
+      const flags = ring.flags[i];
+      expect((flags & 0x01) !== 0).toBe(v.expect.silent);
+      expect((flags & 0x02) !== 0).toBe(v.expect.clipped);
+      expect((flags & 0x04) !== 0).toBe(v.expect.agcFrozen);
+      expect((flags & 0x08) !== 0 ? 1 : 0).toBe(v.expect.thresholdMode);
+      expect((flags >> 4) & 0x0f).toBe(v.expect.beatMask);
+
+      // Quantised magnitudes, dequantised exactly as the provider and panel do.
+      const close = (got: number, want: number) => {
+        if (want === 0) {
+          expect(got).toBe(0);
+          return;
+        }
+        expect(Math.abs(got - want) / want).toBeLessThan(1e-4);
+      };
+      close(dequantiseLog(ring.rmsIn[i]), v.expect.rmsInput);
+      close(dequantiseLog(ring.rmsInst[i]), v.expect.rmsInstant);
+      close(dequantiseLog(ring.peak[i]), v.expect.peak);
+      close(dequantiseLog(ring.noise[i]), v.expect.noiseFloor);
+
+      const base = i * 4;
+      for (let b = 0; b < 4; b++) {
+        close(dequantiseLog(ring.flux[base + b]), v.expect.flux[b]);
+        close(dequantiseLog(ring.threshold[base + b]), v.expect.threshold[b]);
+      }
+    },
+  );
+
+  it("agrees field-for-field with decodeTelemetryFrame on every vector", () => {
+    // The two parsers must not drift apart. This is the assertion that makes keeping both
+    // defensible: one is the readable reference, the other is the zero-allocation path.
+    for (const v of VECTORS) {
+      const bytes = new Uint8Array(v.bytes);
+      const ref = decodeTelemetryFrame(bytes)!;
+      const ring = createTelemetryRing(4);
+      pushTelemetryBytes(ring, bytes, 0);
+      const i = ringIndex(ring, 0);
+
+      expect([v.name, ring.seq[i]]).toEqual([v.name, ref.seq]);
+      expect([v.name, ring.gain[i]]).toEqual([v.name, ref.gainSteps]);
+      expect([v.name, ring.dropped[i]]).toEqual([v.name, ref.dropped]);
+      expect([v.name, ring.clips[i]]).toEqual([v.name, ref.clipCount]);
+      expect([v.name, ring.tier[i]]).toEqual([v.name, ref.tier]);
+      expect([v.name, (ring.flags[i] >> 4) & 0x0f]).toEqual([
+        v.name,
+        ref.beatMask,
+      ]);
+      for (let b = 0; b < 4; b++) {
+        expect([v.name, b, dequantiseLog(ring.flux[i * 4 + b])]).toEqual([
+          v.name,
+          b,
+          ref.flux[b],
+        ]);
+        expect([v.name, b, dequantiseLog(ring.threshold[i * 4 + b])]).toEqual([
+          v.name,
+          b,
+          ref.threshold[b],
+        ]);
+      }
+    }
   });
 });

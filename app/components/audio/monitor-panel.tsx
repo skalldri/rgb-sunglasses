@@ -17,6 +17,8 @@ import { useThemeColors } from "@/hooks/use-theme-color";
 import { computeVerdict } from "@/services/audio-scoreboard";
 import {
   AUDIO_NUM_BANDS,
+  BAND_RATIO_MAX,
+  TELEMETRY_TIER_METERS,
   TELEMETRY_TIER_SPECTRUM,
   dequantiseLog,
   ringIndex,
@@ -64,7 +66,12 @@ export const MonitorPanel = memo(function MonitorPanel({
       for (let b = 0; b < AUDIO_NUM_BANDS; b++) {
         const flux = dequantiseLog(ring.flux[base + b]);
         const threshold = dequantiseLog(ring.threshold[base + b]);
-        ratios.push(threshold > 0 ? flux / threshold : 0);
+        /* Clamped with the SAME constant the provider clamps the bars with. Unclamped, the
+         * bar pinned at full while this label announced "480 percent of the firing level" —
+         * one tick meaning two different things to a sighted and a screen-reader user. */
+        ratios.push(
+          threshold > 0 ? Math.min(flux / threshold, BAND_RATIO_MAX) : 0,
+        );
       }
     }
   }
@@ -98,6 +105,12 @@ export const MonitorPanel = memo(function MonitorPanel({
   const haveFrames = summary.frames > 0;
   const spectrumDowngraded =
     haveFrames && summary.tier < TELEMETRY_TIER_SPECTRUM;
+  /* Only tier 1 is evidence of an MTU-limited link: it is the 20-byte tier that exists to
+   * survive an unnegotiated ATT MTU of 23. Tier 2 is 28 bytes, which fits every MTU this
+   * stack actually negotiates, so seeing it means something ASKED for a reduced tier — the
+   * calibration wizard does exactly that for its tap-along step. Prescribing a re-pair there
+   * sends the user to fix a link that is working perfectly. */
+  const mtuLimited = summary.tier === TELEMETRY_TIER_METERS;
 
   return (
     <View
@@ -139,8 +152,9 @@ export const MonitorPanel = memo(function MonitorPanel({
           style={{ color: colors.textMuted }}
           testID={`${testID}-no-spectrum`}
         >
-          Spectrum unavailable on this link — the connection is running at its
-          smallest packet size. Re-pairing usually fixes it.
+          {mtuLimited
+            ? "Spectrum unavailable — the connection is running at its smallest packet size. Re-pairing usually fixes it."
+            : "Spectrum paused while the glasses send more detail instead."}
         </ThemedText>
       ) : (
         <SpectrumBars live={live && haveFrames} />

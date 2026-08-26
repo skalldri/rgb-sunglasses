@@ -29,6 +29,7 @@ import * as TelemetryContext from "@/context/audio-telemetry-context";
 import {
   EMPTY_SUMMARY,
   TELEMETRY_TIER_METERS,
+  TELEMETRY_TIER_STATS,
   TELEMETRY_TIER_SPECTRUM,
   createTelemetryRing,
   type TelemetrySummary,
@@ -113,5 +114,36 @@ describe("MonitorPanel spectrum states", () => {
     mockTelemetry(EMPTY_SUMMARY, "unsupported");
     const { getByTestId } = render(<MonitorPanel {...PROPS} />);
     expect(getByTestId("audio-monitor-unsupported")).not.toBeNull();
+  });
+});
+
+describe("MonitorPanel downgrade copy", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it("prescribes re-pairing only for the genuinely MTU-limited tier", () => {
+    // Tier 1 is the 20-byte tier that exists to survive an unnegotiated ATT MTU of 23, so
+    // seeing it really is evidence of a degraded link.
+    mockTelemetry(
+      { ...EMPTY_SUMMARY, frames: 40, live: true, tier: TELEMETRY_TIER_METERS },
+      "streaming",
+    );
+    const { getByTestId } = render(<MonitorPanel {...PROPS} />);
+    expect(getByTestId("audio-monitor-no-spectrum").props.children).toContain(
+      "smallest packet size",
+    );
+  });
+
+  it("does not blame the link for a deliberately reduced tier", () => {
+    // Tier 2 is 28 bytes — it fits every MTU this stack negotiates, so it only appears
+    // because something ASKED for it. The calibration wizard does exactly that for its
+    // tap-along step, which would otherwise tell every wizard user to go re-pair.
+    mockTelemetry(
+      { ...EMPTY_SUMMARY, frames: 40, live: true, tier: TELEMETRY_TIER_STATS },
+      "streaming",
+    );
+    const { getByTestId } = render(<MonitorPanel {...PROPS} />);
+    const copy = getByTestId("audio-monitor-no-spectrum").props.children;
+    expect(copy).not.toContain("smallest packet size");
+    expect(copy).not.toContain("Re-pairing");
   });
 });

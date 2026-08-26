@@ -35,7 +35,7 @@ const METER_MAX_DB = 0;
  * Hardware-found, 2026-08-25.
  */
 function pctFromDb(db: number): number {
-  'worklet';
+  "worklet";
   const clamped =
     db < METER_MIN_DB ? METER_MIN_DB : db > METER_MAX_DB ? METER_MAX_DB : db;
   return ((clamped - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB)) * 100;
@@ -50,7 +50,7 @@ export interface InputLevelMeterProps {
   /** Latest values, for the accessibility label and the frozen fallback. */
   rmsInputDb: number;
   gainDb: number;
-  headroomDb: number;
+  headroomDb: number | null;
   live: boolean;
   testID?: string;
 }
@@ -85,10 +85,22 @@ export const InputLevelMeter = memo(function InputLevelMeter({
     return { left: `${pctFromDb(db)}%` };
   });
 
+  /* THE TARGET WINDOW LIVES ON A DIFFERENT AXIS TO THE FILL, and must be shifted onto it.
+   *
+   * The fill is INPUT-REFERRED (the firmware divides the gain back out before reporting —
+   * agc_controller.cpp:28-29), but the AGC compares agcTargetLow/High against POST-GAIN RMS
+   * (`smoothed_` and `rms` at agc_controller.cpp:81/86). Drawing the targets unshifted put
+   * the window `gainDb` away from the fill: with the loop settled at +20 dB and the level
+   * correctly inside the target band, the meter showed the fill 20 dB BELOW the drawn sweet
+   * spot — telling the user the AGC was still turning up when it had already converged, and
+   * inviting them to drag the targets down and de-tune a working loop.
+   *
+   * The gate marker below needs no shift: silence detection is input-referred on purpose
+   * (see the comment at agc_controller.cpp:20), so it is already on the fill's axis. */
   const lowPct =
-    targetLow !== null ? pctFromDb(magnitudeToDb(targetLow)) : null;
+    targetLow !== null ? pctFromDb(magnitudeToDb(targetLow) - gainDb) : null;
   const highPct =
-    targetHigh !== null ? pctFromDb(magnitudeToDb(targetHigh)) : null;
+    targetHigh !== null ? pctFromDb(magnitudeToDb(targetHigh) - gainDb) : null;
   const gatePct =
     noiseGate && noiseGate > 0 ? pctFromDb(magnitudeToDb(noiseGate)) : null;
 
@@ -97,9 +109,13 @@ export const InputLevelMeter = memo(function InputLevelMeter({
   /* Reanimated is mocked under jest, so the visual state is unassertable in a unit test. The
    * numbers therefore live in the accessibility label, which is both the only testable
    * surface AND a genuine win for anyone using a screen reader in a dark room. */
+  const headroomText =
+    headroomDb === null ? "—" : `${Math.round(headroomDb)} dB`;
   const a11y = live
     ? `Input level ${Math.round(rmsInputDb)} decibels, mic gain ${gainText}, ` +
-      `${Math.round(headroomDb)} decibels of headroom`
+      (headroomDb === null
+        ? "headroom unavailable — nothing above the noise floor"
+        : `${Math.round(headroomDb)} decibels of headroom`)
     : "Input level unavailable, no signal from the glasses";
 
   return (
@@ -178,7 +194,7 @@ export const InputLevelMeter = memo(function InputLevelMeter({
           style={{ color: colors.textSecondary }}
           testID={`${testID}-gain`}
         >
-          mic gain {gainText} · {Math.round(headroomDb)} dB headroom
+          mic gain {gainText} · {headroomText} headroom
         </ThemedText>
         <ThemedText type="caption" style={{ color: colors.textMuted }}>
           0

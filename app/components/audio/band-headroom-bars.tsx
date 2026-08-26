@@ -6,7 +6,7 @@ import { ThemedText } from "@/components/themed-text";
 import { Radii, Spacing } from "@/constants/theme";
 import { useAudioTelemetry } from "@/context/audio-telemetry-context";
 import { useThemeColors } from "@/hooks/use-theme-color";
-import { AUDIO_NUM_BANDS } from "@/services/audio-telemetry";
+import { AUDIO_NUM_BANDS, BAND_RATIO_MAX } from "@/services/audio-telemetry";
 
 /**
  * Four bars answering the one question the serial shell could never answer at a venue:
@@ -29,8 +29,9 @@ export const BAND_RANGES = [
   "2.0–6.0 kHz",
 ] as const;
 
-/** Matches BAND_RATIO_MAX in the provider: the bar is full at 1.5x the fire line. */
-const RATIO_MAX = 1.5;
+/* The bar is full at BAND_RATIO_MAX x the fire line. Imported, not restated: this constant
+ * also positions the fire tick and clamps what the provider writes, and a local copy meant
+ * retuning one desynced the tick from where the bars actually saturate. */
 
 interface Props {
   /** Latest ratios for the accessibility label; the bars themselves animate off shared values. */
@@ -93,7 +94,7 @@ function BandRow({
 
   const fillStyle = useAnimatedStyle(() => {
     const r = ratioValue ? ratioValue.value : 0;
-    const pct = Math.min(r / RATIO_MAX, 1) * 100;
+    const pct = Math.min(r / BAND_RATIO_MAX, 1) * 100;
     return { width: `${pct}%` };
   });
 
@@ -127,7 +128,10 @@ function BandRow({
         <View
           style={[
             styles.fireTick,
-            { left: `${(1 / RATIO_MAX) * 100}%`, backgroundColor: colors.text },
+            {
+              left: `${(1 / BAND_RATIO_MAX) * 100}%`,
+              backgroundColor: colors.text,
+            },
           ]}
         />
       </View>

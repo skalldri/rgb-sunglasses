@@ -509,3 +509,55 @@ describe("summarizeTelemetry", () => {
     expect(summarizeTelemetry(ring, 100).tier).toBe(TELEMETRY_TIER_SPECTRUM);
   });
 });
+
+describe("summary regressions from review", () => {
+  function fill(frames: { bytes: Uint8Array; timeMs: number }[]) {
+    const ring = createTelemetryRing(512);
+    for (const f of frames) pushTelemetryBytes(ring, f.bytes, f.timeMs);
+    return ring;
+  }
+
+  it("reports no headroom rather than a confident +100 dB in a silent room", () => {
+    // Every frame quantises to zero, magnitudeToDb returns its floor, and negating that
+    // presented the sentinel as a measurement: "100 dB headroom" on the meter legend.
+    const ring = fill(
+      Array.from({ length: 20 }, (_, n) => ({
+        bytes: makeFrame({ peak: 0 }),
+        timeMs: n * 125,
+      })),
+    );
+    const s = summarizeTelemetry(ring, 2500);
+    expect(s.peakDb).toBe(TELEMETRY_DB_FLOOR);
+    expect(s.headroomDb).toBeNull();
+  });
+
+  it("still reports headroom when there IS a peak", () => {
+    const ring = fill([{ bytes: makeFrame({ peak: 0.25 }), timeMs: 0 }]);
+    expect(summarizeTelemetry(ring, 100).headroomDb).toBeCloseTo(12, 0);
+  });
+
+  it("estimates a tempo the send period cannot represent as an interval", () => {
+    // 130 BPM is a 461 ms beat. At the default 8 Hz the sticky-OR beat flags can only land on
+    // 125 ms boundaries, so individual intervals are 375 or 500 ms and NOTHING is 461. The
+    // median estimator therefore reported a confident, wrong "120". Averaging over the window
+    // recovers the real tempo because the quantisation error is zero-mean.
+    const bpm = 130;
+    const beatMs = 60_000 / bpm;
+    const rateHz = 8;
+    const stepMs = 1000 / rateHz;
+    const frames: { bytes: Uint8Array; timeMs: number }[] = [];
+    let nextBeat = 0;
+    for (let n = 0; n < 8 * rateHz; n++) {
+      const t = n * stepMs;
+      let mask = 0;
+      if (t >= nextBeat) {
+        mask = 0x1;
+        nextBeat += beatMs;
+      }
+      frames.push({ bytes: makeFrame({ beatMask: mask }), timeMs: t });
+    }
+    const s = summarizeTelemetry(fill(frames), 8 * 1000);
+    expect(s.bpm).not.toBeNull();
+    expect(Math.abs(s.bpm! - bpm)).toBeLessThanOrEqual(3);
+  });
+});

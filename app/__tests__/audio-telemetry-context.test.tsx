@@ -426,4 +426,94 @@ describe("AudioTelemetryProvider", () => {
       expect(seen.length).toBe(baseline + 2);
     });
   });
+
+  describe("recovery paths from review", () => {
+    it("keeps retrying while the device is still discovering, instead of latching unsupported", () => {
+      // Discovery is ~170 sequential GATT reads and only populates selectedDevice at the end, so
+      // a single 1.5 s retry could easily land before it finishes. When it did, the screen told
+      // the user their current firmware was too old — permanently, with no path back except
+      // blurring and refocusing.
+      const h = buildDevice();
+      const late = { ...h.device, characteristicsByService: undefined };
+      jest
+        .spyOn(BluetoothContext, "useBluetooth")
+        .mockImplementation(() => ({ selectedDevice: late }) as any);
+
+      const { getByTestId } = render(
+        <AudioTelemetryProvider>
+          <Probe />
+        </AudioTelemetryProvider>,
+      );
+
+      act(() => {
+        jest.advanceTimersByTime(5000);
+      });
+      expect(getByTestId("probe").props.children).not.toContain("unsupported");
+
+      // Discovery completes: the retry must pick it up without a refocus.
+      jest
+        .spyOn(BluetoothContext, "useBluetooth")
+        .mockImplementation(() => ({ selectedDevice: h.device }) as any);
+      (late as any).characteristicsByService =
+        h.device.characteristicsByService;
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+      expect(h.monitor).toHaveBeenCalled();
+    });
+
+    it("stops the re-arm timer on a link error instead of streaming into nothing", () => {
+      // The re-arm interval kept extending the firmware's watchdog hold over a dead
+      // subscription: the device carried on encoding and notifying at 8-32 Hz to nobody, and
+      // the governor kept holding the faster connection interval — the exact battery cost the
+      // stream-hold design exists to avoid.
+      const h = buildDevice();
+      mockBluetooth(h.device);
+      render(
+        <AudioTelemetryProvider>
+          <Probe />
+        </AudioTelemetryProvider>,
+      );
+      h.writeWithResponse.mockClear();
+
+      act(() => {
+        h.monitorCbs.forEach((cb) =>
+          cb({ message: "GATT_INSUFFICIENT_ENCRYPTION" }, null),
+        );
+      });
+      act(() => {
+        jest.advanceTimersByTime(REQUESTED_HOLD_S * 1000 * 3);
+      });
+
+      const rearms = h.writeWithResponse.mock.calls.filter(
+        (c) =>
+          c[0] ===
+          encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
+      );
+      expect(rearms).toHaveLength(0);
+    });
+
+    it("re-arms after a disconnect-shaped error once the link is usable again", () => {
+      // Disconnect errors were filtered as "normal end" with no recovery, so the meters stayed
+      // dead after a mid-focus link drop even once the link came back.
+      const h = buildDevice();
+      mockBluetooth(h.device);
+      render(
+        <AudioTelemetryProvider>
+          <Probe />
+        </AudioTelemetryProvider>,
+      );
+      expect(h.monitor).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        h.monitorCbs.forEach((cb) =>
+          cb({ message: "Device was disconnected" }, null),
+        );
+      });
+      act(() => {
+        jest.advanceTimersByTime(4000);
+      });
+      expect(h.monitor.mock.calls.length).toBeGreaterThan(1);
+    });
+  });
 });

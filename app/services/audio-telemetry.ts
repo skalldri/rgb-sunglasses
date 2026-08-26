@@ -410,6 +410,17 @@ export function ringIndex(ring: TelemetryRing, fromNewest: number): number {
 export const GAIN_STEPS_MIN = -40; // -20 dB
 export const GAIN_STEPS_MAX = 40; // +20 dB
 
+/**
+ * Ratio at which a band bar is drawn full, and the clamp applied to every band ratio.
+ *
+ * Lives here rather than in either component because THREE places consume it: the provider
+ * (clamping what it writes to the shared values), the bars (positioning the fire tick), and
+ * the monitor panel's accessibility pass. When it lived in two of them the bar could pin at
+ * full while the label announced "480 percent of the firing level" — the same tick meaning
+ * two different things.
+ */
+export const BAND_RATIO_MAX = 1.5;
+
 export const SUMMARY_WINDOW_MS = 10_000;
 /** Beyond this with no frame, the meters freeze rather than decay. See VerdictBanner. */
 export const STALE_AFTER_MS = 1_000;
@@ -433,7 +444,13 @@ export type TelemetrySummary = {
   noiseFloorDb: number;
   peakDb: number;
   /** dB between the loudest recent peak and full scale. */
-  headroomDb: number;
+  /**
+   * dB between the loudest recent peak and full scale, or null when the peak sits at the
+   * meter's floor — i.e. every frame in the window quantised to zero. Negating the floor
+   * sentinel produced a confident "+100 dB of headroom" on every quiet room, which reads as
+   * a measurement rather than as the absence of one.
+   */
+  headroomDb: number | null;
 
   silentFraction: number;
   clipFraction: number;
@@ -462,7 +479,7 @@ export const EMPTY_SUMMARY: TelemetrySummary = {
   rmsInputDb: TELEMETRY_DB_FLOOR,
   noiseFloorDb: TELEMETRY_DB_FLOOR,
   peakDb: TELEMETRY_DB_FLOOR,
-  headroomDb: 0,
+  headroomDb: null,
   silentFraction: 0,
   clipFraction: 0,
   beatsPerSecond: 0,
@@ -553,15 +570,18 @@ export function summarizeTelemetry(
 
   let bpm: number | null = null;
   if (beatTimes.length >= MIN_BEATS_FOR_BPM) {
-    const intervals: number[] = [];
-    for (let k = 1; k < beatTimes.length; k++) {
-      /* beatTimes is newest-first, so the earlier entry is the later timestamp. */
-      intervals.push(beatTimes[k - 1] - beatTimes[k]);
-    }
-    intervals.sort((a, b) => a - b);
-    const median = intervals[Math.floor(intervals.length / 2)];
-    if (median > 0) {
-      const candidate = 60_000 / median;
+    /* MEAN interval across the whole window, not the median of individual intervals. Each
+     * interval carries up to one send-period of quantisation error, and those errors are
+     * zero-mean, so averaging over the window cancels most of them; a median just picks one
+     * quantised value and reports it with full confidence. At the default 8 Hz a 461 ms pulse
+     * (130 BPM) is only ever observable as 375 or 500 ms, and the median estimator turned a
+     * steady 130 BPM into exactly "120". */
+    const newestBeat = beatTimes[0];
+    const oldestBeat = beatTimes[beatTimes.length - 1];
+    const spanMs = newestBeat - oldestBeat;
+    const gaps = beatTimes.length - 1;
+    if (spanMs > 0 && gaps > 0) {
+      const candidate = 60_000 / (spanMs / gaps);
       bpm =
         candidate >= BPM_MIN && candidate <= BPM_MAX
           ? Math.round(candidate)
@@ -588,7 +608,7 @@ export function summarizeTelemetry(
     peakDb: magnitudeToDb(peakMag),
     /* Headroom is derived, never a wire field: how far the loudest recent peak sits below
      * full scale. Negative would mean the peak itself exceeded 0 dBFS. */
-    headroomDb: -magnitudeToDb(peakMag),
+    headroomDb: peakQ === 0 ? null : -magnitudeToDb(peakMag),
     silentFraction: frames > 0 ? silent / frames : 0,
     clipFraction: frames > 0 ? clipped / frames : 0,
     beatsPerSecond,

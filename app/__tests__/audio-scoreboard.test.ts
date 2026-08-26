@@ -3,7 +3,6 @@ import {
   MUTED_FRACTION,
   TOO_SENSITIVE_BPS,
   computeVerdict,
-  formatScoreboard,
 } from "@/services/audio-scoreboard";
 import { AUDIO_PARAMS } from "@/services/audio-params";
 import {
@@ -33,6 +32,26 @@ function healthy(over: Partial<TelemetrySummary> = {}): TelemetrySummary {
 }
 
 describe("computeVerdict priority", () => {
+  it("distinguishes a stream that never started from one that died", () => {
+    // The discriminator is ageMs, not the frame count: when a stream dies the window drains
+    // to zero frames, which used to read as a fresh start at exactly the wrong moment.
+    const neverStarted = computeVerdict({
+      ...healthy(),
+      frames: 0,
+      ageMs: Infinity,
+    });
+    expect(neverStarted.kind).toBe("no-data");
+
+    const diedAndDrained = computeVerdict({
+      ...healthy(),
+      frames: 0,
+      live: false,
+      ageMs: 30_000,
+    });
+    expect(diedAndDrained.kind).toBe("stale");
+    expect(diedAndDrained.title).toBe("No signal");
+  });
+
   it("reports no data before anything else", () => {
     // Every other field is screaming, but with no frames we know nothing and must say so.
     const v = computeVerdict({
@@ -236,33 +255,5 @@ describe("verdict copy", () => {
     }
     // Every branch reachable — a verdict nobody can trigger is dead copy.
     expect(kinds.size).toBe(8);
-  });
-});
-
-describe("formatScoreboard", () => {
-  it("renders dashes with no data rather than a confident zero", () => {
-    const f = formatScoreboard(EMPTY_SUMMARY);
-    expect(f).toEqual({
-      beatsPerSecond: "—",
-      bpm: "—",
-      gain: "—",
-      headroom: "—",
-      noiseFloor: "—",
-      muted: "—",
-    });
-  });
-
-  it("formats a live summary with units and an explicit gain sign", () => {
-    const f = formatScoreboard(healthy());
-    expect(f.beatsPerSecond).toBe("2.1/s");
-    expect(f.bpm).toBe("128");
-    expect(f.gain).toBe("+6.5 dB");
-    expect(f.headroom).toBe("13 dB");
-    expect(f.noiseFloor).toBe("-64 dBFS");
-    expect(f.muted).toBe("0%");
-  });
-
-  it("keeps the sign on negative gain", () => {
-    expect(formatScoreboard(healthy({ gainDb: -12.5 })).gain).toBe("-12.5 dB");
   });
 });
