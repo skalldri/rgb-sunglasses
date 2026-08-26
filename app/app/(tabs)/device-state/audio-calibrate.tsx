@@ -18,8 +18,8 @@ import {
 import { useBluetooth } from "@/context/bluetooth-context";
 import {
   useAudioCalibration,
-  STEP_SECONDS,
-  TAP_TARGET,
+  type CollectorKind,
+  type CalibrationState,
 } from "@/hooks/use-audio-calibration";
 import { useAudioParams } from "@/hooks/use-audio-params";
 import { useAudioPresets } from "@/hooks/use-audio-presets";
@@ -29,30 +29,32 @@ import {
   formatParamValue,
   type AudioParamKey,
 } from "@/services/audio-params";
-import type { ProposedChange } from "@/services/audio-calibration";
+import { MIN_TAPS, type ProposedChange } from "@/services/audio-calibration";
 
 /**
- * "Tune it for me" — the guided calibration wizard.
+ * "Tune it for me" — opportunistic calibration.
  *
- * A pushed full-screen route rather than a modal, with Cancel always visible, because it holds
- * the user's attention for ~30 s in a loud room and needs an unambiguous way out at every
- * point. It writes NOTHING until the final review, and auto-saves the pre-change settings as
- * a named preset before the first write, so there is always a way back.
+ * A COLLECTION BOARD, NOT A WIZARD. There is no countdown and no required order. Each
+ * collector is toggled on around whatever moment the venue happens to offer and accumulates
+ * across as many sittings as it takes; Fit runs when the operator says so.
+ *
+ * The countdown version this replaced was unusable anywhere it mattered: it demanded 8 s of
+ * silence, then 15 s of music, then 30 s of tapping, each starting the instant the app decided.
+ * A venue does not take direction — the band starts when it starts — and the flow did not fail
+ * loudly when it was ignored, it fitted whatever happened to be playing and reported success.
+ *
+ * Still writes NOTHING until the final review, and still auto-saves the pre-change settings as
+ * a named preset before the first write.
  */
 
-/* No provider here: the device-state stack layout owns the single AudioTelemetryProvider.
- * Mounting a second one on top of the still-mounted tuning screen's is what put two
- * subscriptions and two watchdogs on one characteristic. */
+/* No provider here: the device-state stack layout owns the single AudioTelemetryProvider. */
 export default function AudioCalibrateScreen() {
-
   const c = useThemeColors();
   const router = useRouter();
   const { selectedDevice } = useBluetooth();
   const telemetry = useAudioTelemetry();
 
-  /* All parameter plumbing comes from ONE hook, shared with the tuning screen. It used to be
-   * ~60 lines copied between the two, and the copies had already diverged on how they
-   * filtered a missing value. */
+  /* All parameter plumbing comes from ONE hook, shared with the tuning screen. */
   const { resolved, currentValues, valueOf, writeParam } = useAudioParams();
 
   const presets = useAudioPresets({ currentValues, writeParam });
@@ -60,22 +62,25 @@ export default function AudioCalibrateScreen() {
   /**
    * Save the pre-change settings under EXACTLY the name the UI promises.
    *
-   * It used to append a timestamp ("Before calibration · 9:45 PM") while all three
-   * user-facing strings said plainly "Before calibration" — so a user whose apply failed
-   * mid-write went looking for a preset that did not exist under the promised name. The
-   * timestamp was there to stop a second run overwriting the first run's escape hatch, but
-   * that trade is backwards: the most recent pre-calibration state is the one worth keeping,
-   * and an un-findable rescue preset is not a rescue.
-   *
-   * The return value is checked rather than discarded: saveCurrentAs yields null when no
-   * values resolved, and promising a way back that was never written is worse than saying so.
+   * The return value is checked rather than discarded: saveCurrentAs yields null when no values
+   * resolved, and promising a way back that was never written is worse than saying so.
    */
   const snapshotPreset = useCallback(
     (name: string) => presets.saveCurrentAs(name, Date.now()) !== null,
     [presets],
   );
 
-  const { state, start, recordTap, cancel, apply } = useAudioCalibration({
+  const {
+    state,
+    startCollecting,
+    stopCollecting,
+    discardLast,
+    recordTap,
+    fit,
+    reset,
+    cancel,
+    apply,
+  } = useAudioCalibration({
     ring: telemetry?.ring ?? { current: null as never },
     requestStream: telemetry?.requestStream ?? (() => {}),
     valueOf,
@@ -84,26 +89,34 @@ export default function AudioCalibrateScreen() {
   });
 
   /* Per-row accept toggles. Default on: the user asked to be tuned, so opting OUT of a single
-   * row is the exception. Keyed by param key, so a re-run resets cleanly. */
+   * row is the exception. */
   const [rejected, setRejected] = useState<Set<string>>(new Set());
 
-  /* Wrap start so BOTH entry points (Start and Try again) clear the per-row rejections. The
-   * hook resets its own state, but this set lives on a screen that stays mounted across runs:
-   * a user who toggled rows off in run 1 got run 2's fresh proposal rendered with those
-   * switches already off and silently excluded — worst case an "Apply 0 changes" button,
+  /* Clear rejections whenever a fresh proposal is produced. The hook resets its own state, but
+   * this set lives on a screen that stays mounted across runs: rows toggled off in run 1 would
+   * otherwise arrive already-excluded in run 2, worst case an "Apply 0 changes" button,
    * disabled, with nothing on screen explaining why. */
-  const startRun = useCallback(() => {
+  const runFit = useCallback(() => {
     setRejected(new Set());
-    start();
-  }, [start]);
+    fit();
+  }, [fit]);
+  const startOver = useCallback(() => {
+    setRejected(new Set());
+    reset();
+  }, [reset]);
+  /* Back to the board WITHOUT throwing anything away. A fit can fail for reasons that have
+   * nothing to do with what was collected ("nothing to change"), and a venue may not offer
+   * those quiet moments again. */
+  const backToCollecting = useCallback(() => {
+    setRejected(new Set());
+    cancel();
+  }, [cancel]);
   const accepted = state.changes.filter((ch) => !rejected.has(ch.key));
 
-  /* THE WIZARD IS ENTIRELY TELEMETRY-DEPENDENT, so it must gate on telemetry — not, as it
-   * did, on the audio CONFIG service. Those are separate axes: firmware can expose the
-   * tunables without the telemetry stream (the app ships ahead of firmware by design). In
-   * that case the user pressed Start, recorded an empty ring for 8 s, and was told "I did not
-   * hear enough to measure the room. Try again." — forever, with the copy blaming the room
-   * for a firmware capability gap. */
+  /* THE FLOW IS ENTIRELY TELEMETRY-DEPENDENT, so it gates on telemetry — not on the audio
+   * CONFIG service. Those are separate axes: firmware can expose the tunables without the
+   * telemetry stream, and in that case every collector would sit at 0 frames forever with the
+   * copy blaming the room for a firmware capability gap. */
   const telemetryStatus = useAudioTelemetryStatus();
   const telemetryUnsupported = telemetryStatus === "unsupported";
 
@@ -120,6 +133,8 @@ export default function AudioCalibrateScreen() {
       </SafeAreaView>
     );
   }
+
+  const collecting = state.phase === "collecting";
 
   return (
     <SafeAreaView
@@ -148,9 +163,9 @@ export default function AudioCalibrateScreen() {
               This needs newer firmware
             </ThemedText>
             <ThemedText type="caption" style={{ color: c.textSecondary }}>
-              The guided tune-up listens to what the glasses are hearing, and this firmware
-              cannot send that yet. You can still tune everything by hand on the previous
-              screen.
+              The guided tune-up listens to what the glasses are hearing, and
+              this firmware cannot send that yet. You can still tune everything
+              by hand on the previous screen.
             </ThemedText>
             <AppButton
               testID="calibrate-unsupported-back"
@@ -161,69 +176,101 @@ export default function AudioCalibrateScreen() {
           </Card>
         ) : null}
 
-        {!telemetryUnsupported && state.step === "intro" ? (
-          <Card>
-            <ThemedText type="defaultSemiBold">
-              This takes about a minute
-            </ThemedText>
-            <ThemedText type="caption" style={{ color: c.textSecondary }}>
-              First I listen to the empty room, then to the music, then you tap
-              along with the beat. Nothing is changed until you have seen
-              exactly what I want to change.
-            </ThemedText>
-            <ThemedText
-              type="caption"
-              style={{ color: c.textMuted, marginTop: Spacing.sm }}
+        {!telemetryUnsupported && collecting ? (
+          <>
+            <Card>
+              <ThemedText type="defaultSemiBold">
+                Collect whenever it suits
+              </ThemedText>
+              <ThemedText type="caption" style={{ color: c.textSecondary }}>
+                Nothing is timed and nothing has to be done in order. Start a
+                collector when the moment is right, stop it when it stops being
+                right, and come back to it as often as you like.
+              </ThemedText>
+              <ThemedText
+                type="caption"
+                style={{ color: c.textMuted, marginTop: Spacing.sm }}
+              >
+                Nothing is changed until you have seen exactly what I want to
+                change.
+              </ThemedText>
+            </Card>
+
+            <CollectorCard
+              kind="background"
+              title="Background noise"
+              hint="Whatever the room does with the music off. A noisy room is fine — crowd, air handling, chatter. It gets measured and fitted to, not rejected."
+              activeHint="Listening to the room. Stop if the music starts."
+              state={state}
+              onStart={startCollecting}
+              onStop={stopCollecting}
+              onDiscard={discardLast}
+            />
+
+            <CollectorCard
+              kind="music"
+              title="Music"
+              hint="A representative stretch of what will actually be played. Collect more than one if the set changes character."
+              activeHint="Listening to the music."
+              state={state}
+              onStart={startCollecting}
+              onStop={stopCollecting}
+              onDiscard={discardLast}
+            />
+
+            <CollectorCard
+              kind="taps"
+              title="Tap along"
+              hint="Optional. Tap the beat and I can fit Sensitivity to what you hear; skip it and everything else is still fitted."
+              activeHint="Tap the pad on every beat you hear."
+              state={state}
+              onStart={startCollecting}
+              onStop={stopCollecting}
+              onDiscard={discardLast}
             >
-              Start the first step with the music off. A noisy room is fine —
-              it gets measured and fitted to, not rejected.
-            </ThemedText>
-            <AppButton
-              testID="calibrate-start"
-              onPress={startRun}
-              title="Start"
-              style={styles.primaryButton}
-            />
-          </Card>
+              {state.active === "taps" ? (
+                <>
+                  <TapPad
+                    count={state.tapCount}
+                    minimum={MIN_TAPS}
+                    onTap={recordTap}
+                    testID="tap-pad"
+                  />
+                  <ThemedText
+                    type="caption"
+                    style={{ color: c.textMuted }}
+                    testID="calibrate-tap-count"
+                  >
+                    {state.tapCount} tap{state.tapCount === 1 ? "" : "s"}
+                  </ThemedText>
+                </>
+              ) : null}
+            </CollectorCard>
+
+            <Card>
+              <AppButton
+                testID="calibrate-fit"
+                disabled={!state.canFit}
+                onPress={runFit}
+                title="Work out my settings"
+                style={styles.primaryButton}
+              />
+              <ThemedText
+                type="caption"
+                style={{ color: c.textMuted }}
+                testID="calibrate-fit-hint"
+              >
+                {state.canFit
+                  ? state.collectors.taps.ready
+                    ? "Ready. Everything will be fitted, including Sensitivity."
+                    : "Ready. Without taps, everything except Sensitivity will be fitted."
+                  : "Needs background noise and music before it can work anything out."}
+              </ThemedText>
+            </Card>
+          </>
         ) : null}
 
-        {state.step === "room" || state.step === "music" ? (
-          <Card>
-            <ThemedText type="defaultSemiBold" testID="calibrate-step-title">
-              {state.step === "room"
-                ? "Listening to the room"
-                : "Listening to the music"}
-            </ThemedText>
-            <ThemedText type="caption" style={{ color: c.textSecondary }}>
-              {state.step === "room"
-                ? "Music off — this measures whatever else the room is doing. Crowd noise is fine."
-                : "Let a normal, representative track play."}
-            </ThemedText>
-            <ThemedText type="heading" testID="calibrate-countdown">
-              {state.secondsLeft}s
-            </ThemedText>
-            <ProgressBar
-              progress={1 - state.secondsLeft / STEP_SECONDS[state.step]}
-            />
-          </Card>
-        ) : null}
-
-        {state.step === "tap" ? (
-          <Card>
-            <ThemedText type="defaultSemiBold">Tap along</ThemedText>
-            <ThemedText type="caption" style={{ color: c.textSecondary }}>
-              Tap the pad on every beat you hear. This is the only way to check
-              the glasses are finding the same beats you are.
-            </ThemedText>
-            <TapPad
-              count={state.tapCount}
-              target={TAP_TARGET}
-              onTap={recordTap}
-            />
-          </Card>
-        ) : null}
-
-        {state.step === "review" || state.step === "applying" ? (
+        {state.phase === "review" || state.phase === "applying" ? (
           <Card>
             <ThemedText type="defaultSemiBold">
               Here is what I want to change
@@ -242,7 +289,7 @@ export default function AudioCalibrateScreen() {
                 key={ch.key}
                 change={ch}
                 accepted={!rejected.has(ch.key)}
-                disabled={state.step === "applying"}
+                disabled={state.phase === "applying"}
                 onToggle={() =>
                   setRejected((prev) => {
                     const next = new Set(prev);
@@ -279,19 +326,27 @@ export default function AudioCalibrateScreen() {
             </ThemedText>
             <AppButton
               testID="calibrate-apply"
-              disabled={state.step === "applying" || accepted.length === 0}
+              disabled={state.phase === "applying" || accepted.length === 0}
               onPress={() => apply(accepted)}
               style={styles.primaryButton}
               title={
-                state.step === "applying" && state.applyProgress
+                state.phase === "applying" && state.applyProgress
                   ? `Applying ${state.applyProgress.done} of ${state.applyProgress.total}...`
                   : `Apply ${accepted.length} change${accepted.length === 1 ? "" : "s"}`
               }
             />
+            {state.phase === "review" ? (
+              <AppButton
+                testID="calibrate-collect-more"
+                onPress={startOver}
+                title="Collect more instead"
+                style={styles.secondaryButton}
+              />
+            ) : null}
           </Card>
         ) : null}
 
-        {state.step === "failed" ? (
+        {state.phase === "failed" ? (
           <Card>
             <ThemedText type="defaultSemiBold" style={{ color: c.warning }}>
               Could not finish
@@ -303,16 +358,24 @@ export default function AudioCalibrateScreen() {
             >
               {state.failure}
             </ThemedText>
+            {/* Back to the board, NOT a fresh start: what was collected is still good, and a
+                venue may not offer those moments again. */}
             <AppButton
               testID="calibrate-retry"
-              onPress={startRun}
-              title="Try again"
+              onPress={backToCollecting}
+              title="Back to collecting"
               style={styles.primaryButton}
+            />
+            <AppButton
+              testID="calibrate-start-over"
+              onPress={startOver}
+              title="Throw it away and start over"
+              style={styles.secondaryButton}
             />
           </Card>
         ) : null}
 
-        {state.step === "done" ? (
+        {state.phase === "done" ? (
           <Card>
             <ThemedText type="defaultSemiBold" style={{ color: c.success }}>
               Done
@@ -331,7 +394,7 @@ export default function AudioCalibrateScreen() {
         ) : null}
 
         {/* The monitor stays visible throughout: it is how the user sees the room respond, and
-            during the tap step it is how they confirm the glasses hear what they hear. */}
+            while collecting taps it is how they confirm the glasses hear what they hear. */}
         <MonitorPanel
           targetLow={valueOf("agcTargetLow")}
           targetHigh={valueOf("agcTargetHigh")}
@@ -342,6 +405,89 @@ export default function AudioCalibrateScreen() {
   );
 }
 
+/**
+ * One collector: how much it holds, a start/stop toggle, and a way to throw away the last
+ * sitting.
+ *
+ * The readout counts SECONDS COLLECTED, never elapsed time, and does not cap at the minimum —
+ * topping up past "ready" improves the fit, and a collector that refused more would make a
+ * marginal sample permanent.
+ */
+function CollectorCard({
+  kind,
+  title,
+  hint,
+  activeHint,
+  state,
+  onStart,
+  onStop,
+  onDiscard,
+  children,
+}: {
+  kind: CollectorKind;
+  title: string;
+  hint: string;
+  activeHint: string;
+  state: CalibrationState;
+  onStart: (k: CollectorKind) => void;
+  onStop: () => void;
+  onDiscard: (k: CollectorKind) => void;
+  children?: React.ReactNode;
+}) {
+  const c = useThemeColors();
+  const r = state.collectors[kind];
+  const isActive = state.active === kind;
+  /* Another collector is running. Starting this one would stop that one mid-sitting, which is
+   * never what someone means to do. */
+  const otherActive = state.active !== null && !isActive;
+
+  return (
+    <Card>
+      <View style={styles.collectorHead}>
+        <View style={styles.collectorTitle}>
+          <ThemedText type="defaultSemiBold">{title}</ThemedText>
+          <ThemedText
+            type="caption"
+            style={{ color: r.ready ? c.success : c.textSecondary }}
+            testID={`calibrate-readout-${kind}`}
+          >
+            {r.ready ? "✓ " : ""}
+            {r.seconds.toFixed(1)}s collected
+            {r.chunks > 0
+              ? ` · ${r.chunks} go${r.chunks === 1 ? "" : "es"}`
+              : ""}
+          </ThemedText>
+        </View>
+      </View>
+
+      <ProgressBar
+        progress={Math.min(1, r.needFrames > 0 ? r.frames / r.needFrames : 0)}
+      />
+
+      <ThemedText type="caption" style={{ color: c.textMuted }}>
+        {isActive ? activeHint : hint}
+      </ThemedText>
+
+      {children}
+
+      <AppButton
+        testID={`calibrate-toggle-${kind}`}
+        disabled={otherActive}
+        onPress={() => (isActive ? onStop() : onStart(kind))}
+        title={isActive ? "Stop" : r.chunks > 0 ? "Collect more" : "Start"}
+        style={styles.primaryButton}
+      />
+      {r.chunks > 0 && !isActive ? (
+        <AppButton
+          testID={`calibrate-discard-${kind}`}
+          onPress={() => onDiscard(kind)}
+          title="Discard the last one"
+          style={styles.secondaryButton}
+        />
+      ) : null}
+    </Card>
+  );
+}
 
 function ChangeRow({
   change,
@@ -396,13 +542,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: Spacing.md,
   },
-  progressTrack: {
-    height: 8,
-    borderRadius: Radii.sm,
-    overflow: "hidden",
+  secondaryButton: {
+    minHeight: 48,
+    borderRadius: Radii.md,
+    alignItems: "center",
+    justifyContent: "center",
     marginTop: Spacing.sm,
   },
-  progressFill: { height: "100%" },
+  collectorHead: { flexDirection: "row", alignItems: "center" },
+  collectorTitle: { flex: 1, minWidth: 0, gap: 2 },
   changeRow: {
     flexDirection: "row",
     alignItems: "center",

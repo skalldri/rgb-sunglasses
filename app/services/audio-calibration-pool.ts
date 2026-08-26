@@ -143,6 +143,30 @@ export function appendChunk(
   };
 }
 
+/**
+ * Flatten a staging pool into ONE chunk.
+ *
+ * Collection drains the ring on a short interval so nothing is lost to wraparound, but a
+ * "sitting" is what the user thinks they collected and what Discard has to remove. Sealing at
+ * stop() makes chunk == sitting; without it, Discard would throw away one second of a
+ * two-minute sample and appear to do nothing.
+ */
+export function sealPool(staging: CalibrationPool): PoolChunk {
+  return {
+    frames: staging.frames,
+    timeMs: staging.timeMs,
+    rmsInput: staging.rmsInput,
+    clipped: staging.clipped,
+    beat: staging.beat,
+    flux: staging.flux,
+    mean: staging.mean,
+    sigma: staging.sigma,
+    thresholdMode: staging.thresholdMode,
+    hasStats: staging.hasStats,
+    medianStepMs: staging.medianStepMs,
+  };
+}
+
 /** Drop the most recent chunk — the "that one was ruined" escape hatch. */
 export function dropLastChunk(pool: CalibrationPool): CalibrationPool {
   const n = pool.chunks.length;

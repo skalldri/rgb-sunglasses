@@ -19,7 +19,15 @@ import { useThemeColors } from "@/hooks/use-theme-color";
 
 interface Props {
   count: number;
-  target: number;
+  /**
+   * The MINIMUM number of taps that can be fitted against — not a goal to stop at.
+   *
+   * It used to be a target the step auto-completed on, so the pad read "12 / 24" and stopping
+   * was the app's decision. Collection is open-ended now: tapping past the minimum only makes
+   * the fit better, and a pad that read "15 / 8" would look broken at exactly the moment the
+   * user was doing the right thing.
+   */
+  minimum: number;
   disabled?: boolean;
   onTap: () => void;
   testID?: string;
@@ -27,12 +35,13 @@ interface Props {
 
 export const TapPad = memo(function TapPad({
   count,
-  target,
+  minimum,
   disabled,
   onTap,
   testID = "tap-pad",
 }: Props) {
   const colors = useThemeColors();
+  const enough = count >= minimum;
 
   const handle = () => {
     if (disabled) return;
@@ -48,7 +57,11 @@ export const TapPad = memo(function TapPad({
       onPress={handle}
       disabled={disabled}
       accessibilityRole="button"
-      accessibilityLabel={`Tap along with the beat. ${count} of ${target} taps recorded.`}
+      accessibilityLabel={
+        enough
+          ? `Tap along with the beat. ${count} taps recorded, enough to fit. Keep going for a better fit.`
+          : `Tap along with the beat. ${count} of ${minimum} taps recorded, ${minimum - count} more needed.`
+      }
       style={({ pressed }) => [
         styles.pad,
         {
@@ -59,10 +72,10 @@ export const TapPad = memo(function TapPad({
       ]}
     >
       <ThemedText type="heading" testID={`${testID}-count`}>
-        {count} / {target}
+        {enough ? `${count} taps` : `${count} / ${minimum}`}
       </ThemedText>
       <ThemedText type="caption" style={{ color: colors.textSecondary }}>
-        Tap on every beat
+        {enough ? "Enough to fit — more is better" : "Tap on every beat"}
       </ThemedText>
       <View style={styles.dots}>
         {Array.from({ length: 8 }, (_, i) => (
@@ -72,7 +85,7 @@ export const TapPad = memo(function TapPad({
               styles.dot,
               {
                 backgroundColor:
-                  i < Math.min(8, Math.round((count / target) * 8))
+                  enough || i < Math.min(8, Math.round((count / minimum) * 8))
                     ? colors.primary
                     : colors.border,
               },
