@@ -23,16 +23,32 @@ function withDebugAppIdSuffix(config) {
 // disappears when both the release and debug APKs are installed.
 // The src/release/AndroidManifest.xml overlay (written by withDebugResources)
 // restores "rgbsunglassesapp" for the release build at Gradle merge time.
+//
+// Must be "ensure exactly one", not "rewrite in place": `expo prebuild` (without
+// --clean) applies mods on top of whatever is already on disk in android/, and
+// @expo/config-plugins' own built-in `withScheme` base mod (android/Scheme.js,
+// `setScheme`/`appendScheme`) only treats a scheme as already-present if it finds
+// the literal "rgbsunglassesapp" from app.json's `expo.scheme` in the manifest. Since
+// this function always rewrites that entry away to "rgbsunglassesapp.dev", the base
+// mod sees "rgbsunglassesapp" missing on every subsequent prebuild and re-appends a
+// fresh `<data android:scheme="rgbsunglassesapp">` entry via `appendScheme()` — which
+// this function then rewrites to ".dev" too, adding one more duplicate per run
+// (observed growing 1 -> 2 -> 3 across three consecutive prebuilds). Fix: remove
+// every existing "rgbsunglassesapp"/"rgbsunglassesapp.dev" data entry from the
+// intent-filter first, then insert exactly one ".dev" entry — self-healing even
+// against duplicates left behind by prior (buggy) prebuild runs.
 function withDevSchemeInManifest(config) {
   return withAndroidManifest(config, (cfg) => {
     const activities = cfg.modResults.manifest?.application?.[0]?.activity ?? [];
     for (const activity of activities) {
       for (const filter of activity['intent-filter'] ?? []) {
-        for (const data of filter.data ?? []) {
-          if (data.$?.['android:scheme'] === 'rgbsunglassesapp') {
-            data.$['android:scheme'] = 'rgbsunglassesapp.dev';
-          }
-        }
+        if (!filter.data) continue;
+        const isDevOrProdScheme = (data) =>
+          data.$?.['android:scheme'] === 'rgbsunglassesapp' ||
+          data.$?.['android:scheme'] === 'rgbsunglassesapp.dev';
+        if (!filter.data.some(isDevOrProdScheme)) continue;
+        filter.data = filter.data.filter((data) => !isDevOrProdScheme(data));
+        filter.data.push({ $: { 'android:scheme': 'rgbsunglassesapp.dev' } });
       }
     }
     return cfg;
