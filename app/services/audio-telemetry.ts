@@ -280,8 +280,19 @@ export function decodeTelemetryFrameFromBase64(
  * cost 4x the memory to represent the same 256 distinct values.
  */
 
-/** ~16 s at 31.25 Hz — sized for the wizard's tap-along window, not for the meters. */
-export const RING_FRAMES = 512;
+/**
+ * Sized for the WIZARD'S TAP STEP, which is the longest window anything extracts: 30 s at the
+ * undecimated 32 Hz the tap step requests is 960 frames.
+ *
+ * 512 was wrong and only looked right because requestStream was inert, leaving the stream at
+ * 8 Hz. At a working 32 Hz, tapping slower than ~84 BPM — or letting the step run its full 30 s
+ * instead of finishing early at 24 taps — wrapped the ring and silently dropped the head of the
+ * window, while tapsRef kept every tap. Those orphaned early taps could then never match a
+ * beat, capping recall for every candidate in the sweep and quietly biasing the fit.
+ *
+ * ~31 KB of typed arrays at this size, which is nothing on a phone.
+ */
+export const RING_FRAMES = 1024;
 
 export type TelemetryRing = {
   capacity: number;

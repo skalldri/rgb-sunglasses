@@ -1,18 +1,19 @@
 import { useRouter } from "expo-router";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { MonitorPanel } from "@/components/audio/monitor-panel";
 import { TapPad } from "@/components/audio/tap-pad";
 import { ThemedText } from "@/components/themed-text";
+import { AppButton } from "@/components/ui/app-button";
 import { Card } from "@/components/ui/card";
+import { ProgressBar } from "@/components/ui/progress-bar";
 import { EmptyState } from "@/components/ui/empty-state";
-import { UUID_AUDIO_CONFIG_SERVICE } from "@/constants/bluetooth";
 import { Radii, Spacing } from "@/constants/theme";
 import {
-  AudioTelemetryProvider,
   useAudioTelemetry,
+  useAudioTelemetryStatus,
 } from "@/context/audio-telemetry-context";
 import { useBluetooth } from "@/context/bluetooth-context";
 import {
@@ -20,14 +21,12 @@ import {
   STEP_SECONDS,
   TAP_TARGET,
 } from "@/hooks/use-audio-calibration";
-import { useAudioParamWriter } from "@/hooks/use-audio-param-writer";
+import { useAudioParams } from "@/hooks/use-audio-params";
 import { useAudioPresets } from "@/hooks/use-audio-presets";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import {
   AUDIO_PARAMS,
-  encodeParam,
   formatParamValue,
-  resolveAudioParams,
   type AudioParamKey,
 } from "@/services/audio-params";
 import type { ProposedChange } from "@/services/audio-calibration";
@@ -41,80 +40,38 @@ import type { ProposedChange } from "@/services/audio-calibration";
  * a named preset before the first write, so there is always a way back.
  */
 
-export default function AudioCalibrateRoute() {
-  return (
-    <AudioTelemetryProvider>
-      <AudioCalibrateScreen />
-    </AudioTelemetryProvider>
-  );
-}
+/* No provider here: the device-state stack layout owns the single AudioTelemetryProvider.
+ * Mounting a second one on top of the still-mounted tuning screen's is what put two
+ * subscriptions and two watchdogs on one characteristic. */
+export default function AudioCalibrateScreen() {
 
-function AudioCalibrateScreen() {
   const c = useThemeColors();
   const router = useRouter();
-  const { selectedDevice, writeServiceCharacteristic } = useBluetooth();
+  const { selectedDevice } = useBluetooth();
   const telemetry = useAudioTelemetry();
 
-  const serviceChars =
-    selectedDevice?.characteristicsByService?.[UUID_AUDIO_CONFIG_SERVICE];
-  const resolved = useMemo(
-    () => resolveAudioParams(serviceChars ?? {}),
-    [serviceChars],
-  );
-
-  const write = useCallback(
-    (uuid: string, encoded: string) =>
-      writeServiceCharacteristic(UUID_AUDIO_CONFIG_SERVICE, uuid, encoded),
-    [writeServiceCharacteristic],
-  );
-  const writer = useAudioParamWriter(useMemo(() => ({ write }), [write]));
-
-  const byKey = useMemo(() => {
-    const map = {} as Partial<Record<AudioParamKey, (typeof resolved)[number]>>;
-    resolved.forEach((r) => {
-      map[r.spec.key] = r;
-    });
-    return map;
-  }, [resolved]);
-
-  const valueOf = useCallback(
-    (key: AudioParamKey): number | null => {
-      const entry = byKey[key];
-      if (!entry) return null;
-      return writer.displayValue(entry.spec.uuid, entry.value);
-    },
-    [byKey, writer],
-  );
-
-  const writeParam = useCallback(
-    (key: AudioParamKey, value: number) => {
-      const spec = AUDIO_PARAMS[key];
-      return writer.writeNow(spec.uuid, value, (v) => encodeParam(spec, v));
-    },
-    [writer],
-  );
-
-  const currentValues = useMemo(() => {
-    const out: Partial<Record<AudioParamKey, number>> = {};
-    resolved.forEach((r) => {
-      const v = writer.displayValue(r.spec.uuid, r.value);
-      if (v !== null) out[r.spec.key] = v;
-    });
-    return out;
-  }, [resolved, writer]);
+  /* All parameter plumbing comes from ONE hook, shared with the tuning screen. It used to be
+   * ~60 lines copied between the two, and the copies had already diverged on how they
+   * filtered a missing value. */
+  const { resolved, currentValues, valueOf, writeParam } = useAudioParams();
 
   const presets = useAudioPresets({ currentValues, writeParam });
 
+  /**
+   * Save the pre-change settings under EXACTLY the name the UI promises.
+   *
+   * It used to append a timestamp ("Before calibration · 9:45 PM") while all three
+   * user-facing strings said plainly "Before calibration" — so a user whose apply failed
+   * mid-write went looking for a preset that did not exist under the promised name. The
+   * timestamp was there to stop a second run overwriting the first run's escape hatch, but
+   * that trade is backwards: the most recent pre-calibration state is the one worth keeping,
+   * and an un-findable rescue preset is not a rescue.
+   *
+   * The return value is checked rather than discarded: saveCurrentAs yields null when no
+   * values resolved, and promising a way back that was never written is worse than saying so.
+   */
   const snapshotPreset = useCallback(
-    (name: string) => {
-      /* Named with the time, so a second run does not silently overwrite the first run's
-       * escape hatch — saveCurrentAs overwrites by name. */
-      const stamp = new Date().toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-      presets.saveCurrentAs(`${name} · ${stamp}`, Date.now());
-    },
+    (name: string) => presets.saveCurrentAs(name, Date.now()) !== null,
     [presets],
   );
 
@@ -129,7 +86,26 @@ function AudioCalibrateScreen() {
   /* Per-row accept toggles. Default on: the user asked to be tuned, so opting OUT of a single
    * row is the exception. Keyed by param key, so a re-run resets cleanly. */
   const [rejected, setRejected] = useState<Set<string>>(new Set());
+
+  /* Wrap start so BOTH entry points (Start and Try again) clear the per-row rejections. The
+   * hook resets its own state, but this set lives on a screen that stays mounted across runs:
+   * a user who toggled rows off in run 1 got run 2's fresh proposal rendered with those
+   * switches already off and silently excluded — worst case an "Apply 0 changes" button,
+   * disabled, with nothing on screen explaining why. */
+  const startRun = useCallback(() => {
+    setRejected(new Set());
+    start();
+  }, [start]);
   const accepted = state.changes.filter((ch) => !rejected.has(ch.key));
+
+  /* THE WIZARD IS ENTIRELY TELEMETRY-DEPENDENT, so it must gate on telemetry — not, as it
+   * did, on the audio CONFIG service. Those are separate axes: firmware can expose the
+   * tunables without the telemetry stream (the app ships ahead of firmware by design). In
+   * that case the user pressed Start, recorded an empty ring for 8 s, and was told "I did not
+   * hear enough to measure the room. Try again." — forever, with the copy blaming the room
+   * for a firmware capability gap. */
+  const telemetryStatus = useAudioTelemetryStatus();
+  const telemetryUnsupported = telemetryStatus === "unsupported";
 
   if (!selectedDevice || resolved.length === 0) {
     return (
@@ -166,7 +142,26 @@ function AudioCalibrateScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        {state.step === "intro" ? (
+        {telemetryUnsupported ? (
+          <Card>
+            <ThemedText type="defaultSemiBold">
+              This needs newer firmware
+            </ThemedText>
+            <ThemedText type="caption" style={{ color: c.textSecondary }}>
+              The guided tune-up listens to what the glasses are hearing, and this firmware
+              cannot send that yet. You can still tune everything by hand on the previous
+              screen.
+            </ThemedText>
+            <AppButton
+              testID="calibrate-unsupported-back"
+              onPress={() => router.back()}
+              title="Back to tuning"
+              style={styles.primaryButton}
+            />
+          </Card>
+        ) : null}
+
+        {!telemetryUnsupported && state.step === "intro" ? (
           <Card>
             <ThemedText type="defaultSemiBold">
               This takes about a minute
@@ -182,14 +177,12 @@ function AudioCalibrateScreen() {
             >
               Start the first step between songs, while the room is quiet.
             </ThemedText>
-            <Pressable
+            <AppButton
               testID="calibrate-start"
-              onPress={start}
-              style={[styles.primaryButton, { backgroundColor: c.primary }]}
-              accessibilityRole="button"
-            >
-              <ThemedText style={{ color: c.onPrimary }}>Start</ThemedText>
-            </Pressable>
+              onPress={startRun}
+              title="Start"
+              style={styles.primaryButton}
+            />
           </Card>
         ) : null}
 
@@ -209,9 +202,7 @@ function AudioCalibrateScreen() {
               {state.secondsLeft}s
             </ThemedText>
             <ProgressBar
-              value={1 - state.secondsLeft / STEP_SECONDS[state.step]}
-              color={c.primary}
-              track={c.surfaceAlt}
+              progress={1 - state.secondsLeft / STEP_SECONDS[state.step]}
             />
           </Card>
         ) : null}
@@ -285,30 +276,17 @@ function AudioCalibrateScreen() {
               Your current settings will be saved as &quot;Before
               calibration&quot; first.
             </ThemedText>
-            <Pressable
+            <AppButton
               testID="calibrate-apply"
               disabled={state.step === "applying" || accepted.length === 0}
               onPress={() => apply(accepted)}
-              style={[
-                styles.primaryButton,
-                {
-                  backgroundColor:
-                    accepted.length === 0 ? c.surfaceAlt : c.primary,
-                  opacity: state.step === "applying" ? 0.6 : 1,
-                },
-              ]}
-              accessibilityRole="button"
-            >
-              <ThemedText
-                style={{
-                  color: accepted.length === 0 ? c.textMuted : c.onPrimary,
-                }}
-              >
-                {state.step === "applying" && state.applyProgress
+              style={styles.primaryButton}
+              title={
+                state.step === "applying" && state.applyProgress
                   ? `Applying ${state.applyProgress.done} of ${state.applyProgress.total}...`
-                  : `Apply ${accepted.length} change${accepted.length === 1 ? "" : "s"}`}
-              </ThemedText>
-            </Pressable>
+                  : `Apply ${accepted.length} change${accepted.length === 1 ? "" : "s"}`
+              }
+            />
           </Card>
         ) : null}
 
@@ -324,14 +302,12 @@ function AudioCalibrateScreen() {
             >
               {state.failure}
             </ThemedText>
-            <Pressable
+            <AppButton
               testID="calibrate-retry"
-              onPress={start}
-              style={[styles.primaryButton, { backgroundColor: c.primary }]}
-              accessibilityRole="button"
-            >
-              <ThemedText style={{ color: c.onPrimary }}>Try again</ThemedText>
-            </Pressable>
+              onPress={startRun}
+              title="Try again"
+              style={styles.primaryButton}
+            />
           </Card>
         ) : null}
 
@@ -344,16 +320,12 @@ function AudioCalibrateScreen() {
               Watch the meters for a moment. If it is not right, your old
               settings are saved as &quot;Before calibration&quot;.
             </ThemedText>
-            <Pressable
+            <AppButton
               testID="calibrate-finish"
               onPress={() => router.back()}
-              style={[styles.primaryButton, { backgroundColor: c.primary }]}
-              accessibilityRole="button"
-            >
-              <ThemedText style={{ color: c.onPrimary }}>
-                Back to tuning
-              </ThemedText>
-            </Pressable>
+              title="Back to tuning"
+              style={styles.primaryButton}
+            />
           </Card>
         ) : null}
 
@@ -369,27 +341,6 @@ function AudioCalibrateScreen() {
   );
 }
 
-function ProgressBar({
-  value,
-  color,
-  track,
-}: {
-  value: number;
-  color: string;
-  track: string;
-}) {
-  const pct = Math.max(0, Math.min(1, value)) * 100;
-  return (
-    <View style={[styles.progressTrack, { backgroundColor: track }]}>
-      <View
-        style={[
-          styles.progressFill,
-          { width: `${pct}%`, backgroundColor: color },
-        ]}
-      />
-    </View>
-  );
-}
 
 function ChangeRow({
   change,

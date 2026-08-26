@@ -226,6 +226,13 @@ export function AudioTelemetryProvider({
 
       const superseded = () => generationRef.current !== generation;
 
+      /* Restore the default request when this focus session ends: the wizard raises the
+       * tier/rate, and leaving requestRef raised means the next arm silently starts at the
+       * wizard's burst settings. */
+      const resetRequest = () => {
+        requestRef.current = { tier: REQUESTED_TIER, rateHz: REQUESTED_RATE_HZ };
+      };
+
       const stopRearm = () => {
         if (rearmTimer) {
           clearInterval(rearmTimer);
@@ -420,8 +427,26 @@ export function AudioTelemetryProvider({
          * minute after opening the screen, which is exactly when the user is deciding whether
          * to trust it. */
         bucketRefRef.current = BUCKET_REF_SEED;
+
+        /* WIRE UP requestStream(). Without this assignment the whole wizard tap step was
+         * inert: requestStream() reset the ring and sent nothing, so the device stayed at
+         * tier 1 / 8 Hz, every recorded window measured ~125 ms spacing, and the spacing
+         * guard in use-audio-calibration.ts refused the sensitivity fit on every run of
+         * every device. The hook tests inject a fake requestStream, so nothing caught it. */
+        writeControlRef.current = (tier, rateHz) => {
+          if (superseded()) return;
+          safeWrite(encodeControl(tier, rateHz, REQUESTED_HOLD_S), "request");
+        };
+
+        /* EVERY control write reads requestRef, never the module constants. The re-arm
+         * interval is 30 s and the tap step is 30 s long, so a re-arm that encoded the
+         * defaults would revert the stream to tier 3 / 8 Hz partway through the recording —
+         * straddling a rate change, which is precisely what the window's spacing guard
+         * refuses. The fit would then be discarded depending on where the tick happened to
+         * land. */
+        const armReq = requestRef.current;
         safeWrite(
-          encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
+          encodeControl(armReq.tier, armReq.rateHz, REQUESTED_HOLD_S),
           "arm",
         );
 
@@ -430,8 +455,9 @@ export function AudioTelemetryProvider({
          * that contract, and it is why the hold is short. */
         rearmTimer = setInterval(() => {
           if (superseded()) return;
+          const req = requestRef.current;
           safeWrite(
-            encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
+            encodeControl(req.tier, req.rateHz, REQUESTED_HOLD_S),
             "re-arm",
           );
         }, REARM_MS);
@@ -474,6 +500,9 @@ export function AudioTelemetryProvider({
         /* Stop explicitly so the device drops the connection-parameter hold promptly. This
          * is politeness, not safety: unsubscribing below makes the firmware's next tick
          * self-terminate, and the watchdog catches the case where neither reaches it. */
+        /* Clear before the stop write: a requestStream() racing teardown must not be able
+         * to re-arm the device after we have told it to stop. */
+        writeControlRef.current = null;
         safeWrite(encodeControl(TELEMETRY_TIER_OFF, 0, 0), "stop");
         try {
           subscription?.remove();
@@ -485,6 +514,7 @@ export function AudioTelemetryProvider({
          * rendering the last status and the last numbers it was told about — stale meters
          * presented as current, which is exactly what the freeze-with-NO-SIGNAL behaviour
          * exists to prevent. */
+        resetRequest();
         summaryRef.current = EMPTY_SUMMARY;
         summaryListeners.current.forEach((l) => l());
         setStatus("idle");

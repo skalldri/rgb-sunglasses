@@ -13,6 +13,7 @@ import {
   createTelemetryRing,
   decodeTelemetryFrame,
   decodeTelemetryFrameFromBase64,
+  extractCalibrationWindow,
   dequantiseLog,
   magnitudeToDb,
   pushTelemetryBytes,

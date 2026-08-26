@@ -72,8 +72,12 @@ type Deps = {
   valueOf: (key: AudioParamKey) => number | null;
   /** Writes one parameter. Resolves false (does not throw) on a rejected write. */
   writeParam: (key: AudioParamKey, value: number) => Promise<boolean>;
-  /** Snapshot the current settings before applying, so there is always a way back. */
-  snapshotPreset: (name: string) => void;
+  /**
+   * Snapshot the current settings before applying, so there is always a way back.
+   * Returns false when nothing could be saved — the caller must not promise a rescue that
+   * does not exist.
+   */
+  snapshotPreset: (name: string) => boolean;
   now?: () => number;
 };
 
@@ -89,9 +93,18 @@ function sensitivityCandidates(thresholdMode: 0 | 1) {
 }
 
 export function useAudioCalibration(deps: Deps) {
-  const now = deps.now ?? (() => Date.now());
   const depsRef = React.useRef(deps);
   depsRef.current = deps;
+
+  /* Stable identity, routed through depsRef like every other dep in this file.
+   *
+   * `deps.now ?? (() => Date.now())` minted a fresh closure on every render, and `now` sits
+   * in the dep array of captureWindow -> beginStep -> finishTap/finishMusic/finishRoom ->
+   * start/recordTap, so all seven useCallbacks rebuilt every render and TapPad's memo (which
+   * receives recordTap) never hit — the memoization was pure overhead. Cheap today because
+   * the countdown only re-renders ~1/s, but any future effect keyed on these callbacks would
+   * re-fire on every render. */
+  const now = React.useCallback(() => depsRef.current.now?.() ?? Date.now(), []);
 
   const [state, setState] = React.useState<CalibrationState>({
     step: "intro",
@@ -119,6 +132,12 @@ export function useAudioCalibration(deps: Deps) {
   const tapsRef = React.useRef<number[]>([]);
   const windowStartRef = React.useRef(0);
   const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  /* Bumped by cancel() and by unmount. The apply loop captures it and stops on any change:
+   * Cancel stays live during "applying", and without this the user could walk away at
+   * "Applying 2 of 5..." while the device kept being rewritten behind them — precisely the
+   * half-applied state this batch design exists to prevent, since depsRef keeps writeParam
+   * callable after unmount. */
+  const abortRef = React.useRef(0);
 
   const clearTimer = React.useCallback(() => {
     if (timerRef.current) {
@@ -127,7 +146,13 @@ export function useAudioCalibration(deps: Deps) {
     }
   }, []);
 
-  React.useEffect(() => clearTimer, [clearTimer]);
+  React.useEffect(
+    () => () => {
+      abortRef.current++;
+      clearTimer();
+    },
+    [clearTimer],
+  );
 
   const captureWindow = React.useCallback((): CalibrationWindow & {
     medianStepMs: number;
@@ -172,6 +197,11 @@ export function useAudioCalibration(deps: Deps) {
   const fail = React.useCallback(
     (reason: string) => {
       clearTimer();
+      /* Restore the default stream request. Without this, requestRef stays at the tap step's
+       * {tier 2, 32 Hz} after a failure, so the retry's identical requestStream() call hits
+       * the no-edge early return and skips the ring reset that "start the recording clean"
+       * depends on — the retry then records into a window still holding the failed run. */
+      depsRef.current.requestStream(null);
       setState((s) => ({ ...s, step: "failed", failure: reason }));
     },
     [clearTimer],
@@ -289,14 +319,28 @@ export function useAudioCalibration(deps: Deps) {
             : 0;
         const detectedBpm =
           spanS > 0 ? ((detected.length - 1) / spanS) * 60 : 0;
+        /* The two classic failures, REPORTED but not silently corrected.
+         *
+         * The copy used to claim a correction had been applied ("the gap between beats has
+         * been lengthened to suit"). Nothing applied one: the pushed rows are the sweep's own
+         * best F-score, chosen BEFORE this classification and never amended. And because the
+         * classification runs on a replay of that same winner, a double/half result is proof
+         * the APPLIED settings still show the failure — so the claim was affirmatively false
+         * exactly when it appeared. The user applied, believed the double-fire was fixed, and
+         * the lights still strobed twice per beat.
+         *
+         * Saying what was observed, and what to do about it, is honest and still useful:
+         * these two failures need opposite fixes, so naming which one is happening is most of
+         * the value. */
         const relation = classifyTempo(detectedBpm, quality.bpm);
         if (relation.kind === "double") {
+          const ms = Math.round(relation.proposedRefractoryFrames * FRAME_MS);
           notes.push(
-            `${relation.message} The gap between beats has been lengthened to suit.`,
+            `${relation.message} I could not fix that automatically — try Beat feel "Kick only", or a gap of about ${ms} ms in Advanced.`,
           );
         } else if (relation.kind === "half") {
           notes.push(
-            `${relation.message} The sensitivity has been raised to suit.`,
+            `${relation.message} I could not fix that automatically — try turning Sensitivity up a step by hand.`,
           );
         }
       }
@@ -377,6 +421,7 @@ export function useAudioCalibration(deps: Deps) {
   }, [finishTap, now]);
 
   const cancel = React.useCallback(() => {
+    abortRef.current++;
     clearTimer();
     depsRef.current.requestStream(null);
     setState((s) => ({ ...s, step: "intro", secondsLeft: 0, failure: null }));
@@ -395,7 +440,10 @@ export function useAudioCalibration(deps: Deps) {
       setState((s) => ({ ...s, step: "done" }));
       return;
     }
-    d.snapshotPreset("Before calibration");
+    /* If the snapshot did not land there is no way back, so say so up front rather than
+     * discovering it only if a write later fails. Applying anyway is still the user's call —
+     * the wizard's whole job is to change these values — but the promise has to be honest. */
+    const rescued = d.snapshotPreset("Before calibration");
     setState((s) => ({
       ...s,
       step: "applying",
@@ -403,7 +451,23 @@ export function useAudioCalibration(deps: Deps) {
       applyError: null,
     }));
 
+    const abortGeneration = abortRef.current;
     for (let i = 0; i < accepted.length; i++) {
+      if (abortRef.current !== abortGeneration) {
+        /* Cancelled or unmounted mid-batch. Stop where we are and say so rather than
+         * silently finishing — and never flip to "done", which on the disconnect path could
+         * otherwise report success after the user had already bailed. */
+        setState((s) => ({
+          ...s,
+          step: "review",
+          applyProgress: null,
+          applyError:
+            rescued
+              ? 'Stopped partway through. Your previous settings are saved as "Before calibration".'
+              : "Stopped partway through, and your previous settings could NOT be saved.",
+        }));
+        return;
+      }
       const change = accepted[i];
       let ok = false;
       try {
@@ -419,7 +483,9 @@ export function useAudioCalibration(deps: Deps) {
           ...s,
           step: "review",
           applyProgress: null,
-          applyError: `Could not set ${change.label}. Nothing after it was changed; your previous settings are saved as "Before calibration".`,
+          applyError: rescued
+            ? `Could not set ${change.label}. Nothing after it was changed; your previous settings are saved as "Before calibration".`
+            : `Could not set ${change.label}. Nothing after it was changed — and your previous settings could NOT be saved, so note them before trying again.`,
         }));
         return;
       }

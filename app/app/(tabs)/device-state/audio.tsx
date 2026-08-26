@@ -15,11 +15,10 @@ import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { SegmentedControl } from "@/components/ui/segmented-control";
-import { UUID_AUDIO_CONFIG_SERVICE } from "@/constants/bluetooth";
 import { Radii, Spacing } from "@/constants/theme";
-import { AudioTelemetryProvider } from "@/context/audio-telemetry-context";
 import { useBluetooth } from "@/context/bluetooth-context";
-import { useAudioParamWriter, type AudioParamWriter } from "@/hooks/use-audio-param-writer";
+import { type AudioParamWriter } from "@/hooks/use-audio-param-writer";
+import { useAudioParams } from "@/hooks/use-audio-params";
 import { useAudioPresets } from "@/hooks/use-audio-presets";
 import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
 import { useThemeColors } from "@/hooks/use-theme-color";
@@ -68,25 +67,12 @@ const THRESHOLD_MODE_MEDIAN = 1;
  * documented in app/CLAUDE.md. If a stale value ever proves to be a real problem, the fix is a
  * ref-driven one-shot read, not a reactive effect.
  */
-/**
- * The screen is wrapped in AudioTelemetryProvider rather than mounting the provider globally,
- * so the notification subscription exists only while this route does. That matters more than
- * it looks: this is the app's 12th concurrent GATT notification registration against
- * Android's ~15 cap, and the provider also holds the device's connection interval at MEDIUM
- * while streaming. Both must end when the user leaves.
- */
-export default function AudioTuningRoute() {
-    return (
-        <AudioTelemetryProvider>
-            <AudioTuningScreen />
-        </AudioTelemetryProvider>
-    );
-}
+/* No provider here either — the stack layout owns the single AudioTelemetryProvider. */
+export default function AudioTuningScreen() {
 
-function AudioTuningScreen() {
     const router = useRouter();
     const c = useThemeColors();
-    const { selectedDevice, writeServiceCharacteristic } = useBluetooth();
+    const { selectedDevice } = useBluetooth();
     useDisconnectRedirect();
 
     const [mode, setMode] = useState<Mode>("simple");
@@ -94,68 +80,19 @@ function AudioTuningScreen() {
     const [presetsOpen, setPresetsOpen] = useState(false);
     const [toast, setToast] = useState<string | null>(null);
 
-    const serviceChars = selectedDevice?.characteristicsByService?.[UUID_AUDIO_CONFIG_SERVICE];
-
-    const write = useCallback(
-        (uuid: string, encoded: string) =>
-            writeServiceCharacteristic(UUID_AUDIO_CONFIG_SERVICE, uuid, encoded),
-        [writeServiceCharacteristic],
-    );
-    const writer = useAudioParamWriter(useMemo(() => ({ write }), [write]));
-
-    const resolved = useMemo(() => resolveAudioParams(serviceChars ?? {}), [serviceChars]);
-
-    /** The most recent failed write across the audio characteristics, or null. */
-    const writeFailure = useMemo(() => {
-        if (!serviceChars) return null;
-        for (const key of AUDIO_PARAM_ORDER) {
-            const spec = AUDIO_PARAMS[key];
-            const reason = serviceChars[spec.uuid]?.lastWriteError;
-            if (reason) return { label: spec.friendlyLabel, reason };
-        }
-        return null;
-    }, [serviceChars]);
-    const byKey = useMemo(() => {
-        const map = {} as Partial<Record<AudioParamKey, (typeof resolved)[number]>>;
-        resolved.forEach(r => {
-            map[r.spec.key] = r;
-        });
-        return map;
-    }, [resolved]);
-
-    /** Current value for a parameter, preferring a local override while the thumb is owned. */
-    const valueOf = useCallback(
-        (key: AudioParamKey): number | null => {
-            const entry = byKey[key];
-            if (!entry) return null;
-            return writer.displayValue(entry.spec.uuid, entry.value);
-        },
-        [byKey, writer],
-    );
-
-    const busyOf = useCallback(
-        (key: AudioParamKey): boolean => serviceChars?.[AUDIO_PARAMS[key].uuid]?.isUpdateInProgress ?? false,
-        [serviceChars],
-    );
-
-    const writeParam = useCallback(
-        (key: AudioParamKey, value: number) => {
-            const spec = AUDIO_PARAMS[key];
-            return writer.writeNow(spec.uuid, value, v => encodeParam(spec, v));
-        },
-        [writer],
-    );
-
-    /* Current device values, keyed for the preset layer. Uses the writer's display value so a
-     * preset saved mid-drag captures what the user actually sees, not a stale context value. */
-    const currentValues = useMemo(() => {
-        const out: Partial<Record<AudioParamKey, number>> = {};
-        resolved.forEach(r => {
-            const v = writer.displayValue(r.spec.uuid, r.value);
-            if (typeof v === "number") out[r.spec.key] = v;
-        });
-        return out;
-    }, [resolved, writer]);
+    /* All parameter plumbing comes from ONE hook, shared with the calibration wizard. It used
+     * to be ~60 lines copied between the two screens, and the copies had already diverged on
+     * how they filtered a missing value (`typeof v === "number"` here vs `v !== null` there). */
+    const {
+        resolved,
+        currentValues,
+        valueOf,
+        busyOf,
+        writeParam,
+        writer,
+        absent,
+        writeFailure,
+    } = useAudioParams();
 
     // The named writeParam above, not a second copy of it: an inline duplicate was a second
     // identity that would silently diverge the moment one of them grew (a busy guard, a retry).
@@ -418,7 +355,7 @@ function AudioTuningScreen() {
         );
     }
 
-    if (!serviceChars || resolved.length === 0) {
+    if (absent) {
         return (
             <SafeAreaView style={[styles.screen, { backgroundColor: c.background }]} edges={["top"]}>
                 <Header onBack={() => router.back()} />
@@ -705,7 +642,7 @@ function AdvancedGroups({
     busyOf: (key: AudioParamKey) => boolean;
     onWrite: (key: AudioParamKey, value: number) => Promise<boolean>;
     onHelp: (key: AudioParamKey) => void;
-    writer: ReturnType<typeof useAudioParamWriter>;
+    writer: ReturnType<typeof useAudioParams>["writer"];
 }) {
     const c = useThemeColors();
     const usesMedian = Math.round(valueOf("beatThresholdMode") ?? 0) === THRESHOLD_MODE_MEDIAN;

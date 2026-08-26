@@ -516,4 +516,103 @@ describe("AudioTelemetryProvider", () => {
       expect(h.monitor.mock.calls.length).toBeGreaterThan(1);
     });
   });
+
+describe("requestStream reaches the device", () => {
+  it("writes the requested tier and rate to the control characteristic", () => {
+    // THE regression this suite existed to miss. requestStream() was wired to a ref nothing
+    // ever assigned, so it reset the ring and sent nothing: the device stayed at tier 1/8 Hz,
+    // every wizard window measured ~125 ms spacing, and the spacing guard refused the
+    // sensitivity fit on every run of every device. The hook tests inject a fake
+    // requestStream, so only a test at THIS layer can see it.
+    const h = buildDevice();
+    mockBluetooth(h.device);
+    let ctx: ReturnType<typeof useAudioTelemetryContextForTest> = null;
+    function Grab() {
+      ctx = useAudioTelemetryContextForTest();
+      return null;
+    }
+    render(
+      <AudioTelemetryProvider>
+        <Grab />
+      </AudioTelemetryProvider>,
+    );
+    h.writeWithResponse.mockClear();
+
+    act(() => {
+      ctx!.requestStream(2, 32);
+    });
+
+    expect(h.writeWithResponse).toHaveBeenCalledWith(encodeControl(2, 32, REQUESTED_HOLD_S));
+  });
+
+  it("keeps re-arming at the REQUESTED tier, not the default", () => {
+    // The re-arm interval is 30 s and the tap step is 30 s long, so a re-arm encoding the
+    // module constants reverts the stream mid-recording — straddling a rate change, which is
+    // exactly what the window's spacing guard refuses.
+    const h = buildDevice();
+    mockBluetooth(h.device);
+    let ctx: ReturnType<typeof useAudioTelemetryContextForTest> = null;
+    function Grab() {
+      ctx = useAudioTelemetryContextForTest();
+      return null;
+    }
+    render(
+      <AudioTelemetryProvider>
+        <Grab />
+      </AudioTelemetryProvider>,
+    );
+    act(() => {
+      ctx!.requestStream(2, 32);
+    });
+    h.writeWithResponse.mockClear();
+
+    act(() => {
+      jest.advanceTimersByTime((REQUESTED_HOLD_S / 2) * 1000 + 50);
+    });
+    expect(h.writeWithResponse).toHaveBeenLastCalledWith(
+      encodeControl(2, 32, REQUESTED_HOLD_S),
+    );
+  });
+
+  it("restores the default request when the screen blurs", () => {
+    // Otherwise the next focus silently starts at the wizard's burst settings.
+    const h = buildDevice();
+    mockBluetooth(h.device);
+    let ctx: ReturnType<typeof useAudioTelemetryContextForTest> = null;
+    function Grab() {
+      ctx = useAudioTelemetryContextForTest();
+      return null;
+    }
+    const { rerender } = render(
+      <AudioTelemetryProvider>
+        <Grab />
+      </AudioTelemetryProvider>,
+    );
+    act(() => {
+      ctx!.requestStream(2, 32);
+    });
+
+    act(() => {
+      focusState.focused = false;
+      rerender(
+        <AudioTelemetryProvider>
+          <Grab />
+        </AudioTelemetryProvider>,
+      );
+    });
+    h.writeWithResponse.mockClear();
+    act(() => {
+      focusState.focused = true;
+      rerender(
+        <AudioTelemetryProvider>
+          <Grab />
+        </AudioTelemetryProvider>,
+      );
+    });
+    expect(h.writeWithResponse).toHaveBeenCalledWith(
+      encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
+    );
+  });
+});
+
 });

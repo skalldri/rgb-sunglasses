@@ -1,3 +1,5 @@
+import { AUDIO_FRAME_MS } from "@/constants/bluetooth";
+import { clampNumber, clampToSpec } from "@/services/audio-params";
 import { AUDIO_NUM_BANDS } from "@/services/audio-telemetry";
 
 /**
@@ -35,9 +37,17 @@ export function median(values: number[]): number {
   return percentile(values, 0.5);
 }
 
+/* Policy bounds only — the tighter limits this wizard deliberately imposes on ITS OWN
+ * proposals (a floor above 0.10 eats real beats; a gate outside [0.0002, 0.004] is not a
+ * measurement of anything). Anything that is a PARAMETER's range comes from clampToSpec, so
+ * the firmware's ranges live in exactly one place.
+ *
+ * Delegates to clampNumber rather than re-deriving the NaN/Infinity convention: the local
+ * copy sent +Infinity to the MINIMUM, the opposite of the documented saturate-toward-the-
+ * obvious-end behaviour. Latent today (every input here is provably finite) and exactly the
+ * kind of divergence that stops being latent the moment an input stops being finite. */
 function clamp(v: number, lo: number, hi: number): number {
-  if (!Number.isFinite(v)) return lo;
-  return v < lo ? lo : v > hi ? hi : v;
+  return clampNumber(v, lo, hi);
 }
 
 /* ── recorded window ── */
@@ -162,12 +172,12 @@ export function analyzeMusic(win: CalibrationWindow): MusicResult {
 
   const clipFraction = win.clipped.filter(Boolean).length / win.frames;
 
-  let low = clamp(p25 * 0.9, 0.001, 0.1);
-  let high = clamp(p90 * 1.1, 0.02, 0.5);
+  let low = clampToSpec("agcTargetLow", p25 * 0.9);
+  let high = clampToSpec("agcTargetHigh", p90 * 1.1);
 
   let clipAdjusted = false;
   if (clipFraction > MUSIC_CLIP_FRACTION) {
-    high = clamp(high * 0.75, 0.02, 0.5);
+    high = clampToSpec("agcTargetHigh", high * 0.75);
     clipAdjusted = true;
   }
 
@@ -176,13 +186,13 @@ export function analyzeMusic(win: CalibrationWindow): MusicResult {
   let widened = false;
   if (high < low * MIN_TARGET_RATIO) {
     const wanted = high / MIN_TARGET_RATIO;
-    const newLow = clamp(wanted, 0.001, 0.1);
+    const newLow = clampToSpec("agcTargetLow", wanted);
     if (newLow < low) {
       low = newLow;
       widened = true;
     } else {
       /* The floor is already at its clamp, so the only way to open the band is upward. */
-      high = clamp(low * MIN_TARGET_RATIO, 0.02, 0.5);
+      high = clampToSpec("agcTargetHigh", low * MIN_TARGET_RATIO);
       widened = true;
     }
   }
@@ -351,8 +361,14 @@ export type TempoRelation =
   | { kind: "double"; message: string; proposedRefractoryFrames: number }
   | { kind: "half"; message: string };
 
-/** Analysis frame period, ~31.25 Hz. Refractory is counted in frames, not milliseconds. */
-export const FRAME_MS = 32;
+/**
+ * Analysis frame period, ~31.25 Hz. Refractory is counted in frames, not milliseconds.
+ *
+ * Re-exported from the shared constant rather than restated: a second literal 32 here would
+ * silently disagree with everything else that converts frames to time the day the analysis
+ * rate changes.
+ */
+export const FRAME_MS = AUDIO_FRAME_MS;
 
 /**
  * Detect the two classic failures by comparing tempos rather than individual beats.

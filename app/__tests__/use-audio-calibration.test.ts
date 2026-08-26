@@ -42,7 +42,7 @@ function makeHarness(
   const ring = { current: createTelemetryRing(1024) };
   const requestStream = jest.fn();
   const writeParam = jest.fn().mockResolvedValue(true);
-  const snapshotPreset = jest.fn();
+  const snapshotPreset = jest.fn().mockReturnValue(true);
   const values: Partial<Record<AudioParamKey, number>> = {
     beatFluxFloor: AUDIO_PARAMS.beatFluxFloor.defaultValue,
     agcTargetLow: AUDIO_PARAMS.agcTargetLow.defaultValue,
@@ -363,6 +363,26 @@ describe("useAudioCalibration", () => {
       expect(h.writeParam).toHaveBeenCalledTimes(2);
       expect(result.current.state.step).toBe("review");
       expect(result.current.state.applyError).toContain("Before calibration");
+    });
+
+
+    it("does not promise a rescue preset that was never saved", async () => {
+      // saveCurrentAs returns null when no values resolved. Promising "your previous settings
+      // are saved as Before calibration" in that case sends the user looking for a file that
+      // does not exist, at the moment they most need it.
+      const h = makeHarness();
+      h.snapshotPreset.mockReturnValue(false);
+      h.writeParam.mockResolvedValueOnce(false);
+      const { result } = reachReview(h);
+
+      await act(async () => {
+        await result.current.apply(result.current.state.changes);
+      });
+
+      expect(result.current.state.applyError).toContain("could NOT be saved");
+      expect(result.current.state.applyError).not.toContain(
+        'saved as "Before calibration"',
+      );
     });
 
     it("treats a thrown write as a failure, not a crash", async () => {

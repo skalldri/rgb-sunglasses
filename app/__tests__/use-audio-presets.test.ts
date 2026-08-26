@@ -8,10 +8,12 @@
  *     hear the difference within a bar.
  */
 
-/* A store that actually stores. `loadPresets: () => []` reads back as an empty disk no matter
- * what was written, which lets a test pass on in-memory state alone — and the hook is allowed to
- * treat the file as the source of truth (another screen can add a preset while this one is
- * mounted), so that difference is load-bearing rather than cosmetic. */
+/* A STATEFUL fake store: savePresets remembers, loadPresets returns what was saved.
+ *
+ * The old mock returned [] from loadPresets unconditionally, which is not how any real store
+ * behaves — and it hid the property that matters now that commits re-read before mutating:
+ * two hook instances sharing one file must not clobber each other's entries. A static mock
+ * cannot express that at all. */
 jest.mock("@/services/audio-preset-store", () => {
     const state: { presets: unknown[] } = { presets: [] };
     return {
@@ -55,6 +57,7 @@ function resetPresetStore() {
 describe("useAudioPresets", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        // Reset the fake store between tests, or saved presets leak across them.
         resetPresetStore();
     });
 
@@ -215,6 +218,43 @@ describe("useAudioPresets", () => {
             expect(written).toHaveLength(1);
             expect(written[0].name).toBe("Warehouse");
         });
+
+
+        it("does not clobber a preset another instance saved after this one mounted", () => {
+        // The calibration wizard saves its "Before calibration" rescue preset while the tuning
+        // screen below stays mounted with a savedRef seeded before that preset existed. Every
+        // commit writes the WHOLE list, so a mutation computed from the stale ref erased the
+        // one documented way back from a bad calibration. Re-reading before mutating makes
+        // each commit last-writer-wins per ENTRY rather than per LIST.
+        const a = renderHook(() =>
+            useAudioPresets({ currentValues: factory(), writeParam: jest.fn() }),
+        );
+        act(() => {
+            a.result.current.saveCurrentAs("From screen A", 1);
+        });
+
+        // A second instance mounts and saves something A has never seen.
+        const b = renderHook(() =>
+            useAudioPresets({ currentValues: factory(), writeParam: jest.fn() }),
+        );
+        act(() => {
+            b.result.current.saveCurrentAs("Before calibration", 2);
+        });
+
+        // A now saves again from its stale view. Both must survive.
+        act(() => {
+            a.result.current.saveCurrentAs("From screen A again", 3);
+        });
+
+        const written = (savePresets as jest.Mock).mock.calls.at(-1)![0] as {
+            name: string;
+        }[];
+        expect(written.map(p => p.name).sort()).toEqual([
+            "Before calibration",
+            "From screen A",
+            "From screen A again",
+        ]);
+    });
 
         it("persists the reduced list when deleting", () => {
             const { result } = setup();
