@@ -449,6 +449,26 @@ strategy="accessibility")` work — but accessibility/OCR matching only finds **
 elements, so scroll first for below-the-fold targets (e.g. the Battery card at the bottom
 of Controls).
 
+**"Add if absent" config plugins cannot retrofit a stale `android/` — write local plugins as "ensure", not "add".**
+The PR #224 icon bug above is one instance of a general trap. Because `launch-app.sh` runs
+`expo prebuild` without `--clean` on every launch, any manifest/resource entry a plugin writes
+only when it's missing will, once written once, never be corrected by a later change to that
+plugin's config — the guard that was supposed to make the plugin idempotent instead makes it
+permanently stuck on whatever it wrote first. `react-native-ble-plx`'s own Expo plugin has this
+exact shape: `addLocationPermissionToManifest`/`addScanPermissionToManifest`
+(`node_modules/react-native-ble-plx/plugin/build/withBLEAndroidManifest.js`) only add the
+`BLUETOOTH_SCAN`/`ACCESS_*_LOCATION` entries when absent, so flipping `neverForLocation` in
+`app.json` after those entries already exist from an earlier prebuild is silently a no-op —
+`android:usesPermissionFlags="neverForLocation"` and `android:maxSdkVersion="30"` never land,
+and BLE scanning on API 31+ ends up needing a location permission the app deliberately never
+requests (see the comment in `requestAndroid31Permissions()`, `hooks/ble-manager.ts`). Fixed by
+`plugins/withBleNeverForLocation.js`, registered **after** `"react-native-ble-plx"` in
+`app.json`'s plugin list, which finds-or-creates the three entries and then unconditionally sets
+the required attributes on them every prebuild — clean or incremental. When writing or reviewing
+any local plugin under `plugins/`, prefer this "find-or-create, then set the required attributes
+unconditionally" shape over "if not present, add" — the latter is only safe for plugins whose
+config never changes after the first prebuild, which is not a safe assumption to make silently.
+
 ### Device-Free Validation Loop
 
 For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) now gates all three — the `test` job runs jest, and a separate `typecheck-lint` job runs `tsc --noEmit` and `eslint --max-warnings 0` (added for issue #130, since a green CI used to mean only jest passed and tsc/lint debt drifted in undetected). Still run them locally before pushing so you're not waiting on CI to catch a type error or a new lint warning (any warning now fails CI). **Green here is not "verified"** — see the next section for the class of bug this loop is structurally blind to.
