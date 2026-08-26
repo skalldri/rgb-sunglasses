@@ -175,7 +175,8 @@ export default function AudioCalibrateScreen() {
               type="caption"
               style={{ color: c.textMuted, marginTop: Spacing.sm }}
             >
-              Start the first step between songs, while the room is quiet.
+              Start the first step with the music off. A noisy room is fine —
+              it gets measured and fitted to, not rejected.
             </ThemedText>
             <AppButton
               testID="calibrate-start"
@@ -195,7 +196,7 @@ export default function AudioCalibrateScreen() {
             </ThemedText>
             <ThemedText type="caption" style={{ color: c.textSecondary }}>
               {state.step === "room"
-                ? "Keep it as quiet as you can — this measures the background noise."
+                ? "Music off — this measures whatever else the room is doing. Crowd noise is fine."
                 : "Let a normal, representative track play."}
             </ThemedText>
             <ThemedText type="heading" testID="calibrate-countdown">

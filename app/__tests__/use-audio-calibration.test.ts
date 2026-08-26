@@ -154,9 +154,10 @@ describe("useAudioCalibration", () => {
     expect(result.current.state.secondsLeft).toBe(STEP_SECONDS.room - 3);
   });
 
-  it("refuses a room that is too loud, naming the reason", () => {
-    // The most important refusal in the wizard: measuring a "noise floor" during the support
-    // act produces a gate that mutes the headliner.
+  it("carries a LOUD room through to the music step instead of dead-ending", () => {
+    // The lockout regression, at the step-machine level. A festival crowd sits far above
+    // ROOM_NOISY_RMS and never drops below it, so a hard refusal here meant the wizard could
+    // never reach the music or tap steps at the only venue it was built for.
     const h = makeHarness();
     const { result } = renderCal(h);
     act(() => result.current.start());
@@ -165,8 +166,24 @@ describe("useAudioCalibration", () => {
     );
     runStep(h, 0);
 
+    expect(result.current.state.step).toBe("music");
+    expect(result.current.state.failure).toBeNull();
+    // Still writes nothing before review — the loud path is not a shortcut past consent.
+    expect(h.writeParam).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a room it could not MEASURE, which is a different thing", () => {
+    // The distinction the fix turns on: too few frames means there is no measurement to
+    // reason about, so refusing stays correct. Loudness is a successful measurement.
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    act(() => result.current.start());
+    // ~16 frames at 31.25 Hz, under MIN_ROOM_FRAMES, then let the rest of the step elapse.
+    feed(h, 0.5, (n) => makeFrame({ tier: 2, seq: n, rmsInput: 0.0005 }));
+    runStep(h, STEP_SECONDS.room - 0.5);
+
     expect(result.current.state.step).toBe("failed");
-    expect(result.current.state.failure).toContain("not quiet enough");
+    expect(result.current.state.failure).toContain("did not hear enough");
     expect(h.writeParam).not.toHaveBeenCalled();
   });
 

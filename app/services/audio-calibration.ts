@@ -7,11 +7,18 @@ import { AUDIO_NUM_BANDS } from "@/services/audio-telemetry";
  * tested against synthetic rooms without a venue, a board, or a phone.
  *
  * THE GOVERNING RULE IS THAT EVERY STEP MUST BE ABLE TO REFUSE. A wizard that always produces
- * an answer will confidently fit garbage — a room measured while the support act is playing, a
- * user who tapped four times and gave up — and then write that fit to the device the person is
- * about to wear on stage. Each analyse* function therefore returns a discriminated result with
- * an `ok` flag and a plain-language reason, and the caller is expected to show the reason
- * rather than a number.
+ * an answer will confidently fit garbage — a user who tapped four times and gave up — and then
+ * write that fit to the device the person is about to wear on stage. Each analyse* function
+ * therefore returns a discriminated result with an `ok` flag and a plain-language reason, and
+ * the caller is expected to show the reason rather than a number.
+ *
+ * REFUSE ONLY WHAT CANNOT BE MEASURED, NOT WHAT IS INCONVENIENT TO MEASURE. The two are easy
+ * to conflate and the cost is asymmetric: too few frames or too few taps means there is no
+ * measurement to reason about, so refusing is the only honest answer. A LOUD ROOM is not that
+ * — it is a successful measurement of a difficult room, and it is the case this whole feature
+ * exists to serve. Refusing it locked the wizard out of every real venue (see ROOM_NOISY_RMS).
+ * Where a measurement succeeds but constrains what can be fitted, fit what can be fitted and
+ * WARN about the rest.
  *
  * Constants here are NOT round numbers picked for looks. Where one came from a measurement in
  * docs/plans/2026-08-02-beat-detection-phase3-and-beyond.md it says so, because the difference
@@ -38,9 +45,14 @@ export function median(values: number[]): number {
 }
 
 /* Policy bounds only — the tighter limits this wizard deliberately imposes on ITS OWN
- * proposals (a floor above 0.10 eats real beats; a gate outside [0.0002, 0.004] is not a
- * measurement of anything). Anything that is a PARAMETER's range comes from clampToSpec, so
- * the firmware's ranges live in exactly one place.
+ * proposals, and ONLY where there is evidence for them (a floor above 0.10 eats real beats;
+ * a gate below 0.0002 is just "off"). Anything that is a PARAMETER's range comes from
+ * clampToSpec, so the firmware's ranges live in exactly one place.
+ *
+ * A private bound needs a reason of its own. The gate's old 0.004 CEILING had none — it was
+ * inherited caution, five times tighter than the parameter, and it silently became a lockout:
+ * the room step refused any room loud enough to need a gate that big. When a policy bound and
+ * a parameter range disagree, be sure the policy is protecting something real.
  *
  * Delegates to clampNumber rather than re-deriving the NaN/Infinity convention: the local
  * copy sent +Infinity to the MINIMUM, the opposite of the documented saturate-toward-the-
@@ -76,10 +88,35 @@ export type CalibrationWindow = {
 
 /* ── step 1: listen to the room ── */
 
-/** Above this the room is too loud to be measuring a noise floor in. */
-export const ROOM_TOO_LOUD_RMS = 0.003;
+/**
+ * Above this the room is NOISY — loud enough that a level-based gate can no longer sit above
+ * the background. This is a FACT REPORTED TO THE USER, not a refusal.
+ *
+ * It was `ROOM_TOO_LOUD_RMS`, and `analyzeRoom` refused outright above it. That locked the
+ * wizard out of precisely the venue it exists for: at a festival the crowd never drops below
+ * this even between songs, so the room step could never pass and no later step could ever
+ * run. The failure copy ("Try again between songs") sent the operator to the loudest moment
+ * of the night.
+ *
+ * The bound was also self-referential. 1.15 * 0.003 = 0.00345, i.e. it was the level at which
+ * this wizard's OWN gate clamp (then ceilinged at 0.004) began to saturate — not a limit of
+ * the hardware. The firmware's `agcNoiseGateRms` accepts up to 0.02, 6.7x higher. The wizard
+ * refused to measure a room because the answer would not fit in a box it drew itself.
+ *
+ * And the refusal preempted the graceful path that already existed one function later:
+ * `reconcileGate` sets the gate from the music and warns when it cannot clear the room, which
+ * is the correct venue behaviour and was unreachable in the loud case it was written for.
+ */
+export const ROOM_NOISY_RMS = 0.003;
 /** Minimum frames before a room measurement is believed (~4 s at 8 Hz). */
 export const MIN_ROOM_FRAMES = 30;
+/**
+ * Policy bounds on the proposed beat floor. The upper one is evidence-backed — the plan doc
+ * records real beats being eaten above 0.10 — so it stays a cap even in a loud room; we
+ * report the saturation instead of exceeding it.
+ */
+export const FLOOR_MIN = 0.02;
+export const FLOOR_MAX = 0.1;
 
 export type RoomResult =
   | { ok: false; reason: string }
@@ -89,6 +126,12 @@ export type RoomResult =
       quietFlux99: number;
       /** Proposed Minimum beat strength (beatFluxFloor). */
       proposedFloor: number;
+      /** The room is loud enough that a level gate cannot sit above its background. */
+      noisy: boolean;
+      /** The floor wanted to exceed FLOOR_MAX, so it cannot clear the room's own flux. */
+      floorSaturated: boolean;
+      /** Plain-language consequences of the flags above. Empty for a quiet room. */
+      warnings: string[];
     };
 
 export function analyzeRoom(win: CalibrationWindow): RoomResult {
@@ -105,26 +148,50 @@ export function analyzeRoom(win: CalibrationWindow): RoomResult {
       reason: "I did not hear enough to measure the room. Try again.",
     };
   }
-  if (roomP95 > ROOM_TOO_LOUD_RMS) {
-    return {
-      ok: false,
-      reason:
-        "It's not quiet enough to measure the room. Try again between songs.",
-    };
-  }
-
   /* Band 0 only: the kick band is where a false fire is most visible, and it is the band the
    * lights follow. The floor applies to every band, so fitting it to the noisiest-in-practice
-   * band is the conservative choice. */
+   * band is the conservative choice.
+   *
+   * This is also the half of the room measurement that SURVIVES a loud room, which is why
+   * refusing the whole step on a level threshold was so costly. Crowd noise is broadband and
+   * sustained; a kick is impulsive and band-limited, so band-0 flux still separates them long
+   * after RMS has stopped being able to. */
   const band0: number[] = [];
   for (let f = 0; f < win.frames; f++)
     band0.push(win.flux[f * AUDIO_NUM_BANDS]);
   const quietFlux99 = percentile(band0, 0.99);
 
-  /* 1.2x the loudest thing the quiet room produced, so room noise cannot clear the floor.
-   * Capped at 0.10 because the plan doc records real beats being eaten above that. */
-  const proposedFloor = clamp(1.2 * quietFlux99, 0.02, 0.1);
-  return { ok: true, roomP95, quietFlux99, proposedFloor };
+  /* 1.2x the loudest thing the room produced, so room noise cannot clear the floor. */
+  const wantedFloor = 1.2 * quietFlux99;
+  const proposedFloor = clamp(wantedFloor, FLOOR_MIN, FLOOR_MAX);
+
+  const noisy = roomP95 > ROOM_NOISY_RMS;
+  const floorSaturated = Number.isFinite(wantedFloor) && wantedFloor > FLOOR_MAX;
+
+  /* Say what the measurement means for the night, not what it means arithmetically. Both of
+   * these describe things the operator will SEE, so they can decide whether to accept the
+   * proposal or go and tune by hand. */
+  const warnings: string[] = [];
+  if (noisy) {
+    warnings.push(
+      "There's a lot of background noise in here. I've measured it and fitted to it, but the lights will react to the crowd as well as the music.",
+    );
+  }
+  if (floorSaturated) {
+    warnings.push(
+      "The background noise is loud enough that beats have to be picked out of it. Minimum beat strength is already as high as it safely goes — above this it starts eating real beats — so raise it by hand only if the lights still twitch between songs.",
+    );
+  }
+
+  return {
+    ok: true,
+    roomP95,
+    quietFlux99,
+    proposedFloor,
+    noisy,
+    floorSaturated,
+    warnings,
+  };
 }
 
 /* ── step 2: let the music play ── */
@@ -221,6 +288,8 @@ export function analyzeMusic(win: CalibrationWindow): MusicResult {
  */
 export const GATE_ROOM_MARGIN = 1.15;
 export const GATE_MUSIC_MARGIN = 0.8;
+/** Below this a gate is not a measurement of anything, it is just "off". */
+export const GATE_MIN = 0.0002;
 
 export type GateResult = {
   noiseGate: number;
@@ -231,7 +300,20 @@ export type GateResult = {
 export function reconcileGate(roomP95: number, musicP5: number): GateResult {
   const fromRoom = GATE_ROOM_MARGIN * roomP95;
   const fromMusic = GATE_MUSIC_MARGIN * musicP5;
-  const noiseGate = clamp(Math.min(fromRoom, fromMusic), 0.0002, 0.004);
+  /* The UPPER bound is the PARAMETER's range, not a private ceiling of this wizard's.
+   *
+   * This used to clamp at 0.004 — five times below what agcNoiseGateRms accepts (0.02) — and
+   * that ceiling is what made a loud room unfittable and drove the room-step lockout
+   * documented on ROOM_NOISY_RMS.
+   *
+   * Raising it is safe because the ceiling was never what protected the music: the min()
+   * against 0.8*musicP5 is. The gate can never exceed 80% of the quietest music this wizard
+   * actually heard, however loud the room gets, so the field bug the margins were chosen to
+   * prevent ("the glasses do nothing until you turn the volume up") stays prevented. */
+  const noiseGate = clampToSpec(
+    "agcNoiseGateRms",
+    Math.max(GATE_MIN, Math.min(fromRoom, fromMusic)),
+  );
 
   /* Warn on the condition that actually matters — the chosen gate does not clear the room's
    * own noise, so room noise will sometimes get through — rather than on which of the two

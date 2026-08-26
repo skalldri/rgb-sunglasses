@@ -123,6 +123,9 @@ export function useAudioCalibration(deps: Deps) {
   const roomRef = React.useRef<{
     roomP95: number;
     proposedFloor: number;
+    /** Loud room: measured and fitted, but a level gate cannot clear the background. */
+    noisy: boolean;
+    warnings: string[];
   } | null>(null);
   const musicRef = React.useRef<{
     targetLow: number;
@@ -238,7 +241,17 @@ export function useAudioCalibration(deps: Deps) {
       });
     };
 
-    push("beatFluxFloor", room.proposedFloor, "Measured from the quiet room.");
+    /* The room's own findings first: they frame every row below them, and in a loud room they
+     * are the difference between "these numbers look odd" and "this is what this room costs". */
+    warnings.push(...room.warnings);
+
+    push(
+      "beatFluxFloor",
+      room.proposedFloor,
+      room.noisy
+        ? "Measured from the room's background noise."
+        : "Measured from the quiet room.",
+    );
     push(
       "agcTargetLow",
       music.targetLow,
@@ -389,6 +402,8 @@ export function useAudioCalibration(deps: Deps) {
     roomRef.current = {
       roomP95: result.roomP95,
       proposedFloor: result.proposedFloor,
+      noisy: result.noisy,
+      warnings: result.warnings,
     };
     beginStep("music", finishMusic);
   }, [beginStep, captureWindow, fail, finishMusic]);

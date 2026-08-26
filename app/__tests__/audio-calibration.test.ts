@@ -1,5 +1,7 @@
 import {
+  FLOOR_MAX,
   FRAME_MS,
+  GATE_MIN,
   GATE_MUSIC_MARGIN,
   GATE_ROOM_MARGIN,
   MAX_TAP_IRREGULARITY,
@@ -7,7 +9,7 @@ import {
   MIN_ROOM_FRAMES,
   MIN_TAPS,
   MIN_TARGET_RATIO,
-  ROOM_TOO_LOUD_RMS,
+  ROOM_NOISY_RMS,
   TAP_MATCH_MS,
   analyzeMusic,
   analyzeRoom,
@@ -21,6 +23,7 @@ import {
   sweepSensitivity,
   type CalibrationWindow,
 } from "@/services/audio-calibration";
+import { AUDIO_PARAMS } from "@/services/audio-params";
 import { AUDIO_NUM_BANDS } from "@/services/audio-telemetry";
 
 /** Build a window with per-frame control over the fields a given step reads. */
@@ -104,19 +107,53 @@ describe("step 1 — listen to the room", () => {
     expect(r.proposedFloor).toBeGreaterThan(r.quietFlux99);
   });
 
-  it("refuses a room that is not quiet enough to measure", () => {
-    // The single most important refusal: measuring a noise floor during the support act
-    // produces a gate that mutes the headliner.
+  it("MEASURES a loud room rather than refusing it", () => {
+    // The regression this file exists to prevent from coming back. A hard refusal above
+    // ROOM_NOISY_RMS locked the wizard out of every real venue: at a festival the crowd never
+    // drops below it, so the room step could never pass and no later step could ever run.
     const win = makeWindow({
       frames: 100,
-      rmsInput: () => ROOM_TOO_LOUD_RMS * 2,
+      rmsInput: () => ROOM_NOISY_RMS * 2,
+      flux: (_f, b) => (b === 0 ? 0.01 : 0),
     });
     const r = analyzeRoom(win);
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.reason).toBe(
-      "It's not quiet enough to measure the room. Try again between songs.",
-    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.noisy).toBe(true);
+    expect(r.roomP95).toBeCloseTo(ROOM_NOISY_RMS * 2, 6);
+    // It still produces the thing a loud room most needs: a fitted beat floor.
+    expect(r.proposedFloor).toBeGreaterThan(0);
+    expect(r.warnings.join(" ")).toContain("background noise");
+  });
+
+  it("stays quiet about a genuinely quiet room", () => {
+    const win = makeWindow({
+      frames: 100,
+      rmsInput: () => 0.0005,
+      flux: (_f, b) => (b === 0 ? 0.01 : 0),
+    });
+    const r = analyzeRoom(win);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.noisy).toBe(false);
+    expect(r.floorSaturated).toBe(false);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("reports the floor saturating instead of exceeding the evidence-backed cap", () => {
+    // Above 0.10 the plan doc records real beats being eaten, so a room whose own flux needs
+    // more than that is a room we must WARN about, not one we quietly over-fit.
+    const win = makeWindow({
+      frames: 100,
+      rmsInput: () => 0.0005,
+      flux: (_f, b) => (b === 0 ? 5 : 0),
+    });
+    const r = analyzeRoom(win);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.floorSaturated).toBe(true);
+    expect(r.proposedFloor).toBe(FLOOR_MAX);
+    expect(r.warnings.join(" ")).toContain("as high as it safely goes");
   });
 
   it("refuses too short a recording", () => {
@@ -255,9 +292,41 @@ describe("step 3 — gate reconciliation", () => {
     expect(g.warning).toContain("background noise is nearly as loud");
   });
 
-  it("clamps into the range the firmware accepts", () => {
-    expect(reconcileGate(1, 1).noiseGate).toBeLessThanOrEqual(0.004);
-    expect(reconcileGate(0, 0).noiseGate).toBeGreaterThanOrEqual(0.0002);
+  it("clamps into the range the firmware actually accepts, not a private ceiling", () => {
+    // agcNoiseGateRms accepts 0..0.02. The old bound here was 0.004 — five times tighter than
+    // the parameter, for no stated reason — and it is what made a loud room unfittable.
+    expect(AUDIO_PARAMS.agcNoiseGateRms.max).toBe(0.02);
+    expect(reconcileGate(1, 1).noiseGate).toBeLessThanOrEqual(
+      AUDIO_PARAMS.agcNoiseGateRms.max,
+    );
+    expect(reconcileGate(0, 0).noiseGate).toBeGreaterThanOrEqual(GATE_MIN);
+  });
+
+  it("proposes a gate above the old 0.004 ceiling when the venue needs one", () => {
+    // A loud room with correspondingly loud music: the gate that belongs here is one the old
+    // clamp could not express, so it silently saturated and the room step refused instead.
+    const g = reconcileGate(0.01, 0.05);
+    expect(g.noiseGate).toBeGreaterThan(0.004);
+  });
+
+  it("NEVER lets the gate exceed 80% of the quietest music, however loud the room", () => {
+    // This is the property that makes raising the ceiling safe. The ceiling was never what
+    // protected the music from being muted -- the min() against the music is. If this ever
+    // fails, the original field bug is back: the glasses do nothing until you turn it up.
+    for (const roomP95 of [0.0005, 0.003, 0.01, 0.05, 0.5, 5]) {
+      for (const musicP5 of [0.0006, 0.002, 0.01, 0.04]) {
+        const g = reconcileGate(roomP95, musicP5);
+        expect(g.noiseGate).toBeLessThanOrEqual(GATE_MUSIC_MARGIN * musicP5);
+      }
+    }
+  });
+
+  it("warns whenever the chosen gate cannot clear the room, including the venue case", () => {
+    // Previously unreachable: analyzeRoom refused above 0.003, so a gate that lost to the
+    // room's own noise could never be produced by the loud path this copy describes.
+    const g = reconcileGate(0.01, 0.005);
+    expect(g.noiseGate).toBeLessThan(0.01);
+    expect(g.warning).toContain("nearly as loud");
   });
 });
 
