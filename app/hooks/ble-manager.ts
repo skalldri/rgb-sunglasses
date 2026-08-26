@@ -159,14 +159,23 @@ const requestAndroid31Permissions = async () => {
         }
     );
     // No location permission on API 31+: BLUETOOTH_SCAN carries
-    // android:usesPermissionFlags="neverForLocation" (set by the ble-plx Expo
-    // plugin via "neverForLocation": true in app.json), which asserts scan
+    // android:usesPermissionFlags="neverForLocation", which asserts scan
     // results are never used to derive location — so ACCESS_FINE_LOCATION is
     // not required for scanning and isn't even declared beyond maxSdkVersion
     // 30 in the manifest. Requesting it here would always come back denied.
     // Trade-off accepted with the flag: Android filters some location-beacon
     // advertisement frames from scans; the board is a plain connectable
     // advertiser and is unaffected (issue #189, B-PR1).
+    //
+    // The flag in app.json alone ("neverForLocation": true, passed to the
+    // ble-plx Expo plugin) is NOT what guarantees this — that plugin only adds
+    // the manifest entries if they're absent, and never retrofits the flag/
+    // maxSdkVersion onto entries an earlier prebuild already wrote (which is
+    // exactly what happens here, since `app/scripts/launch-app.sh` runs
+    // `expo prebuild` without `--clean` on every launch). The actual guarantee
+    // is `plugins/withBleNeverForLocation.js`, registered after
+    // "react-native-ble-plx" in app.json, which ENSURES these attributes on
+    // the existing manifest entries every prebuild, clean or incremental.
 
     return (
         bluetoothScanPermission === "granted" &&
