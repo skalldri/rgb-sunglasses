@@ -14,7 +14,10 @@ import {
   useAudioTelemetrySummary,
 } from "@/context/audio-telemetry-context";
 import { useThemeColors } from "@/hooks/use-theme-color";
-import { computeVerdict } from "@/services/audio-scoreboard";
+import {
+  computeVerdict,
+  type SensitivityControl,
+} from "@/services/audio-scoreboard";
 import {
   AUDIO_NUM_BANDS,
   BAND_RATIO_MAX,
@@ -39,6 +42,12 @@ interface Props {
   targetLow: number | null;
   targetHigh: number | null;
   noiseGate: number | null;
+  /**
+   * How the surrounding screen presents sensitivity, so the verdict names a control that is
+   * actually on screen and points the right way. Omitted by the calibration wizard, which has
+   * no Simple/Advanced switch and whose own notes speak in the Simple macro's words.
+   */
+  sensitivity?: SensitivityControl;
   testID?: string;
 }
 
@@ -46,13 +55,14 @@ export const MonitorPanel = memo(function MonitorPanel({
   targetLow,
   targetHigh,
   noiseGate,
+  sensitivity,
   testID = "audio-monitor",
 }: Props) {
   const colors = useThemeColors();
   const summary = useAudioTelemetrySummary();
   const status = useAudioTelemetryStatus();
   const telemetry = useAudioTelemetry();
-  const verdict = computeVerdict(summary);
+  const verdict = computeVerdict(summary, sensitivity);
 
   /* Read the newest ratios straight off the ring for the accessibility labels. The bars
    * themselves do not use these — they animate off shared values — so this costs one pass
@@ -121,12 +131,20 @@ export const MonitorPanel = memo(function MonitorPanel({
       ]}
     >
       <View style={styles.headerRow}>
-        <BeatPulse
-          bpm={summary.bpm}
-          beatsPerSecond={summary.beatsPerSecond}
-          lastBeatBand={summary.lastBeatBand}
-          live={live}
-        />
+        {/* BeatPulse must be the one that gives way. Its own inner text is `flex: 1`, so
+         * without a width constraint here it sizes to the space it would LIKE and pushes the
+         * pill past the card's right edge and off the screen — "LIVE" rendered as "LIV" with
+         * the pill half off-device. minWidth:0 is the half that is easy to omit: a flex child
+         * will not shrink below its content width without it, so `flex: 1` alone does not fix
+         * this. */}
+        <View style={styles.pulseWrap}>
+          <BeatPulse
+            bpm={summary.bpm}
+            beatsPerSecond={summary.beatsPerSecond}
+            lastBeatBand={summary.lastBeatBand}
+            live={live}
+          />
+        </View>
         <View
           testID={`${testID}-pill`}
           style={[
@@ -189,10 +207,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  pulseWrap: { flex: 1, minWidth: 0 },
   pill: {
     paddingHorizontal: Spacing.sm,
     paddingVertical: 2,
     borderRadius: Radii.pill,
     borderWidth: StyleSheet.hairlineWidth,
+    /* Never give up width: this is the status the whole panel is judged by, and "NO SIGNAL"
+     * is the longer, more important of the two strings it can hold. */
+    flexShrink: 0,
   },
 });

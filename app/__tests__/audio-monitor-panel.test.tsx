@@ -8,6 +8,7 @@
  */
 
 import { render } from "@testing-library/react-native";
+import { StyleSheet } from "react-native";
 import React from "react";
 
 const focusState = { focused: true };
@@ -145,5 +146,29 @@ describe("MonitorPanel downgrade copy", () => {
     const copy = getByTestId("audio-monitor-no-spectrum").props.children;
     expect(copy).not.toContain("smallest packet size");
     expect(copy).not.toContain("Re-pairing");
+  });
+});
+
+describe("MonitorPanel header layout", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  /* WHAT THIS CAN AND CANNOT PROVE.
+   *
+   * jest-expo has no layout engine, so nothing here can observe the actual overflow — the
+   * evidence for the bug is a device screenshot (2026-08-26: the green pill rendered as "LIV"
+   * with its right half past the screen edge, because BeatPulse's `flex: 1` inner text sized
+   * the header's first child to the width it WANTED and pushed the pill out of the card).
+   *
+   * What this DOES do is pin the two constraints that fix it, so removing either is a test
+   * failure rather than a silent regression only a screenshot would catch. Treat a green run
+   * as "the constraint is still declared", never as "the header fits".
+   */
+  it("keeps the status pill from being squeezed out of the header", () => {
+    mockTelemetry(EMPTY_SUMMARY, "streaming");
+    const { getByTestId } = render(<MonitorPanel {...PROPS} />);
+
+    const pill = getByTestId("audio-monitor-pill");
+    const flat = StyleSheet.flatten(pill.props.style) as Record<string, unknown>;
+    expect(flat.flexShrink).toBe(0);
   });
 });

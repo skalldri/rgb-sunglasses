@@ -257,3 +257,60 @@ describe("verdict copy", () => {
     expect(kinds.size).toBe(8);
   });
 });
+
+describe("sensitivity advice adapts to the mode on screen", () => {
+  /* The bug this pins (user-found on hardware, 2026-08-26): the banner said "Turn Sensitivity
+   * down" while the user was in Advanced, where no 1..10 Sensitivity control exists. Worse
+   * than vague — the Advanced slider whose friendlyLabel IS "Sensitivity" holds beatAlpha, a
+   * THRESHOLD that runs inversely (sensitivity 1 -> alpha 1.50, sensitivity 10 -> 0.10), so
+   * following the advice literally there makes the over-firing worse. */
+
+  it("names the Simple macro when Simple is on screen", () => {
+    const v = computeVerdict(healthy({ beatsPerSecond: 9 }), {
+      mode: "simple",
+      key: "beatAlpha",
+    });
+    expect(v.detail).toContain("Turn Sensitivity down.");
+  });
+
+  it("names the real parameter, and the OPPOSITE direction, in Advanced", () => {
+    const v = computeVerdict(healthy({ beatsPerSecond: 9 }), {
+      mode: "advanced",
+      key: "beatAlpha",
+    });
+    // The direction is the whole point: firing too much means RAISING the threshold.
+    expect(v.detail).toContain("Raise Beat Alpha");
+    expect(v.detail).not.toContain("Turn Sensitivity down");
+    expect(v.detail).toContain("opposite way");
+  });
+
+  it("follows the threshold shape, naming SF Delta in median mode", () => {
+    const v = computeVerdict(healthy({ beatsPerSecond: 9 }), {
+      mode: "advanced",
+      key: "beatSfDelta",
+    });
+    expect(v.detail).toContain("Raise Beat SF Delta");
+    expect(v.detail).not.toContain("Beat Alpha");
+  });
+
+  it("inverts the direction for the insensitive verdict too", () => {
+    const simple = computeVerdict(healthy({ beatsPerSecond: 0 }), {
+      mode: "simple",
+      key: "beatAlpha",
+    });
+    expect(simple.detail).toContain("Turn Sensitivity up.");
+
+    const advanced = computeVerdict(healthy({ beatsPerSecond: 0 }), {
+      mode: "advanced",
+      key: "beatAlpha",
+    });
+    expect(advanced.detail).toContain("Lower Beat Alpha");
+    expect(advanced.detail).not.toContain("Turn Sensitivity up");
+  });
+
+  it("defaults to Simple naming, which is what the wizard's own notes use", () => {
+    expect(computeVerdict(healthy({ beatsPerSecond: 9 })).detail).toContain(
+      "Turn Sensitivity down.",
+    );
+  });
+});

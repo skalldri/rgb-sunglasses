@@ -1,3 +1,4 @@
+import { AUDIO_PARAMS } from "@/services/audio-params";
 import type { TelemetrySummary } from "@/services/audio-telemetry";
 
 /**
@@ -57,7 +58,46 @@ function pct(fraction: number): number {
   return Math.round(fraction * 100);
 }
 
-export function computeVerdict(s: TelemetrySummary): Verdict {
+/**
+ * How the surrounding screen is presenting sensitivity right now, so the advice can name a
+ * control that actually exists there — and point the right way.
+ *
+ * THE DIRECTION IS THE POINT, not just the name. "Sensitivity" in Simple is a 1..10 macro;
+ * the Advanced sliders it drives are THRESHOLDS and run inversely — alphaFromSensitivity maps
+ * 1 -> 1.50 and 10 -> 0.10, deltaFromSensitivity 1 -> 0.40 and 10 -> 0.025. So "Turn
+ * Sensitivity down", read by someone in Advanced looking at the slider whose friendlyLabel is
+ * literally "Sensitivity" (it is beatAlpha's), tells them to drag it the way that makes the
+ * firing WORSE. Naming the firmware label and the direction removes both halves of that.
+ *
+ * `key` follows the threshold shape, exactly as the Simple macro does: showing advice about
+ * the parameter the device is not using is its own kind of wrong.
+ */
+export type SensitivityControl = {
+  mode: "simple" | "advanced";
+  key: "beatAlpha" | "beatSfDelta";
+};
+
+/* Simple naming, matching the wizard's own notes ("try turning Sensitivity up a step by
+ * hand"). The wizard embeds this panel and has no Simple/Advanced switch of its own. */
+const DEFAULT_SENSITIVITY_CONTROL: SensitivityControl = {
+  mode: "simple",
+  key: "beatAlpha",
+};
+
+function fireLessAdvice(c: SensitivityControl): string {
+  if (c.mode === "simple") return "Turn Sensitivity down.";
+  return `Raise ${AUDIO_PARAMS[c.key].firmwareLabel}, or raise ${AUDIO_PARAMS.beatFluxFloor.firmwareLabel} — both make it fire less. They are thresholds, so they run the opposite way to the Simple Sensitivity slider.`;
+}
+
+function fireMoreAdvice(c: SensitivityControl): string {
+  if (c.mode === "simple") return "Turn Sensitivity up.";
+  return `Lower ${AUDIO_PARAMS[c.key].firmwareLabel} — it is a threshold, so it runs the opposite way to the Simple Sensitivity slider.`;
+}
+
+export function computeVerdict(
+  s: TelemetrySummary,
+  sensitivity: SensitivityControl = DEFAULT_SENSITIVITY_CONTROL,
+): Verdict {
   /* ORDER MATTERS HERE, and the discriminator is ageMs, not the frame count.
    *
    * When a stream dies at a venue the 10 s window drains to zero frames, so a bare
@@ -144,7 +184,7 @@ export function computeVerdict(s: TelemetrySummary): Verdict {
       tone: "warning",
       title: "Too sensitive",
       detail:
-        "It is firing on almost every sound, including the snare. Turn Sensitivity down.",
+        `It is firing on almost every sound, including the snare. ${fireLessAdvice(sensitivity)}`,
     };
   }
 
@@ -157,7 +197,7 @@ export function computeVerdict(s: TelemetrySummary): Verdict {
       tone: "warning",
       title: "Not finding beats",
       detail:
-        "The glasses can hear the room but nothing is firing. Turn Sensitivity up.",
+        `The glasses can hear the room but nothing is firing. ${fireMoreAdvice(sensitivity)}`,
     };
   }
 

@@ -469,6 +469,12 @@ function AudioTuningScreen() {
                     targetLow={valueOf("agcTargetLow")}
                     targetHigh={valueOf("agcTargetHigh")}
                     noiseGate={valueOf("agcNoiseGateRms")}
+                    // The banner has to name a control the user can actually see. In Advanced
+                    // there is no 1..10 "Sensitivity" — there are the raw thresholds, which run
+                    // the OTHER WAY, so unqualified "turn Sensitivity down" advice read there
+                    // sends someone the wrong direction. Same sensitivityKey the Simple macro
+                    // uses, so the advice always tracks the threshold shape in effect.
+                    sensitivity={{ mode, key: sensitivityKey as "beatAlpha" | "beatSfDelta" }}
                 />
 
                 <SegmentedControl<Mode>
