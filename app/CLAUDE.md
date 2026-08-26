@@ -469,6 +469,29 @@ any local plugin under `plugins/`, prefer this "find-or-create, then set the req
 unconditionally" shape over "if not present, add" — the latter is only safe for plugins whose
 config never changes after the first prebuild, which is not a safe assumption to make silently.
 
+**A second instance, and a nastier shape: a mod can break a DIFFERENT mod's presence-check.**
+`withDevSchemeInManifest` (`plugins/withDevVariant.js`) rewrote the
+`<data android:scheme="rgbsunglassesapp"/>` intent-filter entry to `"rgbsunglassesapp.dev"`. That
+rename is what defeated `@expo/config-plugins`' own built-in `withScheme` base mod
+(`android/Scheme.js`), whose `setScheme`/`appendScheme` only skip re-adding a scheme they find
+already present. Having renamed the configured scheme away, our mod made it look *missing* on
+every subsequent prebuild, so the base mod re-appended a fresh one — which our mod then renamed
+too, adding one duplicate `<data>` entry per prebuild (measured 1 -> 2 -> 3 across three runs on
+an unclean `android/`). Fixed by removing every existing `"rgbsunglassesapp"`/`".dev"` entry and
+inserting exactly one, which self-heals manifests already carrying duplicates and leaves no
+"missing scheme" state for the base mod to react to.
+
+Note what generalises: it is not enough for your own mod to be idempotent in isolation. If it
+mutates something another mod uses as ITS presence-check, you have made that mod non-idempotent
+instead, and the damage shows up in a file neither author is looking at. In the same file,
+`withDebugAppIdSuffix` was already correct (`if (contents.includes('applicationIdSuffix ".dev"'))
+return cfg;`) and `withDebugResources` overwrites rather than appends, so both are idempotent by
+construction.
+
+Duplicate `<data>` elements are harmless at runtime — Android tolerates them — so this class is
+prebuild determinism and hygiene rather than a crash. It is still worth checking for in any new
+manifest or gradle mod, because the failure is invisible until someone diffs a generated file.
+
 ### Device-Free Validation Loop
 
 For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) now gates all three — the `test` job runs jest, and a separate `typecheck-lint` job runs `tsc --noEmit` and `eslint --max-warnings 0` (added for issue #130, since a green CI used to mean only jest passed and tsc/lint debt drifted in undetected). Still run them locally before pushing so you're not waiting on CI to catch a type error or a new lint warning (any warning now fails CI). **Green here is not "verified"** — see the next section for the class of bug this loop is structurally blind to.
@@ -593,12 +616,6 @@ app/scripts/launch-app.sh --device <device name>
 ```
 
 This is the correct fix to reach for, not the manual `adb install` + `monkey`/`android_launch_app` dance — that manual path still works as a fallback (e.g. if Metro itself won't start), but `--app-id` fixes the actual CLI invocation so it works end-to-end unattended. Don't pass `--android` to a separately-running `npx expo start` to reconnect Metro — that flag tries to auto-launch generic Expo Go instead of the custom dev-client app that's actually installed.
-
-**Config plugins must be written as "ensure exactly one", never "append" or "add-if-absent" — `android/` persists across prebuilds.** `app/scripts/launch-app.sh` deliberately runs `expo prebuild` on every launch, without `--clean`, so every mod in `plugins/` runs again against whatever is already on disk in `android/`. A mod that unconditionally appends (or that mutates state in a way a *different* mod's own presence-check no longer recognizes) accumulates duplicates across launches instead of converging.
-
-Concretely hit in `withDevSchemeInManifest` (`plugins/withDevVariant.js`): it rewrites the `<data android:scheme="rgbsunglassesapp"/>` intent-filter entry to `"rgbsunglassesapp.dev"`. That rewrite is exactly what breaks `@expo/config-plugins`' own built-in `withScheme` base mod (`android/Scheme.js`) — its `setScheme`/`appendScheme` only skip re-adding a scheme it finds already present in the manifest. Since our mod always renames `"rgbsunglassesapp"` away, the base mod sees it "missing" on every subsequent prebuild and re-`appendScheme()`s a fresh one — which our mod then renames to `.dev` too, adding one more duplicate `<data>` entry per prebuild (measured: 1 → 2 → 3 across three consecutive `expo prebuild --platform android` runs on an unclean `android/`). Fixed by making the mod remove *every* existing `"rgbsunglassesapp"`/`"rgbsunglassesapp.dev"` entry from the intent-filter first, then insert exactly one `.dev` entry — self-healing even against duplicates left behind by earlier buggy runs, and immune to the base mod's re-append because there's no longer a "missing scheme" state to trigger it. `withDebugAppIdSuffix` in the same file was already written the correct way (`if (contents.includes('applicationIdSuffix ".dev"')) return cfg;`) and needed no change; `withDebugResources` fully overwrites each generated file/overlay on every run rather than appending, so it's idempotent by construction.
-
-The duplicated entry is generally harmless at runtime (Android tolerates redundant `<data>` elements in one intent-filter) — this is a prebuild-determinism/hygiene issue, not a crash. But the same "unconditional append" shape is worth checking for in any future manifest/gradle-file mod added to `plugins/`.
 
 ### BLE Link Can Get Orphaned by App Reloads, Not Just Discovery Failures
 
