@@ -29,29 +29,30 @@ BtGattPrimaryService<kAudioConfigServiceUuid> audioConfigPrimaryService;
  * without knowing anything about this project, which is exactly the situation you are in when
  * the companion app is the thing misbehaving.
  */
-#define AUDIO_PARAM_CHAR_F(varName, key, label, index)                                     \
-    using varName##_t = BtGattPersistentCharacteristic<key, label, false, float,           \
-                                                       audioParamDefaultF<index>()>;       \
+/* ONE macro, parameterised by the C type and the one-letter suffix the table's helpers use.
+ *
+ * There were two near-identical 11-line bodies differing only in `float`/`uint32_t`,
+ * `audioParamDefaultF/U` and `audioParamRangeBytesF/U`. Any future change to the declaration
+ * shape had to be made to both, identically — and missing one would give float and integer
+ * parameters divergent GATT scaffolding that compiles perfectly well. Token pasting removes
+ * that possibility rather than documenting it. */
+#define AUDIO_PARAM_CHAR(varName, key, label, index, CTYPE, SUF)                           \
+    using varName##_t = BtGattPersistentCharacteristic<key, label, false, CTYPE,           \
+                                                       audioParamDefault##SUF<index>()>;   \
     template <>                                                                            \
     struct BtGattValidRangeTraits<varName##_t> {                                           \
         static constexpr bool kSupported = true;                                           \
-        static constexpr AudioParamRangeBytes kRange = audioParamRangeBytesF<index>();      \
+        static constexpr AudioParamRangeBytes kRange = audioParamRangeBytes##SUF<index>();  \
         static constexpr const uint8_t *kBytes = kRange.b;                                 \
         static constexpr uint16_t kSize = sizeof(kRange.b);                                \
     };                                                                                     \
     varName##_t varName
 
+#define AUDIO_PARAM_CHAR_F(varName, key, label, index)                                     \
+    AUDIO_PARAM_CHAR(varName, key, label, index, float, F)
+
 #define AUDIO_PARAM_CHAR_U(varName, key, label, index)                                     \
-    using varName##_t = BtGattPersistentCharacteristic<key, label, false, uint32_t,        \
-                                                       audioParamDefaultU<index>()>;       \
-    template <>                                                                            \
-    struct BtGattValidRangeTraits<varName##_t> {                                           \
-        static constexpr bool kSupported = true;                                           \
-        static constexpr AudioParamRangeBytes kRange = audioParamRangeBytesU<index>();      \
-        static constexpr const uint8_t *kBytes = kRange.b;                                 \
-        static constexpr uint16_t kSize = sizeof(kRange.b);                                \
-    };                                                                                     \
-    varName##_t varName
+    AUDIO_PARAM_CHAR(varName, key, label, index, uint32_t, U)
 
 /* Notify=false on every characteristic in this service (it used to be true):
  * Android caps GATT notification registrations at ~15 per app

@@ -751,9 +751,18 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
             });
 
         /* Valid Range (0x2906), only for characteristics that opt in via
-         * BtGattValidRangeTraits. Emitted BEFORE the CCC so a notifiable characteristic's
-         * CCC keeps its position relative to the value handle, which is what a central that
-         * caches handles across a reconnect depends on. */
+         * BtGattValidRangeTraits.
+         *
+         * Emitted AFTER the CCC. The previous ordering put it between CPF and CCC with a
+         * comment claiming that preserved the CCC's position relative to the value handle —
+         * which is exactly backwards: it moved the CCC from value+3 to value+4. A bonded
+         * central that had cached the CCCD handle would then write its subscription to the
+         * Valid Range attribute instead, and notifications would silently never resume.
+         *
+         * Latent today, since all 14 opt-ins are Notify=false — but the next person to opt a
+         * notifiable characteristic into Valid Range would have trusted that comment. With
+         * the range last, the CCC keeps its offset and the invariant the comment asserts is
+         * actually true. */
         if constexpr (BtGattValidRangeTraits<Self>::kSupported) {
             auto rangeAttrs = std::make_tuple(bt_gatt_attr{
                 .uuid = &kGattValidRangeUuid.uuid,
@@ -766,7 +775,7 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
             });
 
             if constexpr (Notify) {
-                return std::tuple_cat(baseAttrs, rangeAttrs, ccAttrs());
+                return std::tuple_cat(baseAttrs, ccAttrs(), rangeAttrs);
             } else {
                 return std::tuple_cat(baseAttrs, rangeAttrs);
             }

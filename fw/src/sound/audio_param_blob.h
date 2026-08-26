@@ -62,9 +62,13 @@ constexpr std::array<uint8_t, kAudioParamBlobSize> audioParamBlobBuild() {
     out[o++] = AUDIO_PARAM_BLOB_VERSION;
     out[o++] = (uint8_t)kAudioParamCount;
 
+    /* Uses the shared LE-32 helper directly. It used to build a fake (v, 0.0f) range pair and
+     * throw the upper half away — which worked, but meant the wire format had two
+     * serialization paths and one of them was a trick. */
     const auto putF32 = [&out, &o](float v) {
-        const AudioParamRangeBytes pair = audioParamRangeBytesFromFloats(v, 0.0f);
-        for (int k = 0; k < 4; k++) out[o++] = pair.b[k];
+        uint8_t tmp[4]{};
+        audioParamPutLe32(tmp, std::bit_cast<uint32_t>(v));
+        for (int k = 0; k < 4; k++) out[o++] = tmp[k];
     };
     const auto putStr = [&out, &o](const char *s) {
         const size_t n = s != nullptr ? audioParamStrLen(s) : 0;

@@ -346,32 +346,28 @@ struct AudioParamRangeBytes {
     uint8_t b[8];
 };
 
-constexpr AudioParamRangeBytes audioParamRangeBytesFromFloats(float lo, float hi) {
-    const uint32_t l = std::bit_cast<uint32_t>(lo);
-    const uint32_t h = std::bit_cast<uint32_t>(hi);
-    return AudioParamRangeBytes{{
-        (uint8_t)(l & 0xFF),
-        (uint8_t)((l >> 8) & 0xFF),
-        (uint8_t)((l >> 16) & 0xFF),
-        (uint8_t)((l >> 24) & 0xFF),
-        (uint8_t)(h & 0xFF),
-        (uint8_t)((h >> 8) & 0xFF),
-        (uint8_t)((h >> 16) & 0xFF),
-        (uint8_t)((h >> 24) & 0xFF),
-    }};
+/** The one place a 32-bit value becomes little-endian bytes on this wire. */
+constexpr void audioParamPutLe32(uint8_t *out, uint32_t v) {
+    out[0] = (uint8_t)(v & 0xFF);
+    out[1] = (uint8_t)((v >> 8) & 0xFF);
+    out[2] = (uint8_t)((v >> 16) & 0xFF);
+    out[3] = (uint8_t)((v >> 24) & 0xFF);
 }
 
 constexpr AudioParamRangeBytes audioParamRangeBytesFromU32(uint32_t lo, uint32_t hi) {
-    return AudioParamRangeBytes{{
-        (uint8_t)(lo & 0xFF),
-        (uint8_t)((lo >> 8) & 0xFF),
-        (uint8_t)((lo >> 16) & 0xFF),
-        (uint8_t)((lo >> 24) & 0xFF),
-        (uint8_t)(hi & 0xFF),
-        (uint8_t)((hi >> 8) & 0xFF),
-        (uint8_t)((hi >> 16) & 0xFF),
-        (uint8_t)((hi >> 24) & 0xFF),
-    }};
+    AudioParamRangeBytes out{};
+    audioParamPutLe32(&out.b[0], lo);
+    audioParamPutLe32(&out.b[4], hi);
+    return out;
+}
+
+/* Delegates rather than repeating the shift/mask ladder. Two copies had to be edited in
+ * lockstep, and a fix applied to one and not the other would produce descriptor bytes that
+ * differ by characteristic TYPE — precisely the plausible-looking-but-wrong range the comment
+ * above warns about. */
+constexpr AudioParamRangeBytes audioParamRangeBytesFromFloats(float lo, float hi) {
+    return audioParamRangeBytesFromU32(std::bit_cast<uint32_t>(lo),
+                                       std::bit_cast<uint32_t>(hi));
 }
 
 /** Descriptor bytes for a FLOAT32 parameter. */

@@ -16,6 +16,7 @@ import {
 import {
   AUDIO_PARAMS,
   AUDIO_PARAM_ORDER,
+  resolveAudioParams,
   noiseLevelFromGate,
   sensitivityFromAlpha,
   type AudioParamKey,
@@ -126,12 +127,28 @@ describe("parseAudioParamRanges — refusals", () => {
     expect(parseAudioParamRanges(toBase64(bad))).toBeNull();
   });
 
-  it("refuses a count that disagrees with this app build", () => {
-    // A mismatch means the firmware's parameter list is not the one this app was built
-    // against, so no position can be trusted.
-    const bad = [...V.bytes];
-    bad[1] = AUDIO_PARAM_ORDER.length - 1;
-    expect(parseAudioParamRanges(toBase64(bad))).toBeNull();
+
+  it("decodes the known prefix of a NEWER firmware's longer table", () => {
+    // audio_param_table.h is append-only, so a future firmware with a 15th tunable sends
+    // count = 15. Refusing that outright made every already-shipped app fall back to its own
+    // table for all 14 parameters it DID know — recreating the retuned-after-ship staleness
+    // (beat_alpha 3.5 -> 0.3) this blob exists to prevent.
+    const extended = [...V.bytes];
+    extended[1] = AUDIO_PARAM_ORDER.length + 1;
+    // A plausible 15th entry: float type, no unit, no enum labels, four float32s.
+    extended.push(0, 0, 0, ...new Array(16).fill(0));
+
+    const out = parseAudioParamRanges(toBase64(extended));
+    expect(out).not.toBeNull();
+    expect(Object.keys(out!)).toHaveLength(AUDIO_PARAM_ORDER.length);
+    // The prefix still decodes correctly — this is the whole point.
+    expect(out!.beatAlpha!.min).toBeCloseTo(V.expect[2].min, 6);
+  });
+
+  it("still refuses a SHORTER table, where there is no trustworthy prefix", () => {
+    const short = [...V.bytes];
+    short[1] = AUDIO_PARAM_ORDER.length - 1;
+    expect(parseAudioParamRanges(toBase64(short))).toBeNull();
   });
 
   it("refuses a truncated blob rather than applying a partial result", () => {
@@ -172,17 +189,13 @@ describe("overrides applied through resolveAudioParams", () => {
   it("a firmware range replaces the app-side one", () => {
     // The point of the whole feature: the device's own clamps win, so a slider cannot offer a
     // value the firmware would reject.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- avoids a cycle at module scope
-    const { resolveAudioParams } = require("@/services/audio-params");
     const key: AudioParamKey = "beatAlpha";
     const spec = AUDIO_PARAMS[key];
     const chars = { [spec.uuid]: { value: null } };
     const resolved = resolveAudioParams(chars, {
       [key]: { min: 0.5, max: 5, defaultValue: 1 },
     });
-    const entry = resolved.find(
-      (r: { spec: { key: string } }) => r.spec.key === key,
-    );
+    const entry = resolved.find((r) => r.spec.key === key)!;
     expect(entry.spec.min).toBe(0.5);
     expect(entry.spec.max).toBe(5);
     expect(entry.spec.defaultValue).toBe(1);

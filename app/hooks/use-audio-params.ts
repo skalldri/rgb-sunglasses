@@ -1,14 +1,20 @@
 import { useCallback, useMemo } from "react";
 
-import { UUID_AUDIO_CONFIG_SERVICE } from "@/constants/bluetooth";
+import {
+  UUID_AUDIO_CONFIG_SERVICE,
+  UUID_AUDIO_PARAM_RANGES,
+  UUID_AUDIO_TELEMETRY_SERVICE,
+} from "@/constants/bluetooth";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useAudioParamWriter } from "@/hooks/use-audio-param-writer";
+import { parseAudioParamRanges } from "@/services/audio-param-ranges";
 import {
   AUDIO_PARAMS,
   AUDIO_PARAM_ORDER,
   encodeParam,
   resolveAudioParams,
   type AudioParamKey,
+  type AudioParamSpec,
   type ResolvedAudioParam,
 } from "@/services/audio-params";
 
@@ -32,6 +38,14 @@ export interface UseAudioParamsResult {
   currentValues: Partial<Record<AudioParamKey, number>>;
   /** Current value for one parameter, or null when the device does not expose it. */
   valueOf: (key: AudioParamKey) => number | null;
+  /**
+   * The RESOLVED spec for one parameter — the app-side table merged with whatever ranges the
+   * firmware published. Every render and every encode must go through this rather than
+   * reaching into AUDIO_PARAMS directly, or the firmware's ranges have no observable effect:
+   * the merged spec was previously consulted only for `.key`/`.uuid`/`.value`, so sliders
+   * still rendered and clamped against stale app-side minimums.
+   */
+  specOf: (key: AudioParamKey) => AudioParamSpec;
   /** True while a write to that parameter is in flight. */
   busyOf: (key: AudioParamKey) => boolean;
   /** Write immediately, no throttling. Resolves false (never throws) on a rejected write. */
@@ -61,12 +75,30 @@ export function useAudioParams(): UseAudioParamsResult {
   );
   const writer = useAudioParamWriter(useMemo(() => ({ write }), [write]));
 
-  /* resolveAudioParams takes an `overrides` argument this hook does not yet supply — that is
-   * the seam the firmware's published ranges plug into, and it lands with that firmware. Doing
-   * it here rather than in a screen means it is wired once for every consumer. */
+  /* Ranges, defaults and steps from the firmware's own table — the same table it clamps
+   * against — so a slider cannot offer a value the device would reject and "reset to
+   * defaults" restores what THIS image ships. Both beat_alpha (3.5 -> 0.3) and
+   * noise_gate_rms (0.001 -> 0.0006) were retuned after app builds shipped, so an app-side
+   * defaults table restores values that were measured to be wrong.
+   *
+   * Absent on older firmware, where parseAudioParamRanges returns null and the app-side table
+   * stays authoritative — the seam resolveAudioParams was built with.
+   *
+   * Keyed on the characteristic's VALUE, not on selectedDevice: depending on the whole device
+   * object re-parsed a 346-byte blob and minted a new overrides identity on every unrelated
+   * mutation of it, which then invalidated `resolved` and everything derived from it. */
+  const rangesValue =
+    selectedDevice?.characteristicsByService?.[UUID_AUDIO_TELEMETRY_SERVICE]?.[
+      UUID_AUDIO_PARAM_RANGES
+    ]?.value;
+  const rangeOverrides = useMemo(
+    () => parseAudioParamRanges(rangesValue) ?? undefined,
+    [rangesValue],
+  );
+
   const resolved = useMemo(
-    () => resolveAudioParams(serviceChars ?? {}),
-    [serviceChars],
+    () => resolveAudioParams(serviceChars ?? {}, rangeOverrides),
+    [serviceChars, rangeOverrides],
   );
 
   const currentValues = useMemo(() => {
@@ -83,6 +115,22 @@ export function useAudioParams(): UseAudioParamsResult {
     [currentValues],
   );
 
+  const specByKey = useMemo(() => {
+    const map = {} as Partial<Record<AudioParamKey, AudioParamSpec>>;
+    resolved.forEach((r) => {
+      map[r.spec.key] = r.spec;
+    });
+    return map;
+  }, [resolved]);
+
+  /* Falls back to the static table for a parameter the device does not expose, so callers
+   * that ask about one never get undefined — but for anything the device DOES expose, the
+   * firmware's ranges win. */
+  const specOf = useCallback(
+    (key: AudioParamKey): AudioParamSpec => specByKey[key] ?? AUDIO_PARAMS[key],
+    [specByKey],
+  );
+
   const busyOf = useCallback(
     (key: AudioParamKey): boolean =>
       serviceChars?.[AUDIO_PARAMS[key].uuid]?.isUpdateInProgress ?? false,
@@ -91,10 +139,12 @@ export function useAudioParams(): UseAudioParamsResult {
 
   const writeParam = useCallback(
     (key: AudioParamKey, value: number) => {
-      const spec = AUDIO_PARAMS[key];
+      /* The RESOLVED spec, so encodeParam clamps against the firmware's range rather than the
+       * app's copy of it. */
+      const spec = specOf(key);
       return writer.writeNow(spec.uuid, value, (v) => encodeParam(spec, v));
     },
-    [writer],
+    [writer, specOf],
   );
 
   /**
@@ -119,6 +169,7 @@ export function useAudioParams(): UseAudioParamsResult {
     resolved,
     currentValues,
     valueOf,
+    specOf,
     busyOf,
     writeParam,
     writer,

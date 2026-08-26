@@ -28,15 +28,6 @@ import { decodeBytesFromBase64 } from "@/services/ble-value-codec";
 
 export const AUDIO_PARAM_BLOB_VERSION = 1;
 
-export type AudioParamRangeEntry = {
-  type: 0 | 1 | 2;
-  unit: string;
-  enumLabels: string[];
-  defaultValue: number;
-  min: number;
-  max: number;
-  step: number;
-};
 
 /**
  * Decode the blob into per-parameter overrides keyed by AudioParamKey.
@@ -55,9 +46,19 @@ export function parseAudioParamRanges(
 
   const count = bytes[1];
   /* The blob is positional: entry N describes the Nth characteristic in GATT declaration
-   * order. A count mismatch means the firmware's parameter list is not the one this app was
-   * built against, so the positions cannot be trusted and nothing is applied. */
-  if (count !== AUDIO_PARAM_ORDER.length) return null;
+   * order. The firmware's table is APPEND-ONLY, so a count GREATER than this app knows about
+   * is a newer firmware with extra tunables — and its first N entries still describe exactly
+   * the parameters this app has, in the same order. Decoding that prefix is the same
+   * positional trust the UUID mapping already relies on.
+   *
+   * Refusing on any mismatch recreated the exact staleness this blob exists to prevent: the
+   * first time firmware grew a 15th parameter, every already-shipped app would silently fall
+   * back to its own table for all 14 it *did* know — including retuned defaults like
+   * beat_alpha 3.5 -> 0.3, which is the motivating example for the whole feature.
+   *
+   * A count SMALLER than expected is still fatal: this app would be reading entries that do
+   * not exist, and there is no prefix to trust. */
+  if (count < AUDIO_PARAM_ORDER.length) return null;
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const out: Partial<Record<AudioParamKey, Partial<AudioParamSpec>>> = {};
@@ -74,7 +75,9 @@ export function parseAudioParamRanges(
     return s;
   };
 
-  for (let i = 0; i < count; i++) {
+  /* Only the prefix this app understands. Entries beyond it belong to parameters this build
+   * has no UI for, and the trailing-bytes rule below covers them. */
+  for (let i = 0; i < AUDIO_PARAM_ORDER.length; i++) {
     if (o >= bytes.length) return null;
     const type = bytes[o];
     o += 1;
