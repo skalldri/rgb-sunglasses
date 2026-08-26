@@ -136,6 +136,56 @@ describe("collection is not timed", () => {
     expect(h.writeParam).not.toHaveBeenCalled();
   });
 
+  it("counts the sitting in progress, not just committed ones", () => {
+    // Hardware-found. A sitting is only sealed into the pool at stop(), so reporting the
+    // committed figure left the readout at "0.0s collected" for the whole sitting — observed
+    // reading 0.0s through 35 s of successful collection, which is indistinguishable from a
+    // dead stream. At a venue a sitting runs for minutes.
+    const h = makeHarness();
+    const { result } = renderCal(h);
+
+    act(() => result.current.startCollecting("background"));
+    feed(h, 2, QUIET);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // Still recording — nothing has been stopped or sealed.
+    expect(result.current.state.active).toBe("background");
+    expect(result.current.state.collectors.background.frames).toBeGreaterThan(0);
+    expect(result.current.state.collectors.background.seconds).toBeGreaterThan(0);
+  });
+
+  it("stops counting when the stream dies mid-sitting", () => {
+    // The count must come from frames collected, never elapsed time — a readout that keeps
+    // climbing while nothing arrives is the same lie the old countdown told.
+    const h = makeHarness();
+    const { result } = renderCal(h);
+
+    act(() => result.current.startCollecting("background"));
+    feed(h, 2, QUIET);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    const afterFrames = result.current.state.collectors.background.frames;
+    const afterSeconds = result.current.state.collectors.background.seconds;
+
+    // Time passes; no frames arrive.
+    h.clock.advance(30_000);
+    act(() => {
+      jest.advanceTimersByTime(30_000);
+    });
+
+    expect(result.current.state.collectors.background.frames).toBe(afterFrames);
+    // SECONDS too, not just frames. Asserting only the frame count let a mutant that read
+    // seconds straight off the wall clock survive — the readout would have climbed through
+    // half a minute of silence while nothing was being collected.
+    expect(result.current.state.collectors.background.seconds).toBeCloseTo(
+      afterSeconds,
+      6,
+    );
+  });
+
   it("accumulates across several sittings with gaps between them", () => {
     const h = makeHarness();
     const { result } = renderCal(h);

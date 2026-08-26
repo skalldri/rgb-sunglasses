@@ -23,6 +23,7 @@ import {
   appendChunk,
   dropLastChunk,
   emptyPool,
+  poolSeconds,
   readiness,
   sealPool,
   type CalibrationPool,
@@ -165,10 +166,37 @@ export function useAudioCalibration(deps: Deps) {
 
   const publish = React.useCallback((activeNow: CollectorKind | null) => {
     const p = poolsRef.current;
+    const live = stagingRef.current;
+
+    /**
+     * Readiness INCLUDING the sitting in progress.
+     *
+     * The committed pool alone is not what the user is watching. A sitting is only sealed into
+     * the pool at stop(), so reporting the committed figure left the readout at "0.0s
+     * collected" for the entire sitting — found on hardware, where it read 0.0s for 35 s of
+     * successful collection and looked exactly like a broken stream. At a venue a sitting can
+     * run for minutes, and that is precisely when someone needs to see it working.
+     *
+     * Counted from FRAMES ACTUALLY COLLECTED, never from elapsed wall-clock: if the stream
+     * dies mid-sitting the number must stop climbing, because a readout that keeps counting
+     * while nothing arrives is the same lie the old countdown told.
+     */
+    const readOf = (k: CollectorKind) => {
+      const base = readiness(p[k], COLLECTOR_MIN_FRAMES[k]);
+      if (k !== activeNow || live.frames === 0) return base;
+      const frames = base.frames + live.frames;
+      return {
+        ...base,
+        frames,
+        seconds: base.seconds + poolSeconds(live),
+        ready: frames >= COLLECTOR_MIN_FRAMES[k],
+      };
+    };
+
     const collectors = {
-      background: readiness(p.background, COLLECTOR_MIN_FRAMES.background),
-      music: readiness(p.music, COLLECTOR_MIN_FRAMES.music),
-      taps: readiness(p.taps, COLLECTOR_MIN_FRAMES.taps),
+      background: readOf("background"),
+      music: readOf("music"),
+      taps: readOf("taps"),
     };
     setState((s) => ({
       ...s,
