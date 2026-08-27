@@ -30,6 +30,7 @@ import {
     encodeParam,
     formatParamValue,
     gateFromNoiseLevel,
+    nearestMacroStep,
     noiseLevelFromGate,
     paramFramesToMs,
     paramToPosition,
@@ -324,8 +325,12 @@ describe("macro mappings", () => {
     });
 
     it("reports null for a value that is not on any step, so the UI can say Custom", () => {
-        // The shared dev board carries a persisted beat_alpha of 1.5 from Phase 1 — which IS
-        // step 1 — so pick something genuinely off-grid.
+        // Values picked to be off the macro grid regardless of what any board happens to carry.
+        // This comment used to justify 0.77 by asserting the shared dev board holds a persisted
+        // beat_alpha of 1.5 from Phase 1 — stale, and corrected elsewhere in this same PR
+        // (fw/src/sound/audio_config.cpp: measured 2026-08-24, it reports 0.3000). The
+        // assertions never depended on that; only the rationale did, and a committed comment is
+        // exactly where a corrected fact regresses back into the codebase.
         expect(sensitivityFromAlpha(0.77)).toBeNull();
         expect(sensitivityFromAlpha(19)).toBeNull();
         expect(sensitivityFromDelta(1.9)).toBeNull();
@@ -381,5 +386,67 @@ describe("preset macros", () => {
     it("keeps preset labels unique so a pill group can key on them", () => {
         expect(new Set(BEAT_FEEL_PRESETS.map(p => p.label)).size).toBe(BEAT_FEEL_PRESETS.length);
         expect(new Set(ADAPT_SPEED_PRESETS.map(p => p.label)).size).toBe(ADAPT_SPEED_PRESETS.length);
+    });
+});
+
+describe("zero-snap boundary (review #413)", () => {
+    const gate = AUDIO_PARAMS.agcNoiseGateRms;
+
+    it("keeps a nonzero sub-log-floor value OUT of the off band", () => {
+        // 0.00005 is legal firmware-side (range 0..0.02) and settable over the shell, but sits
+        // below the app's 0.0001 logFloor. Rendering it exactly ON the band edge meant the most
+        // natural gesture — grab the thumb and release, which fires onSlidingComplete whether or
+        // not it moved — round-tripped it to 0 and silently disabled the gate.
+        const position = paramToPosition(gate, 0.00005);
+        expect(position).toBeGreaterThan(ZERO_SNAP_POSITION);
+        expect(positionToParam(gate, position)).toBeGreaterThan(0);
+    });
+
+    it("still snaps to off inside the band, and renders a real 0 at the bottom", () => {
+        expect(positionToParam(gate, ZERO_SNAP_POSITION)).toBe(0);
+        expect(positionToParam(gate, ZERO_SNAP_POSITION / 2)).toBe(0);
+        expect(paramToPosition(gate, 0)).toBe(0);
+    });
+});
+
+describe("macro curves derive their midpoint from the table (review #413)", () => {
+    it("puts step 5 exactly on the parameter's own default", () => {
+        // The midpoints used to be literals repeated per direction, unconnected to the spec
+        // three screens up holding the same number. Retuning a default in the table without
+        // editing every literal made forward and inverse disagree, and a device on what used to
+        // be a macro step then rendered "Custom" everywhere.
+        expect(alphaFromSensitivity(5)).toBeCloseTo(AUDIO_PARAMS.beatAlpha.defaultValue, 10);
+        expect(deltaFromSensitivity(5)).toBeCloseTo(AUDIO_PARAMS.beatSfDelta.defaultValue, 10);
+        expect(gateFromNoiseLevel(5)).toBeCloseTo(AUDIO_PARAMS.agcNoiseGateRms.defaultValue, 10);
+    });
+
+    it("round-trips every step through the shared descriptor", () => {
+        for (let s = 1; s <= 10; s++) {
+            expect(sensitivityFromAlpha(alphaFromSensitivity(s))).toBe(s);
+            expect(sensitivityFromDelta(deltaFromSensitivity(s))).toBe(s);
+            expect(noiseLevelFromGate(gateFromNoiseLevel(s))).toBe(s);
+        }
+    });
+});
+
+describe("nearestMacroStep (review #413)", () => {
+    it("picks a step for an off-grid value so the thumb has somewhere to go", () => {
+        // A board tuned over the shell has no exact step — the inverse correctly returns null,
+        // which is how "Custom" is detected — but a Simple slider still has to render.
+        expect(sensitivityFromAlpha(0.77)).toBeNull();
+        const step = nearestMacroStep("beatAlpha", 0.77);
+        expect(step).not.toBeNull();
+        expect(step).toBeGreaterThanOrEqual(1);
+        expect(step).toBeLessThanOrEqual(10);
+    });
+
+    it("returns the exact step when the value IS on the grid", () => {
+        for (let s = 1; s <= 10; s++) {
+            expect(nearestMacroStep("beatAlpha", alphaFromSensitivity(s))).toBe(s);
+        }
+    });
+
+    it("has no opinion about parameters that are not macro-backed", () => {
+        expect(nearestMacroStep("fluxGamma", 500)).toBeNull();
     });
 });

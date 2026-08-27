@@ -5,6 +5,7 @@
  * who does not know why they are there, so each test states the consequence of getting it wrong.
  */
 
+import { CLAMP_READBACK_DELAYS_MS } from "@/constants/bluetooth";
 import { act, renderHook } from "@testing-library/react-native";
 
 import {
@@ -58,7 +59,28 @@ describe("useAudioParamWriter", () => {
         expect(write).toHaveBeenLastCalledWith(UUID, "enc:19");
     });
 
-    it("does not rewrite an unchanged encoded value", async () => {
+    it("does not rewrite an unchanged encoded value WITHIN one throttle window", async () => {
+        const write = jest.fn().mockResolvedValue(true);
+        const { result } = renderHook(() => useAudioParamWriter({ write }));
+
+        await act(async () => {
+            result.current.onSlide(UUID, 5, encode);
+        });
+        await act(async () => {
+            // Still inside the window — the real drag case, many frames snapping to one value,
+            // and each must not cost a round-trip.
+            jest.advanceTimersByTime(WRITE_THROTTLE_MS / 2);
+            result.current.onSlide(UUID, 5, encode);
+        });
+
+        expect(write).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes the same value again once the window has passed", async () => {
+        // The dedupe used to be unbounded, making the latch a session-long memory of what the
+        // APP last sent rather than a drag-frame optimisation. Anything that changed the value
+        // underneath it — a firmware clamp read-back, `sound dsp set` on the shell — left
+        // re-asserting the old value silently skipped.
         const write = jest.fn().mockResolvedValue(true);
         const { result } = renderHook(() => useAudioParamWriter({ write }));
 
@@ -70,8 +92,7 @@ describe("useAudioParamWriter", () => {
             result.current.onSlide(UUID, 5, encode);
         });
 
-        // Many slider positions snap to the same value; each must not cost a round-trip.
-        expect(write).toHaveBeenCalledTimes(1);
+        expect(write).toHaveBeenCalledTimes(2);
     });
 
     it("writes the final position once on slide complete", async () => {
@@ -128,10 +149,12 @@ describe("useAudioParamWriter", () => {
             expect(result.current.displayValue(UUID, 999)).toBe(999);
         });
 
-        it("outlasts the 1200 ms clamp read-back in context/bluetooth-context.tsx", () => {
-            // If this ever stops holding, the thumb is handed back before the clamped value
-            // lands and the snap appears to happen at random.
-            expect(SETTLE_MS).toBeGreaterThan(1200);
+        it("outlasts the LAST clamp read-back, whatever that is retuned to", () => {
+            // Asserts the RELATION against the real constant, not a hand-copied literal. The old
+            // version re-hardcoded 1200 while the delays lived inside a React function body where
+            // nothing could import them — so retuning them to [150, 2000] would have broken the
+            // invariant (thumb snapping mid-settle "at random") with this still green.
+            expect(SETTLE_MS).toBeGreaterThan(Math.max(...CLAMP_READBACK_DELAYS_MS));
         });
 
         it("leaves untouched parameters showing their context value", () => {
@@ -188,6 +211,31 @@ describe("useAudioParamWriter", () => {
                 await result.current.writeNow(UUID, 3, encode);
             });
             expect(write).toHaveBeenCalledTimes(2);
+        });
+
+        it("allows a retry after a write that RESOLVES FALSE — the production path", async () => {
+            // writeServiceCharacteristic never throws: it catches every BLE error and returns
+            // false. The catch clause was therefore dead code for the real writer, the latch was
+            // only cleared on a path production never takes, and a failed value became
+            // unwritable for the rest of the session — every retry swallowed by the dedupe and
+            // reported as success. This suite stayed green because its only retry test used
+            // mockRejectedValue.
+            const write = jest.fn().mockResolvedValue(false);
+            const { result } = renderHook(() => useAudioParamWriter({ write }));
+
+            let first = true;
+            await act(async () => {
+                first = await result.current.writeNow(UUID, 3, encode);
+            });
+            expect(first).toBe(false);
+
+            let second = true;
+            await act(async () => {
+                second = await result.current.writeNow(UUID, 3, encode);
+            });
+
+            expect(write).toHaveBeenCalledTimes(2);
+            expect(second).toBe(false);
         });
 
         it("does not throw when a write rejects during a drag", async () => {

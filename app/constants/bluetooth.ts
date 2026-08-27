@@ -290,3 +290,20 @@ export const UUID_CPF_DESCRIPTOR = "00002904-0000-1000-8000-00805f9b34fb";
 export const UUID_CUD_DESCRIPTOR = "00002901-0000-1000-8000-00805f9b34fb";
 // Client Characteristic Configuration Descriptor UUID
 export const UUID_CCC_DESCRIPTOR = "00002902-0000-1000-8000-00805f9b34fb";
+
+/**
+ * When the app re-reads a non-notifiable characteristic after writing it, to make a firmware
+ * clamp visible in the UI.
+ *
+ * Two passes, not one: the clamp write-back happens whenever the owning firmware thread next
+ * runs its getter — normally ~32 ms, but a busy owner can push it past 150 ms, and a single
+ * fixed read would then return the still-unclamped value.
+ *
+ * EXPORTED because a second module depends on the LAST entry: the Audio Tuning slider's settle
+ * window (SETTLE_MS in hooks/use-audio-param-writer.ts) must outlast it, or the thumb is handed
+ * back to context before the clamped value lands and the snap looks random. That relation used
+ * to be two hand-copied literals in two files — this constant was declared inside the
+ * BluetoothProvider function body, so nothing could import it and nothing could check it.
+ * Retuning these delays silently broke the invariant with every test still green.
+ */
+export const CLAMP_READBACK_DELAYS_MS = [150, 1200];

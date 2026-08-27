@@ -99,6 +99,15 @@ export interface AudioParamSpec {
  */
 export const ZERO_SNAP_POSITION = 0.02;
 
+/**
+ * How far above the zero-snap band a nonzero sub-log-floor value renders.
+ *
+ * Small enough to be visually indistinguishable from the band's edge, large enough that
+ * positionToParam's `p <= ZERO_SNAP_POSITION` test fails — so a grab-and-release cannot
+ * round-trip a live value to "off". See paramToPosition.
+ */
+export const SUB_FLOOR_NUDGE = 1e-3;
+
 export const AUDIO_PARAMS: Record<AudioParamKey, AudioParamSpec> = {
     fluxGamma: {
         key: "fluxGamma",
@@ -487,8 +496,22 @@ export function paramToPosition(spec: AudioParamSpec, value: number): number {
 
     const lo = logLow(spec);
     if (spec.allowsZero && v <= lo) {
-        // Everything at or below the log floor — including exactly 0 — sits in the "off" band.
-        return v <= spec.min ? 0 : ZERO_SNAP_POSITION;
+        if (v <= spec.min) return 0; // genuinely off
+
+        /* A NONZERO value below the log floor renders just ABOVE the snap band, never on its
+         * edge, so that turning the parameter off always requires deliberately dragging into
+         * the band.
+         *
+         * Sitting exactly on ZERO_SNAP_POSITION made the two directions disagree: this returned
+         * the band's edge, while positionToParam maps the whole band (p <= ZERO_SNAP_POSITION)
+         * to spec.min. onSlidingComplete fires on touch-up whether or not the thumb moved — and
+         * Android's SeekBar tap-jumps to the touch x — so the most natural gesture, grab and
+         * release, round-tripped a small live value to 0 and silently disabled the gate.
+         *
+         * The app cannot itself produce a sub-floor nonzero value, so the exposed case is a
+         * board tuned over the serial shell or by another GATT client: precisely the boards
+         * whose settings a user would least expect the app to quietly discard. */
+        return ZERO_SNAP_POSITION + SUB_FLOOR_NUDGE;
     }
 
     const t = Math.log(v / lo) / Math.log(spec.max / lo);
@@ -667,22 +690,59 @@ function clampToSpec(key: AudioParamKey, value: number): number {
     return clampNumber(value, spec.min, spec.max);
 }
 
-/** Sensitivity 1..10 -> Beat Alpha. 5 = the firmware default of 0.30, 1 = 1.50, 10 = 0.10. */
-export function alphaFromSensitivity(s: number): number {
-    const raw = twoSidedGeometric(clampNumber(s, SENSITIVITY_MIN, SENSITIVITY_MAX), 0.3, 5, 1 / 3);
-    return clampToSpec("beatAlpha", raw);
-}
-export function sensitivityFromAlpha(alpha: number): number | null {
-    return invertTwoSidedGeometric(alpha, 0.3, 5, 1 / 3);
+/**
+ * One descriptor per macro, consumed by BOTH directions.
+ *
+ * The midpoint is READ FROM THE TABLE rather than restated, and the factors are written once
+ * rather than once per direction. Previously each macro carried its midpoint and both factors
+ * twice — six literal sites across three macros — none of them derived from the spec three
+ * screens up that holds the same number. Retuning a default in the table without editing every
+ * literal made forward and inverse disagree, and a device sitting on what used to be a macro
+ * step then rendered "Custom" everywhere. The round-trip tests would have caught drift WITHIN a
+ * pair but not between the table and the macros, which is the drift that could actually happen.
+ */
+interface MacroCurve {
+    key: AudioParamKey;
+    lowFactor: number;
+    highFactor: number;
 }
 
-/** Sensitivity 1..10 -> Beat SF Delta (median mode). 5 = 0.10, 1 = 0.40, 10 = 0.025. */
+/** Midpoint always comes from the parameter's own default — never restated here. */
+function macroMid(curve: MacroCurve): number {
+    return AUDIO_PARAMS[curve.key].defaultValue;
+}
+
+function macroForward(curve: MacroCurve, s: number): number {
+    const raw = twoSidedGeometric(
+        clampNumber(s, SENSITIVITY_MIN, SENSITIVITY_MAX),
+        macroMid(curve),
+        curve.lowFactor,
+        curve.highFactor,
+    );
+    return clampToSpec(curve.key, raw);
+}
+
+function macroInverse(curve: MacroCurve, value: number): number | null {
+    return invertTwoSidedGeometric(value, macroMid(curve), curve.lowFactor, curve.highFactor);
+}
+
+/** 5 = the firmware default (0.30), 1 = 1.50, 10 = 0.10. */
+const ALPHA_CURVE: MacroCurve = { key: "beatAlpha", lowFactor: 5, highFactor: 1 / 3 };
+/** Median mode. 5 = the firmware default (0.10), 1 = 0.40, 10 = 0.025. */
+const DELTA_CURVE: MacroCurve = { key: "beatSfDelta", lowFactor: 4, highFactor: 1 / 4 };
+
+export function alphaFromSensitivity(s: number): number {
+    return macroForward(ALPHA_CURVE, s);
+}
+export function sensitivityFromAlpha(alpha: number): number | null {
+    return macroInverse(ALPHA_CURVE, alpha);
+}
+
 export function deltaFromSensitivity(s: number): number {
-    const raw = twoSidedGeometric(clampNumber(s, SENSITIVITY_MIN, SENSITIVITY_MAX), 0.1, 4, 1 / 4);
-    return clampToSpec("beatSfDelta", raw);
+    return macroForward(DELTA_CURVE, s);
 }
 export function sensitivityFromDelta(delta: number): number | null {
-    return invertTwoSidedGeometric(delta, 0.1, 4, 1 / 4);
+    return macroInverse(DELTA_CURVE, delta);
 }
 
 /**
@@ -695,19 +755,51 @@ export function sensitivityFromDelta(delta: number): number | null {
  * The margin between quiet-room p95 (0.00049) and normal-volume music p5 (0.00061) is only
  * 1.25x, so the useful band is narrow: steps 4-6 are where nearly all real tuning happens.
  */
+const GATE_CURVE: MacroCurve = { key: "agcNoiseGateRms", lowFactor: 1 / 6, highFactor: 20 / 3 };
+
+const MACRO_CURVES: Partial<Record<AudioParamKey, MacroCurve>> = {
+    beatAlpha: ALPHA_CURVE,
+    beatSfDelta: DELTA_CURVE,
+    agcNoiseGateRms: GATE_CURVE,
+};
+
+/**
+ * The macro step whose value sits closest to `value`, for RENDERING a device that is off the
+ * 1..10 grid — never for writing.
+ *
+ * A board tuned over the serial shell, or carrying a pre-retune persisted value, has no exact
+ * macro step: the inverse correctly returns null, which is how "Custom" is detected. But a
+ * Simple-mode slider still has to put its thumb somewhere, and pinning it at 0 while the caption
+ * says "move the slider to take control" is worse than approximate.
+ *
+ * Compared in LOG space, because every macro curve is geometric: linear distance would call 0.31
+ * nearer to 0.30 than 0.29 is, which is not what "nearest step" means on a ratio scale.
+ */
+export function nearestMacroStep(key: AudioParamKey, value: number): number | null {
+    const curve = MACRO_CURVES[key];
+    if (!curve || !(value > 0)) return null;
+
+    let best = SENSITIVITY_MIN;
+    let bestDistance = Infinity;
+    for (let s = SENSITIVITY_MIN; s <= SENSITIVITY_MAX; s++) {
+        const candidate = macroForward(curve, s);
+        if (!(candidate > 0)) continue;
+        const distance = Math.abs(Math.log(candidate / value));
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = s;
+        }
+    }
+    return best;
+}
+
 export function gateFromNoiseLevel(s: number | "off"): number {
     if (s === "off") return 0;
-    const raw = twoSidedGeometric(
-        clampNumber(s, SENSITIVITY_MIN, SENSITIVITY_MAX),
-        0.0006,
-        1 / 6,
-        20 / 3,
-    );
-    return clampToSpec("agcNoiseGateRms", raw);
+    return macroForward(GATE_CURVE, s);
 }
 export function noiseLevelFromGate(gate: number): number | "off" | null {
     if (gate === 0) return "off";
-    return invertTwoSidedGeometric(gate, 0.0006, 1 / 6, 20 / 3);
+    return macroInverse(GATE_CURVE, gate);
 }
 
 export interface BeatFeelPreset {

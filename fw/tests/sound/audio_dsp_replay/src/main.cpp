@@ -44,7 +44,7 @@
  * fw/tools/beat_lab/compare.py applies a relative tolerance.
  */
 #include <math.h>
-#include <sound/audio_param_table.h> /* shared D-line/#PARAMS format — single source of truth */
+#include <sound/audio_param_table.h> /* shared defaults + clamps — single source of truth */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,7 +52,7 @@
 
 #include "agc_controller.h" /* the REAL firmware AGC policy, compiled in for sim mode */
 #include "audio_dsp.h"
-#include "audio_tap_format.h"
+#include "audio_tap_format.h" /* shared D-line/#PARAMS wire format — single source of truth */
 
 /* Terminates the native_sim process with the given exit code (a plain return
  * from main() would leave the simulated kernel idling forever). Declared here

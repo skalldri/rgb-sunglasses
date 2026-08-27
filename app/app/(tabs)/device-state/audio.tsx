@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { memo, useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -15,13 +15,14 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { UUID_AUDIO_CONFIG_SERVICE } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
-import { useAudioParamWriter } from "@/hooks/use-audio-param-writer";
+import { useAudioParamWriter, type AudioParamWriter } from "@/hooks/use-audio-param-writer";
 import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
 import { useThemeColors } from "@/hooks/use-theme-color";
 import {
     ADAPT_SPEED_PRESETS,
     AUDIO_PARAMS,
     AUDIO_PARAM_ORDER,
+    type AudioParamSpec,
     AudioParamKey,
     BEAT_FEEL_PRESETS,
     NOISE_MACRO_SPEC,
@@ -33,6 +34,7 @@ import {
     encodeParam,
     formatParamValue,
     gateFromNoiseLevel,
+    nearestMacroStep,
     noiseLevelFromGate,
     paramFramesToMs,
     resolveAudioParams,
@@ -79,6 +81,17 @@ export default function AudioTuningScreen() {
     const writer = useAudioParamWriter(useMemo(() => ({ write }), [write]));
 
     const resolved = useMemo(() => resolveAudioParams(serviceChars ?? {}), [serviceChars]);
+
+    /** The most recent failed write across the audio characteristics, or null. */
+    const writeFailure = useMemo(() => {
+        if (!serviceChars) return null;
+        for (const key of AUDIO_PARAM_ORDER) {
+            const spec = AUDIO_PARAMS[key];
+            const reason = serviceChars[spec.uuid]?.lastWriteError;
+            if (reason) return { label: spec.friendlyLabel, reason };
+        }
+        return null;
+    }, [serviceChars]);
     const byKey = useMemo(() => {
         const map = {} as Partial<Record<AudioParamKey, (typeof resolved)[number]>>;
         resolved.forEach(r => {
@@ -212,11 +225,24 @@ export default function AudioTuningScreen() {
         async (label: string) => {
             const preset = ADAPT_SPEED_PRESETS.find(p => p.label === label);
             if (!preset) return;
-            // Sequential: Android permits one outstanding GATT operation, and firing three
-            // writes concurrently gets two of them rejected rather than queued.
-            await writeParam("agcAttackFrames", preset.attackFrames);
-            await writeParam("agcReleaseFrames", preset.releaseFrames);
-            await writeParam("agcRateLimitFrames", preset.rateLimitFrames);
+            /* Sequential: Android permits one outstanding GATT operation, and firing three writes
+             * concurrently gets two of them rejected rather than queued.
+             *
+             * STOP AT THE FIRST FAILURE. writeParam resolves false rather than throwing, so
+             * discarding these results let a mid-sequence failure carry on and leave a torn
+             * preset — attack at Fast's 2 frames while release and rate limit kept the previous
+             * preset's values, a combination no preset defines. adaptSpeedFromFrames then maps
+             * that to null and the row just reads "Custom", with nothing saying a write failed.
+             * The device is still torn either way, but stopping keeps it one write from the old
+             * preset rather than two, and the banner below now says so. */
+            const steps: [AudioParamKey, number][] = [
+                ["agcAttackFrames", preset.attackFrames],
+                ["agcReleaseFrames", preset.releaseFrames],
+                ["agcRateLimitFrames", preset.rateLimitFrames],
+            ];
+            for (const [key, value] of steps) {
+                if (!(await writeParam(key, value))) return;
+            }
         },
         [writeParam],
     );
@@ -255,6 +281,27 @@ export default function AudioTuningScreen() {
                     How the glasses listen to the room.
                 </ThemedText>
 
+                {/* This screen used to surface write failures NOWHERE — alone among the
+                    device-state screens. A slider write that failed showed the thumb for the
+                    settle window and then silently snapped back, which at a venue is
+                    indistinguishable from the firmware clamping the value.
+
+                    Read from the context's own lastWriteError rather than the writer's onError
+                    callback: onError only fires when the write function THROWS, and the writer
+                    this screen is wired to (writeServiceCharacteristic) never throws — it
+                    catches every BLE error and returns false. The context records the reason on
+                    the characteristic either way, so that is the surface that actually sees a
+                    real failure. */}
+                {writeFailure ? (
+                    <ThemedText
+                        type="caption"
+                        style={{ color: c.danger }}
+                        testID="audio-write-error"
+                    >
+                        Could not set {writeFailure.label}: {writeFailure.reason}
+                    </ThemedText>
+                ) : null}
+
                 <SegmentedControl<Mode>
                     options={[
                         { label: "Simple", value: "simple" },
@@ -277,6 +324,14 @@ export default function AudioTuningScreen() {
                                 firmwareLabel: AUDIO_PARAMS[sensitivityKey].firmwareLabel,
                             }}
                             value={sensitivity}
+                            /* Off-grid device: put the thumb on the nearest step and keep the
+                             * slider live, so the "move the slider to take control" caption
+                             * below is actually followable. */
+                            ghostValue={
+                                sensitivity === null && sensitivityRaw !== null
+                                    ? nearestMacroStep(sensitivityKey, sensitivityRaw)
+                                    : null
+                            }
                             busy={busyOf(sensitivityKey)}
                             liveNote={
                                 sensitivity === null && sensitivityRaw !== null
@@ -296,7 +351,7 @@ export default function AudioTuningScreen() {
                         <ParamChoiceRow
                             title="Beat feel"
                             testID="choice-beat-feel"
-                            options={BEAT_FEEL_PRESETS.map(p => ({ label: p.label, blurb: p.blurb }))}
+                            options={BEAT_FEEL_OPTIONS}
                             selected={beatFeel}
                             customLabel={refractory === null ? null : `${paramFramesToMs(refractory)} ms`}
                             help="How long to ignore a band after it fires."
@@ -309,6 +364,11 @@ export default function AudioTuningScreen() {
                         <ParamSliderRow
                             spec={NOISE_MACRO_SPEC}
                             value={noiseLevel === "off" ? 0 : noiseLevel}
+                            ghostValue={
+                                noiseLevel === null && gateRaw !== null
+                                    ? nearestMacroStep("agcNoiseGateRms", gateRaw)
+                                    : null
+                            }
                             busy={busyOf("agcNoiseGateRms")}
                             liveNote={
                                 noiseLevel === null && gateRaw !== null
@@ -328,7 +388,7 @@ export default function AudioTuningScreen() {
                         <ParamChoiceRow
                             title="How fast it adapts"
                             testID="choice-adapt-speed"
-                            options={ADAPT_SPEED_PRESETS.map(p => ({ label: p.label, blurb: p.blurb }))}
+                            options={ADAPT_SPEED_OPTIONS}
                             selected={adaptSpeed}
                             customLabel={
                                 attack === null || release === null
@@ -441,23 +501,15 @@ function AdvancedGroups({
                             const value = valueOf(key);
 
                             if (spec.kind === "enum") {
-                                const labels = spec.enumLabels ?? [];
                                 return (
                                     <React.Fragment key={key}>
                                         {index > 0 ? <Divider /> : null}
-                                        <ParamChoiceRow
-                                            title={spec.friendlyLabel}
-                                            firmwareLabel={spec.firmwareLabel}
-                                            testID={`choice-${spec.key}`}
-                                            options={labels.map(label => ({ label }))}
-                                            selected={value === null ? null : labels[Math.round(value)] ?? null}
-                                            help={spec.help}
+                                        <AdvancedChoiceRow
+                                            spec={spec}
+                                            value={value}
                                             busy={busyOf(key)}
-                                            onSelect={label => {
-                                                const next = labels.indexOf(label);
-                                                if (next >= 0) void onWrite(key, next);
-                                            }}
-                                            onHelp={() => onHelp(key)}
+                                            onWrite={onWrite}
+                                            onHelp={onHelp}
                                         />
                                     </React.Fragment>
                                 );
@@ -466,16 +518,12 @@ function AdvancedGroups({
                             return (
                                 <React.Fragment key={key}>
                                     {index > 0 ? <Divider /> : null}
-                                    <ParamSliderRow
+                                    <AdvancedSliderRow
                                         spec={spec}
                                         value={value}
                                         busy={busyOf(key)}
-                                        showFirmwareLabel
-                                        onSlide={v => writer.onSlide(spec.uuid, v, x => encodeParam(spec, x))}
-                                        onSlideComplete={v =>
-                                            writer.onSlideComplete(spec.uuid, v, x => encodeParam(spec, x))
-                                        }
-                                        onHelp={() => onHelp(key)}
+                                        writer={writer}
+                                        onHelp={onHelp}
                                     />
                                 </React.Fragment>
                             );
@@ -486,6 +534,96 @@ function AdvancedGroups({
         </>
     );
 }
+
+/* Stable per-row wrappers. The Advanced rows used to pass raw inline arrows for onSlide /
+ * onSlideComplete / onHelp — and ParamSliderRow's hand-written comparator compares exactly those
+ * by identity, so it returned false on every render and the memo it guards never once hit.
+ * Building the handlers inside the row, from props that are themselves stable, is what actually
+ * delivers the memoization the comparator was written for. */
+
+const NO_LABELS: readonly string[] = [];
+
+const AdvancedSliderRow = memo(function AdvancedSliderRow({
+    spec,
+    value,
+    busy,
+    writer,
+    onHelp,
+}: {
+    spec: AudioParamSpec;
+    value: number | null;
+    busy: boolean;
+    writer: AudioParamWriter;
+    onHelp: (key: AudioParamKey) => void;
+}) {
+    const handleSlide = useCallback(
+        (v: number) => writer.onSlide(spec.uuid, v, x => encodeParam(spec, x)),
+        [writer, spec],
+    );
+    const handleComplete = useCallback(
+        (v: number) => writer.onSlideComplete(spec.uuid, v, x => encodeParam(spec, x)),
+        [writer, spec],
+    );
+    const handleHelp = useCallback(() => onHelp(spec.key), [onHelp, spec.key]);
+
+    return (
+        <ParamSliderRow
+            spec={spec}
+            value={value}
+            busy={busy}
+            showFirmwareLabel
+            onSlide={handleSlide}
+            onSlideComplete={handleComplete}
+            onHelp={handleHelp}
+        />
+    );
+});
+
+const AdvancedChoiceRow = memo(function AdvancedChoiceRow({
+    spec,
+    value,
+    busy,
+    onWrite,
+    onHelp,
+}: {
+    spec: AudioParamSpec;
+    value: number | null;
+    busy: boolean;
+    onWrite: (key: AudioParamKey, value: number) => Promise<boolean> | void;
+    onHelp: (key: AudioParamKey) => void;
+}) {
+    const labels = spec.enumLabels ?? NO_LABELS;
+    // Memoised: a fresh array each render defeats ParamChoiceRow's own memo independently of
+    // the handlers.
+    const options = useMemo(() => labels.map(label => ({ label })), [labels]);
+    const handleSelect = useCallback(
+        (label: string) => {
+            const next = labels.indexOf(label);
+            if (next >= 0) void onWrite(spec.key, next);
+        },
+        [labels, onWrite, spec.key],
+    );
+    const handleHelp = useCallback(() => onHelp(spec.key), [onHelp, spec.key]);
+
+    return (
+        <ParamChoiceRow
+            title={spec.friendlyLabel}
+            firmwareLabel={spec.firmwareLabel}
+            testID={`choice-${spec.key}`}
+            options={options}
+            selected={value === null ? null : labels[Math.round(value)] ?? null}
+            help={spec.help}
+            busy={busy}
+            onSelect={handleSelect}
+            onHelp={handleHelp}
+        />
+    );
+});
+
+/* Hoisted to module scope: these are static, and rebuilding them per render allocated a new
+ * array every time, defeating ParamChoiceRow's memo on its own. */
+const BEAT_FEEL_OPTIONS = BEAT_FEEL_PRESETS.map(p => ({ label: p.label, blurb: p.blurb }));
+const ADAPT_SPEED_OPTIONS = ADAPT_SPEED_PRESETS.map(p => ({ label: p.label, blurb: p.blurb }));
 
 const styles = StyleSheet.create({
     screen: { flex: 1 },

@@ -127,6 +127,74 @@ describe("AudioTuningScreen", () => {
             );
         });
 
+        it("stops the adapt-speed preset at the first failed write", async () => {
+            /* Review #413. writeParam resolves false rather than throwing, so discarding the
+             * results let a mid-sequence failure carry on and leave a preset no preset defines
+             * — attack from the new one, release and rate limit from the old — which
+             * adaptSpeedFromFrames then reports as a bland "Custom". */
+            const write = jest
+                .fn()
+                .mockResolvedValueOnce(true) // attack lands
+                .mockResolvedValue(false); // release fails
+            mockBluetooth(buildDevice(), write);
+            const { getByText } = render(<AudioTuningScreen />);
+
+            fireEvent.press(getByText("Fast"));
+
+            await waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+            // Third write never issued: one parameter out of step beats three.
+            expect(write).toHaveBeenCalledTimes(2);
+        });
+
+        it("surfaces a failed write instead of silently snapping back", async () => {
+            /* This screen surfaced write errors NOWHERE — alone among the device-state screens.
+             * A failed write showed the thumb for the settle window and then reverted, which is
+             * indistinguishable from the firmware clamping the value. */
+            const device = buildDevice();
+            device.characteristicsByService[UUID_AUDIO_CONFIG_SERVICE][
+                AUDIO_PARAMS.beatAlpha.uuid
+            ].lastWriteError = "GATT write not permitted";
+            mockBluetooth(device);
+            const { getByTestId } = render(<AudioTuningScreen />);
+
+            expect(getByTestId("audio-write-error").props.children.join("")).toContain(
+                "GATT write not permitted",
+            );
+        });
+
+        it("keeps the Sensitivity slider LIVE on an off-grid board", async () => {
+            /* Review #413. `value === null` meant two different things — "not read yet" and "off
+             * the 1..10 macro grid" — and disabling on both killed Simple mode on any board
+             * tuned over the shell. The caption in this exact state reads "Custom (…) - move the
+             * slider to take control", so the screen was instructing a gesture it had disabled.
+             *
+             * 0.77 is deliberately off every macro step (see audio-params.test.ts). */
+            const write = mockBluetooth(buildDevice({ beatAlpha: 0.77 }));
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+
+            const slider = getByTestId("param-slider-beatAlpha");
+            expect(slider.props.disabled).toBeFalsy();
+            // The caption that makes this a contradiction rather than a nicety.
+            expect(getByText(/move the slider to take control/)).toBeTruthy();
+
+            // And the drag the caption asks for actually reaches the device.
+            fireEvent(slider, "slidingComplete", 1);
+            await waitFor(() => expect(write).toHaveBeenCalled());
+        });
+
+        it("still disables a slider whose characteristic has not been read", () => {
+            // The other half of the distinction: an unread value has nowhere to put the thumb,
+            // so it must stay disabled rather than inviting a drag from a meaningless position.
+            const device = buildDevice();
+            device.characteristicsByService[UUID_AUDIO_CONFIG_SERVICE][
+                AUDIO_PARAMS.beatAlpha.uuid
+            ].value = null;
+            mockBluetooth(device);
+            const { getByTestId } = render(<AudioTuningScreen />);
+
+            expect(getByTestId("param-slider-beatAlpha").props.disabled).toBe(true);
+        });
+
         it("writes the noise gate when Ignore background noise moves", async () => {
             const write = mockBluetooth(buildDevice());
             const { getByTestId } = render(<AudioTuningScreen />);

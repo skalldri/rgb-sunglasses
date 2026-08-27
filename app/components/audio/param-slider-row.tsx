@@ -29,14 +29,23 @@ interface Props {
     onSlideComplete: (value: number) => void;
     onHelp?: () => void;
     disabled?: boolean;
+    /**
+     * Where to put the thumb when `value` is null because the device is OFF THE MACRO GRID
+     * rather than unread. Supplying it keeps the slider live, which is the whole point: the
+     * Simple-mode caption tells the user to move the slider to take control, and a disabled
+     * slider makes that instruction impossible to follow.
+     */
+    ghostValue?: number | null;
 }
 
 /**
  * One tunable parameter as a labelled slider.
  *
- * Memoised on the values it actually renders. The Audio Tuning screen recomputes a live
- * telemetry summary at 2 Hz, and without this every one of those ticks would re-render all 14
- * controls — including the one currently under the user's finger.
+ * Memoised on the values it actually renders, so a drag re-renders the row under the finger
+ * rather than all fourteen. (An earlier version of this comment justified the memo with a "live
+ * telemetry summary at 2 Hz" — no such thing exists on this branch: there is no summary, no
+ * subscription, and all fourteen characteristics are non-notifiable. The memo is still worth
+ * having for the drag path; it just was not earning its keep for the stated reason.)
  */
 function ParamSliderRowImpl({
     spec,
@@ -48,12 +57,25 @@ function ParamSliderRowImpl({
     onSlide,
     onSlideComplete,
     onHelp,
+    ghostValue,
     disabled,
 }: Props) {
     const c = useThemeColors();
 
-    const position = value === null ? 0 : paramToPosition(spec, value);
+    /* "Not read yet" and "off the macro grid" both arrive as a null `value`, and conflating
+     * them disabled Simple mode on any hand-tuned board: the thumb pinned at 0, the readout at
+     * "--", and the caption instructing a drag the native `disabled` prop had already blocked.
+     * A ghost value distinguishes them — it means "we know where this device sits, just not as
+     * an exact step", so the thumb goes there and the first drag takes ownership. */
+    const ghost = value === null ? (ghostValue ?? null) : null;
+    const position =
+        value !== null
+            ? paramToPosition(spec, value)
+            : ghost !== null
+              ? paramToPosition(spec, ghost)
+              : 0;
     const readout = value === null ? "--" : formatParamValue(spec, value);
+    const unread = value === null && ghost === null;
 
     const handleValueChange = useCallback(
         (p: number) => onSlide(positionToParam(spec, p)),
@@ -108,7 +130,7 @@ function ParamSliderRowImpl({
                 minimumValue={0}
                 maximumValue={1}
                 value={position}
-                disabled={disabled || value === null}
+                disabled={disabled || unread}
                 minimumTrackTintColor={c.primary}
                 maximumTrackTintColor={c.border}
                 thumbTintColor={c.primary}
@@ -153,6 +175,7 @@ export const ParamSliderRow = memo(
         prev.liveNote === next.liveNote &&
         prev.showFirmwareLabel === next.showFirmwareLabel &&
         prev.disabled === next.disabled &&
+        prev.ghostValue === next.ghostValue &&
         prev.onSlide === next.onSlide &&
         prev.onSlideComplete === next.onSlideComplete &&
         prev.onHelp === next.onHelp,
