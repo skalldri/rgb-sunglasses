@@ -469,6 +469,29 @@ any local plugin under `plugins/`, prefer this "find-or-create, then set the req
 unconditionally" shape over "if not present, add" — the latter is only safe for plugins whose
 config never changes after the first prebuild, which is not a safe assumption to make silently.
 
+**A second instance, and a nastier shape: a mod can break a DIFFERENT mod's presence-check.**
+`withDevSchemeInManifest` (`plugins/withDevVariant.js`) rewrote the
+`<data android:scheme="rgbsunglassesapp"/>` intent-filter entry to `"rgbsunglassesapp.dev"`. That
+rename is what defeated `@expo/config-plugins`' own built-in `withScheme` base mod
+(`android/Scheme.js`), whose `setScheme`/`appendScheme` only skip re-adding a scheme they find
+already present. Having renamed the configured scheme away, our mod made it look *missing* on
+every subsequent prebuild, so the base mod re-appended a fresh one — which our mod then renamed
+too, adding one duplicate `<data>` entry per prebuild (measured 1 -> 2 -> 3 across three runs on
+an unclean `android/`). Fixed by removing every existing `"rgbsunglassesapp"`/`".dev"` entry and
+inserting exactly one, which self-heals manifests already carrying duplicates and leaves no
+"missing scheme" state for the base mod to react to.
+
+Note what generalises: it is not enough for your own mod to be idempotent in isolation. If it
+mutates something another mod uses as ITS presence-check, you have made that mod non-idempotent
+instead, and the damage shows up in a file neither author is looking at. In the same file,
+`withDebugAppIdSuffix` was already correct (`if (contents.includes('applicationIdSuffix ".dev"'))
+return cfg;`) and `withDebugResources` overwrites rather than appends, so both are idempotent by
+construction.
+
+Duplicate `<data>` elements are harmless at runtime — Android tolerates them — so this class is
+prebuild determinism and hygiene rather than a crash. It is still worth checking for in any new
+manifest or gradle mod, because the failure is invisible until someone diffs a generated file.
+
 ### Device-Free Validation Loop
 
 For any app change that doesn't need the physical phone, run the `/validate-app` skill (`.claude/skills/validate-app/SKILL.md`): `npm ci` in `app/` (reapplies the ble-plx patch via `postinstall`), then jest + typecheck + lint. There is **no `typecheck` npm script** — it's `npx tsc --noEmit` directly. CI (`.github/workflows/app-ci.yml`) now gates all three — the `test` job runs jest, and a separate `typecheck-lint` job runs `tsc --noEmit` and `eslint --max-warnings 0` (added for issue #130, since a green CI used to mean only jest passed and tsc/lint debt drifted in undetected). Still run them locally before pushing so you're not waiting on CI to catch a type error or a new lint warning (any warning now fails CI). **Green here is not "verified"** — see the next section for the class of bug this loop is structurally blind to.
