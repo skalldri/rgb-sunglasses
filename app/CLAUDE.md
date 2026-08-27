@@ -533,7 +533,11 @@ If a device has never been paired and `/re-pair` isn't being used, ask the user 
 
 ### ADB Wireless Pairing State Lives on the Phone, Not the Container
 
-`adb devices` showing empty does **not** mean the device was never paired. Wireless debugging pairing (the 6-digit code flow) is remembered by the phone; only the TCP connection itself is container-local and drops on container restart. Don't infer "needs full re-pair" from missing local files like `~/.android/known_devices.xml` — those don't reliably reflect pairing state either. Always try `adb connect <ip:port>` first (ask the user for the device's current IP:port from the Wireless debugging screen if unknown); only walk through the full `adb pair` flow if `adb connect` actually fails.
+`adb devices` showing empty does **not** mean the device was never paired. Wireless debugging pairing (the 6-digit code flow) is remembered by the phone; only the TCP connection itself is container-local and drops on container restart. Don't infer "needs full re-pair" from missing local files like `~/.android/known_devices.xml` — those don't reliably reflect pairing state either.
+
+**But do NOT bring a device online yourself** — see "NEVER connect an ADB device yourself" in the root `CLAUDE.md`. This section previously said "always try `adb connect <ip:port>` first"; that instruction is **withdrawn** (2026-08-27, maintainer instruction). Establishing the connection is the user's to do, and an agent probing for it is the autonomy that rule forbids.
+
+What this section is still for is the *diagnosis*: a device missing from `adb devices` usually means the TCP connection dropped, **not** that the pairing was lost, and wireless debugging rotates to a new random port whenever it restarts (mDNS discovery does not work from inside the container, so the new port cannot be found locally). Report that distinction — and the evidence for it — then hand it back rather than acting on it.
 
 ### Launching the App
 

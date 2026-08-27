@@ -71,9 +71,26 @@ exercise the runtime PTCH-wedge recovery path — see `/debug-fw`'s symptom tabl
 ### Choosing which phone to use
 
 **Any connected phone is viable.** If a phone answers over ADB, it is fair game — do not
-stop and ask merely because a particular device is absent. Identify which phone is
+stop and ask merely because a particular device is absent. It does not have to be one of
+the phones named below: those are simply the *known* handsets, documented because their
+quirks are known, not because they are the only permitted ones. Identify which phone is
 attached (`adb devices -l`, or the `device` field in any execbro result) and read the
 phone-specific notes in `app/CLAUDE.md` through that lens.
+
+**NEVER connect an ADB device yourself.** Use whatever is already connected; never bring
+one online. That means no `adb connect`, no `adb disconnect`, no `adb pair`, no re-pairing
+a dropped wireless-debugging session, no switching to a different transport, and no
+walking the user through it as a way of getting a device back. **If nothing is connected,
+or a connected device drops mid-session, say so plainly and stop.** Report what you
+observed — `adb devices -l` output, whether the host still answers a ping, whether the
+port is refused — and hand it back. Do not work around it.
+
+This is the part of the pre-2026-08-24 rule that survives, and it is the part that
+matters: the original rule bundled "use the OnePlus specifically" together with "do not
+go connecting things on your own", and only the first half was lifted. Broken 2026-08-26:
+an agent whose phone dropped its wireless-debugging session ran `adb disconnect` and
+`adb connect <ip:port>` to try to recover it instead of stopping — the connection is the
+user's to make, and an agent probing for it is exactly the autonomy this forbids.
 
 The one real caveat is that **only a few phones have validated UI control paths**. The
 tap/scroll recipes differ per device — coordinate taps from a screenshot land high on the
@@ -90,8 +107,12 @@ over to the Pixel, while a pass on the Pixel does not by itself prove the OnePlu
 When a change touches the GATT layout, say which phone you verified on and what that does
 and does not cover. When it does not touch GATT, either phone is a genuine result.
 
-Superseded 2026-08-24: this section previously required the OnePlus 9 Pro (LE2125)
-specifically and told agents to stop and ask if it was absent.
+Superseded 2026-08-24 (maintainer instruction, reconfirmed 2026-08-27): this section
+previously required the OnePlus 9 Pro (LE2125) specifically and told agents to stop and
+ask if it was absent. Any connected Android phone is now allowed — the named phones are
+the *known* ones, not the permitted ones. The "never connect a device yourself" half of
+the old rule was restored 2026-08-27 (maintainer instruction) after it was lifted along
+with the phone-choice half it had been bundled with.
 
 ### NEVER reboot the shared Android phone on your own
 
