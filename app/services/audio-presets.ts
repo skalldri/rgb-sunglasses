@@ -17,6 +17,8 @@ import {
     AUDIO_PARAMS,
     AUDIO_PARAM_ORDER,
     AudioParamKey,
+    alphaFromSensitivity,
+    deltaFromSensitivity,
     formatParamValue,
 } from "@/services/audio-params";
 
@@ -50,6 +52,31 @@ function factoryValues(): Record<AudioParamKey, number> {
 }
 
 /**
+ * A preset's sensitivity intent, expressed on the shared 1..10 macro scale and emitted as BOTH
+ * threshold parameters.
+ *
+ * WHICH parameter carries "sensitivity" depends on the device's threshold mode: mean-sigma mode
+ * reads `beatAlpha` and never looks at `beatSfDelta`; median mode does the opposite
+ * (`fw/src/sound/audio_dsp.cpp`). A preset that sets only `beatAlpha` — which all three
+ * opinionated built-ins used to — therefore has its headline trait silently do nothing on a
+ * median-mode board, while its gate and AGC changes land: the user gets a preset that is half
+ * applied and reports success.
+ *
+ * Setting both is the fix rather than setting `beatThresholdMode`, deliberately. The threshold
+ * mode is a shape the user (or the firmware default) chose, and this screen already refuses to
+ * overwrite it for the Sensitivity macro — a preset quietly switching detector modes would be a
+ * bigger surprise than the one being fixed. The unused one is a single wasted GATT write, and it
+ * is already correct if the mode is changed later.
+ *
+ * The scale position is the authored value because the two curves are independent calibrations
+ * of the SAME perceptual scale, so position 4.6 means the same subjective sensitivity in either
+ * mode. Deriving both from it is what stops the pair drifting.
+ */
+function sensitivityValues(s: number): { beatAlpha: number; beatSfDelta: number } {
+    return { beatAlpha: alphaFromSensitivity(s), beatSfDelta: deltaFromSensitivity(s) };
+}
+
+/**
  * Built-in presets.
  *
  * These are starting points, not answers — the room decides. Each one only sets the parameters
@@ -75,7 +102,10 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             agcTargetHigh: 0.08,
             agcAttackFrames: 2,
             agcReleaseFrames: 10,
-            beatAlpha: 0.35,
+            // A touch below the default sensitivity: a loud room produces more candidate
+            // onsets, not fewer, so the bar for "that was a beat" goes up. (Scale 4.6 -> alpha
+            // 0.352, the value this preset carried as a literal before both modes were covered.)
+            ...sensitivityValues(4.6),
             beatRefractoryFrames: 6,
         },
     },
@@ -90,7 +120,9 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             agcNoiseGateRms: 0.00025,
             agcTargetLow: 0.0012,
             agcReleaseFrames: 20,
-            beatAlpha: 0.22,
+            // More sensitive than default, so a brushed snare in a quiet passage still counts.
+            // (Scale 6.4 -> alpha 0.221, the previous literal.)
+            ...sensitivityValues(6.4),
             beatRefractoryFrames: 5,
         },
     },
@@ -103,7 +135,9 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             // Not a music setting. Raises the bar for what counts as a beat and enforces a long
             // gap, so talking and clinking glasses do not drive the lights.
             agcNoiseGateRms: 0.0008,
-            beatAlpha: 0.6,
+            // Well below default sensitivity — the point is NOT to fire at conversation.
+            // (Scale 3.3 -> alpha 0.595, the previous literal.)
+            ...sensitivityValues(3.3),
             beatRefractoryFrames: 12,
         },
     },

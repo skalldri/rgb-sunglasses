@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     KeyboardAvoidingView,
     Modal,
@@ -56,6 +56,22 @@ export function PresetSheet({
 }: Props) {
     const c = useThemeColors();
     const [name, setName] = useState(suggestedName);
+
+    /* Re-seed the name every time the sheet OPENS, not once per app launch.
+     *
+     * A Modal's children stay mounted while `visible` is false, so `useState(suggestedName)` ran
+     * exactly once and the field then held that first timestamp forever. Because saving
+     * overwrites by name, the second save of a session silently replaced the first preset instead
+     * of adding one — the user watched "Saved" appear and lost the earlier capture.
+     *
+     * The suggestion is read through a ref rather than a dependency: the parent recomputes it
+     * from `new Date()` on every render, so depending on it directly would wipe the field out
+     * from under anyone typing into it. */
+    const suggestedRef = useRef(suggestedName);
+    suggestedRef.current = suggestedName;
+    useEffect(() => {
+        if (visible) setName(suggestedRef.current);
+    }, [visible]);
 
     return (
         <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -115,25 +131,18 @@ export function PresetSheet({
                                                     onPress={() => onAssignSlot("B", preset.id)}
                                                     testID={`preset-slot-b-${preset.id}`}
                                                 />
-                                                <Pressable
-                                                    accessibilityRole="button"
+                                                {/* AppButton, not a fork of it: the hand-rolled
+                                                    copy omitted accessibilityState, so a screen
+                                                    reader announced a disabled Apply as tappable.
+                                                    Only the pill radius is ours. */}
+                                                <AppButton
+                                                    title="Apply"
                                                     accessibilityLabel={`Apply ${preset.name}`}
                                                     disabled={busy || changes === 0}
-                                                    hitSlop={8}
                                                     onPress={() => onApply(preset)}
                                                     testID={`preset-apply-${preset.id}`}
-                                                    style={[
-                                                        styles.applyButton,
-                                                        {
-                                                            backgroundColor: c.primary,
-                                                            opacity: busy || changes === 0 ? 0.35 : 1,
-                                                        },
-                                                    ]}
-                                                >
-                                                    <ThemedText style={{ color: c.onPrimary, fontWeight: "600" }}>
-                                                        Apply
-                                                    </ThemedText>
-                                                </Pressable>
+                                                    style={styles.applyButton}
+                                                />
                                             </View>
                                         </View>
 
@@ -257,12 +266,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
     },
-    applyButton: {
-        minHeight: 44,
-        justifyContent: "center",
-        paddingHorizontal: Spacing.lg,
-        borderRadius: Radii.pill,
-    },
+    applyButton: { borderRadius: Radii.pill },
     saveRow: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
     nameInput: {
         flex: 1,

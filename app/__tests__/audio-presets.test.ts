@@ -13,6 +13,7 @@ import {
     AUDIO_PARAMS,
     AUDIO_PARAM_ORDER,
     AudioParamKey,
+    macroScaleOf,
 } from "@/services/audio-params";
 import {
     BUILT_IN_PRESETS,
@@ -171,5 +172,43 @@ describe("describeDiffEntry / suggestPresetName", () => {
     it("suggests a stable, zero-padded name", () => {
         expect(suggestPresetName(new Date(2026, 7, 24, 21, 4))).toBe("Tuned 21:04");
         expect(suggestPresetName(new Date(2026, 7, 24, 9, 30))).toBe("Tuned 09:30");
+    });
+
+    describe("built-ins express sensitivity in BOTH threshold modes", () => {
+        /* The DSP reads beatAlpha only in mean-sigma mode and beatSfDelta only in median mode
+         * (fw/src/sound/audio_dsp.cpp). A preset that set only beatAlpha - which all three
+         * opinionated built-ins did - had its headline trait do precisely nothing on a
+         * median-mode board, while its gate and AGC changes landed and it reported success. */
+        const opinionated = BUILT_IN_PRESETS.filter(p => p.id !== "builtin:factory");
+
+        it.each(opinionated.map(p => [p.name, p] as const))(
+            "%s sets both threshold parameters",
+            (_name, preset) => {
+                expect(typeof preset.values.beatAlpha).toBe("number");
+                expect(typeof preset.values.beatSfDelta).toBe("number");
+            },
+        );
+
+        it.each(opinionated.map(p => [p.name, p] as const))(
+            "%s puts both on the SAME point of the sensitivity scale",
+            (_name, preset) => {
+                /* Both are derived from one authored scale position, so this holds by
+                 * construction today - and that is the point: it is what fails if someone later
+                 * hand-edits one of the two literals back in, which is exactly how the pair
+                 * would silently come apart again. Positions are deliberately off-grid, so the
+                 * step-rounding inverse cannot be used here. */
+                const viaAlpha = macroScaleOf("beatAlpha", preset.values.beatAlpha!);
+                const viaDelta = macroScaleOf("beatSfDelta", preset.values.beatSfDelta!);
+                expect(viaAlpha).not.toBeNull();
+                expect(viaDelta).not.toBeNull();
+                expect(viaDelta!).toBeCloseTo(viaAlpha!, 6);
+            },
+        );
+
+        it("leaves the threshold MODE alone", () => {
+            // Switching detector modes behind the user's back would be a bigger surprise than the
+            // half-applied preset this fixes; the screen refuses to do it for the macro slider too.
+            opinionated.forEach(p => expect(p.values.beatThresholdMode).toBeUndefined());
+        });
     });
 });

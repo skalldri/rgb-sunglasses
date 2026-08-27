@@ -33,6 +33,28 @@ export interface ApplyResult {
     failed: AudioParamKey[];
 }
 
+export interface SavePresetResult {
+    preset: AudioPreset;
+    /** False when the in-memory list updated but the write to disk did not. */
+    persisted: boolean;
+    /** True when a preset of the same name was overwritten rather than added. */
+    replaced: boolean;
+}
+
+/**
+ * What a tap on A/B did, as three distinct answers rather than a nullable ApplyResult.
+ *
+ * `identical` exists because it is REACHABLE and was previously indistinguishable from success:
+ * presets are partial maps, so the device can match both slots on every key either expresses, at
+ * which point applying either writes nothing. That used to be announced as "Swapped (0 changed)"
+ * — a report of success for an action that did nothing and could never do anything until a slot
+ * is reassigned.
+ */
+export type SwapOutcome =
+    | { kind: "unassigned" }
+    | { kind: "identical" }
+    | { kind: "applied"; preset: AudioPreset; result: ApplyResult };
+
 export interface UseAudioPresetsOptions {
     /** Current device values, used for diffing and for capturing undo state. */
     currentValues: Partial<Record<AudioParamKey, number>>;
@@ -89,12 +111,46 @@ export function useAudioPresets({ currentValues, writeParam }: UseAudioPresetsOp
     );
 
     /**
-     * Write a set of parameters, one at a time, recording an undo entry first.
+     * The write phase, shared by apply and undo.
      *
-     * The undo snapshot is taken from the values as they are NOW and covers only the keys about
-     * to change — so undoing restores exactly what this change disturbed and nothing else.
-     * A parameter whose current value is unknown is skipped rather than guessed at, because
-     * writing a guess would be worse than leaving it.
+     * Both need exactly this — sequential writes, a count, and the keys that failed — and both
+     * used to carry their own token-for-token copy of it. The genuine difference between them is
+     * only the undo bookkeeping around the loop, so anything added here later (retry,
+     * abort-on-disconnect, progress) lands on both paths instead of just one.
+     */
+    const runWrites = useCallback(
+        async (entries: { key: AudioParamKey; to: number }[]): Promise<ApplyResult> => {
+            setApplying(true);
+            const failed: AudioParamKey[] = [];
+            let applied = 0;
+            try {
+                for (const { key, to } of entries) {
+                    const ok = await writeRef.current(key, to);
+                    if (ok) applied += 1;
+                    else failed.push(key);
+                }
+            } finally {
+                setApplying(false);
+            }
+            return { applied, failed };
+        },
+        [],
+    );
+
+    /**
+     * Write a set of parameters, one at a time, recording an undo entry for what actually landed.
+     *
+     * The snapshot is taken from the values as they are NOW, before any write moves them, and
+     * covers only the keys about to change — so undoing restores exactly what this change
+     * disturbed and nothing else. A parameter whose current value is unknown is skipped rather
+     * than guessed at, because writing a guess would be worse than leaving it.
+     *
+     * The entry is pushed AFTER the writes, and only for the keys that succeeded. Pushing it
+     * up-front unconditionally meant a failed apply still consumed an undo slot: with
+     * UNDO_DEPTH = 5, someone whose device had dropped out of range could flush their genuine
+     * pre-experiment snapshot off the stack with five failed Apply taps, then walk back through
+     * five entries that restore nothing while the hand-tuned state they wanted is gone for good.
+     * An apply that changed nothing now leaves no undo entry at all.
      */
     const applyValues = useCallback(
         async (
@@ -109,24 +165,23 @@ export function useAudioPresets({ currentValues, writeParam }: UseAudioPresetsOp
                 if (typeof v === "number") before[key] = v;
             });
 
-            setUndoStack(prev => [{ label, values: before }, ...prev].slice(0, UNDO_DEPTH));
-            setApplying(true);
+            const result = await runWrites(entries);
 
-            const failed: AudioParamKey[] = [];
-            let applied = 0;
-            try {
-                for (const { key, to } of entries) {
-                    const ok = await writeRef.current(key, to);
-                    if (ok) applied += 1;
-                    else failed.push(key);
-                }
-            } finally {
-                setApplying(false);
+            const failedKeys = new Set(result.failed);
+            const restorable: Partial<Record<AudioParamKey, number>> = {};
+            entries.forEach(({ key }) => {
+                if (failedKeys.has(key)) return;
+                const v = before[key];
+                if (typeof v === "number") restorable[key] = v;
+            });
+
+            if (Object.keys(restorable).length > 0) {
+                setUndoStack(prev => [{ label, values: restorable }, ...prev].slice(0, UNDO_DEPTH));
             }
 
-            return { applied, failed };
+            return result;
         },
-        [],
+        [runWrites],
     );
 
     const applyPreset = useCallback(
@@ -150,73 +205,115 @@ export function useAudioPresets({ currentValues, writeParam }: UseAudioPresetsOp
             to: top.values[key] as number,
         }));
 
-        setApplying(true);
-        const failed: AudioParamKey[] = [];
-        let applied = 0;
-        try {
-            for (const { key, to } of entries) {
-                const ok = await writeRef.current(key, to);
-                if (ok) applied += 1;
-                else failed.push(key);
-            }
-        } finally {
-            setApplying(false);
-        }
-        return { applied, failed };
-    }, [undoStack]);
+        return runWrites(entries);
+    }, [runWrites, undoStack]);
 
+    /**
+     * Capture the current values as a saved preset.
+     *
+     * Returns null only when there is genuinely nothing to capture. Otherwise it reports what
+     * happened, because both outcomes are ones the user has to be told about:
+     *
+     *  - `persisted: false` — the list updated in memory but the disk write failed, so the
+     *    preset is gone at next launch. This used to be swallowed: `commitSaved` returned the
+     *    store's boolean and `saveCurrentAs` dropped it on the floor, so the screen announced a
+     *    confident `Saved "X"` for a preset that no longer existed the next time the app opened.
+     *  - `replaced: true` — a preset of the same name was overwritten. Overwriting on name is
+     *    deliberate (it stops near-duplicates nobody can tell apart accumulating), but doing it
+     *    SILENTLY is not: the announcement now says which one happened.
+     */
     const saveCurrentAs = useCallback(
-        (name: string, now: number): AudioPreset | null => {
+        (name: string, now: number): SavePresetResult | null => {
             const preset = presetFromValues(name, valuesRef.current, now);
             if (Object.keys(preset.values).length === 0) return null;
 
-            // Same name overwrites rather than accumulating near-duplicates nobody can tell apart.
             const without = savedRef.current.filter(p => p.name !== name);
-            commitSaved([...without, preset]);
-            return preset;
+            const replaced = without.length !== savedRef.current.length;
+            const persisted = commitSaved([...without, preset]);
+            return { preset, persisted, replaced };
         },
         [commitSaved],
     );
 
+    /** Returns false when the removal did not reach disk — the preset returns at next launch. */
     const deletePreset = useCallback(
-        (id: string) => {
-            commitSaved(savedRef.current.filter(p => p.id !== id));
+        (id: string): boolean => {
+            const persisted = commitSaved(savedRef.current.filter(p => p.id !== id));
             setSlotA(prev => (prev === id ? null : prev));
             setSlotB(prev => (prev === id ? null : prev));
+            return persisted;
         },
         [commitSaved],
     );
 
-    /** Apply whichever of A/B is not currently the closer match — the one-tap compare. */
-    const swapAB = useCallback(async (): Promise<ApplyResult | null> => {
+    /**
+     * The one-tap compare: on A, go to B; otherwise go to A.
+     *
+     * That rule is chosen, not defaulted. The obvious-sounding alternative — "apply whichever
+     * needs fewer writes" — makes the destination depend on how far the device has drifted from
+     * each slot, so the same tap goes to different places at different times. Mid-set, in the
+     * dark, a compare button has to be predictable above all else: tap, hear A; tap, hear B.
+     *
+     * (The previous comment here described the fewer-writes rule and a tie going to B. Neither
+     * was implemented — `diffPreset(current, b)` was never computed at all, and the neither-matches
+     * case went to A. The code was the better behaviour; only the description was wrong.)
+     */
+    const swapAB = useCallback(async (): Promise<SwapOutcome> => {
         const a = findPreset(slotA);
         const b = findPreset(slotB);
-        if (!a || !b) return null;
+        if (!a || !b) return { kind: "unassigned" };
 
-        // "Which one are we on" is decided by which needs fewer writes to reach; ties go to B so
-        // the first tap after assigning both slots always does something visible.
-        const target = previewDiff(a).length === 0 ? b : a;
-        return applyPreset(target);
+        const onA = previewDiff(a).length === 0;
+        const onB = previewDiff(b).length === 0;
+        if (onA && onB) return { kind: "identical" };
+
+        const preset = onA ? b : a;
+        return { kind: "applied", preset, result: await applyPreset(preset) };
     }, [applyPreset, findPreset, previewDiff, slotA, slotB]);
 
-    return {
-        builtIns: BUILT_IN_PRESETS,
-        saved,
-        allPresets,
-        slotA,
-        slotB,
-        setSlotA,
-        setSlotB,
-        undoStack,
-        canUndo: undoStack.length > 0,
-        applying,
-        previewDiff,
-        applyPreset,
-        applyValues,
-        undo,
-        saveCurrentAs,
-        deletePreset,
-        swapAB,
-        findPreset,
-    };
+    /* Stable identity, for the same reason the writer's is (see use-audio-param-writer.ts).
+     *
+     * A fresh object literal per render is invisible until something downstream memoises on it:
+     * `changeCounts` in audio.tsx depended on this object, so its `useMemo` never once hit and it
+     * re-diffed every preset against all 14 parameters on every render — including every frame of
+     * every slider drag, and while the sheet that consumes it was closed. Memoising here fixes it
+     * for every consumer at once rather than one dependency array at a time. */
+    return useMemo(
+        () => ({
+            builtIns: BUILT_IN_PRESETS,
+            saved,
+            allPresets,
+            slotA,
+            slotB,
+            setSlotA,
+            setSlotB,
+            undoStack,
+            canUndo: undoStack.length > 0,
+            applying,
+            previewDiff,
+            applyPreset,
+            applyValues,
+            undo,
+            saveCurrentAs,
+            deletePreset,
+            swapAB,
+            findPreset,
+        }),
+        [
+            saved,
+            allPresets,
+            slotA,
+            slotB,
+            undoStack,
+            applying,
+            previewDiff,
+            applyPreset,
+            applyValues,
+            undo,
+            saveCurrentAs,
+            deletePreset,
+            swapAB,
+            findPreset,
+        ],
+    );
 }

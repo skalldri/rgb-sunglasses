@@ -8,17 +8,29 @@
  *     hear the difference within a bar.
  */
 
-jest.mock("@/services/audio-preset-store", () => ({
-    loadPresets: jest.fn(() => []),
-    savePresets: jest.fn(() => true),
-    AUDIO_PRESET_STORE_VERSION: 1,
-}));
+/* A store that actually stores. `loadPresets: () => []` reads back as an empty disk no matter
+ * what was written, which lets a test pass on in-memory state alone — and the hook is allowed to
+ * treat the file as the source of truth (another screen can add a preset while this one is
+ * mounted), so that difference is load-bearing rather than cosmetic. */
+jest.mock("@/services/audio-preset-store", () => {
+    const state: { presets: unknown[] } = { presets: [] };
+    return {
+        __state: state,
+        loadPresets: jest.fn(() => state.presets),
+        savePresets: jest.fn((next: unknown[]) => {
+            state.presets = next;
+            return true;
+        }),
+        AUDIO_PRESET_STORE_VERSION: 1,
+    };
+});
 
 import { act, renderHook, waitFor } from "@testing-library/react-native";
 
 import { UNDO_DEPTH, useAudioPresets } from "@/hooks/use-audio-presets";
 import { AUDIO_PARAMS, AUDIO_PARAM_ORDER, AudioParamKey } from "@/services/audio-params";
 import { savePresets } from "@/services/audio-preset-store";
+import * as presetStore from "@/services/audio-preset-store";
 import { BUILT_IN_PRESETS } from "@/services/audio-presets";
 
 const factory = (): Record<AudioParamKey, number> => {
@@ -35,8 +47,16 @@ function setup(currentValues = factory(), writeParam = jest.fn().mockResolvedVal
     return { ...hook, writeParam, currentValues };
 }
 
+/** The mocked store keeps state across tests in a file; each test starts from an empty disk. */
+function resetPresetStore() {
+    (presetStore as unknown as { __state: { presets: unknown[] } }).__state.presets = [];
+}
+
 describe("useAudioPresets", () => {
-    beforeEach(() => jest.clearAllMocks());
+    beforeEach(() => {
+        jest.clearAllMocks();
+        resetPresetStore();
+    });
 
     it("exposes the built-ins plus anything saved", () => {
         const { result } = setup();
@@ -257,7 +277,7 @@ describe("useAudioPresets", () => {
                 result.current.setSlotA("builtin:factory");
             });
             await act(async () => {
-                expect(await result.current.swapAB()).toBeNull();
+                expect(await result.current.swapAB()).toEqual({ kind: "unassigned" });
             });
             expect(writeParam).not.toHaveBeenCalled();
         });
@@ -278,6 +298,158 @@ describe("useAudioPresets", () => {
             const written = writeParam.mock.calls.map(c => c[0]);
             expect(written.length).toBe(Object.keys(loudClub.values).length);
             expect(written).toContain("agcNoiseGateRms");
+        });
+
+        it("goes to A when the device matches NEITHER slot", async () => {
+            // The old comment promised B for this case; the code went to A. A compare button has
+            // to be predictable, so A it is - asserted, rather than left to whichever the diff
+            // happened to favour.
+            const drifted = { ...factory(), agcNoiseGateRms: 0.00321, beatRefractoryFrames: 9 };
+            const { result } = setup(drifted);
+            act(() => {
+                result.current.setSlotA("builtin:speech");
+                result.current.setSlotB("builtin:loud-club");
+            });
+            await waitFor(() => expect(result.current.slotB).toBe("builtin:loud-club"));
+
+            let outcome: Awaited<ReturnType<typeof result.current.swapAB>> | undefined;
+            await act(async () => {
+                outcome = await result.current.swapAB();
+            });
+
+            expect(outcome).toMatchObject({ kind: "applied" });
+            expect(outcome!.kind === "applied" && outcome!.preset.id).toBe("builtin:speech");
+        });
+
+        it("reports `identical` instead of announcing a swap that writes nothing", async () => {
+            /* Presets are PARTIAL maps, so a device can match both slots on every key either one
+             * expresses. That used to return an ApplyResult of 0 writes, which the screen reported
+             * as "Swapped (0 changed)" - success for something that did nothing and could not do
+             * anything until a slot was reassigned. */
+            const both = { ...factory(), ...loudClub.values };
+            const { result, writeParam } = setup(both);
+            act(() => {
+                result.current.setSlotA("builtin:loud-club");
+                result.current.setSlotB("builtin:loud-club");
+            });
+            await waitFor(() => expect(result.current.slotB).toBe("builtin:loud-club"));
+
+            await act(async () => {
+                expect(await result.current.swapAB()).toEqual({ kind: "identical" });
+            });
+            expect(writeParam).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("failure handling", () => {
+        it("leaves NO undo entry when every write failed", async () => {
+            /* The entry used to be pushed before the writes and never removed, so five failed
+             * applies flushed a real pre-experiment snapshot off a five-deep stack. */
+            const { result } = setup(factory(), jest.fn().mockResolvedValue(false));
+            await act(async () => {
+                await result.current.applyPreset(loudClub);
+            });
+            expect(result.current.undoStack).toHaveLength(0);
+            expect(result.current.canUndo).toBe(false);
+        });
+
+        it("does not evict real history behind a run of failed applies", async () => {
+            const writeParam = jest.fn().mockResolvedValue(true);
+            const { result } = setup(factory(), writeParam);
+
+            await act(async () => {
+                await result.current.applyValues("Hand tuned", [
+                    { key: "beatRefractoryFrames", to: 9 },
+                ]);
+            });
+            await waitFor(() => expect(result.current.undoStack).toHaveLength(1));
+
+            writeParam.mockResolvedValue(false);
+            for (let i = 0; i < UNDO_DEPTH; i++) {
+                await act(async () => {
+                    await result.current.applyPreset(loudClub);
+                });
+            }
+
+            expect(result.current.undoStack).toHaveLength(1);
+            expect(result.current.undoStack[0].label).toBe("Hand tuned");
+        });
+
+        it("records an undo entry covering only the writes that landed", async () => {
+            const writeParam = jest
+                .fn()
+                .mockResolvedValueOnce(true)
+                .mockResolvedValue(false);
+            const { result } = setup(factory(), writeParam);
+
+            await act(async () => {
+                await result.current.applyPreset(loudClub);
+            });
+
+            await waitFor(() => expect(result.current.undoStack).toHaveLength(1));
+            const keys = Object.keys(result.current.undoStack[0].values);
+            expect(keys).toHaveLength(1);
+            expect(writeParam.mock.calls[0][0]).toBe(keys[0]);
+        });
+
+        it("reports a failed disk write rather than claiming the preset was saved", async () => {
+            (savePresets as jest.Mock).mockReturnValueOnce(false);
+            const { result } = setup();
+            let saved: ReturnType<typeof result.current.saveCurrentAs>;
+            act(() => {
+                saved = result.current.saveCurrentAs("Warehouse", 1);
+            });
+            expect(saved!).not.toBeNull();
+            expect(saved!!.persisted).toBe(false);
+        });
+
+        it("says whether a save added a preset or replaced one", async () => {
+            const { result } = setup();
+            let first: ReturnType<typeof result.current.saveCurrentAs>;
+            act(() => {
+                first = result.current.saveCurrentAs("Warehouse", 1);
+            });
+            await waitFor(() => expect(result.current.saved).toHaveLength(1));
+            expect(first!!.replaced).toBe(false);
+
+            let second: ReturnType<typeof result.current.saveCurrentAs>;
+            act(() => {
+                second = result.current.saveCurrentAs("Warehouse", 2);
+            });
+            await waitFor(() => expect(result.current.saved[0].savedAt).toBe(2));
+            expect(second!!.replaced).toBe(true);
+        });
+
+        it("reports a delete that did not reach disk", async () => {
+            const { result } = setup();
+            act(() => {
+                result.current.saveCurrentAs("Warehouse", 7);
+            });
+            await waitFor(() => expect(result.current.saved).toHaveLength(1));
+
+            (savePresets as jest.Mock).mockReturnValueOnce(false);
+            let persisted = true;
+            act(() => {
+                persisted = result.current.deletePreset(result.current.saved[0].id);
+            });
+            expect(persisted).toBe(false);
+        });
+    });
+
+    describe("render stability", () => {
+        it("returns the same object across renders that change nothing", () => {
+            const currentValues = factory();
+            const writeParam = jest.fn().mockResolvedValue(true);
+            const { result, rerender } = renderHook(() =>
+                useAudioPresets({ currentValues, writeParam }),
+            );
+
+            const first = result.current;
+            rerender({});
+            /* Kill this by dropping the useMemo around the hook's return: a fresh literal per
+             * render is what made audio.tsx's changeCounts memo never once hit, re-diffing every
+             * preset against all 14 parameters on every slider-drag frame. */
+            expect(result.current).toBe(first);
         });
     });
 });

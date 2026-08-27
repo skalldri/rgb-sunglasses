@@ -641,13 +641,20 @@ function twoSidedGeometric(s: number, mid: number, lowFactor: number, highFactor
  * gate, which increases. Checking the reconstruction also gives the "Custom" answer for free —
  * a value that is not on any step reconstructs to something else and is correctly rejected.
  */
-function invertTwoSidedGeometric(
+/**
+ * The unrounded scale position(s) that could produce `value` — one per branch of the curve.
+ *
+ * Split out because two callers need it at different precisions: the macro inverse below rounds
+ * to a step and rejects anything that does not reconstruct (that is how "Custom" is detected),
+ * while `macroScaleOf` keeps the continuous answer.
+ */
+function twoSidedGeometricCandidates(
     value: number,
     mid: number,
     lowFactor: number,
     highFactor: number,
-): number | null {
-    if (!Number.isFinite(value) || value <= 0 || mid <= 0) return null;
+): number[] {
+    if (!Number.isFinite(value) || value <= 0 || mid <= 0) return [];
 
     const lnRatio = Math.log(value / mid);
     const candidates: number[] = [];
@@ -664,8 +671,16 @@ function invertTwoSidedGeometric(
                 ((SENSITIVITY_MAX - SENSITIVITY_DEFAULT) * lnRatio) / Math.log(highFactor),
         );
     }
+    return candidates;
+}
 
-    for (const candidate of candidates) {
+function invertTwoSidedGeometric(
+    value: number,
+    mid: number,
+    lowFactor: number,
+    highFactor: number,
+): number | null {
+    for (const candidate of twoSidedGeometricCandidates(value, mid, lowFactor, highFactor)) {
         const rounded = Math.round(candidate);
         if (rounded < SENSITIVITY_MIN || rounded > SENSITIVITY_MAX) continue;
 
@@ -762,6 +777,30 @@ const MACRO_CURVES: Partial<Record<AudioParamKey, MacroCurve>> = {
     beatSfDelta: DELTA_CURVE,
     agcNoiseGateRms: GATE_CURVE,
 };
+
+/**
+ * Where `value` sits on the shared 1..10 sensitivity scale, WITHOUT rounding to a step.
+ *
+ * `sensitivityFromAlpha` and friends answer "which macro step is this exactly", and correctly
+ * return null for anything between steps. This answers the different question "how sensitive is
+ * this, on the common scale" — which is what translating between two macros needs, since the
+ * alpha and delta curves are independent calibrations of the same perceptual axis. Used to give a
+ * preset one sensitivity intent that both threshold modes can carry.
+ */
+export function macroScaleOf(key: AudioParamKey, value: number): number | null {
+    const curve = MACRO_CURVES[key];
+    if (!curve) return null;
+
+    const mid = macroMid(curve);
+    for (const candidate of twoSidedGeometricCandidates(value, mid, curve.lowFactor, curve.highFactor)) {
+        if (candidate < SENSITIVITY_MIN || candidate > SENSITIVITY_MAX) continue;
+        const reconstructed = twoSidedGeometric(candidate, mid, curve.lowFactor, curve.highFactor);
+        if (Math.abs(reconstructed - value) <= 1e-9 * Math.max(Math.abs(value), 1e-12)) {
+            return candidate;
+        }
+    }
+    return null;
+}
 
 /**
  * The macro step whose value sits closest to `value`, for RENDERING a device that is off the
