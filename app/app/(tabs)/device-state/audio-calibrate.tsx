@@ -14,6 +14,7 @@ import { Radii, Spacing } from "@/constants/theme";
 import {
   useAudioTelemetry,
   useAudioTelemetryStatus,
+  useAudioTelemetryStream,
 } from "@/context/audio-telemetry-context";
 import { useBluetooth } from "@/context/bluetooth-context";
 import {
@@ -52,6 +53,8 @@ export default function AudioCalibrateScreen() {
   const c = useThemeColors();
   const router = useRouter();
   const { selectedDevice } = useBluetooth();
+  // The wizard renders meters throughout, so it holds the stream while it is focused.
+  useAudioTelemetryStream();
   const telemetry = useAudioTelemetry();
 
   /* All parameter plumbing comes from ONE hook, shared with the tuning screen. */

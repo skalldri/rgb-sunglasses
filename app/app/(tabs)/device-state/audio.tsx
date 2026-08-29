@@ -5,6 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AudioHelpSheet, type AudioHelpContent } from "@/components/audio/audio-help-sheet";
 import { MonitorPanel } from "@/components/audio/monitor-panel";
+import { useAudioTelemetryStream } from "@/context/audio-telemetry-context";
 import { PresetSheet } from "@/components/audio/preset-sheet";
 import { ParamChoiceRow } from "@/components/audio/param-choice-row";
 import { ParamSliderRow } from "@/components/audio/param-slider-row";
@@ -83,6 +84,9 @@ export default function AudioTuningScreen() {
     /* All parameter plumbing comes from ONE hook, shared with the calibration wizard. It used
      * to be ~60 lines copied between the two screens, and the copies had already diverged on
      * how they filtered a missing value (`typeof v === "number"` here vs `v !== null` there). */
+    // This screen renders meters, so it is what keeps the telemetry stream armed.
+    useAudioTelemetryStream();
+
     const {
         resolved,
         currentValues,
