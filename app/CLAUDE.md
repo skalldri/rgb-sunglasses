@@ -783,3 +783,24 @@ A characteristic whose write-value and notified/stored value differ (e.g. any dr
 - a notify that silently failed (e.g. exceeded the negotiated MTU — see the Known Issues entry above) while the UI happened to already show the right value from a stale read.
 
 What actually caught the MTU/notify bugs in this codebase: reopening the picker afterward to confirm _all_ options are still listed (not just the one that appeared selected), and cross-checking the characteristic's value against the firmware's own source of truth immediately after the write (the `glim` shell command, via the `mcp__serial__*` tools) — not a different/unrelated characteristic. When verifying any BLE write, always do both before calling it confirmed.
+
+### Driving the calibration wizard (or any pushed screen) with execbro — two incidents (2026-08-29)
+
+- **`mcp__execbro__navigate` PUSHES a new instance when the target route is not top-of-stack
+  — it does not pop back to an existing one.** Navigating calibrate → audio → (navigate
+  "/device-state/audio-calibrate") stacked a SECOND audio-calibrate instance; expo-router's
+  dev-mode nav-state restore then resurrected the polluted stack across a JS reload. With
+  duplicate instances mounted, the app's ENTIRE touch pipeline wedged: every Pressable showed
+  press feedback (onPressIn) but onPress never fired — for real fingers and injected taps
+  alike — while JS stayed responsive. Looks exactly like a product bug and is not one (a
+  clean stack counted 80/80 real taps through the same code). Recover with
+  `am force-stop` + relaunch, which clears the restored stack. Prefer the app's own
+  back-navigation / real UI taps over navigate() for any screen already in the stack, and
+  when a screen misbehaves, suspect the stack shape (`get_screen_state` prints it) before
+  the screen's code.
+- **Never chain blind injected input.** An `input keyevent KEYCODE_APP_SWITCH` ×2 plus a
+  pre-committed coordinate tap — with no screenshot between steps — landed in the Settings
+  app (open in recents) and the tap DISABLED Android Developer options on the shared phone,
+  nearly killing the ADB link. The re-read-before-every-tap rule applies doubly to keyevents
+  that change which app is foregrounded: screenshot between every injected step, or hand the
+  phone actions to the user when one is present.

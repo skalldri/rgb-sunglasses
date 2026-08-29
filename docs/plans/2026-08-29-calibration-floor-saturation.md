@@ -404,3 +404,21 @@ an in-range answer for any real room, which would make the noisy-room proposal r
   review said "fitted to the loud parts of the music").
 - **Still with the maintainer**: §5c (tempo double/half one-tap fix?), the vestigial-floor-row
   question (§11), and when to merge the stack.
+
+## 13. Tap-along hardware pass (2026-08-29, late)
+
+Real fingers drove the tap pad for the first time. First attempt looked like a product bug —
+pad showed press feedback, count frozen at 0, then every button went touch-dead — but stage
+counters (temporary instrumentation, since reverted) on a clean relaunch proved the code
+sound: 80/80 taps flowed pressIn → press → recordTap with zero guard failures, 39 s of
+32 Hz undecimated tap window, and the fit produced the tap-derived rows on hardware for the
+first time (beatAlpha 0.30→0.193 "Matched 45% of your taps, up from 32%", refractory 5→12).
+The touch-dead state was environmental: agent-driven `navigate()` calls had stacked duplicate
+audio-calibrate instances (dev-mode nav restore resurrected them after reload), which wedged
+the app's entire touch pipeline — not reachable by real-user navigation, not present in
+production builds (no dev nav restore). Lessons recorded in app/CLAUDE.md.
+
+Two hardening changes landed from the investigation: `cancel()` now clears `state.active`
+alongside the ref (a stale pad would otherwise swallow taps silently — press feedback with a
+frozen count), and TapPad gained wiring-level Pressable tests, since the hook suite calls
+recordTap() directly and is structurally blind to the component the finger touches.

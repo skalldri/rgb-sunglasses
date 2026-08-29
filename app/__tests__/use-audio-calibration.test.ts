@@ -262,6 +262,21 @@ describe("one collector at a time", () => {
     expect(result.current.state.active).toBe(null);
   });
 
+  it("cancel clears the active collector so a stale pad cannot swallow taps", () => {
+    // recordTap guards on the REF but the TapPad renders on the STATE. A cancel() that reset
+    // only the ref left the pad on screen with every press silently eaten by the guard —
+    // press feedback with a frozen count. State and ref must fall together.
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    act(() => result.current.startCollecting("taps"));
+    feed(h, 1, QUIET, 32);
+    act(() => result.current.cancel());
+
+    expect(result.current.state.active).toBeNull();
+    act(() => result.current.recordTap());
+    expect(result.current.state.tapCount).toBe(0);
+  });
+
   it("records taps only while the tap collector is running", () => {
     const h = makeHarness();
     const { result } = renderCal(h);

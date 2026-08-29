@@ -565,7 +565,11 @@ export function useAudioCalibration(deps: Deps) {
     clearTimer();
     activeRef.current = null;
     depsRef.current.requestStream(null);
-    setState((s) => ({ ...s, phase: "collecting", failure: null }));
+    /* `active: null` MUST accompany the ref reset. recordTap guards on the REF, but the
+     * TapPad renders on the STATE — leaving state.active at "taps" here keeps the pad on
+     * screen while every press on it silently hits the guard and vanishes: press feedback
+     * with a frozen count, the most gaslighting failure this screen can produce. */
+    setState((s) => ({ ...s, phase: "collecting", active: null, failure: null }));
   }, [clearTimer]);
 
   /**
