@@ -388,3 +388,19 @@ removed, and the sweep fallback constant-folded each fail tests.
 including genuinely loud ones (1.0–2.5 against a cap of 0.1). The floor fit may never produce
 an in-range answer for any real room, which would make the noisy-room proposal row vestigial
 (it can only ever say "cap"). Keep / cap-and-warn (current) / drop is a product call.
+
+## 12. Session close-out (2026-08-29, second session)
+
+- **§5e executed** — the full venue scenario on hardware, first time: 269 s crowd background
+  (level raised mid-sitting; loud tail read rms 0.0053 at the board) + 113 s music-over-crowd
+  (rms 0.0114). Fit produced the coherent loud-room proposal: floor 0.080→0.100 (cap, with
+  the saturation warning now true), targets 0.002→0.005 / 0.05→0.02, gate 0.0006→0.0057
+  (music bound won), all three warnings consistent. **The apply path ran for the first time**:
+  4/4 writes verified against `sound dsp params` / `sound agc status` readbacks, the
+  "Before calibration" preset was saved first, and applying that preset restored every value
+  (verified by the same readbacks). Board left on defaults.
+- **§5a shipped** — `clipAdjusted` surfaces as a warning, `widened` as a note (commit
+  2402a05); the venue run demonstrated the gap live (window widened to exactly 4x while the
+  review said "fitted to the loud parts of the music").
+- **Still with the maintainer**: §5c (tempo double/half one-tap fix?), the vestigial-floor-row
+  question (§11), and when to merge the stack.
