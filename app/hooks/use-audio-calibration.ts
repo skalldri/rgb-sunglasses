@@ -384,6 +384,24 @@ export function useAudioCalibration(deps: Deps) {
       "Fitted to the loud parts of the music.",
     );
 
+    /* analyzeMusic corrects its own proposal in two ways, and both were silently dropped
+     * here while the neighbouring steps surfaced theirs (room -> warnings, taps -> notes) —
+     * observed live in the 2026-08-29 venue run, where the window was widened to 4x and the
+     * review still said the ceiling was "fitted to the loud parts of the music". Clipping is
+     * a WARNING (the operator can act on it: the mic is being overdriven where it sits);
+     * widening is a NOTE (nothing to act on, but the numbers are not purely measured and the
+     * review should not pretend they are). */
+    if (musicResult.clipAdjusted) {
+      warnings.push(
+        "The mic was overdriven while the music played, so I've aimed the volume window lower to keep it out of distortion. If the glasses sit right next to a speaker, moving them helps more than refitting.",
+      );
+    }
+    if (musicResult.widened) {
+      notes.push(
+        "The music's quiet and loud parts were very close together, so I've widened the volume window — any narrower and the auto-volume hunts back and forth.",
+      );
+    }
+
     const gate = reconcileGate(roomResult.roomP95, musicResult.musicP5);
     push(
       "agcNoiseGateRms",

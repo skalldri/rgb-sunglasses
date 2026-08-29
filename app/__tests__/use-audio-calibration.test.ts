@@ -415,6 +415,46 @@ describe("fitting", () => {
     expect(floorRow?.because).toContain("background noise");
   });
 
+  it("warns when the mic clipped during the music", () => {
+    // analyzeMusic pulls the ceiling down 25% when the mic was overdriven (clipAdjusted). The
+    // flag was computed and tested but never shown — the review claimed a clean fit off a
+    // distorting mic.
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, (n) =>
+      makeFrame({
+        tier: 2,
+        seq: n,
+        rmsInput: 0.01 + (n % 50) * 0.0008,
+        clipped: n % 10 === 0, // 10% of frames, well past MUSIC_CLIP_FRACTION
+      }),
+    );
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    expect(result.current.state.warnings.join(" ")).toContain("overdriven");
+  });
+
+  it("notes when the window had to be widened to keep the AGC stable", () => {
+    // Music with almost no dynamic range: p25 ≈ p90, so high < 4x low and analyzeMusic drags
+    // the window open (widened). Observed live (2026-08-29 venue run): the window came out at
+    // exactly 4x while the review said the ceiling was "fitted to the loud parts of the
+    // music" — the correction must be disclosed, not passed off as a measurement.
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, (n) =>
+      makeFrame({ tier: 2, seq: n, rmsInput: 0.01 }),
+    );
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    expect(result.current.state.notes.join(" ")).toContain(
+      "widened the volume window",
+    );
+  });
+
   it("leaves the floor alone in a quiet room, and says so instead of warning", () => {
     // The 2026-08-29 hardware bug: a silent room's band-0 flux is log-noise (measured p99 =
     // 1.19 at rms p95 = 0.0006), and fitting the floor to it proposed the MAXIMUM justified
