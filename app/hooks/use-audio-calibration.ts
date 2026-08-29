@@ -359,13 +359,20 @@ export function useAudioCalibration(deps: Deps) {
 
     warnings.push(...roomResult.warnings);
 
-    push(
-      "beatFluxFloor",
-      roomResult.proposedFloor,
-      roomResult.noisy
-        ? "Measured from the room's background noise."
-        : "Measured from the quiet room.",
-    );
+    /* A null proposal means the room produced nothing the floor could be fitted to (quiet
+     * room: the flux percentile is log-noise, see analyzeRoom). Leaving the parameter alone
+     * IS the fit's answer, so say so rather than silently showing one fewer row. */
+    if (roomResult.proposedFloor !== null) {
+      push(
+        "beatFluxFloor",
+        roomResult.proposedFloor,
+        "Measured from the room's background noise.",
+      );
+    } else {
+      notes.push(
+        "The room was quiet, so Minimum beat strength has been left alone.",
+      );
+    }
     push(
       "agcTargetLow",
       musicResult.targetLow,
@@ -407,7 +414,14 @@ export function useAudioCalibration(deps: Deps) {
       const mode = tapWin.thresholdMode;
       const sensitivityKey: AudioParamKey =
         mode === 1 ? "beatSfDelta" : "beatAlpha";
-      const floor = roomResult.proposedFloor;
+      /* Replay with the floor the device will ACTUALLY run after apply: the proposed one if
+       * the fit is changing it, otherwise the device's current value. Sweeping against a
+       * floor nothing is going to set would score candidates for a detector that will never
+       * exist. */
+      const floor =
+        roomResult.proposedFloor ??
+        d.valueOf("beatFluxFloor") ??
+        AUDIO_PARAMS.beatFluxFloor.defaultValue;
       const sweep = sweepSensitivity(
         tapWin,
         taps,

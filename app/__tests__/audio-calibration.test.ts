@@ -93,18 +93,39 @@ describe("percentile", () => {
 });
 
 describe("step 1 — listen to the room", () => {
-  it("measures a quiet room and proposes a floor above its loudest flux", () => {
+  /**
+   * Band-0 flux as a SILENT room actually produces it, modeled on the 2026-08-29 bench
+   * measurement (987 frames, rms p95 = 0.0006): about half the frames exactly zero — flux is
+   * rectified, so any noise loses energy half the time — and the rest log-noise junk reaching
+   * past 1.0, p99 = 1.19. Log-flux is a ratio, and near the quantisation floor a tiny
+   * absolute change is a huge log change, so silence is SPIKY in flux, not flat.
+   */
+  const SILENT_ROOM_FLUX = [
+    0, 0.71, 0, 0.28, 0, 1.19, 0, 0.09, 0.53, 0, 0.02, 0.4, 0, 0, 1.99, 0,
+    0.14, 0, 0.33, 0.05,
+  ];
+
+  it("leaves the floor ALONE in a quiet room, however wild the flux looks", () => {
+    // THE bug this fit is gated for (2026-08-29, hardware): in a measurably silent room the
+    // p99 selects log-noise transients, the wanted floor lands 14x above FLOOR_MAX, and the
+    // wizard proposed the MAXIMUM floor justified by "the background noise is loud enough…"
+    // while its sibling `noisy` flag said the room was quiet. The flux percentile is only a
+    // measurement when the level says there was something to measure.
     const win = makeWindow({
       frames: 100,
-      rmsInput: () => 0.0005,
-      flux: (f, b) => (b === 0 ? 0.01 + (f % 5) * 0.001 : 0),
+      rmsInput: (f) => 0.0002 + (f % 5) * 0.0001, // rms p95 ≈ 0.0006, as measured
+      flux: (f, b) => (b === 0 ? SILENT_ROOM_FLUX[f % SILENT_ROOM_FLUX.length] : 0),
     });
     const r = analyzeRoom(win);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.roomP95).toBeCloseTo(0.0005, 6);
-    // The floor must clear the room's own worst flux, or room noise fires beats.
-    expect(r.proposedFloor).toBeGreaterThan(r.quietFlux99);
+    expect(r.noisy).toBe(false);
+    // No proposal, no saturation, no warning: nothing for the `noisy` flag to contradict.
+    expect(r.proposedFloor).toBeNull();
+    expect(r.floorSaturated).toBe(false);
+    expect(r.warnings).toEqual([]);
+    // The junk percentile is still REPORTED (diagnostics), just not fitted to.
+    expect(r.quietFlux99).toBeGreaterThan(FLOOR_MAX);
   });
 
   it("MEASURES a loud room rather than refusing it", () => {
@@ -114,15 +135,19 @@ describe("step 1 — listen to the room", () => {
     const win = makeWindow({
       frames: 100,
       rmsInput: () => ROOM_NOISY_RMS * 2,
-      flux: (_f, b) => (b === 0 ? 0.01 : 0),
+      flux: (_f, b) => (b === 0 ? 0.04 : 0),
     });
     const r = analyzeRoom(win);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.noisy).toBe(true);
     expect(r.roomP95).toBeCloseTo(ROOM_NOISY_RMS * 2, 6);
-    // It still produces the thing a loud room most needs: a fitted beat floor.
-    expect(r.proposedFloor).toBeGreaterThan(0);
+    // It still produces the thing a loud room most needs: a fitted beat floor, clearing the
+    // room's own worst flux so room noise cannot fire beats.
+    expect(r.proposedFloor).not.toBeNull();
+    expect(r.proposedFloor as number).toBeGreaterThan(r.quietFlux99);
+    expect(r.proposedFloor as number).toBeCloseTo(1.2 * 0.04, 6);
+    expect(r.floorSaturated).toBe(false);
     expect(r.warnings.join(" ")).toContain("background noise");
   });
 
@@ -140,17 +165,34 @@ describe("step 1 — listen to the room", () => {
     expect(r.warnings).toEqual([]);
   });
 
-  it("reports the floor saturating instead of exceeding the evidence-backed cap", () => {
-    // Above 0.10 the plan doc records real beats being eaten, so a room whose own flux needs
-    // more than that is a room we must WARN about, not one we quietly over-fit.
+  it("treats the noisy bound as strictly above — AT the bound is still quiet", () => {
+    // Documents the boundary so a future >= rewrite fails a test instead of silently moving
+    // which rooms get fitted.
     const win = makeWindow({
       frames: 100,
-      rmsInput: () => 0.0005,
+      rmsInput: () => ROOM_NOISY_RMS,
       flux: (_f, b) => (b === 0 ? 5 : 0),
     });
     const r = analyzeRoom(win);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    expect(r.noisy).toBe(false);
+    expect(r.proposedFloor).toBeNull();
+  });
+
+  it("reports the floor saturating instead of exceeding the evidence-backed cap", () => {
+    // Above 0.10 the plan doc records real beats being eaten, so a NOISY room whose own flux
+    // needs more than that is a room we must WARN about, not one we quietly over-fit. (A
+    // quiet room with the same wild flux gets no proposal at all — see the first test.)
+    const win = makeWindow({
+      frames: 100,
+      rmsInput: () => ROOM_NOISY_RMS * 2,
+      flux: (_f, b) => (b === 0 ? 5 : 0),
+    });
+    const r = analyzeRoom(win);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.noisy).toBe(true);
     expect(r.floorSaturated).toBe(true);
     expect(r.proposedFloor).toBe(FLOOR_MAX);
     expect(r.warnings.join(" ")).toContain("as high as it safely goes");
@@ -167,7 +209,7 @@ describe("step 1 — listen to the room", () => {
   it("clamps the proposed floor into the range the plan doc supports", () => {
     const loud = makeWindow({
       frames: 100,
-      rmsInput: () => 0.0005,
+      rmsInput: () => ROOM_NOISY_RMS * 2,
       flux: (_f, b) => (b === 0 ? 5 : 0),
     });
     const r = analyzeRoom(loud);
@@ -177,12 +219,12 @@ describe("step 1 — listen to the room", () => {
     // measurement says otherwise.
     expect(r.proposedFloor).toBeLessThanOrEqual(0.1);
 
-    const silent = makeWindow({
+    const noisyButFluxless = makeWindow({
       frames: 100,
-      rmsInput: () => 0.0005,
+      rmsInput: () => ROOM_NOISY_RMS * 2,
       flux: () => 0,
     });
-    const r2 = analyzeRoom(silent);
+    const r2 = analyzeRoom(noisyButFluxless);
     expect(r2.ok).toBe(true);
     if (!r2.ok) return;
     expect(r2.proposedFloor).toBeGreaterThanOrEqual(0.02);

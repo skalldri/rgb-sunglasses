@@ -106,6 +106,20 @@ export type CalibrationWindow = {
  * And the refusal preempted the graceful path that already existed one function later:
  * `reconcileGate` sets the gate from the music and warns when it cannot clear the room, which
  * is the correct venue behaviour and was unreachable in the loud case it was written for.
+ *
+ * MEASURED BASIS (2026-08-29 bench sweep, proto0, crowd noise at three playback levels plus a
+ * silent control; docs/plans/2026-08-29-calibration-floor-saturation.md): the mic's own
+ * self-noise reads rms p95 = 0.0006–0.0008 input-referred — a crowd bed "barely audible" to a
+ * human lands INSIDE that band and the firmware flags it SILENT — while a busy-bar level read
+ * p95 = 0.0034 and venue-loud 0.0067. So 0.003 sits 4–5x above the hardware floor and below
+ * every level a gate could meaningfully act on. The anchor is the MIC'S SELF-NOISE, which is a
+ * property of the hardware and therefore the same in every venue; what a particular venue
+ * reads is not calibratable on a bench (a phone speaker's SPL at the mic is whatever the
+ * volume slider says), and this constant deliberately does not claim to encode it.
+ *
+ * This same criterion also gates the beat-floor fit below — see analyzeRoom. It is a fixed
+ * constant, not a parameter this fit adjusts, so conditioning a measurement on it cannot
+ * ratchet (the failure mode that killed the "count only frames above the noise gate" design).
  */
 export const ROOM_NOISY_RMS = 0.003;
 /** Minimum frames before a room measurement is believed (~4 s at 8 Hz). */
@@ -124,8 +138,14 @@ export type RoomResult =
       ok: true;
       roomP95: number;
       quietFlux99: number;
-      /** Proposed Minimum beat strength (beatFluxFloor). */
-      proposedFloor: number;
+      /**
+       * Proposed Minimum beat strength (beatFluxFloor), or null to LEAVE IT ALONE.
+       *
+       * Null whenever the room is not noisy: a room with no level-measurable bed produced no
+       * flux worth fitting to (see the block comment in analyzeRoom), and the honest proposal
+       * is no proposal.
+       */
+      proposedFloor: number | null;
       /** The room is loud enough that a level gate cannot sit above its background. */
       noisy: boolean;
       /** The floor wanted to exceed FLOOR_MAX, so it cannot clear the room's own flux. */
@@ -161,22 +181,51 @@ export function analyzeRoom(win: CalibrationWindow): RoomResult {
     band0.push(win.flux[f * AUDIO_NUM_BANDS]);
   const quietFlux99 = percentile(band0, 0.99);
 
+  const noisy = roomP95 > ROOM_NOISY_RMS;
+
+  /* THE FLUX PERCENTILE IS ONLY A MEASUREMENT WHEN THE LEVEL SAYS THERE WAS SOMETHING TO
+   * MEASURE. Log-flux is a ratio, and near the quantisation floor a tiny absolute change is a
+   * huge log change — so a room with no real noise bed still produces flux transients that a
+   * p99 selects with enthusiasm. Measured (2026-08-29 sweep, proto0): a silent room at rms
+   * p95 = 0.0006 produced band-0 flux p99 = 1.19, wanting a floor 14x above FLOOR_MAX, while
+   * its sibling `noisy` flag correctly said the room was quiet — the wizard proposed the
+   * maximum floor and blamed background noise the same breath it said there wasn't any.
+   *
+   * The shape of the flux distribution cannot make this call: genuine crowd noise at three
+   * playback levels produced the SAME shape as silence (~50% exact zeros — structural, flux
+   * is rectified and energy falls half the time — and p99 >> p75 everywhere, with magnitude
+   * non-monotonic in level). Level separates cleanly (11x in rms p95 between silence and
+   * venue-loud), so level is the gate: below ROOM_NOISY_RMS the flux is log-noise by
+   * construction, and the honest fit LEAVES THE FLOOR ALONE — no proposal, no warning,
+   * nothing for the `noisy` flag to contradict. ROOM_NOISY_RMS is a fixed constant, not a
+   * parameter this fit adjusts, so this cannot ratchet the way gate-conditioned filtering
+   * would (see the rule on that constant). */
+  if (!noisy) {
+    return {
+      ok: true,
+      roomP95,
+      quietFlux99,
+      proposedFloor: null,
+      noisy,
+      floorSaturated: false,
+      warnings: [],
+    };
+  }
+
   /* 1.2x the loudest thing the room produced, so room noise cannot clear the floor. */
   const wantedFloor = 1.2 * quietFlux99;
   const proposedFloor = clamp(wantedFloor, FLOOR_MIN, FLOOR_MAX);
 
-  const noisy = roomP95 > ROOM_NOISY_RMS;
   const floorSaturated = Number.isFinite(wantedFloor) && wantedFloor > FLOOR_MAX;
 
   /* Say what the measurement means for the night, not what it means arithmetically. Both of
    * these describe things the operator will SEE, so they can decide whether to accept the
-   * proposal or go and tune by hand. */
+   * proposal or go and tune by hand. Only reachable in the noisy case, which is what makes
+   * the saturation copy's claim about background noise TRUE whenever it appears. */
   const warnings: string[] = [];
-  if (noisy) {
-    warnings.push(
-      "There's a lot of background noise in here. I've measured it and fitted to it, but the lights will react to the crowd as well as the music.",
-    );
-  }
+  warnings.push(
+    "There's a lot of background noise in here. I've measured it and fitted to it, but the lights will react to the crowd as well as the music.",
+  );
   if (floorSaturated) {
     warnings.push(
       "The background noise is loud enough that beats have to be picked out of it. Minimum beat strength is already as high as it safely goes — above this it starts eating real beats — so raise it by hand only if the lights still twitch between songs.",

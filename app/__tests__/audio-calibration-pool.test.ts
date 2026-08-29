@@ -108,15 +108,17 @@ describe("pool accumulation", () => {
   it("feeds the existing analysis unchanged", () => {
     // The point of concatenation: a pool IS a CalibrationWindow. Percentiles over rmsInput are
     // order-independent, so a room measured in three lulls equals one measured in one.
+    // The room is made NOISY so the fitted-floor path runs and the comparison is between two
+    // fitted numbers, not two null "leave it alone" answers.
     let split = emptyPool();
-    split = appendChunk(split, chunk({ frames: 40, t0: 0, rms: () => 0.0005 }));
+    split = appendChunk(split, chunk({ frames: 40, t0: 0, rms: () => 0.005 }));
     split = appendChunk(
       split,
-      chunk({ frames: 40, t0: 100_000, rms: () => 0.0005 }),
+      chunk({ frames: 40, t0: 100_000, rms: () => 0.005 }),
     );
     const single = appendChunk(
       emptyPool(),
-      chunk({ frames: 80, t0: 0, rms: () => 0.0005 }),
+      chunk({ frames: 80, t0: 0, rms: () => 0.005 }),
     );
 
     const a = analyzeRoom(split);
@@ -125,7 +127,8 @@ describe("pool accumulation", () => {
     expect(b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
     expect(a.roomP95).toBeCloseTo(b.roomP95, 9);
-    expect(a.proposedFloor).toBeCloseTo(b.proposedFloor, 9);
+    expect(a.proposedFloor).not.toBeNull();
+    expect(a.proposedFloor).toBeCloseTo(b.proposedFloor as number, 9);
   });
 });
 

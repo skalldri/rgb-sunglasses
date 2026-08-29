@@ -398,7 +398,7 @@ describe("fitting", () => {
     const { result } = renderCal(h);
     // Well above ROOM_NOISY_RMS. The old room step REFUSED this outright.
     sitting(result, h, "background", 2, (n) =>
-      makeFrame({ tier: 2, seq: n, rmsInput: 0.02 }),
+      makeFrame({ tier: 2, seq: n, rmsInput: 0.02, flux: [0.04, 0, 0, 0] }),
     );
     sitting(result, h, "music", 4, MUSIC);
     act(() => result.current.fit());
@@ -407,6 +407,68 @@ describe("fitting", () => {
     expect(result.current.state.warnings.join(" ")).toContain(
       "background noise",
     );
+    // A noisy room is the one case the floor IS fitted from — the row must be there.
+    const floorRow = result.current.state.changes.find(
+      (c) => c.key === "beatFluxFloor",
+    );
+    expect(floorRow).toBeDefined();
+    expect(floorRow?.because).toContain("background noise");
+  });
+
+  it("leaves the floor alone in a quiet room, and says so instead of warning", () => {
+    // The 2026-08-29 hardware bug: a silent room's band-0 flux is log-noise (measured p99 =
+    // 1.19 at rms p95 = 0.0006), and fitting the floor to it proposed the MAXIMUM justified
+    // by "the background noise is loud enough…" while `noisy` said the room was quiet. The
+    // fixture reproduces that input: quiet rms, junk flux spikes well past FLOOR_MAX.
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, (n) =>
+      makeFrame({
+        tier: 2,
+        seq: n,
+        rmsInput: 0.0005,
+        flux: [n % 2 ? 1.2 : 0, 0, 0, 0],
+      }),
+    );
+    sitting(result, h, "music", 4, MUSIC);
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    const keys = result.current.state.changes.map((c) => c.key);
+    expect(keys).not.toContain("beatFluxFloor");
+    // The user is told the floor was left alone, not warned about phantom background noise.
+    expect(result.current.state.notes.join(" ")).toContain(
+      "Minimum beat strength has been left alone",
+    );
+    expect(result.current.state.warnings.join(" ")).not.toContain(
+      "as high as it safely goes",
+    );
+  });
+
+  it("sweeps against the device's CURRENT floor when the fit proposes none", () => {
+    // With no floor proposal the replay must model the floor the device will actually run
+    // after apply — its current value — not a value nothing is going to set.
+    const h = makeHarness();
+    const valueOfSpy = jest.fn(h.valueOf);
+    h.valueOf = valueOfSpy;
+    const { result } = renderCal(h);
+
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // A regular tap sitting so the sweep actually runs (>= MIN_TAPS, even spacing).
+    act(() => result.current.startCollecting("taps"));
+    for (let i = 0; i < 10; i++) {
+      feed(h, 0.5, QUIET, 32);
+      act(() => result.current.recordTap());
+    }
+    act(() => result.current.stopCollecting());
+
+    valueOfSpy.mockClear();
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    expect(valueOfSpy).toHaveBeenCalledWith("beatFluxFloor");
   });
 
   it("keeps what was collected when a fit fails", () => {
