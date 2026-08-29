@@ -485,6 +485,113 @@ describe("fitting", () => {
     );
   });
 
+  it("promotes the anti-double refractory to a validated proposal row", () => {
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // 75 BPM taps (800 ms apart) over a recording where every beat has an echo 13 frames
+    // (416 ms) later. No refractory in the sweep's grid (max 12) suppresses the echo, so the
+    // sweep's best still fires at ~150 BPM; the computed fix is 14 frames — OUTSIDE the grid,
+    // which is exactly why it must be replay-validated rather than assumed.
+    act(() => result.current.startCollecting("taps"));
+    for (let k = 0; k < 10; k++) {
+      act(() => result.current.recordTap());
+      feed(h, 0.8, (n) =>
+        makeFrame({
+          tier: 2,
+          seq: n,
+          rmsInput: 0.01,
+          flux: n === 0 || n === 13 ? [0.5, 0, 0, 0] : [0, 0, 0, 0],
+        }),
+      );
+    }
+    act(() => result.current.stopCollecting());
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    const row = result.current.state.changes.find(
+      (c) => c.key === "beatRefractoryFrames",
+    );
+    expect(row).toBeDefined();
+    expect(row?.newValue).toBe(14);
+    expect(row?.because).toContain("firing twice per beat");
+    // The tempo coupling is stated on the row, not hidden.
+    expect(row?.because).toContain("BPM");
+    // The manual-procedure note is replaced by the row.
+    expect(result.current.state.notes.join(" ")).not.toContain(
+      "could not fix that automatically",
+    );
+  });
+
+  it("keeps the manual note when the anti-double refractory does not actually help", () => {
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // Same double-fire shape, but the echo lands 17 frames out — past the computed fix of 14
+    // — so replaying with the candidate changes nothing. The promotion is gated on the replay
+    // IMPROVING the match; an unvalidated write here would ship a number that provably does
+    // not fix the thing its because-line claims.
+    act(() => result.current.startCollecting("taps"));
+    for (let k = 0; k < 10; k++) {
+      act(() => result.current.recordTap());
+      feed(h, 0.8, (n) =>
+        makeFrame({
+          tier: 2,
+          seq: n,
+          rmsInput: 0.01,
+          flux: n === 0 || n === 17 ? [0.5, 0, 0, 0] : [0, 0, 0, 0],
+        }),
+      );
+    }
+    act(() => result.current.stopCollecting());
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    const row = result.current.state.changes.find(
+      (c) => c.key === "beatRefractoryFrames",
+    );
+    expect(row?.newValue).not.toBe(14);
+    expect(row?.because).toBe("Chosen alongside the sensitivity.");
+    expect(result.current.state.notes.join(" ")).toContain(
+      "could not fix that automatically",
+    );
+  });
+
+  it("explains the every-other-beat case instead of proposing what the sweep rejected", () => {
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // Taps every ~416 ms; the recording only has a beat under every SECOND tap, so the best
+    // any candidate can do is fire at half the tapped tempo. There is nothing evidence-backed
+    // to propose — every sensitivity scored the same or worse — so the fit must say why it is
+    // leaving Sensitivity alone, not guess "one step up".
+    act(() => result.current.startCollecting("taps"));
+    for (let k = 0; k < 12; k++) {
+      act(() => result.current.recordTap());
+      feed(h, 0.4, (n) =>
+        makeFrame({
+          tier: 2,
+          seq: n,
+          rmsInput: 0.01,
+          flux: k % 2 === 0 && n === 0 ? [0.5, 0, 0, 0] : [0, 0, 0, 0],
+        }),
+      );
+    }
+    act(() => result.current.stopCollecting());
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    const notes = result.current.state.notes.join(" ");
+    expect(notes).toContain("every other beat");
+    expect(notes).toContain("matched your taps worse");
+  });
+
   it("sweeps against the device's CURRENT floor when the fit proposes none", () => {
     // With no floor proposal the replay must model the floor the device will actually run
     // after apply — its current value — not a value nothing is going to set.

@@ -32,6 +32,7 @@ import {
 import {
   AUDIO_PARAMS,
   alphaFromSensitivity,
+  clampToSpec,
   deltaFromSensitivity,
   type AudioParamKey,
 } from "@/services/audio-params";
@@ -460,21 +461,8 @@ export function useAudioCalibration(deps: Deps) {
               ).f
             : 0;
 
-        push(
-          sensitivityKey,
-          sweep.best.paramValue,
-          `Matched ${Math.round(sweep.best.f * 100)}% of your taps, up from ${Math.round(before * 100)}%.`,
-        );
-        push(
-          "beatRefractoryFrames",
-          sweep.best.refractoryFrames,
-          "Chosen alongside the sensitivity.",
-        );
-
-        /* The two classic failures, REPORTED but not silently corrected — the classification
-         * runs on a replay of the sweep's own winner, so a double/half result is proof the
-         * APPLIED settings still show it. Claiming a correction had been made was false
-         * exactly when it appeared. */
+        /* The two classic failures, classified on a replay of the sweep's own winner, so a
+         * double/half result is proof the settings the sweep would apply still show it. */
         const detected = replayBeats(
           tapWin,
           sweep.best.paramValue,
@@ -488,16 +476,52 @@ export function useAudioCalibration(deps: Deps) {
         const detectedBpm =
           spanS > 0 ? ((detected.length - 1) / spanS) * 60 : 0;
         const relation = classifyTempo(detectedBpm, quality.bpm);
+
+        let bestF = sweep.best.f;
+        let refractory = sweep.best.refractoryFrames;
+        let refractoryBecause = "Chosen alongside the sensitivity.";
+
         if (relation.kind === "double") {
-          const ms = Math.round(relation.proposedRefractoryFrames * FRAME_MS);
-          notes.push(
-            `${relation.message} I could not fix that automatically — try Beat feel "Kick only", or a gap of about ${ms} ms in Advanced.`,
+          /* The anti-double refractory (just over half the TAPPED interval) can sit outside
+           * the sweep's grid — the grid tops out at 12 frames, which a sub-~86 BPM song
+           * exceeds — so it was never scored. Validate it against the recording before
+           * proposing: replay with it, and promote it to a row only when the match actually
+           * improves. Otherwise the honest output is still the manual note. The value is
+           * tempo-coupled by construction, so the row says so instead of passing it off as a
+           * measurement of anything but tonight's tempo. */
+          const candidate = clampToSpec(
+            "beatRefractoryFrames",
+            relation.proposedRefractoryFrames,
           );
+          const fixed = matchTaps(
+            taps,
+            replayBeats(tapWin, sweep.best.paramValue, candidate, floor),
+          );
+          if (fixed.f > sweep.best.f + 1e-9) {
+            bestF = fixed.f;
+            refractory = candidate;
+            refractoryBecause = `Stops it firing twice per beat — match went ${Math.round(sweep.best.f * 100)}% to ${Math.round(fixed.f * 100)}%. Tuned to ~${Math.round(quality.bpm)} BPM songs, so refit if the set speeds up.`;
+          } else {
+            const ms = Math.round(relation.proposedRefractoryFrames * FRAME_MS);
+            notes.push(
+              `${relation.message} I could not fix that automatically — try Beat feel "Kick only", or a gap of about ${ms} ms in Advanced.`,
+            );
+          }
         } else if (relation.kind === "half") {
+          /* No proposal on purpose: the sweep already tried every sensitivity, and this WAS
+           * the best fit — everything more sensitive matched the taps worse. Proposing
+           * "one step up" would contradict the fit's own evidence. */
           notes.push(
-            `${relation.message} I could not fix that automatically — try turning Sensitivity up a step by hand.`,
+            `${relation.message} Everything more sensitive matched your taps worse when I tried it, so Sensitivity stays at the best fit — more taps over a louder stretch of music may help.`,
           );
         }
+
+        push(
+          sensitivityKey,
+          sweep.best.paramValue,
+          `Matched ${Math.round(bestF * 100)}% of your taps, up from ${Math.round(before * 100)}%.`,
+        );
+        push("beatRefractoryFrames", refractory, refractoryBecause);
       }
     }
 
