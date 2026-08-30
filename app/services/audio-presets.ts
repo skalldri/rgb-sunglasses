@@ -52,7 +52,7 @@ function factoryValues(): Record<AudioParamKey, number> {
 }
 
 /**
- * A preset's sensitivity intent, expressed on the shared 1..10 macro scale and emitted as BOTH
+ * A preset's sensitivity intent, expressed on the shared 1..20 macro scale and emitted as BOTH
  * threshold parameters.
  *
  * WHICH parameter carries "sensitivity" depends on the device's threshold mode: mean-sigma mode
@@ -103,9 +103,11 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             agcAttackFrames: 2,
             agcReleaseFrames: 10,
             // A touch below the default sensitivity: a loud room produces more candidate
-            // onsets, not fewer, so the bar for "that was a beat" goes up. (Scale 4.6 -> alpha
-            // 0.352, the value this preset carried as a literal before both modes were covered.)
-            ...sensitivityValues(4.6),
+            // onsets, not fewer, so the bar for "that was a beat" goes up. (Scale 9.66 -> alpha
+            // 0.352, the value this preset has carried since it was a literal. Was 4.6 on the
+            // 1..10 scale; recomputed to hold alpha when the scale grew to 1..20 — the delta
+            // moved ~2%, accepted, since the curves are independent calibrations of one axis.)
+            ...sensitivityValues(9.66),
             beatRefractoryFrames: 6,
         },
     },
@@ -121,8 +123,9 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             agcTargetLow: 0.0012,
             agcReleaseFrames: 20,
             // More sensitive than default, so a brushed snare in a quiet passage still counts.
-            // (Scale 6.4 -> alpha 0.221, the previous literal.)
-            ...sensitivityValues(6.4),
+            // (Scale 12.8 -> alpha 0.221, the previous literal. Was 6.4 on the 1..10 scale;
+            // the high half rescaled proportionally, so both alpha and delta carry over exactly.)
+            ...sensitivityValues(12.8),
             beatRefractoryFrames: 5,
         },
     },
@@ -136,8 +139,10 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             // gap, so talking and clinking glasses do not drive the lights.
             agcNoiseGateRms: 0.0008,
             // Well below default sensitivity — the point is NOT to fire at conversation.
-            // (Scale 3.3 -> alpha 0.595, the previous literal.)
-            ...sensitivityValues(3.3),
+            // (Scale 8.53 -> alpha 0.595, the previous literal. Was 3.3 on the 1..10 scale;
+            // recomputed to hold alpha when the scale grew to 1..20 — the delta moved ~10%,
+            // in the duller direction, which suits this preset's whole point.)
+            ...sensitivityValues(8.53),
             beatRefractoryFrames: 12,
         },
     },

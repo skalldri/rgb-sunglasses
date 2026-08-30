@@ -612,8 +612,39 @@ export function resolveAudioParams(
  * ---------------------------------------------------------------------------------------- */
 
 export const SENSITIVITY_MIN = 1;
-export const SENSITIVITY_MAX = 10;
-export const SENSITIVITY_DEFAULT = 5;
+export const SENSITIVITY_MAX = 20;
+export const SENSITIVITY_DEFAULT = 10;
+
+export const NOISE_LEVEL_MIN = 1;
+export const NOISE_LEVEL_MAX = 10;
+export const NOISE_LEVEL_DEFAULT = 5;
+
+/**
+ * A macro's step range and anchor. `mid` is the step that maps exactly to the parameter's
+ * firmware default.
+ *
+ * Sensitivity and the noise level used to share one set of 1..10 constants. When Sensitivity
+ * grew to 1..20 (field testing kept running out of low end — step 1's beatAlpha of 1.5 was only
+ * 7% of the firmware's 20.0 ceiling), the noise macro had to NOT follow: its own doc note says
+ * steps 4-6 are where nearly all real gate tuning happens, so stretching it would just dilute a
+ * band that is already narrow. Hence a scale per curve rather than module-level globals.
+ */
+interface MacroScale {
+    min: number;
+    max: number;
+    mid: number;
+}
+
+const SENSITIVITY_SCALE: MacroScale = {
+    min: SENSITIVITY_MIN,
+    max: SENSITIVITY_MAX,
+    mid: SENSITIVITY_DEFAULT,
+};
+const NOISE_SCALE: MacroScale = {
+    min: NOISE_LEVEL_MIN,
+    max: NOISE_LEVEL_MAX,
+    mid: NOISE_LEVEL_DEFAULT,
+};
 
 /** Relative tolerance when inverting a macro mapping (floats round-trip through IEEE-754). */
 const MACRO_TOLERANCE = 0.02;
@@ -621,15 +652,21 @@ const MACRO_TOLERANCE = 0.02;
 /**
  * Two-sided geometric interpolation anchored at the firmware default.
  *
- * `lowFactor` is what the value is multiplied by at step 1; `highFactor` is what it is
- * multiplied by at step 10. Both are plain multipliers so a mapping that runs "downwards"
- * (alpha: step 1 is the least sensitive, so the biggest alpha) and one that runs "upwards"
- * (the noise gate: step 1 ignores the least) read the same way at the call site.
+ * `lowFactor` is what the value is multiplied by at the scale's bottom step; `highFactor` is
+ * what it is multiplied by at the top step. Both are plain multipliers so a mapping that runs
+ * "downwards" (alpha: step 1 is the least sensitive, so the biggest alpha) and one that runs
+ * "upwards" (the noise gate: step 1 ignores the least) read the same way at the call site.
  */
-function twoSidedGeometric(s: number, mid: number, lowFactor: number, highFactor: number): number {
-    return s <= SENSITIVITY_DEFAULT
-        ? mid * Math.pow(lowFactor, (SENSITIVITY_DEFAULT - s) / (SENSITIVITY_DEFAULT - SENSITIVITY_MIN))
-        : mid * Math.pow(highFactor, (s - SENSITIVITY_DEFAULT) / (SENSITIVITY_MAX - SENSITIVITY_DEFAULT));
+function twoSidedGeometric(
+    scale: MacroScale,
+    s: number,
+    mid: number,
+    lowFactor: number,
+    highFactor: number,
+): number {
+    return s <= scale.mid
+        ? mid * Math.pow(lowFactor, (scale.mid - s) / (scale.mid - scale.min))
+        : mid * Math.pow(highFactor, (s - scale.mid) / (scale.max - scale.mid));
 }
 
 /**
@@ -649,6 +686,7 @@ function twoSidedGeometric(s: number, mid: number, lowFactor: number, highFactor
  * while `macroScaleOf` keeps the continuous answer.
  */
 function twoSidedGeometricCandidates(
+    scale: MacroScale,
     value: number,
     mid: number,
     lowFactor: number,
@@ -660,31 +698,26 @@ function twoSidedGeometricCandidates(
     const candidates: number[] = [];
 
     if (lowFactor > 0 && lowFactor !== 1) {
-        candidates.push(
-            SENSITIVITY_DEFAULT -
-                ((SENSITIVITY_DEFAULT - SENSITIVITY_MIN) * lnRatio) / Math.log(lowFactor),
-        );
+        candidates.push(scale.mid - ((scale.mid - scale.min) * lnRatio) / Math.log(lowFactor));
     }
     if (highFactor > 0 && highFactor !== 1) {
-        candidates.push(
-            SENSITIVITY_DEFAULT +
-                ((SENSITIVITY_MAX - SENSITIVITY_DEFAULT) * lnRatio) / Math.log(highFactor),
-        );
+        candidates.push(scale.mid + ((scale.max - scale.mid) * lnRatio) / Math.log(highFactor));
     }
     return candidates;
 }
 
 function invertTwoSidedGeometric(
+    scale: MacroScale,
     value: number,
     mid: number,
     lowFactor: number,
     highFactor: number,
 ): number | null {
-    for (const candidate of twoSidedGeometricCandidates(value, mid, lowFactor, highFactor)) {
+    for (const candidate of twoSidedGeometricCandidates(scale, value, mid, lowFactor, highFactor)) {
         const rounded = Math.round(candidate);
-        if (rounded < SENSITIVITY_MIN || rounded > SENSITIVITY_MAX) continue;
+        if (rounded < scale.min || rounded > scale.max) continue;
 
-        const reconstructed = twoSidedGeometric(rounded, mid, lowFactor, highFactor);
+        const reconstructed = twoSidedGeometric(scale, rounded, mid, lowFactor, highFactor);
         if (Math.abs(reconstructed - value) <= MACRO_TOLERANCE * Math.max(Math.abs(value), 1e-12)) {
             return rounded;
         }
@@ -718,6 +751,7 @@ export function clampToSpec(key: AudioParamKey, value: number): number {
  */
 interface MacroCurve {
     key: AudioParamKey;
+    scale: MacroScale;
     lowFactor: number;
     highFactor: number;
 }
@@ -729,7 +763,8 @@ function macroMid(curve: MacroCurve): number {
 
 function macroForward(curve: MacroCurve, s: number): number {
     const raw = twoSidedGeometric(
-        clampNumber(s, SENSITIVITY_MIN, SENSITIVITY_MAX),
+        curve.scale,
+        clampNumber(s, curve.scale.min, curve.scale.max),
         macroMid(curve),
         curve.lowFactor,
         curve.highFactor,
@@ -738,13 +773,42 @@ function macroForward(curve: MacroCurve, s: number): number {
 }
 
 function macroInverse(curve: MacroCurve, value: number): number | null {
-    return invertTwoSidedGeometric(value, macroMid(curve), curve.lowFactor, curve.highFactor);
+    return invertTwoSidedGeometric(
+        curve.scale,
+        value,
+        macroMid(curve),
+        curve.lowFactor,
+        curve.highFactor,
+    );
 }
 
-/** 5 = the firmware default (0.30), 1 = 1.50, 10 = 0.10. */
-const ALPHA_CURVE: MacroCurve = { key: "beatAlpha", lowFactor: 5, highFactor: 1 / 3 };
-/** Median mode. 5 = the firmware default (0.10), 1 = 0.40, 10 = 0.025. */
-const DELTA_CURVE: MacroCurve = { key: "beatSfDelta", lowFactor: 4, highFactor: 1 / 4 };
+/**
+ * Sensitivity endpoints are DERIVED from the parameter table, same rule as `macroMid`: a number
+ * the table owns is never restated. Step 1 is therefore the firmware max — the whole reason the
+ * scale is 1..20 is that step 1's old hand-picked 1.50 kept proving not low enough in the field,
+ * and any hand-picked replacement would eventually do the same. Step 20 is the firmware min.
+ *
+ * 10 = the firmware default (0.30), 1 = 20.0 (firmware max), 20 = 0.10 (firmware min).
+ */
+const ALPHA_CURVE: MacroCurve = {
+    key: "beatAlpha",
+    scale: SENSITIVITY_SCALE,
+    lowFactor: AUDIO_PARAMS.beatAlpha.max / AUDIO_PARAMS.beatAlpha.defaultValue,
+    highFactor: AUDIO_PARAMS.beatAlpha.min / AUDIO_PARAMS.beatAlpha.defaultValue,
+};
+/**
+ * Median mode. 10 = the firmware default (0.10), 1 = 2.0 (firmware max), 20 = 0.025.
+ *
+ * The high factor stays a literal: this spec's min is 0 with `allowsZero`, so there is no
+ * nonzero table endpoint to derive a geometric curve from — 0.025 is the same most-sensitive
+ * value the 1..10 scale ended at.
+ */
+const DELTA_CURVE: MacroCurve = {
+    key: "beatSfDelta",
+    scale: SENSITIVITY_SCALE,
+    lowFactor: AUDIO_PARAMS.beatSfDelta.max / AUDIO_PARAMS.beatSfDelta.defaultValue,
+    highFactor: 1 / 4,
+};
 
 export function alphaFromSensitivity(s: number): number {
     return macroForward(ALPHA_CURVE, s);
@@ -770,7 +834,12 @@ export function sensitivityFromDelta(delta: number): number | null {
  * The margin between quiet-room p95 (0.00049) and normal-volume music p5 (0.00061) is only
  * 1.25x, so the useful band is narrow: steps 4-6 are where nearly all real tuning happens.
  */
-const GATE_CURVE: MacroCurve = { key: "agcNoiseGateRms", lowFactor: 1 / 6, highFactor: 20 / 3 };
+const GATE_CURVE: MacroCurve = {
+    key: "agcNoiseGateRms",
+    scale: NOISE_SCALE,
+    lowFactor: 1 / 6,
+    highFactor: 20 / 3,
+};
 
 const MACRO_CURVES: Partial<Record<AudioParamKey, MacroCurve>> = {
     beatAlpha: ALPHA_CURVE,
@@ -779,7 +848,7 @@ const MACRO_CURVES: Partial<Record<AudioParamKey, MacroCurve>> = {
 };
 
 /**
- * Where `value` sits on the shared 1..10 sensitivity scale, WITHOUT rounding to a step.
+ * Where `value` sits on the macro's own step scale, WITHOUT rounding to a step.
  *
  * `sensitivityFromAlpha` and friends answer "which macro step is this exactly", and correctly
  * return null for anything between steps. This answers the different question "how sensitive is
@@ -792,9 +861,22 @@ export function macroScaleOf(key: AudioParamKey, value: number): number | null {
     if (!curve) return null;
 
     const mid = macroMid(curve);
-    for (const candidate of twoSidedGeometricCandidates(value, mid, curve.lowFactor, curve.highFactor)) {
-        if (candidate < SENSITIVITY_MIN || candidate > SENSITIVITY_MAX) continue;
-        const reconstructed = twoSidedGeometric(candidate, mid, curve.lowFactor, curve.highFactor);
+    const candidates = twoSidedGeometricCandidates(
+        curve.scale,
+        value,
+        mid,
+        curve.lowFactor,
+        curve.highFactor,
+    );
+    for (const candidate of candidates) {
+        if (candidate < curve.scale.min || candidate > curve.scale.max) continue;
+        const reconstructed = twoSidedGeometric(
+            curve.scale,
+            candidate,
+            mid,
+            curve.lowFactor,
+            curve.highFactor,
+        );
         if (Math.abs(reconstructed - value) <= 1e-9 * Math.max(Math.abs(value), 1e-12)) {
             return candidate;
         }
@@ -804,7 +886,7 @@ export function macroScaleOf(key: AudioParamKey, value: number): number | null {
 
 /**
  * The macro step whose value sits closest to `value`, for RENDERING a device that is off the
- * 1..10 grid — never for writing.
+ * macro's step grid — never for writing.
  *
  * A board tuned over the serial shell, or carrying a pre-retune persisted value, has no exact
  * macro step: the inverse correctly returns null, which is how "Custom" is detected. But a
@@ -818,9 +900,9 @@ export function nearestMacroStep(key: AudioParamKey, value: number): number | nu
     const curve = MACRO_CURVES[key];
     if (!curve || !(value > 0)) return null;
 
-    let best = SENSITIVITY_MIN;
+    let best = curve.scale.min;
     let bestDistance = Infinity;
-    for (let s = SENSITIVITY_MIN; s <= SENSITIVITY_MAX; s++) {
+    for (let s = curve.scale.min; s <= curve.scale.max; s++) {
         const candidate = macroForward(curve, s);
         if (!(candidate > 0)) continue;
         const distance = Math.abs(Math.log(candidate / value));
@@ -889,12 +971,12 @@ export function adaptSpeedFromFrames(
 /* ------------------------------------------------------------------------------------------
  * Synthetic specs for the Simple-mode macro sliders.
  *
- * These are not characteristics — they are 1..10 abstractions over one or more real parameters.
+ * These are not characteristics — they are stepped abstractions over one or more real parameters.
  * Giving them the same shape as a real spec lets the same slider component render both, so
  * Simple and Advanced mode cannot drift apart visually.
  * ---------------------------------------------------------------------------------------- */
 
-/** Sensitivity 1..10. Writes Beat Alpha, or Beat SF Delta when the device is in median mode. */
+/** Sensitivity 1..20. Writes Beat Alpha, or Beat SF Delta when the device is in median mode. */
 export const SENSITIVITY_MACRO_SPEC: AudioParamSpec = {
     key: "beatAlpha",
     uuid: "macro:sensitivity",
@@ -914,7 +996,7 @@ export const SENSITIVITY_MACRO_SPEC: AudioParamSpec = {
     detail:
         "The detector keeps a one-second memory of how much the sound has been changing, and " +
         "fires when the current moment stands out from it. This slider moves how far above that " +
-        "memory a sound has to be. 5 is what the glasses ship with.",
+        "memory a sound has to be. 10 is what the glasses ship with; 1 reacts to almost nothing.",
     advancedOnly: false,
 };
 
@@ -928,8 +1010,8 @@ export const NOISE_MACRO_SPEC: AudioParamSpec = {
     friendlyLabel: "Ignore background noise",
     group: "agc",
     min: 0,
-    max: SENSITIVITY_MAX,
-    defaultValue: SENSITIVITY_DEFAULT,
+    max: NOISE_LEVEL_MAX,
+    defaultValue: NOISE_LEVEL_DEFAULT,
     scale: "linear",
     step: 1,
     allowsZero: true,

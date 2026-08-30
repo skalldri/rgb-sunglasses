@@ -80,6 +80,19 @@ describe("built-in presets", () => {
         expect(gateOf("builtin:loud-club")).toBeGreaterThan(def);
         expect(gateOf("builtin:acoustic")).toBeLessThan(def);
     });
+
+    it("kept each preset's beatAlpha when the sensitivity scale grew to 1..20", () => {
+        // The authored scale positions were recomputed for the 1..20 curve so that each
+        // preset's alpha — its headline trait, and the value these presets carried when they
+        // were literals — stayed put. A retune of the CURVE must not retune the PRESETS.
+        // (beatSfDelta drifts a few percent on the low-side presets, accepted: the two curves
+        // are independent calibrations of one axis and alpha is the one that was tuned by ear.)
+        const alphaOf = (id: string) =>
+            BUILT_IN_PRESETS.find(p => p.id === id)!.values.beatAlpha as number;
+        expect(alphaOf("builtin:loud-club")).toBeCloseTo(0.352, 2);
+        expect(alphaOf("builtin:acoustic")).toBeCloseTo(0.221, 2);
+        expect(alphaOf("builtin:speech")).toBeCloseTo(0.595, 2);
+    });
 });
 
 describe("diffPreset", () => {

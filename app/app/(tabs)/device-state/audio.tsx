@@ -271,7 +271,7 @@ export default function AudioTuningScreen() {
      * The macro sliders go through the SAME throttle as the raw ones.
      *
      * What is stored as the local override is the underlying parameter value (an alpha, a gate),
-     * not the 1..10 step — because the thumb position is derived by inverting the mapping from
+     * not the macro step — because the thumb position is derived by inverting the mapping from
      * whatever value the parameter currently holds. Storing the step here would make the
      * inversion fail and the control would render "Custom" while the user was dragging it.
      */
@@ -418,7 +418,7 @@ export default function AudioTuningScreen() {
                     targetHigh={valueOf("agcTargetHigh")}
                     noiseGate={valueOf("agcNoiseGateRms")}
                     // The banner has to name a control the user can actually see. In Advanced
-                    // there is no 1..10 "Sensitivity" — there are the raw thresholds, which run
+                    // there is no stepped "Sensitivity" — there are the raw thresholds, which run
                     // the OTHER WAY, so unqualified "turn Sensitivity down" advice read there
                     // sends someone the wrong direction. Same sensitivityKey the Simple macro
                     // uses, so the advice always tracks the threshold shape in effect.

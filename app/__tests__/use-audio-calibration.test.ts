@@ -633,6 +633,77 @@ describe("fitting", () => {
     expect(valueOfSpy).toHaveBeenCalledWith("beatFluxFloor");
   });
 
+  it("can land in the extended low range the 1..20 sensitivity scale added", () => {
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // Every tap-window frame carries mean 0.1 / sigma 0.1, so a candidate alpha fires at flux
+    // above 0.1 + alpha*0.1. Taps land on flux-5.0 beats; an untapped 0.7 "hi-hat" sits between
+    // them (frame 13, past the sweep's largest refractory, so no refractory hides it). Any
+    // alpha below 6 fires on the hi-hat and loses precision — and the OLD 1..10 scale topped
+    // out at alpha 1.5, so every candidate it had lost this window. Only the extended range
+    // scores a perfect match, and the tie toward less-sensitive picks step 1: the firmware-max
+    // alpha. This is the field failure the scale change exists for.
+    act(() => result.current.startCollecting("taps"));
+    for (let k = 0; k < 10; k++) {
+      act(() => result.current.recordTap());
+      feed(h, 0.8, (n) =>
+        makeFrame({
+          tier: 2,
+          seq: n,
+          rmsInput: 0.01,
+          flux: n === 0 ? [5, 0, 0, 0] : n === 13 ? [0.7, 0, 0, 0] : [0, 0, 0, 0],
+          mean: [0.1, 0, 0, 0],
+          sigma: [0.1, 0, 0, 0],
+        }),
+      );
+    }
+    act(() => result.current.stopCollecting());
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    const row = result.current.state.changes.find((c) => c.key === "beatAlpha");
+    expect(row).toBeDefined();
+    expect(row?.newValue).toBe(AUDIO_PARAMS.beatAlpha.max);
+  });
+
+  it("sweeps the sensitive half past step 10, not just the first ten steps", () => {
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // mean 0.1 / sigma 0.5, beats at flux 0.24 (decodes to ~0.2371 through the 0.5 dB wire
+    // ladder). A candidate alpha fires below 0.1 + alpha*0.5: step 10's default (0.30 ->
+    // threshold 0.25) MISSES, step 11 (0.2688 -> 0.2347) fires. Every winner therefore lives
+    // past step 10 — a sweep hardcoded to ten candidates (the old scale's count) matches no
+    // tap at all and proposes nothing, which is exactly the drift this test pins down.
+    act(() => result.current.startCollecting("taps"));
+    for (let k = 0; k < 10; k++) {
+      act(() => result.current.recordTap());
+      feed(h, 0.8, (n) =>
+        makeFrame({
+          tier: 2,
+          seq: n,
+          rmsInput: 0.01,
+          flux: n === 0 ? [0.24, 0, 0, 0] : [0, 0, 0, 0],
+          mean: [0.1, 0, 0, 0],
+          sigma: [0.5, 0, 0, 0],
+        }),
+      );
+    }
+    act(() => result.current.stopCollecting());
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    const row = result.current.state.changes.find((c) => c.key === "beatAlpha");
+    expect(row).toBeDefined();
+    // Tie-break lands on the least sensitive candidate that still catches every tap: step 11.
+    expect(row?.newValue).toBeLessThan(AUDIO_PARAMS.beatAlpha.defaultValue);
+  });
+
   it("keeps what was collected when a fit fails", () => {
     // "Nothing to change" is a legitimate outcome, and it must not cost the pools — a venue
     // may not offer those quiet moments twice.

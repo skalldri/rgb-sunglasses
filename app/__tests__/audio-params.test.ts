@@ -18,6 +18,10 @@ import {
     AUDIO_PARAM_ORDER,
     AudioParamKey,
     BEAT_FEEL_PRESETS,
+    NOISE_LEVEL_DEFAULT,
+    NOISE_LEVEL_MAX,
+    NOISE_LEVEL_MIN,
+    NOISE_MACRO_SPEC,
     SENSITIVITY_DEFAULT,
     SENSITIVITY_MAX,
     SENSITIVITY_MIN,
@@ -278,13 +282,15 @@ describe("macro mappings", () => {
     it("anchors every macro midpoint on the firmware default", () => {
         expect(alphaFromSensitivity(SENSITIVITY_DEFAULT)).toBeCloseTo(AUDIO_PARAMS.beatAlpha.defaultValue, 6);
         expect(deltaFromSensitivity(SENSITIVITY_DEFAULT)).toBeCloseTo(AUDIO_PARAMS.beatSfDelta.defaultValue, 6);
-        expect(gateFromNoiseLevel(SENSITIVITY_DEFAULT)).toBeCloseTo(AUDIO_PARAMS.agcNoiseGateRms.defaultValue, 8);
+        expect(gateFromNoiseLevel(NOISE_LEVEL_DEFAULT)).toBeCloseTo(AUDIO_PARAMS.agcNoiseGateRms.defaultValue, 8);
     });
 
     it("inverts exactly for every integer step", () => {
         for (let s = SENSITIVITY_MIN; s <= SENSITIVITY_MAX; s++) {
             expect(sensitivityFromAlpha(alphaFromSensitivity(s))).toBe(s);
             expect(sensitivityFromDelta(deltaFromSensitivity(s))).toBe(s);
+        }
+        for (let s = NOISE_LEVEL_MIN; s <= NOISE_LEVEL_MAX; s++) {
             expect(noiseLevelFromGate(gateFromNoiseLevel(s))).toBe(s);
         }
     });
@@ -295,7 +301,7 @@ describe("macro mappings", () => {
             expect(deltaFromSensitivity(s + 1)).toBeLessThan(deltaFromSensitivity(s));
         }
         // The gate runs the other way: a higher setting ignores MORE background noise.
-        for (let s = SENSITIVITY_MIN; s < SENSITIVITY_MAX; s++) {
+        for (let s = NOISE_LEVEL_MIN; s < NOISE_LEVEL_MAX; s++) {
             expect(gateFromNoiseLevel(s + 1)).toBeGreaterThan(gateFromNoiseLevel(s));
         }
     });
@@ -316,24 +322,57 @@ describe("macro mappings", () => {
     });
 
     it("hits the documented endpoint values", () => {
-        expect(alphaFromSensitivity(1)).toBeCloseTo(1.5, 6);
-        expect(alphaFromSensitivity(10)).toBeCloseTo(0.1, 6);
-        expect(deltaFromSensitivity(1)).toBeCloseTo(0.4, 6);
-        expect(deltaFromSensitivity(10)).toBeCloseTo(0.025, 6);
+        expect(alphaFromSensitivity(1)).toBeCloseTo(20, 6);
+        expect(alphaFromSensitivity(20)).toBeCloseTo(0.1, 6);
+        expect(deltaFromSensitivity(1)).toBeCloseTo(2, 6);
+        expect(deltaFromSensitivity(20)).toBeCloseTo(0.025, 6);
         expect(gateFromNoiseLevel(1)).toBeCloseTo(0.0001, 8);
         expect(gateFromNoiseLevel(10)).toBeCloseTo(0.004, 8);
     });
 
+    it("spans the FULL firmware range: the endpoints are the table's own min/max", () => {
+        // The whole reason the scale is 1..20: step 1's old hand-picked alpha of 1.5 was only 7%
+        // of the firmware's ceiling and kept proving not low enough in the field. Deriving the
+        // endpoint from the table means "not low enough" can never come back without a firmware
+        // range change. (Delta's most-sensitive end is the one exception — its spec min is 0
+        // with allowsZero, so no geometric endpoint exists to derive; it keeps the old 0.025.)
+        expect(alphaFromSensitivity(SENSITIVITY_MIN)).toBe(AUDIO_PARAMS.beatAlpha.max);
+        expect(alphaFromSensitivity(SENSITIVITY_MAX)).toBeCloseTo(AUDIO_PARAMS.beatAlpha.min, 10);
+        expect(deltaFromSensitivity(SENSITIVITY_MIN)).toBeCloseTo(AUDIO_PARAMS.beatSfDelta.max, 10);
+    });
+
+    it("did NOT stretch the noise-level scale when Sensitivity grew to 1..20", () => {
+        // The gate's own doc note says steps 4-6 are where nearly all real tuning happens — a
+        // narrow useful band that a 1..20 stretch would dilute. Its scale stays 1..10 with the
+        // same endpoints it always had, and the spec the slider renders from agrees.
+        expect(NOISE_LEVEL_MAX).toBe(10);
+        expect(NOISE_MACRO_SPEC.max).toBe(NOISE_LEVEL_MAX);
+        expect(NOISE_MACRO_SPEC.defaultValue).toBe(NOISE_LEVEL_DEFAULT);
+        expect(gateFromNoiseLevel(10)).toBeCloseTo(0.004, 8);
+        // Steps past the gate's own top clamp rather than extending — proof the sensitivity
+        // scale's growth did not leak in.
+        expect(gateFromNoiseLevel(20)).toBeCloseTo(0.004, 8);
+    });
+
+    it("relabels old-grid device values as Custom exactly once, with a sane thumb", () => {
+        // 0.45 was step 4 on the old 1..10 curve. A device still holding it after the scale
+        // change has no exact step (renders "Custom (0.45)"), and the thumb lands on a nearby
+        // step rather than pinning to an end.
+        expect(sensitivityFromAlpha(0.45)).toBeNull();
+        const thumb = nearestMacroStep("beatAlpha", 0.45);
+        expect(thumb).not.toBeNull();
+        // 0.45 sits between step 11 (0.269) and step 9 (0.478) on the new grid — nearest is 9.
+        expect(thumb).toBe(9);
+    });
+
     it("reports null for a value that is not on any step, so the UI can say Custom", () => {
         // Values picked to be off the macro grid regardless of what any board happens to carry.
-        // This comment used to justify 0.77 by asserting the shared dev board holds a persisted
-        // beat_alpha of 1.5 from Phase 1 — stale, and corrected elsewhere in this same PR
-        // (fw/src/sound/audio_config.cpp: measured 2026-08-24, it reports 0.3000). The
-        // assertions never depended on that; only the rationale did, and a committed comment is
-        // exactly where a corrected fact regresses back into the codebase.
-        expect(sensitivityFromAlpha(0.77)).toBeNull();
+        // (0.77 served here on the 1..10 curve; the 1..20 grid put step 8 at 0.763, within the
+        // 2% inversion tolerance, so it stopped being off-grid — 0.9 sits between steps 8 and 7,
+        // more than 15% from either.)
+        expect(sensitivityFromAlpha(0.9)).toBeNull();
         expect(sensitivityFromAlpha(19)).toBeNull();
-        expect(sensitivityFromDelta(1.9)).toBeNull();
+        expect(sensitivityFromDelta(1.7)).toBeNull();
         expect(noiseLevelFromGate(0.0175)).toBeNull();
     });
 
@@ -410,20 +449,22 @@ describe("zero-snap boundary (review #413)", () => {
 });
 
 describe("macro curves derive their midpoint from the table (review #413)", () => {
-    it("puts step 5 exactly on the parameter's own default", () => {
+    it("puts the anchor step exactly on the parameter's own default", () => {
         // The midpoints used to be literals repeated per direction, unconnected to the spec
         // three screens up holding the same number. Retuning a default in the table without
         // editing every literal made forward and inverse disagree, and a device on what used to
         // be a macro step then rendered "Custom" everywhere.
-        expect(alphaFromSensitivity(5)).toBeCloseTo(AUDIO_PARAMS.beatAlpha.defaultValue, 10);
-        expect(deltaFromSensitivity(5)).toBeCloseTo(AUDIO_PARAMS.beatSfDelta.defaultValue, 10);
-        expect(gateFromNoiseLevel(5)).toBeCloseTo(AUDIO_PARAMS.agcNoiseGateRms.defaultValue, 10);
+        expect(alphaFromSensitivity(SENSITIVITY_DEFAULT)).toBeCloseTo(AUDIO_PARAMS.beatAlpha.defaultValue, 10);
+        expect(deltaFromSensitivity(SENSITIVITY_DEFAULT)).toBeCloseTo(AUDIO_PARAMS.beatSfDelta.defaultValue, 10);
+        expect(gateFromNoiseLevel(NOISE_LEVEL_DEFAULT)).toBeCloseTo(AUDIO_PARAMS.agcNoiseGateRms.defaultValue, 10);
     });
 
     it("round-trips every step through the shared descriptor", () => {
-        for (let s = 1; s <= 10; s++) {
+        for (let s = SENSITIVITY_MIN; s <= SENSITIVITY_MAX; s++) {
             expect(sensitivityFromAlpha(alphaFromSensitivity(s))).toBe(s);
             expect(sensitivityFromDelta(deltaFromSensitivity(s))).toBe(s);
+        }
+        for (let s = NOISE_LEVEL_MIN; s <= NOISE_LEVEL_MAX; s++) {
             expect(noiseLevelFromGate(gateFromNoiseLevel(s))).toBe(s);
         }
     });
@@ -433,15 +474,15 @@ describe("nearestMacroStep (review #413)", () => {
     it("picks a step for an off-grid value so the thumb has somewhere to go", () => {
         // A board tuned over the shell has no exact step — the inverse correctly returns null,
         // which is how "Custom" is detected — but a Simple slider still has to render.
-        expect(sensitivityFromAlpha(0.77)).toBeNull();
-        const step = nearestMacroStep("beatAlpha", 0.77);
+        expect(sensitivityFromAlpha(0.9)).toBeNull();
+        const step = nearestMacroStep("beatAlpha", 0.9);
         expect(step).not.toBeNull();
-        expect(step).toBeGreaterThanOrEqual(1);
-        expect(step).toBeLessThanOrEqual(10);
+        expect(step).toBeGreaterThanOrEqual(SENSITIVITY_MIN);
+        expect(step).toBeLessThanOrEqual(SENSITIVITY_MAX);
     });
 
     it("returns the exact step when the value IS on the grid", () => {
-        for (let s = 1; s <= 10; s++) {
+        for (let s = SENSITIVITY_MIN; s <= SENSITIVITY_MAX; s++) {
             expect(nearestMacroStep("beatAlpha", alphaFromSensitivity(s))).toBe(s);
         }
     });

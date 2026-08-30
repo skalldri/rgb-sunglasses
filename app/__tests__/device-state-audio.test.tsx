@@ -17,6 +17,7 @@ import * as BluetoothContext from "@/context/bluetooth-context";
 import {
     AUDIO_PARAMS,
     AUDIO_PARAM_ORDER,
+    SENSITIVITY_MAX,
     alphaFromSensitivity,
     encodeParam,
     gateFromNoiseLevel,
@@ -150,7 +151,7 @@ describe("AudioTuningScreen", () => {
             expect(write).toHaveBeenCalledWith(
                 UUID_AUDIO_CONFIG_SERVICE,
                 AUDIO_PARAMS.beatAlpha.uuid,
-                encodeParam(AUDIO_PARAMS.beatAlpha, alphaFromSensitivity(10)),
+                encodeParam(AUDIO_PARAMS.beatAlpha, alphaFromSensitivity(SENSITIVITY_MAX)),
             );
         });
 
@@ -191,12 +192,13 @@ describe("AudioTuningScreen", () => {
 
         it("keeps the Sensitivity slider LIVE on an off-grid board", async () => {
             /* Review #413. `value === null` meant two different things — "not read yet" and "off
-             * the 1..10 macro grid" — and disabling on both killed Simple mode on any board
+             * the macro grid" — and disabling on both killed Simple mode on any board
              * tuned over the shell. The caption in this exact state reads "Custom (…) - move the
              * slider to take control", so the screen was instructing a gesture it had disabled.
              *
-             * 0.77 is deliberately off every macro step (see audio-params.test.ts). */
-            const write = mockBluetooth(buildDevice({ beatAlpha: 0.77 }));
+             * 0.9 is deliberately off every macro step (see audio-params.test.ts; 0.77 held this
+             * role until the 1..20 grid put step 8 within inversion tolerance of it). */
+            const write = mockBluetooth(buildDevice({ beatAlpha: 0.9 }));
             const { getByTestId, getByText } = render(<AudioTuningScreen />);
 
             const slider = getByTestId("param-slider-beatAlpha");

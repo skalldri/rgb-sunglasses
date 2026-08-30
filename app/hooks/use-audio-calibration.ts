@@ -31,6 +31,8 @@ import {
 } from "@/services/audio-calibration-pool";
 import {
   AUDIO_PARAMS,
+  SENSITIVITY_MAX,
+  SENSITIVITY_MIN,
   alphaFromSensitivity,
   clampToSpec,
   deltaFromSensitivity,
@@ -111,14 +113,14 @@ type Deps = {
   now?: () => number;
 };
 
-/** Sensitivity 1..10, mapped through the same macro the Simple tab uses. */
+/** Every Sensitivity step, mapped through the same macro the Simple tab uses. */
 function sensitivityCandidates(thresholdMode: 0 | 1) {
-  return Array.from({ length: 10 }, (_, i) => ({
-    sensitivity: i + 1,
+  return Array.from({ length: SENSITIVITY_MAX - SENSITIVITY_MIN + 1 }, (_, i) => ({
+    sensitivity: SENSITIVITY_MIN + i,
     paramValue:
       thresholdMode === 1
-        ? deltaFromSensitivity(i + 1)
-        : alphaFromSensitivity(i + 1),
+        ? deltaFromSensitivity(SENSITIVITY_MIN + i)
+        : alphaFromSensitivity(SENSITIVITY_MIN + i),
   }));
 }
 

@@ -62,7 +62,7 @@ function pct(fraction: number): number {
  * How the surrounding screen is presenting sensitivity right now, so the advice can name a
  * control that actually exists there — and point the right way.
  *
- * THE DIRECTION IS THE POINT, not just the name. "Sensitivity" in Simple is a 1..10 macro;
+ * THE DIRECTION IS THE POINT, not just the name. "Sensitivity" in Simple is a 1..20 macro;
  * the Advanced sliders it drives are THRESHOLDS and run inversely — alphaFromSensitivity maps
  * 1 -> 1.50 and 10 -> 0.10, deltaFromSensitivity 1 -> 0.40 and 10 -> 0.025. So "Turn
  * Sensitivity down", read by someone in Advanced looking at the slider whose friendlyLabel is
