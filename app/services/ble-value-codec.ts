@@ -61,6 +61,30 @@ export function encodeUint32ToBase64(value: number): string {
   return btoa(String.fromCharCode(byte0, byte1, byte2, byte3));
 }
 
+/**
+ * Raw bytes of a base64 characteristic value.
+ *
+ * Returns null rather than throwing: this is used on the notification path for the audio
+ * telemetry stream, where a malformed frame must be skipped silently at ~8-32 Hz rather than
+ * raise into a monitor callback that has nowhere to report it.
+ */
+export function decodeBytesFromBase64(encodedValue?: string | null): Uint8Array | null {
+  if (!encodedValue) {
+    return null;
+  }
+  let decoded: string;
+  try {
+    decoded = atob(encodedValue);
+  } catch {
+    return null;
+  }
+  const out = new Uint8Array(decoded.length);
+  for (let i = 0; i < decoded.length; i++) {
+    out[i] = decoded.charCodeAt(i) & 0xff;
+  }
+  return out;
+}
+
 export function decodeUint32FromBase64(encodedValue: string): number {
   const decoded = atob(encodedValue);
   if (decoded.length < 4) {

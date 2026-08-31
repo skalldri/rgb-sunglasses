@@ -6,7 +6,9 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/$1',
     '\\.(png|jpg|jpeg|gif|webp|svg)$': '<rootDir>/test/fileMock.js',
   },
-  testPathIgnorePatterns: ['/node_modules/', '/dist/', '/.expo/'],
+  // __tests__/fixtures holds shared builders, not suites. Without this, jest picks each one
+  // up as a test file and fails it for containing no tests.
+  testPathIgnorePatterns: ['/node_modules/', '/dist/', '/.expo/', '/__tests__/fixtures/'],
   collectCoverageFrom: [
     'app/**/*.{ts,tsx}',
     'components/**/*.{ts,tsx}',

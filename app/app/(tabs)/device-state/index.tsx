@@ -13,7 +13,7 @@ import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { Section } from "@/components/ui/section";
-import { getServiceName, UUID_AUDIO_CONFIG_SERVICE, UUID_BATTERY_SERVICE, UUID_CAPTURE_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
+import { getServiceName, UUID_AUDIO_CONFIG_SERVICE, UUID_AUDIO_TELEMETRY_SERVICE, UUID_BATTERY_SERVICE, UUID_CAPTURE_SERVICE, UUID_GENERIC_ACCESS_SERVICE, UUID_GENERIC_ATTRIBUTE_SERVICE, UUID_IS_ACTIVE_CHARACTERISTIC, UUID_MCUBOOT_INFO_SERVICE, UUID_MCUBOOT_UPDATER_SERVICE, UUID_POWER_DEBUG_SERVICE, UUID_SHUFFLE_INCLUDE_CHARACTERISTIC } from "@/constants/bluetooth";
 import { Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
@@ -83,6 +83,13 @@ export default function DeviceStateMenuScreen() {
             // 14 unlabelled number boxes with no ranges, units or help — unusable at a venue,
             // which is the entire reason the dedicated screen exists.
             service.uuid !== UUID_AUDIO_CONFIG_SERVICE &&
+            // Audio Telemetry is machinery, not a setting: a write-only control word, a
+            // packed binary stream, and a 346-byte metadata blob. Rendered generically it is
+            // a raw UUID heading over three meaningless boxes — and writing the control word
+            // by hand would arm a stream with no subscriber, which the firmware rejects.
+            // Hardware-found 2026-08-25: it showed up in Settings as a bare
+            // "12345678-1234-5678-0009-56789abc0000" row.
+            service.uuid !== UUID_AUDIO_TELEMETRY_SERVICE &&
             selectedDevice?.serviceDisplayNames?.[service.uuid] == null
     );
     const hasBatteryService = visibleServices.some(service => service.uuid === UUID_BATTERY_SERVICE);

@@ -1,0 +1,52 @@
+[
+  {
+    "name": "typical_meters",
+    "tier": 1,
+    "bytes": [17, 82, 52, 18, 7, 13, 132, 140, 188, 71, 9, 55, 184, 172, 162, 148, 179, 176, 172, 167],
+    "expect": { "seq": 4660, "dropped": 7, "gainSteps": 13, "clipCount": 9, "framesSinceStep": 55, "silent": false, "clipped": true, "agcFrozen": false, "thresholdMode": 0, "beatMask": 5,
+      "rmsInput": 0.0199526902, "rmsInstant": 0.0316228718, "peak": 0.501187563, "noiseFloor": 0.000595666002,
+      "flux": [0.398107499, 0.199526519, 0.112202063, 0.0501188561],
+      "threshold": [0.298538595, 0.251188964, 0.199526519, 0.149623826]
+    }
+  },
+  {
+    "name": "typical_stats",
+    "tier": 2,
+    "bytes": [18, 82, 52, 18, 7, 13, 132, 140, 188, 71, 9, 55, 184, 172, 162, 148, 179, 176, 172, 167, 163, 174, 180, 185, 122, 133, 140, 145],
+    "expect": { "seq": 4660, "dropped": 7, "gainSteps": 13, "clipCount": 9, "framesSinceStep": 55, "silent": false, "clipped": true, "agcFrozen": false, "thresholdMode": 0, "beatMask": 5,
+      "rmsInput": 0.0199526902, "rmsInstant": 0.0316228718, "peak": 0.501187563, "noiseFloor": 0.000595666002,
+      "flux": [0.398107499, 0.199526519, 0.112202063, 0.0501188561],
+      "threshold": [0.298538595, 0.251188964, 0.199526519, 0.149623826]
+    }
+  },
+  {
+    "name": "typical_spectrum",
+    "tier": 3,
+    "bytes": [19, 82, 52, 18, 7, 13, 132, 140, 188, 71, 9, 55, 184, 172, 162, 148, 179, 176, 172, 167, 163, 174, 180, 185, 122, 133, 140, 145, 120, 132, 139, 144, 148, 151, 154, 156, 158, 160, 162, 163, 165, 166, 167, 168, 169, 170, 171, 172],
+    "expect": { "seq": 4660, "dropped": 7, "gainSteps": 13, "clipCount": 9, "framesSinceStep": 55, "silent": false, "clipped": true, "agcFrozen": false, "thresholdMode": 0, "beatMask": 5,
+      "rmsInput": 0.0199526902, "rmsInstant": 0.0316228718, "peak": 0.501187563, "noiseFloor": 0.000595666002,
+      "flux": [0.398107499, 0.199526519, 0.112202063, 0.0501188561],
+      "threshold": [0.298538595, 0.251188964, 0.199526519, 0.149623826]
+    }
+  },
+  {
+    "name": "extremes_silent",
+    "tier": 1,
+    "bytes": [17, 253, 255, 255, 255, 216, 0, 0, 0, 0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0],
+    "expect": { "seq": 65535, "dropped": 255, "gainSteps": -40, "clipCount": 255, "framesSinceStep": 255, "silent": true, "clipped": false, "agcFrozen": true, "thresholdMode": 1, "beatMask": 15,
+      "rmsInput": 0, "rmsInstant": 0, "peak": 0, "noiseFloor": 0,
+      "flux": [0, 0, 0, 0],
+      "threshold": [0, 0, 0, 0]
+    }
+  },
+  {
+    "name": "extremes_loud",
+    "tier": 1,
+    "bytes": [17, 0, 1, 0, 0, 40, 200, 222, 200, 0, 0, 0, 222, 200, 80, 0, 0, 0, 0, 0],
+    "expect": { "seq": 1, "dropped": 0, "gainSteps": 40, "clipCount": 0, "framesSinceStep": 0, "silent": false, "clipped": false, "agcFrozen": false, "thresholdMode": 0, "beatMask": 0,
+      "rmsInput": 1, "rmsInstant": 3.54813123, "peak": 1, "noiseFloor": 0,
+      "flux": [3.54813123, 1, 0.0010000061, 0],
+      "threshold": [0, 0, 0, 0]
+    }
+  }
+]

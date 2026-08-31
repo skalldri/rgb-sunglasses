@@ -14,6 +14,7 @@ export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0006-56789abc0000": "Power Debug",
     "12345678-1234-5678-0007-56789abc0000": "Shuffle",
     "12345678-1234-5678-0008-56789abc0000": "Capture",
+    "12345678-1234-5678-0009-56789abc0000": "Audio Telemetry",
     "8d53dc1d-1db7-4cd3-868b-8a527460aa84": "McuMgr Service",
     "57a70000-9350-11ed-a1eb-0242ac120002": "Nordic Status Message Service",
     "00001801-0000-1000-8000-00805f9b34fb": "Generic Attribute Service",
@@ -307,3 +308,17 @@ export const UUID_CCC_DESCRIPTOR = "00002902-0000-1000-8000-00805f9b34fb";
  * Retuning these delays silently broke the invariant with every test still green.
  */
 export const CLAMP_READBACK_DELAYS_MS = [150, 1200];
+
+// Audio Telemetry service (service ID 9) — the live meters behind the Audio Tuning screen.
+// Characteristic UUIDs are auto-assigned in firmware declaration order, so these must match
+// the BtGattServer argument order in fw/src/bluetooth/audio_telemetry_service.cpp. The wire
+// format of the stream is fw/src/sound/audio_telemetry_codec.h, mirrored on this side in
+// services/audio-telemetry.ts.
+//
+// Exactly ONE notifiable characteristic here, deliberately: this takes the app from 11 to 12
+// concurrent GATT notification registrations against Android's ~15 cap, which is why the
+// stream is one characteristic with three payload tiers rather than one per quantity. The
+// Audio Tuning screen must unsubscribe on blur.
+export const UUID_AUDIO_TELEMETRY_SERVICE = "12345678-1234-5678-0009-56789abc0000";
+export const UUID_TELEMETRY_CONTROL       = "12345678-1234-5678-0009-56789abc0000"; // uint32, write-only command
+export const UUID_AUDIO_TELEMETRY         = "12345678-1234-5678-0009-56789abc0001"; // packed frame, notify

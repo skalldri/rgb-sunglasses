@@ -8,6 +8,8 @@
  */
 
 import { sha256 } from 'js-sha256';
+
+import { decodeBytesFromBase64 } from '@/services/ble-value-codec';
 import { Characteristic, Device } from 'react-native-ble-plx';
 // @ts-ignore - cbor-js doesn't have type declarations
 import CBOR from 'cbor-js';
@@ -382,13 +384,18 @@ export function decodeCbor(data: Uint8Array): any {
 }
 
 /**
- * Converts a base64 string to Uint8Array
+ * Converts a base64 string to Uint8Array.
+ *
+ * Delegates to the shared decoder in ble-value-codec. The repo carried three copies of this
+ * atob loop; that one is now the canonical implementation. The name and the throwing contract
+ * are both kept because callers (and a test) depend on them: the SMP path wants a throw on
+ * malformed input where the notification path wants a null, and adapting one contract to the
+ * other is cheaper than keeping a second loop alive for the sake of an error convention.
  */
 export function base64ToUint8Array(base64: string): Uint8Array {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+    const bytes = decodeBytesFromBase64(base64);
+    if (!bytes) {
+        throw new Error('Invalid base64 payload');
     }
     return bytes;
 }
