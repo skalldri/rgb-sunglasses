@@ -1,23 +1,27 @@
 import { useRouter } from "expo-router";
-import React, { memo, useCallback, useMemo, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AudioHelpSheet, type AudioHelpContent } from "@/components/audio/audio-help-sheet";
+import { PresetSheet } from "@/components/audio/preset-sheet";
 import { ParamChoiceRow } from "@/components/audio/param-choice-row";
 import { ParamSliderRow } from "@/components/audio/param-slider-row";
 import { ThemedText } from "@/components/themed-text";
+import { AppButton } from "@/components/ui/app-button";
 import { Card } from "@/components/ui/card";
 import { Divider } from "@/components/ui/divider";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { UUID_AUDIO_CONFIG_SERVICE } from "@/constants/bluetooth";
-import { Spacing } from "@/constants/theme";
+import { Radii, Spacing } from "@/constants/theme";
 import { useBluetooth } from "@/context/bluetooth-context";
 import { useAudioParamWriter, type AudioParamWriter } from "@/hooks/use-audio-param-writer";
+import { useAudioPresets } from "@/hooks/use-audio-presets";
 import { useDisconnectRedirect } from "@/hooks/use-disconnect-redirect";
 import { useThemeColors } from "@/hooks/use-theme-color";
+import { AudioPreset, diffPreset, suggestPresetName } from "@/services/audio-presets";
 import {
     ADAPT_SPEED_PRESETS,
     AUDIO_PARAMS,
@@ -70,6 +74,8 @@ export default function AudioTuningScreen() {
 
     const [mode, setMode] = useState<Mode>("simple");
     const [help, setHelp] = useState<AudioHelpContent | null>(null);
+    const [presetsOpen, setPresetsOpen] = useState(false);
+    const [toast, setToast] = useState<string | null>(null);
 
     const serviceChars = selectedDevice?.characteristicsByService?.[UUID_AUDIO_CONFIG_SERVICE];
 
@@ -121,6 +127,142 @@ export default function AudioTuningScreen() {
             return writer.writeNow(spec.uuid, value, v => encodeParam(spec, v));
         },
         [writer],
+    );
+
+    /* Current device values, keyed for the preset layer. Uses the writer's display value so a
+     * preset saved mid-drag captures what the user actually sees, not a stale context value. */
+    const currentValues = useMemo(() => {
+        const out: Partial<Record<AudioParamKey, number>> = {};
+        resolved.forEach(r => {
+            const v = writer.displayValue(r.spec.uuid, r.value);
+            if (typeof v === "number") out[r.spec.key] = v;
+        });
+        return out;
+    }, [resolved, writer]);
+
+    // The named writeParam above, not a second copy of it: an inline duplicate was a second
+    // identity that would silently diverge the moment one of them grew (a busy guard, a retry).
+    const presets = useAudioPresets({ currentValues, writeParam });
+
+    /* Only the sheet consumes this, and only while it is open.
+     *
+     * The dependency was the whole `presets` object, which was a fresh literal every render, so
+     * this useMemo never hit — it re-diffed every preset against all 14 parameters on every
+     * render, including every frame of every slider drag, with the sheet closed. The hook now
+     * returns a stable object, and the gate means a drag does no preset work at all.
+     *
+     * `diffPreset(currentValues, ...)` rather than the hook's `previewDiff`, which reads the
+     * values out of a ref: a memo keyed on `currentValues` would then be claiming a dependency
+     * that could not actually invalidate it. Same result, deps that mean what they say. */
+    const allPresets = presets.allPresets;
+    const changeCounts = useMemo(() => {
+        if (!presetsOpen) return EMPTY_CHANGE_COUNTS;
+        const out: Record<string, number> = {};
+        allPresets.forEach(p => {
+            out[p.id] = diffPreset(currentValues, p).length;
+        });
+        return out;
+    }, [presetsOpen, allPresets, currentValues]);
+
+    /* Transient status line. Deliberately not a modal: at a venue the user is looking at the
+     * glasses, not the phone, and a dialog would demand a dismissing tap they cannot spare.
+     *
+     * The timer is tracked and cleared, because a bare setTimeout here outlives the screen — it
+     * would fire setToast into an unmounted component (and hold the jest worker open, which is
+     * how this was caught). */
+    const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const announce = useCallback((message: string) => {
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        setToast(message);
+        toastTimer.current = setTimeout(() => {
+            toastTimer.current = null;
+            setToast(null);
+        }, 4000);
+    }, []);
+
+    useEffect(
+        () => () => {
+            if (toastTimer.current) clearTimeout(toastTimer.current);
+        },
+        [],
+    );
+
+    const handleApplyPreset = useCallback(
+        async (preset: AudioPreset) => {
+            setPresetsOpen(false);
+            const { applied, failed } = await presets.applyPreset(preset);
+            announce(
+                failed.length > 0
+                    ? `${preset.name}: ${applied} applied, ${failed.length} failed`
+                    : `Applied "${preset.name}" (${applied} changed)`,
+            );
+        },
+        [announce, presets],
+    );
+
+    const handleSwap = useCallback(async () => {
+        const outcome = await presets.swapAB();
+        if (outcome.kind === "unassigned") {
+            announce("Assign a preset to both A and B first");
+            return;
+        }
+        if (outcome.kind === "identical") {
+            // Reachable, and it used to report "Swapped (0 changed)" — success for an action that
+            // did nothing and could not do anything until a slot is reassigned.
+            announce("A and B match here - nothing to change");
+            return;
+        }
+        const { preset, result } = outcome;
+        announce(
+            result.failed.length > 0
+                ? `${preset.name}: ${result.applied} applied, ${result.failed.length} failed`
+                : `Now on "${preset.name}" (${result.applied} changed)`,
+        );
+    }, [announce, presets]);
+
+    const handleUndo = useCallback(async () => {
+        const top = presets.undoStack[0];
+        if (!top) {
+            announce("Nothing to undo");
+            return;
+        }
+        const { applied, failed } = await presets.undo();
+        // `applied` alone read every outcome as success, so a restore in which every write failed
+        // announced "(0 restored)" in the same confident phrasing as one that worked.
+        announce(
+            failed.length > 0
+                ? `Could not undo ${top.label}: ${failed.length} of ${applied + failed.length} failed`
+                : `Undid: ${top.label} (${applied} restored)`,
+        );
+    }, [announce, presets]);
+
+    const handleSavePreset = useCallback(
+        (name: string) => {
+            const saved = presets.saveCurrentAs(name, Date.now());
+            setPresetsOpen(false);
+            if (!saved) {
+                announce("Nothing to save yet");
+                return;
+            }
+            announce(
+                !saved.persisted
+                    ? `Could not save "${name}" to storage - it will be gone next launch`
+                    : saved.replaced
+                      ? `Replaced "${name}"`
+                      : `Saved "${name}"`,
+            );
+        },
+        [announce, presets],
+    );
+
+    const handleDeletePreset = useCallback(
+        (id: string) => {
+            const name = presets.findPreset(id)?.name ?? "preset";
+            if (!presets.deletePreset(id)) {
+                announce(`Could not remove "${name}" from storage - it will be back next launch`);
+            }
+        },
+        [announce, presets],
     );
 
     const showHelpFor = useCallback((key: AudioParamKey) => {
@@ -413,6 +555,56 @@ export default function AudioTuningScreen() {
                 )}
             </ScrollView>
 
+            {toast ? (
+                <View style={[styles.toast, { backgroundColor: c.surfaceAlt, borderColor: c.border }]}>
+                    <ThemedText type="caption" testID="audio-toast" style={{ color: c.textPrimary }}>
+                        {toast}
+                    </ThemedText>
+                </View>
+            ) : null}
+
+            {/* Sticky footer: the three things you reach for mid-set, always in thumb range. */}
+            <View style={[styles.footer, { borderTopColor: c.border, backgroundColor: c.background }]}>
+                <AppButton
+                    title="A ⇄ B"
+                    variant="secondary"
+                    style={styles.footerButton}
+                    testID="audio-swap-ab"
+                    disabled={presets.applying || !presets.slotA || !presets.slotB}
+                    onPress={handleSwap}
+                />
+                <AppButton
+                    title="Presets"
+                    variant="secondary"
+                    style={styles.footerButton}
+                    testID="audio-open-presets"
+                    onPress={() => setPresetsOpen(true)}
+                />
+                <AppButton
+                    title="Undo"
+                    variant="secondary"
+                    style={styles.footerButton}
+                    testID="audio-undo"
+                    disabled={!presets.canUndo || presets.applying}
+                    onPress={handleUndo}
+                />
+            </View>
+
+            <PresetSheet
+                visible={presetsOpen}
+                presets={presets.allPresets}
+                slotA={presets.slotA}
+                slotB={presets.slotB}
+                changeCounts={changeCounts}
+                busy={presets.applying}
+                suggestedName={suggestPresetName(new Date())}
+                onApply={handleApplyPreset}
+                onAssignSlot={(slot, id) => (slot === "A" ? presets.setSlotA(id) : presets.setSlotB(id))}
+                onDelete={handleDeletePreset}
+                onSave={handleSavePreset}
+                onClose={() => setPresetsOpen(false)}
+            />
+
             <AudioHelpSheet content={help} onClose={closeHelp} />
         </SafeAreaView>
     );
@@ -622,6 +814,9 @@ const AdvancedChoiceRow = memo(function AdvancedChoiceRow({
 
 /* Hoisted to module scope: these are static, and rebuilding them per render allocated a new
  * array every time, defeating ParamChoiceRow's memo on its own. */
+/** Frozen so the closed-sheet path returns a stable identity rather than a fresh literal. */
+const EMPTY_CHANGE_COUNTS: Record<string, number> = {};
+
 const BEAT_FEEL_OPTIONS = BEAT_FEEL_PRESETS.map(p => ({ label: p.label, blurb: p.blurb }));
 const ADAPT_SPEED_OPTIONS = ADAPT_SPEED_PRESETS.map(p => ({ label: p.label, blurb: p.blurb }));
 
@@ -630,5 +825,25 @@ const styles = StyleSheet.create({
     header: { flexDirection: "row", alignItems: "center", paddingHorizontal: Spacing.lg, height: 44 },
     back: { flexDirection: "row", alignItems: "center", gap: Spacing.xs },
     content: { padding: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.xxl },
+    footer: {
+        flexDirection: "row",
+        gap: Spacing.sm,
+        paddingHorizontal: Spacing.lg,
+        paddingTop: Spacing.sm,
+        paddingBottom: Spacing.sm,
+        borderTopWidth: StyleSheet.hairlineWidth,
+    },
+    // 56 dp: these are the controls reached for one-handed, without looking. Surface, border and
+    // disabled dimming come from AppButton's secondary variant — only the size is ours.
+    footerButton: { flex: 1, minHeight: 56 },
+    toast: {
+        position: "absolute",
+        left: Spacing.lg,
+        right: Spacing.lg,
+        bottom: 80,
+        padding: Spacing.md,
+        borderWidth: 1,
+        borderRadius: Radii.md,
+    },
     groupHeader: { gap: 2, paddingBottom: Spacing.xs },
 });

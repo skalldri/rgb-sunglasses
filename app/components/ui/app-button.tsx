@@ -78,6 +78,13 @@ const styles = StyleSheet.create({
   base: { borderRadius: Radii.md, overflow: 'hidden' },
   disabled: { opacity: 0.5 },
   fill: {
+    /* Grow into a taller target when the caller sets one.
+     *
+     * `style` lands on the outer Pressable, so a caller asking for a 56 dp button used to get a
+     * 56 dp touch target wrapped around a 44 dp visible fill — which is why the Audio Tuning
+     * footer forked this component instead of using it. In a container with no height of its own
+     * this changes nothing, because there is no spare height to grow into. */
+    flexGrow: 1,
     minHeight: 44,
     paddingVertical: Spacing.sm + 2,
     paddingHorizontal: Spacing.lg,

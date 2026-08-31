@@ -8,7 +8,7 @@
  * degrades rather than crashes on firmware without the service.
  */
 
-import { fireEvent, render, waitFor } from "@testing-library/react-native";
+import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
 import React from "react";
 
 import AudioTuningScreen from "@/app/(tabs)/device-state/audio";
@@ -21,8 +21,29 @@ import {
     encodeParam,
     gateFromNoiseLevel,
 } from "@/services/audio-params";
+import { savePresets } from "@/services/audio-preset-store";
+import * as presetStore from "@/services/audio-preset-store";
+import { BUILT_IN_PRESETS } from "@/services/audio-presets";
 
 jest.mock("@react-navigation/bottom-tabs", () => ({ useBottomTabBarHeight: () => 0 }));
+
+// The screen persists presets; keep that off the real filesystem.
+/* A store that actually stores. `loadPresets: () => []` reads back as an empty disk no matter
+ * what was written, which lets a test pass on in-memory state alone — and the hook is allowed to
+ * treat the file as the source of truth (another screen can add a preset while this one is
+ * mounted), so that difference is load-bearing rather than cosmetic. */
+jest.mock("@/services/audio-preset-store", () => {
+    const state: { presets: unknown[] } = { presets: [] };
+    return {
+        __state: state,
+        loadPresets: jest.fn(() => state.presets),
+        savePresets: jest.fn((next: unknown[]) => {
+            state.presets = next;
+            return true;
+        }),
+        AUDIO_PRESET_STORE_VERSION: 1,
+    };
+});
 
 /** Build a device exposing the audio service with the firmware defaults, unless overridden. */
 function buildDevice(overrides: Partial<Record<keyof typeof AUDIO_PARAMS, number>> = {}) {
@@ -70,9 +91,15 @@ function mockBluetooth(device: any, writeServiceCharacteristic = jest.fn().mockR
     return writeServiceCharacteristic;
 }
 
+/** The mocked store keeps state across tests in a file; each test starts from an empty disk. */
+function resetPresetStore() {
+    (presetStore as unknown as { __state: { presets: unknown[] } }).__state.presets = [];
+}
+
 describe("AudioTuningScreen", () => {
     beforeEach(() => {
         jest.spyOn(console, "log").mockImplementation(() => {});
+        resetPresetStore();
     });
     afterEach(() => jest.restoreAllMocks());
 
@@ -372,6 +399,259 @@ describe("AudioTuningScreen", () => {
             rerender(<AudioTuningScreen />);
 
             expect(read).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("presets, A/B and undo", () => {
+        it("shows the footer controls, with A/B and Undo disabled until they mean something", () => {
+            mockBluetooth(buildDevice());
+            const { getByTestId } = render(<AudioTuningScreen />);
+
+            // Swapping needs both slots assigned; undo needs something to undo. Offering either
+            // as a live button would be a lie about what a tap will do.
+            expect(getByTestId("audio-swap-ab").props.accessibilityState.disabled).toBe(true);
+            expect(getByTestId("audio-undo").props.accessibilityState.disabled).toBe(true);
+            expect(getByTestId("audio-open-presets")).toBeTruthy();
+        });
+
+        it("opens the preset sheet listing the built-ins", () => {
+            mockBluetooth(buildDevice());
+            const { getByTestId, getByText, queryByTestId } = render(<AudioTuningScreen />);
+
+            expect(queryByTestId("preset-sheet")).toBeNull();
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            expect(getByTestId("preset-sheet")).toBeTruthy();
+            expect(getByText("Factory defaults")).toBeTruthy();
+            expect(getByText("Loud club")).toBeTruthy();
+            expect(getByText("Acoustic / quiet set")).toBeTruthy();
+        });
+
+        it("says how many settings a preset would change, and disables a no-op apply", () => {
+            // The device is on factory defaults, so applying Factory defaults changes nothing.
+            mockBluetooth(buildDevice());
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            expect(getByText("Already applied")).toBeTruthy();
+            expect(getByTestId("preset-apply-builtin:factory").props.accessibilityState.disabled).toBe(true);
+            expect(getByTestId("preset-apply-builtin:loud-club").props.accessibilityState.disabled).toBe(false);
+        });
+
+        it("applies only the parameters a preset actually changes", async () => {
+            const write = mockBluetooth(buildDevice());
+            const { getByTestId } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            await act(async () => {
+                fireEvent.press(getByTestId("preset-apply-builtin:loud-club"));
+            });
+
+            const loudClub = BUILT_IN_PRESETS.find(p => p.id === "builtin:loud-club")!;
+            const expectedKeys = Object.keys(loudClub.values) as (keyof typeof AUDIO_PARAMS)[];
+            await waitFor(() => expect(write).toHaveBeenCalledTimes(expectedKeys.length));
+
+            // Every write must be one this preset actually expresses an opinion about.
+            const writtenUuids = write.mock.calls.map(c => c[1]);
+            const allowed = expectedKeys.map(k => AUDIO_PARAMS[k].uuid);
+            writtenUuids.forEach(u => expect(allowed).toContain(u));
+        });
+
+        it("enables Undo after an apply and restores the previous values", async () => {
+            const write = mockBluetooth(buildDevice());
+            const { getByTestId } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            await act(async () => {
+                fireEvent.press(getByTestId("preset-apply-builtin:loud-club"));
+            });
+            await waitFor(() =>
+                expect(getByTestId("audio-undo").props.accessibilityState.disabled).toBe(false),
+            );
+
+            write.mockClear();
+            await act(async () => {
+                fireEvent.press(getByTestId("audio-undo"));
+            });
+
+            const loudClub = BUILT_IN_PRESETS.find(p => p.id === "builtin:loud-club")!;
+            const keys = Object.keys(loudClub.values) as (keyof typeof AUDIO_PARAMS)[];
+            await waitFor(() => expect(write).toHaveBeenCalledTimes(keys.length));
+
+            // Restores the firmware defaults the device started on.
+            keys.forEach(key => {
+                const spec = AUDIO_PARAMS[key];
+                expect(write).toHaveBeenCalledWith(
+                    UUID_AUDIO_CONFIG_SERVICE,
+                    spec.uuid,
+                    encodeParam(spec, spec.defaultValue),
+                );
+            });
+        });
+
+        it("enables A/B only once both slots are assigned", async () => {
+            mockBluetooth(buildDevice());
+            const { getByTestId } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            fireEvent.press(getByTestId("preset-slot-a-builtin:factory"));
+            await waitFor(() =>
+                expect(getByTestId("audio-swap-ab").props.accessibilityState.disabled).toBe(true),
+            );
+
+            fireEvent.press(getByTestId("preset-slot-b-builtin:loud-club"));
+            await waitFor(() =>
+                expect(getByTestId("audio-swap-ab").props.accessibilityState.disabled).toBe(false),
+            );
+        });
+
+        it("saves from the keyboard's done key, not just the Save button", async () => {
+            // On a real phone the on-screen keyboard covers the Save button outright — the name
+            // field sits at the bottom of a bottom-anchored sheet, which is exactly where the
+            // keyboard lands (found on a Pixel 9 Pro). The sheet now avoids the keyboard, and
+            // submitting from the keyboard saves directly, which is the natural gesture anyway.
+            mockBluetooth(buildDevice());
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            fireEvent.changeText(getByTestId("preset-save-name"), "From Keyboard");
+            await act(async () => {
+                fireEvent(getByTestId("preset-save-name"), "submitEditing");
+            });
+
+            await waitFor(() => expect(getByText('Saved "From Keyboard"')).toBeTruthy());
+            expect(savePresets).toHaveBeenCalled();
+        });
+
+        it("saves the current values under a name", async () => {
+            mockBluetooth(buildDevice());
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            fireEvent.changeText(getByTestId("preset-save-name"), "Warehouse");
+            await act(async () => {
+                fireEvent.press(getByTestId("preset-save"));
+            });
+
+            await waitFor(() => expect(getByText('Saved "Warehouse"')).toBeTruthy());
+            expect(savePresets).toHaveBeenCalled();
+        });
+
+        it("re-suggests a fresh name each time the sheet opens", async () => {
+            /* A Modal keeps its children mounted while hidden, so the name field's useState
+             * initialiser ran once per app launch. The field then held the first suggestion
+             * forever, and because saving overwrites by name, the SECOND save of a session
+             * silently replaced the first preset while announcing a plain "Saved". */
+            mockBluetooth(buildDevice());
+            const { getByTestId } = render(<AudioTuningScreen />);
+
+            fireEvent.press(getByTestId("audio-open-presets"));
+            fireEvent.changeText(getByTestId("preset-save-name"), "Typed over");
+            expect(getByTestId("preset-save-name").props.value).toBe("Typed over");
+
+            await act(async () => {
+                fireEvent.press(getByTestId("preset-save"));
+            });
+
+            await act(async () => {
+                fireEvent.press(getByTestId("audio-open-presets"));
+            });
+
+            expect(getByTestId("preset-save-name").props.value).toMatch(/^Tuned \d{2}:\d{2}$/);
+        });
+
+        it("says the preset will not survive a relaunch when the disk write failed", async () => {
+            (savePresets as jest.Mock).mockReturnValueOnce(false);
+            mockBluetooth(buildDevice());
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            fireEvent.changeText(getByTestId("preset-save-name"), "Warehouse");
+            await act(async () => {
+                fireEvent.press(getByTestId("preset-save"));
+            });
+
+            // Not `Saved "Warehouse"` - it is not saved anywhere that outlives the process.
+            await waitFor(() =>
+                expect(
+                    getByText('Could not save "Warehouse" to storage - it will be gone next launch'),
+                ).toBeTruthy(),
+            );
+        });
+
+        it("says Replaced, not Saved, when a save overwrites a same-named preset", async () => {
+            mockBluetooth(buildDevice());
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+
+            fireEvent.press(getByTestId("audio-open-presets"));
+            fireEvent.changeText(getByTestId("preset-save-name"), "Warehouse");
+            await act(async () => {
+                fireEvent.press(getByTestId("preset-save"));
+            });
+            await waitFor(() => expect(getByText('Saved "Warehouse"')).toBeTruthy());
+
+            fireEvent.press(getByTestId("audio-open-presets"));
+            fireEvent.changeText(getByTestId("preset-save-name"), "Warehouse");
+            await act(async () => {
+                fireEvent.press(getByTestId("preset-save"));
+            });
+            await waitFor(() => expect(getByText('Replaced "Warehouse"')).toBeTruthy());
+        });
+
+        it("does not report a restore as successful when every write failed", async () => {
+            const write = jest.fn().mockResolvedValue(true);
+            mockBluetooth(buildDevice(), write);
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+
+            fireEvent.press(getByTestId("audio-open-presets"));
+            await act(async () => {
+                fireEvent.press(getByTestId("preset-apply-builtin:loud-club"));
+            });
+            await waitFor(() =>
+                expect(getByTestId("audio-undo").props.accessibilityState.disabled).toBe(false),
+            );
+
+            write.mockResolvedValue(false);
+            await act(async () => {
+                fireEvent.press(getByTestId("audio-undo"));
+            });
+
+            // `applied` alone read every outcome as success: a restore in which nothing landed
+            // announced "(0 restored)" in the same phrasing as one that worked.
+            await waitFor(() => expect(getByText(/^Could not undo /)).toBeTruthy());
+        });
+
+        it("announces which preset an A/B tap moved to, not a bare Swapped", async () => {
+            mockBluetooth(buildDevice());
+            const { getByTestId, getByText } = render(<AudioTuningScreen />);
+
+            fireEvent.press(getByTestId("audio-open-presets"));
+            fireEvent.press(getByTestId("preset-slot-a-builtin:factory"));
+            fireEvent.press(getByTestId("preset-slot-b-builtin:loud-club"));
+            fireEvent.press(getByTestId("preset-sheet"));
+
+            await act(async () => {
+                fireEvent.press(getByTestId("audio-swap-ab"));
+            });
+
+            await waitFor(() => expect(getByText(/^Now on "Loud club"/)).toBeTruthy());
+        });
+
+        it("gives the disabled Apply control an accessibilityState a screen reader can read", () => {
+            /* The hand-rolled Apply button dimmed itself with opacity and set `disabled`, but
+             * omitted accessibilityState - so a screen reader announced an Apply that does
+             * nothing as tappable. AppButton has always supplied it. */
+            mockBluetooth(buildDevice());
+            const { getByTestId } = render(<AudioTuningScreen />);
+            fireEvent.press(getByTestId("audio-open-presets"));
+
+            // The device is at factory defaults, so "Factory defaults" changes nothing.
+            expect(
+                getByTestId("preset-apply-builtin:factory").props.accessibilityState.disabled,
+            ).toBe(true);
+            expect(
+                getByTestId("preset-apply-builtin:loud-club").props.accessibilityState.disabled,
+            ).toBe(false);
         });
     });
 });

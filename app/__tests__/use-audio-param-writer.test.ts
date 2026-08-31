@@ -249,6 +249,60 @@ describe("useAudioParamWriter", () => {
         });
     });
 
+    describe("a failed write must not keep claiming it landed", () => {
+        it("drops the optimistic value when writeNow fails", async () => {
+            /* displayValue is what the preset layer reads as "the device's current values". While
+             * a failed write's override stood, diffPreset saw the target value, so every preset
+             * that had just FAILED to apply reported "Already applied" for a settle window. */
+            const write = jest.fn().mockResolvedValue(false);
+            const { result } = renderHook(() => useAudioParamWriter({ write }));
+
+            await act(async () => {
+                await result.current.writeNow(UUID, 42, encode);
+            });
+
+            expect(result.current.displayValue(UUID, 7)).toBe(7);
+            expect(result.current.isOwned(UUID)).toBe(false);
+        });
+
+        it("keeps the optimistic value when the write SUCCEEDS", async () => {
+            const write = jest.fn().mockResolvedValue(true);
+            const { result } = renderHook(() => useAudioParamWriter({ write }));
+
+            await act(async () => {
+                await result.current.writeNow(UUID, 42, encode);
+            });
+
+            // The whole point of the settle window: context has not caught up yet.
+            expect(result.current.displayValue(UUID, 7)).toBe(42);
+        });
+
+        it("drops the optimistic value when the write at the end of a drag fails", async () => {
+            const write = jest.fn().mockResolvedValue(false);
+            const { result } = renderHook(() => useAudioParamWriter({ write }));
+
+            await act(async () => {
+                result.current.onSlideComplete(UUID, 42, encode);
+            });
+
+            expect(result.current.displayValue(UUID, 7)).toBe(7);
+        });
+
+        it("does NOT yank the thumb back mid-drag", async () => {
+            /* Reverting a throttled write while the finger is still down would fight the gesture:
+             * snap back, get pushed out by the next move, snap back again. The release above is
+             * the honest moment to correct it. */
+            const write = jest.fn().mockResolvedValue(false);
+            const { result } = renderHook(() => useAudioParamWriter({ write }));
+
+            await act(async () => {
+                result.current.onSlide(UUID, 42, encode);
+            });
+
+            expect(result.current.displayValue(UUID, 7)).toBe(42);
+        });
+    });
+
     it("cancels pending timers on unmount", async () => {
         const write = jest.fn().mockResolvedValue(true);
         const { result, unmount } = renderHook(() => useAudioParamWriter({ write }));

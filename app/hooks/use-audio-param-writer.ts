@@ -18,6 +18,13 @@
  *  3. The settle window is deliberately longer than the last read-back (1400 > 1200), so the
  *     clamp snap becomes visible exactly once, at a moment the user is looking at it, instead
  *     of mid-drag.
+ *  4. A local value that turns out NOT to have landed is dropped, not held for the settle window.
+ *     An optimistic value is a promise about the device; keeping one alive after a failed write
+ *     makes the app confidently wrong, and not only in the thumb position — the Audio Tuning
+ *     screen reads these same display values as "what the device currently holds" when diffing
+ *     presets, so every preset that had just failed to apply reported "Already applied". The one
+ *     exception is a throttled write mid-drag: the finger owns the thumb until it lifts, and
+ *     snapping back only to be pushed out again by the next move would strobe under the hand.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -107,8 +114,23 @@ export function useAudioParamWriter(options: UseAudioParamWriterOptions): AudioP
         return created;
     }, []);
 
+    /** Drop the local override for `uuid` and cancel any settle timer holding it. */
+    const clearOverride = useCallback((uuid: string) => {
+        const timer = settleTimersRef.current[uuid];
+        if (timer) {
+            clearTimeout(timer);
+            delete settleTimersRef.current[uuid];
+        }
+        setOverrides(prev => {
+            if (!(uuid in prev)) return prev;
+            const next = { ...prev };
+            delete next[uuid];
+            return next;
+        });
+    }, []);
+
     const doWrite = useCallback(
-        async (uuid: string, encoded: string): Promise<boolean> => {
+        async (uuid: string, encoded: string, revertOnFailure: boolean): Promise<boolean> => {
             const slot = slotFor(uuid);
             const now = Date.now();
 
@@ -138,16 +160,18 @@ export function useAudioParamWriter(options: UseAudioParamWriterOptions): AudioP
                      * below is dead code for the real writer, and clearing the latch only there
                      * meant it was never cleared in practice. */
                     slot.lastEncoded = null;
+                    if (revertOnFailure) clearOverride(uuid);
                 }
                 return ok;
             } catch (error) {
                 // Kept for writers that DO throw (tests, and any future direct-characteristic path).
                 slot.lastEncoded = null;
+                if (revertOnFailure) clearOverride(uuid);
                 optionsRef.current.onError?.(uuid, error);
                 return false;
             }
         },
-        [slotFor],
+        [clearOverride, slotFor],
     );
 
     const openSettleWindow = useCallback((uuid: string) => {
@@ -174,7 +198,10 @@ export function useAudioParamWriter(options: UseAudioParamWriterOptions): AudioP
             const since = Date.now() - slot.lastWriteAt;
 
             if (since >= WRITE_THROTTLE_MS) {
-                void doWrite(uuid, encode(value));
+                // `false`: mid-drag the finger owns the thumb. Yanking it back to the device value
+                // on a failed throttled write — and then having the next move push it out again —
+                // would strobe under the user's hand; the release below is the honest moment.
+                void doWrite(uuid, encode(value), false);
                 return;
             }
 
@@ -188,7 +215,7 @@ export function useAudioParamWriter(options: UseAudioParamWriterOptions): AudioP
                 const trailing = slot.trailing;
                 slot.trailing = null;
                 if (trailing && mountedRef.current) {
-                    void doWrite(uuid, trailing.encode(trailing.value));
+                    void doWrite(uuid, trailing.encode(trailing.value), false);
                 }
             }, WRITE_THROTTLE_MS - since);
         },
@@ -206,7 +233,7 @@ export function useAudioParamWriter(options: UseAudioParamWriterOptions): AudioP
             slot.trailing = null;
 
             setOverrides(prev => (prev[uuid] === value ? prev : { ...prev, [uuid]: value }));
-            void doWrite(uuid, encode(value));
+            void doWrite(uuid, encode(value), true);
             openSettleWindow(uuid);
         },
         [doWrite, openSettleWindow, slotFor],
@@ -215,8 +242,8 @@ export function useAudioParamWriter(options: UseAudioParamWriterOptions): AudioP
     const writeNow = useCallback(
         async (uuid: string, value: number, encode: (v: number) => string): Promise<boolean> => {
             setOverrides(prev => ({ ...prev, [uuid]: value }));
-            const ok = await doWrite(uuid, encode(value));
-            openSettleWindow(uuid);
+            const ok = await doWrite(uuid, encode(value), true);
+            if (ok) openSettleWindow(uuid);
             return ok;
         },
         [doWrite, openSettleWindow],
