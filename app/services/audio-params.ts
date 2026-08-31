@@ -444,7 +444,7 @@ export const AUDIO_PARAM_ORDER: AudioParamKey[] = [
  * the bottom 1% of the track. Log scaling is what makes them tunable with a thumb.
  * ---------------------------------------------------------------------------------------- */
 
-function clampNumber(v: number, lo: number, hi: number): number {
+export function clampNumber(v: number, lo: number, hi: number): number {
     // NaN has no position on the scale, so it takes the low end. The infinities DO have an
     // obvious position and must saturate towards it — sending +Infinity to `lo` would park a
     // slider at the wrong end of its travel, which is worse than any rounding error.
@@ -700,7 +700,7 @@ function invertTwoSidedGeometric(
  * firmware's 0.1 minimum — which the device would clamp on read and write back, making the
  * thumb twitch after a write for no reason a user could ever explain.
  */
-function clampToSpec(key: AudioParamKey, value: number): number {
+export function clampToSpec(key: AudioParamKey, value: number): number {
     const spec = AUDIO_PARAMS[key];
     return clampNumber(value, spec.min, spec.max);
 }

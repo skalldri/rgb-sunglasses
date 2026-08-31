@@ -280,8 +280,19 @@ export function decodeTelemetryFrameFromBase64(
  * cost 4x the memory to represent the same 256 distinct values.
  */
 
-/** ~16 s at 31.25 Hz — sized for the wizard's tap-along window, not for the meters. */
-export const RING_FRAMES = 512;
+/**
+ * Sized for the WIZARD'S TAP STEP, which is the longest window anything extracts: 30 s at the
+ * undecimated 32 Hz the tap step requests is 960 frames.
+ *
+ * 512 was wrong and only looked right because requestStream was inert, leaving the stream at
+ * 8 Hz. At a working 32 Hz, tapping slower than ~84 BPM — or letting the step run its full 30 s
+ * instead of finishing early at 24 taps — wrapped the ring and silently dropped the head of the
+ * window, while tapsRef kept every tap. Those orphaned early taps could then never match a
+ * beat, capping recall for every candidate in the sweep and quietly biasing the fit.
+ *
+ * ~31 KB of typed arrays at this size, which is nothing on a phone.
+ */
+export const RING_FRAMES = 1024;
 
 export type TelemetryRing = {
   capacity: number;
@@ -617,5 +628,85 @@ export function summarizeTelemetry(
     thresholdMode: (flags & FLAG_THRESHOLD_MODE) !== 0 ? 1 : 0,
     droppedInWindow: dropped,
     agcFrozen: (flags & FLAG_AGC_FROZEN) !== 0,
+  };
+}
+
+/**
+ * Copy a time range out of the ring as a dequantised calibration window.
+ *
+ * The wizard replays this against candidate settings, so two properties matter more than
+ * they look. It reports `hasStats` false if ANY frame in the range lacked raw statistics —
+ * a window that is 90% tier 2 is still not replayable, because the missing frames would read
+ * as zero-valued statistics and score as beats that never happened. And it refuses a range
+ * spanning a send-rate change by reporting the observed frame spacing, so the caller can tell
+ * whether the refractory (counted in frames) means what it thinks.
+ */
+export function extractCalibrationWindow(
+  ring: TelemetryRing,
+  fromMs: number,
+  toMs: number,
+): {
+  frames: number;
+  timeMs: number[];
+  rmsInput: number[];
+  clipped: boolean[];
+  beat: boolean[];
+  flux: number[];
+  mean: number[];
+  sigma: number[];
+  thresholdMode: 0 | 1;
+  hasStats: boolean;
+  medianStepMs: number;
+} {
+  const held = Math.min(ring.count, ring.capacity);
+  const timeMs: number[] = [];
+  const rmsInput: number[] = [];
+  const clipped: boolean[] = [];
+  const beat: boolean[] = [];
+  const flux: number[] = [];
+  const mean: number[] = [];
+  const sigma: number[] = [];
+  let hasStats = true;
+  let thresholdMode: 0 | 1 = 0;
+
+  /* Walk oldest-first so the output is chronological, which the replay depends on. */
+  for (let n = held - 1; n >= 0; n--) {
+    const i = ringIndex(ring, n);
+    if (i < 0) continue;
+    const t = ring.timeMs[i];
+    if (t < fromMs || t > toMs) continue;
+
+    timeMs.push(t);
+    rmsInput.push(dequantiseLog(ring.rmsIn[i]));
+    clipped.push((ring.flags[i] & FLAG_CLIPPED) !== 0);
+    beat.push(((ring.flags[i] >> BEAT_SHIFT) & 0x0f) !== 0);
+    thresholdMode = (ring.flags[i] & FLAG_THRESHOLD_MODE) !== 0 ? 1 : 0;
+    if (ring.tier[i] < TELEMETRY_TIER_STATS) hasStats = false;
+
+    const base = i * AUDIO_NUM_BANDS;
+    for (let b = 0; b < AUDIO_NUM_BANDS; b++) {
+      flux.push(dequantiseLog(ring.flux[base + b]));
+      mean.push(dequantiseLog(ring.mean[base + b]));
+      sigma.push(dequantiseLog(ring.sigma[base + b]));
+    }
+  }
+
+  const steps: number[] = [];
+  for (let k = 1; k < timeMs.length; k++) steps.push(timeMs[k] - timeMs[k - 1]);
+  steps.sort((a, b) => a - b);
+  const medianStepMs = steps.length > 0 ? steps[Math.floor(steps.length / 2)] : 0;
+
+  return {
+    frames: timeMs.length,
+    timeMs,
+    rmsInput,
+    clipped,
+    beat,
+    flux,
+    mean,
+    sigma,
+    thresholdMode,
+    hasStats: hasStats && timeMs.length > 0,
+    medianStepMs,
   };
 }

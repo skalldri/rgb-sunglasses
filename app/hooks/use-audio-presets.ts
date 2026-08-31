@@ -92,6 +92,32 @@ export function useAudioPresets({ currentValues, writeParam }: UseAudioPresetsOp
         return savePresets(next);
     }, []);
 
+    /**
+     * Re-read the store, then apply `mutate` to what is ACTUALLY on disk.
+     *
+     * Every commit writes the whole list, so a mutation computed from a stale `savedRef`
+     * silently deletes anything another instance wrote since this one mounted. That is not
+     * hypothetical: the calibration wizard saves its "Before calibration" rescue preset, and
+     * the tuning screen below it stays mounted with a ref seeded before that preset existed —
+     * so its next save or delete erased the one documented way back from a bad calibration.
+     *
+     * Reloading first makes each commit last-writer-wins per ENTRY instead of per LIST, which
+     * is the semantics a user would expect from two screens sharing one file. It costs one
+     * synchronous read of a small JSON file per save, on a path that already writes it.
+     */
+    const commitFromDisk = useCallback(
+        (
+            mutate: (current: AudioPreset[]) => AudioPreset[],
+        ): { next: AudioPreset[]; persisted: boolean } => {
+            const onDisk = loadPresets();
+            const next = mutate(onDisk);
+            // `persisted` is returned, never dropped: a save the user is told succeeded but which
+            // never reached disk is simply gone at next launch.
+            return { next, persisted: commitSaved(next) };
+        },
+        [commitSaved],
+    );
+
     useEffect(() => {
         const loaded = loadPresets();
         savedRef.current = loaded;
@@ -227,23 +253,27 @@ export function useAudioPresets({ currentValues, writeParam }: UseAudioPresetsOp
             const preset = presetFromValues(name, valuesRef.current, now);
             if (Object.keys(preset.values).length === 0) return null;
 
-            const without = savedRef.current.filter(p => p.name !== name);
-            const replaced = without.length !== savedRef.current.length;
-            const persisted = commitSaved([...without, preset]);
+            // Same name overwrites rather than accumulating near-duplicates nobody can tell apart.
+            let replaced = false;
+            const { persisted } = commitFromDisk(current => {
+                const without = current.filter(p => p.name !== name);
+                replaced = without.length !== current.length;
+                return [...without, preset];
+            });
             return { preset, persisted, replaced };
         },
-        [commitSaved],
+        [commitFromDisk],
     );
 
     /** Returns false when the removal did not reach disk — the preset returns at next launch. */
     const deletePreset = useCallback(
         (id: string): boolean => {
-            const persisted = commitSaved(savedRef.current.filter(p => p.id !== id));
+            const { persisted } = commitFromDisk(current => current.filter(p => p.id !== id));
             setSlotA(prev => (prev === id ? null : prev));
             setSlotB(prev => (prev === id ? null : prev));
             return persisted;
         },
-        [commitSaved],
+        [commitFromDisk],
     );
 
     /**

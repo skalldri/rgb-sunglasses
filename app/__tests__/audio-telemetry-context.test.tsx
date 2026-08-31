@@ -37,6 +37,7 @@ import {
 import * as BluetoothContext from "@/context/bluetooth-context";
 import {
   AudioTelemetryProvider,
+  useAudioTelemetryStream,
   REQUESTED_HOLD_S,
   REQUESTED_RATE_HZ,
   REQUESTED_TIER,
@@ -96,7 +97,10 @@ function mockBluetooth(device: any) {
     .mockImplementation(() => ({ selectedDevice: device }) as any);
 }
 
+/* Stands in for a screen that renders meters: it acquires the stream, which is what arms it.
+ * A child that does NOT acquire (see SilentProbe) must leave the device untouched. */
 function Probe() {
+  useAudioTelemetryStream();
   const summary = useAudioTelemetrySummary();
   const status = useAudioTelemetryStatus();
   return (
@@ -398,6 +402,7 @@ describe("AudioTelemetryProvider", () => {
       // new snapshot and re-render every consumer -- which is the mutant this test kills.
       const seen: number[] = [];
       function Watcher() {
+        useAudioTelemetryStream();
         const s = useAudioTelemetrySummary();
         seen.push(s.frames);
         return <Text testID="watch">w</Text>;
@@ -514,6 +519,235 @@ describe("AudioTelemetryProvider", () => {
         jest.advanceTimersByTime(4000);
       });
       expect(h.monitor.mock.calls.length).toBeGreaterThan(1);
+    });
+  });
+
+describe("requestStream reaches the device", () => {
+  it("writes the requested tier and rate to the control characteristic", () => {
+    // THE regression this suite existed to miss. requestStream() was wired to a ref nothing
+    // ever assigned, so it reset the ring and sent nothing: the device stayed at tier 1/8 Hz,
+    // every wizard window measured ~125 ms spacing, and the spacing guard refused the
+    // sensitivity fit on every run of every device. The hook tests inject a fake
+    // requestStream, so only a test at THIS layer can see it.
+    const h = buildDevice();
+    mockBluetooth(h.device);
+    let ctx: ReturnType<typeof useAudioTelemetryContextForTest> = null;
+    function Grab() {
+      // Stands for the wizard, which both consumes the stream and re-requests tier/rate.
+      useAudioTelemetryStream();
+      ctx = useAudioTelemetryContextForTest();
+      return null;
+    }
+    render(
+      <AudioTelemetryProvider>
+        <Grab />
+      </AudioTelemetryProvider>,
+    );
+    h.writeWithResponse.mockClear();
+
+    act(() => {
+      ctx!.requestStream(2, 32);
+    });
+
+    expect(h.writeWithResponse).toHaveBeenCalledWith(encodeControl(2, 32, REQUESTED_HOLD_S));
+  });
+
+  it("keeps re-arming at the REQUESTED tier, not the default", () => {
+    // The re-arm interval is 30 s and the tap step is 30 s long, so a re-arm encoding the
+    // module constants reverts the stream mid-recording — straddling a rate change, which is
+    // exactly what the window's spacing guard refuses.
+    const h = buildDevice();
+    mockBluetooth(h.device);
+    let ctx: ReturnType<typeof useAudioTelemetryContextForTest> = null;
+    function Grab() {
+      // Stands for the wizard, which both consumes the stream and re-requests tier/rate.
+      useAudioTelemetryStream();
+      ctx = useAudioTelemetryContextForTest();
+      return null;
+    }
+    render(
+      <AudioTelemetryProvider>
+        <Grab />
+      </AudioTelemetryProvider>,
+    );
+    act(() => {
+      ctx!.requestStream(2, 32);
+    });
+    h.writeWithResponse.mockClear();
+
+    act(() => {
+      jest.advanceTimersByTime((REQUESTED_HOLD_S / 2) * 1000 + 50);
+    });
+    expect(h.writeWithResponse).toHaveBeenLastCalledWith(
+      encodeControl(2, 32, REQUESTED_HOLD_S),
+    );
+  });
+
+  it("restores the default request when the screen blurs", () => {
+    // Otherwise the next focus silently starts at the wizard's burst settings.
+    const h = buildDevice();
+    mockBluetooth(h.device);
+    let ctx: ReturnType<typeof useAudioTelemetryContextForTest> = null;
+    function Grab() {
+      // Stands for the wizard, which both consumes the stream and re-requests tier/rate.
+      useAudioTelemetryStream();
+      ctx = useAudioTelemetryContextForTest();
+      return null;
+    }
+    const { rerender } = render(
+      <AudioTelemetryProvider>
+        <Grab />
+      </AudioTelemetryProvider>,
+    );
+    act(() => {
+      ctx!.requestStream(2, 32);
+    });
+
+    act(() => {
+      focusState.focused = false;
+      rerender(
+        <AudioTelemetryProvider>
+          <Grab />
+        </AudioTelemetryProvider>,
+      );
+    });
+    h.writeWithResponse.mockClear();
+    act(() => {
+      focusState.focused = true;
+      rerender(
+        <AudioTelemetryProvider>
+          <Grab />
+        </AudioTelemetryProvider>,
+      );
+    });
+    expect(h.writeWithResponse).toHaveBeenCalledWith(
+      encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
+    );
+  });
+});
+
+
+  describe("the stream is armed on demand, not on focus", () => {
+    /* The provider spans the WHOLE device-state stack (Controls, Battery, Capture, the generic
+     * service page) because there must be exactly one of it. Arming was gated on that provider
+     * being focused, which is a different question from whether anything on screen shows a
+     * meter — so merely opening the Controls animation list started a tier-3 spectrum stream at
+     * 8 Hz and pinned the connection interval to MEDIUM for as long as the tab stayed open.
+     * Measured on hardware before this fix. */
+    function SilentProbe() {
+      // A screen in the stack that renders no meters: Controls, Battery, Capture.
+      const status = useAudioTelemetryStatus();
+      return <Text testID="silent">{status}</Text>;
+    }
+
+    it("never touches the device when no screen displays telemetry", () => {
+      const h = buildDevice();
+      mockBluetooth(h.device);
+      render(
+        <AudioTelemetryProvider>
+          <SilentProbe />
+        </AudioTelemetryProvider>,
+      );
+
+      // No CCCD subscribe, and above all no control write: no tier, no rate, no hold.
+      expect(h.monitor).not.toHaveBeenCalled();
+      expect(h.writeWithResponse).not.toHaveBeenCalled();
+    });
+
+    it("arms as soon as a screen that shows meters appears", () => {
+      const h = buildDevice();
+      mockBluetooth(h.device);
+      const { rerender } = render(
+        <AudioTelemetryProvider>
+          <SilentProbe />
+        </AudioTelemetryProvider>,
+      );
+      expect(h.writeWithResponse).not.toHaveBeenCalled();
+
+      act(() => {
+        rerender(
+          <AudioTelemetryProvider>
+            <Probe />
+          </AudioTelemetryProvider>,
+        );
+      });
+
+      expect(h.monitor).toHaveBeenCalledTimes(1);
+      expect(h.writeWithResponse).toHaveBeenCalledWith(
+        encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
+      );
+    });
+
+    it("stops the stream once the last consumer goes away", () => {
+      const h = buildDevice();
+      mockBluetooth(h.device);
+      const { rerender } = render(
+        <AudioTelemetryProvider>
+          <Probe />
+        </AudioTelemetryProvider>,
+      );
+      expect(h.writeWithResponse).toHaveBeenCalledTimes(1);
+      h.writeWithResponse.mockClear();
+
+      /* Separate act() calls on purpose: effects flush when act() exits, so advancing timers
+       * inside the same act() as the rerender would run the grace timer BEFORE the release
+       * that schedules it — and the assertion would pass without exercising anything. */
+      act(() => {
+        rerender(
+          <AudioTelemetryProvider>
+            <SilentProbe />
+          </AudioTelemetryProvider>,
+        );
+      });
+      // Still streaming inside the grace window.
+      expect(h.writeWithResponse).not.toHaveBeenCalledWith(encodeControl(0, 0, 0));
+
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+      expect(h.writeWithResponse).toHaveBeenCalledWith(encodeControl(0, 0, 0));
+    });
+
+    it("does NOT stop and re-arm across a screen-to-screen handoff", () => {
+      /* expo-router blurs the outgoing screen before focusing the incoming one, so a push from
+       * Tuning to the wizard momentarily has zero consumers. Tearing down there would stop the
+       * stream, drop the CCCD and re-subscribe at the exact moment the wizard tells the user to
+       * watch the meters — which is what STREAM_RELEASE_GRACE_MS exists to prevent. */
+      const h = buildDevice();
+      mockBluetooth(h.device);
+      const { rerender } = render(
+        <AudioTelemetryProvider>
+          <Probe />
+        </AudioTelemetryProvider>,
+      );
+      h.writeWithResponse.mockClear();
+      const subscribesBefore = h.monitor.mock.calls.length;
+
+      // Outgoing screen blurs (its own act(), so the release actually runs)...
+      act(() => {
+        rerender(
+          <AudioTelemetryProvider>
+            <SilentProbe />
+          </AudioTelemetryProvider>,
+        );
+      });
+      act(() => {
+        jest.advanceTimersByTime(100);
+      });
+      // ...and the incoming one focuses well inside the grace window.
+      act(() => {
+        rerender(
+          <AudioTelemetryProvider>
+            <Probe />
+          </AudioTelemetryProvider>,
+        );
+      });
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+
+      expect(h.writeWithResponse).not.toHaveBeenCalledWith(encodeControl(0, 0, 0));
+      expect(h.monitor.mock.calls.length).toBe(subscribesBefore);
     });
   });
 });

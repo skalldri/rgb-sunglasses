@@ -66,6 +66,15 @@ import {
 const REQUESTED_TIER: TelemetryTier = TELEMETRY_TIER_SPECTRUM;
 const REQUESTED_RATE_HZ = 8;
 const REQUESTED_HOLD_S = 60;
+
+/* How long the stream survives with no consumer before it is torn down.
+ *
+ * Not a debounce for its own sake: expo-router fires the outgoing screen's blur BEFORE the
+ * incoming screen's focus, so pushing Calibrate on top of Tuning drops the consumer count to
+ * zero for one tick. Without this window that handoff would stop the stream and immediately
+ * re-arm it — a control write, a CCCD teardown, a re-subscribe and a ring reset, at the exact
+ * moment the wizard is telling the user to watch the meters. */
+const STREAM_RELEASE_GRACE_MS = 750;
 /** Re-arm at half the hold, per the firmware's documented watchdog contract. */
 const REARM_MS = (REQUESTED_HOLD_S / 2) * 1000;
 /** Summary recompute rate. Slow on purpose — this is the only path that renders. */
@@ -111,6 +120,27 @@ export type AudioTelemetryContextValue = {
   getSummarySnapshot: () => TelemetrySummary;
   getStatus: () => TelemetryStatus;
   subscribeStatus: (listener: () => void) => () => void;
+  /**
+   * Ask for a different tier/rate — used only by the calibration wizard's tap-along step,
+   * which needs UNDECIMATED tier-2 frames.
+   *
+   * Both halves matter. The refractory is counted in analysis frames, so replaying a
+   * decimated window would model a longer refractory than the device applies; and evaluating
+   * a different alpha needs the raw mean/sigma that only tier 2 carries, because the resolved
+   * threshold on the wire has the floor folded in and cannot be inverted back.
+   *
+   * Passing null restores the screen's default. The request is remembered, so the watchdog
+   * re-arm keeps asking for the same thing rather than silently dropping back.
+   */
+  requestStream: (tier: TelemetryTier | null, rateHz?: number) => void;
+  /**
+   * Declare that this caller is displaying telemetry. Returns its release function.
+   *
+   * The stream is armed while at least one consumer is held and torn down (after a short
+   * grace) when the last one releases. Prefer `useAudioTelemetryStream()`, which ties the
+   * acquire/release to screen focus.
+   */
+  acquireStream: () => () => void;
 };
 
 const AudioTelemetryContext =
@@ -142,6 +172,17 @@ export function AudioTelemetryProvider({
    * without a reference the bars would sit invisibly low at normal listening levels and slam
    * to full on a loud track. Decays slowly so the display does not re-scale on every frame. */
   const bucketRefRef = React.useRef(BUCKET_REF_SEED);
+  /* What we are currently asking the device for. Every control write reads THIS, never the
+   * module constants — otherwise the 30 s watchdog re-arm silently reverts a wizard step that
+   * raised the tier/rate, mid-recording. */
+  const requestRef = React.useRef<{ tier: TelemetryTier; rateHz: number }>({
+    tier: REQUESTED_TIER,
+    rateHz: REQUESTED_RATE_HZ,
+  });
+  /* Assigned by arm() while armed, cleared on teardown. */
+  const writeControlRef = React.useRef<
+    ((tier: TelemetryTier, rateHz: number) => void) | null
+  >(null);
   /* Reused across frames so the notify path allocates nothing. */
   const bucketScratchRef = React.useRef<number[]>(
     new Array(AUDIO_NUM_DISPLAY_BUCKETS).fill(0),
@@ -189,8 +230,63 @@ export function AudioTelemetryProvider({
     statusListeners.current.forEach((l) => l());
   }, []);
 
+  /* Consumer bookkeeping — see acquireStream() and the gate at the top of the focus effect. */
+  const consumersRef = React.useRef(0);
+  const releaseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [streamWanted, setStreamWanted] = React.useState(false);
+
+  const acquireStream = React.useCallback((): (() => void) => {
+    consumersRef.current += 1;
+    if (releaseTimerRef.current) {
+      clearTimeout(releaseTimerRef.current);
+      releaseTimerRef.current = null;
+    }
+    setStreamWanted(true);
+
+    let released = false;
+    return () => {
+      /* Idempotent: React can invoke a focus effect's cleanup more than once across a
+       * remount, and a double release would drive the count negative — after which the
+       * stream could never be torn down again. */
+      if (released) return;
+      released = true;
+      consumersRef.current = Math.max(0, consumersRef.current - 1);
+      if (consumersRef.current > 0) return;
+      if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current);
+      releaseTimerRef.current = setTimeout(() => {
+        releaseTimerRef.current = null;
+        if (consumersRef.current === 0) setStreamWanted(false);
+      }, STREAM_RELEASE_GRACE_MS);
+    };
+  }, []);
+
+  React.useEffect(
+    () => () => {
+      if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current);
+    },
+    [],
+  );
+
   useFocusEffect(
     React.useCallback(() => {
+      /* DEMAND-DRIVEN, not focus-driven.
+       *
+       * This provider is mounted on the whole device-state stack (that layout's comment
+       * explains why there must be exactly one), but "the provider is focused" is a different
+       * question from "something on screen is displaying telemetry", and only the first was
+       * ever gated on. Every screen in the stack — the Controls animation list, Battery,
+       * Capture, the generic service page — therefore armed the stream just by being open.
+       *
+       * Measured on hardware with the phone sitting on the animation list: the board logged
+       * `telemetry stream started: tier 3, 8 Hz, hold 60 s` (tier 3 is the full spectrogram,
+       * the most expensive tier) and `conn param request: MEDIUM`, dragging the connection
+       * interval from 11.25 ms to 45 ms — which slows every other GATT operation on that
+       * screen — re-armed every 30 s so it never relaxed, with the device-side DSP
+       * accumulation running the whole time. Nothing on that screen renders a meter.
+       *
+       * Only the tuning screen and the wizard do, and they now say so by acquiring. */
+      if (!streamWanted) return;
+
       const generation = ++generationRef.current;
       let subscription: { remove: () => void } | null = null;
       let rearmTimer: ReturnType<typeof setInterval> | null = null;
@@ -201,6 +297,13 @@ export function AudioTelemetryProvider({
       } | null = null;
 
       const superseded = () => generationRef.current !== generation;
+
+      /* Restore the default request when this focus session ends: the wizard raises the
+       * tier/rate, and leaving requestRef raised means the next arm silently starts at the
+       * wizard's burst settings. */
+      const resetRequest = () => {
+        requestRef.current = { tier: REQUESTED_TIER, rateHz: REQUESTED_RATE_HZ };
+      };
 
       const stopRearm = () => {
         if (rearmTimer) {
@@ -396,8 +499,26 @@ export function AudioTelemetryProvider({
          * minute after opening the screen, which is exactly when the user is deciding whether
          * to trust it. */
         bucketRefRef.current = BUCKET_REF_SEED;
+
+        /* WIRE UP requestStream(). Without this assignment the whole wizard tap step was
+         * inert: requestStream() reset the ring and sent nothing, so the device stayed at
+         * tier 1 / 8 Hz, every recorded window measured ~125 ms spacing, and the spacing
+         * guard in use-audio-calibration.ts refused the sensitivity fit on every run of
+         * every device. The hook tests inject a fake requestStream, so nothing caught it. */
+        writeControlRef.current = (tier, rateHz) => {
+          if (superseded()) return;
+          safeWrite(encodeControl(tier, rateHz, REQUESTED_HOLD_S), "request");
+        };
+
+        /* EVERY control write reads requestRef, never the module constants. The re-arm
+         * interval is 30 s and the tap step is 30 s long, so a re-arm that encoded the
+         * defaults would revert the stream to tier 3 / 8 Hz partway through the recording —
+         * straddling a rate change, which is precisely what the window's spacing guard
+         * refuses. The fit would then be discarded depending on where the tick happened to
+         * land. */
+        const armReq = requestRef.current;
         safeWrite(
-          encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
+          encodeControl(armReq.tier, armReq.rateHz, REQUESTED_HOLD_S),
           "arm",
         );
 
@@ -406,8 +527,9 @@ export function AudioTelemetryProvider({
          * that contract, and it is why the hold is short. */
         rearmTimer = setInterval(() => {
           if (superseded()) return;
+          const req = requestRef.current;
           safeWrite(
-            encodeControl(REQUESTED_TIER, REQUESTED_RATE_HZ, REQUESTED_HOLD_S),
+            encodeControl(req.tier, req.rateHz, REQUESTED_HOLD_S),
             "re-arm",
           );
         }, REARM_MS);
@@ -450,6 +572,9 @@ export function AudioTelemetryProvider({
         /* Stop explicitly so the device drops the connection-parameter hold promptly. This
          * is politeness, not safety: unsubscribing below makes the firmware's next tick
          * self-terminate, and the watchdog catches the case where neither reaches it. */
+        /* Clear before the stop write: a requestStream() racing teardown must not be able
+         * to re-arm the device after we have told it to stop. */
+        writeControlRef.current = null;
         safeWrite(encodeControl(TELEMETRY_TIER_OFF, 0, 0), "stop");
         try {
           subscription?.remove();
@@ -461,12 +586,28 @@ export function AudioTelemetryProvider({
          * rendering the last status and the last numbers it was told about — stale meters
          * presented as current, which is exactly what the freeze-with-NO-SIGNAL behaviour
          * exists to prevent. */
+        resetRequest();
         summaryRef.current = EMPTY_SUMMARY;
         summaryListeners.current.forEach((l) => l());
         setStatus("idle");
       };
-    }, [setStatus]),
+    }, [setStatus, streamWanted]),
   );
+
+  const requestStream = React.useCallback((tier: TelemetryTier | null, rateHz?: number) => {
+    const next = {
+      tier: tier ?? REQUESTED_TIER,
+      rateHz: rateHz ?? REQUESTED_RATE_HZ,
+    };
+    if (next.tier === requestRef.current.tier && next.rateHz === requestRef.current.rateHz) {
+      return; // no edge, no write — the device treats a repeat as a hold extension
+    }
+    requestRef.current = next;
+    /* Drop the history: a window spanning a rate change mixes two frame spacings, and the
+     * replay counts refractory in frames. Better to start the recording clean. */
+    resetTelemetryRing(ringRef.current);
+    writeControlRef.current?.(next.tier, next.rateHz);
+  }, []);
 
   /* EMPTY deps, deliberately: every member is a ref, a shared value or a stable callback, so
    * this object must never change identity. If it did, it would re-render every consumer of
@@ -480,6 +621,8 @@ export function AudioTelemetryProvider({
       getSummarySnapshot,
       getStatus,
       subscribeStatus,
+      requestStream,
+      acquireStream,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -509,6 +652,28 @@ export function useAudioTelemetryStatus(): TelemetryStatus {
   const subscribe = ctx?.subscribeStatus ?? (() => () => {});
   const snapshot = ctx?.getStatus ?? ((): TelemetryStatus => "unsupported");
   return React.useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+/**
+ * Declare that this screen is displaying telemetry, for as long as it is focused.
+ *
+ * A screen that renders any meter must call this. Nothing else starts the stream: the
+ * provider spans the whole device-state stack, so without an explicit consumer the Controls
+ * list, Battery and Capture screens would each arm a tier-3 8 Hz stream and hold the
+ * connection interval down while showing nothing that uses it.
+ *
+ * Tied to FOCUS rather than mount, because a pushed screen does not unmount the one below it
+ * — a mount-scoped acquire would keep the stream alive underneath whatever is on top.
+ */
+export function useAudioTelemetryStream(): void {
+  const ctx = useAudioTelemetry();
+  const acquire = ctx?.acquireStream;
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!acquire) return;
+      return acquire();
+    }, [acquire]),
+  );
 }
 
 export { REQUESTED_RATE_HZ, REQUESTED_TIER, REQUESTED_HOLD_S, encodeControl };

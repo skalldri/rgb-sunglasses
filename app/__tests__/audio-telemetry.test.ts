@@ -13,6 +13,7 @@ import {
   createTelemetryRing,
   decodeTelemetryFrame,
   decodeTelemetryFrameFromBase64,
+  extractCalibrationWindow,
   dequantiseLog,
   magnitudeToDb,
   pushTelemetryBytes,
@@ -559,5 +560,96 @@ describe("summary regressions from review", () => {
     const s = summarizeTelemetry(fill(frames), 8 * 1000);
     expect(s.bpm).not.toBeNull();
     expect(Math.abs(s.bpm! - bpm)).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('extractCalibrationWindow', () => {
+  function fill(frames: { bytes: Uint8Array; timeMs: number }[]) {
+    const ring = createTelemetryRing(512);
+    for (const f of frames) pushTelemetryBytes(ring, f.bytes, f.timeMs);
+    return ring;
+  }
+
+  it('returns frames in chronological order', () => {
+    // The replay walks forward in time; a reversed window would apply refractory backwards.
+    const ring = fill(
+      Array.from({ length: 10 }, (_, n) => ({ bytes: makeFrame({ tier: 2, seq: n }), timeMs: n * 32 })),
+    );
+    const w = extractCalibrationWindow(ring, 0, 1000);
+    expect(w.frames).toBe(10);
+    for (let i = 1; i < w.timeMs.length; i++) {
+      expect(w.timeMs[i]).toBeGreaterThan(w.timeMs[i - 1]);
+    }
+  });
+
+  it('clips to the requested range', () => {
+    const ring = fill(
+      Array.from({ length: 20 }, (_, n) => ({ bytes: makeFrame({ tier: 2 }), timeMs: n * 100 })),
+    );
+    const w = extractCalibrationWindow(ring, 500, 1000);
+    expect(w.frames).toBe(6); // 500..1000 inclusive
+    expect(w.timeMs[0]).toBe(500);
+    expect(w.timeMs[w.frames - 1]).toBe(1000);
+  });
+
+  it('dequantises flux, mean and sigma per band', () => {
+    const ring = fill([
+      {
+        bytes: makeFrame({
+          tier: 2,
+          flux: [0.4, 0.3, 0.2, 0.1],
+          mean: [0.11, 0.12, 0.13, 0.14],
+          sigma: [0.01, 0.02, 0.03, 0.04],
+        }),
+        timeMs: 0,
+      },
+    ]);
+    const w = extractCalibrationWindow(ring, 0, 100);
+    expect(w.flux[0]).toBeCloseTo(0.4, 2);
+    expect(w.flux[3]).toBeCloseTo(0.1, 2);
+    expect(w.mean[1]).toBeCloseTo(0.12, 2);
+    expect(w.sigma[3]).toBeCloseTo(0.04, 3);
+  });
+
+  it('reports hasStats false if ANY frame lacked raw statistics', () => {
+    // A 90%-tier-2 window is still not replayable: the tier-1 frames read as zero-valued
+    // statistics, which the sweep would score as beats that never happened.
+    const frames = Array.from({ length: 10 }, (_, n) => ({
+      bytes: makeFrame({ tier: n === 7 ? 1 : 2 }),
+      timeMs: n * 32,
+    }));
+    expect(extractCalibrationWindow(fill(frames), 0, 1000).hasStats).toBe(false);
+
+    const allStats = Array.from({ length: 10 }, (_, n) => ({
+      bytes: makeFrame({ tier: 2 }),
+      timeMs: n * 32,
+    }));
+    expect(extractCalibrationWindow(fill(allStats), 0, 1000).hasStats).toBe(true);
+  });
+
+  it('reports hasStats false for an empty window', () => {
+    const ring = fill([{ bytes: makeFrame({ tier: 2 }), timeMs: 0 }]);
+    const w = extractCalibrationWindow(ring, 5000, 6000);
+    expect(w.frames).toBe(0);
+    expect(w.hasStats).toBe(false);
+  });
+
+  it('reports the observed frame spacing', () => {
+    // The refractory is counted in FRAMES, so a decimated window would model a longer
+    // refractory than the device applies. The caller checks this before trusting a sweep.
+    const ring = fill(
+      Array.from({ length: 10 }, (_, n) => ({ bytes: makeFrame({ tier: 2 }), timeMs: n * 32 })),
+    );
+    expect(extractCalibrationWindow(ring, 0, 1000).medianStepMs).toBe(32);
+
+    const slow = fill(
+      Array.from({ length: 10 }, (_, n) => ({ bytes: makeFrame({ tier: 2 }), timeMs: n * 125 })),
+    );
+    expect(extractCalibrationWindow(slow, 0, 2000).medianStepMs).toBe(125);
+  });
+
+  it('carries the threshold mode', () => {
+    const ring = fill([{ bytes: makeFrame({ tier: 2, thresholdMode: 1 }), timeMs: 0 }]);
+    expect(extractCalibrationWindow(ring, 0, 100).thresholdMode).toBe(1);
   });
 });
