@@ -18,8 +18,10 @@ static Config test_config() {
     };
 }
 
-static Inputs at(int64_t now_ms, int64_t last_activity_ms) {
-    return Inputs{.now_ms = now_ms, .last_activity_ms = last_activity_ms};
+static Inputs at(int64_t now_ms, int64_t last_activity_ms, uint8_t stream_rate_hz = 0) {
+    return Inputs{.now_ms = now_ms,
+                  .last_activity_ms = last_activity_ms,
+                  .stream_rate_hz = stream_rate_hz};
 }
 
 // Drive a fresh governor to steady SLOW: connect at t=0 (activity at t=0),
@@ -216,6 +218,149 @@ ZTEST(conn_param_governor, test_negative_idle_clamped) {
     zassert_equal(d.request, ParamSet::NONE);
     zassert_equal(gov.target(), ParamSet::FAST);
     zassert_equal(d.next_eval_in_ms, kIdleMs);
+}
+
+// ── Telemetry stream hold ──────────────────────────────────────────────────
+//
+// Outbound notifies deliberately do NOT count as activity, so a live meter would
+// otherwise sink to SLOW and start arriving in 165 ms clumps while the user is
+// dragging a slider against it. The stream therefore gets its own explicit,
+// edge-driven hold — which must also be impossible to leave behind.
+
+ZTEST(conn_param_governor, test_stream_holds_medium_from_slow) {
+    Governor gov(test_config());
+    const int64_t t = settle_to_slow(gov);
+
+    Decision d = gov.step(Trigger::STREAM_STARTED, at(t + kSpacingMs, 0, 8));
+    zassert_equal(d.request, ParamSet::MEDIUM, "a modest stream rate only needs MEDIUM");
+    zassert_mem_equal(d.reason, "telemetry stream", sizeof("telemetry stream"));
+    zassert_true(gov.streamActive());
+
+    // Pinned: no idle timer, because only the STOPPED edge can end this.
+    zassert_equal(d.next_eval_in_ms, 0u, "an explicit hold must not arm the idle clock");
+}
+
+ZTEST(conn_param_governor, test_stream_holds_through_a_long_idle) {
+    // The regression this hold exists to prevent: with no inbound traffic at all, the
+    // idle clock would drag a running stream down to SLOW.
+    Governor gov(test_config());
+    const int64_t t = settle_to_slow(gov);
+
+    gov.step(Trigger::STREAM_STARTED, at(t + kSpacingMs, 0, 8));
+
+    Decision d = gov.step(Trigger::TIMER, at(t + kSpacingMs + kIdleMs * 10, 0, 8));
+    zassert_equal(d.request, ParamSet::NONE, "steady state, nothing to re-request");
+    zassert_equal(gov.target(), ParamSet::MEDIUM, "must still be held up after long silence");
+}
+
+ZTEST(conn_param_governor, test_high_rate_stream_asks_for_fast) {
+    // At/above kStreamFastRateHz one notify per connection event no longer fits
+    // MEDIUM's 30-45 ms interval — that is the wizard's tap-along burst.
+    Governor gov(test_config());
+    const int64_t t = settle_to_slow(gov);
+
+    Decision d = gov.step(Trigger::STREAM_STARTED,
+                          at(t + kSpacingMs, 0, Governor::kStreamFastRateHz));
+    zassert_equal(d.request, ParamSet::FAST);
+    zassert_mem_equal(d.reason, "telemetry stream", sizeof("telemetry stream"));
+}
+
+ZTEST(conn_param_governor, test_stream_stop_releases_to_slow) {
+    Governor gov(test_config());
+    const int64_t t = settle_to_slow(gov);
+
+    gov.step(Trigger::STREAM_STARTED, at(t + kSpacingMs, 0, 8));
+
+    // Long after any activity, so releasing the hold should land straight on SLOW.
+    const int64_t stop = t + kSpacingMs * 2 + kIdleMs;
+    Decision d = gov.step(Trigger::STREAM_STOPPED, at(stop, 0, 0));
+    zassert_equal(d.request, ParamSet::SLOW, "the radio must come back down");
+    zassert_false(gov.streamActive());
+}
+
+ZTEST(conn_param_governor, test_dfu_outranks_a_stream) {
+    // A firmware update is the one thing more important than a live meter, and it
+    // must not be demoted by a stream that happens to be running.
+    Governor gov(test_config());
+    const int64_t t = settle_to_slow(gov);
+
+    gov.step(Trigger::STREAM_STARTED, at(t + kSpacingMs, 0, 8));
+    zassert_equal(gov.target(), ParamSet::MEDIUM);
+
+    Decision d = gov.step(Trigger::DFU_STARTED, at(t + kSpacingMs * 2, 0, 8));
+    zassert_equal(d.request, ParamSet::FAST);
+    zassert_mem_equal(d.reason, "SMP DFU boost", sizeof("SMP DFU boost"));
+
+    // And when the DFU ends the stream hold is still in force, not forgotten.
+    d = gov.step(Trigger::DFU_STOPPED, at(t + kSpacingMs * 3, 0, 8));
+    zassert_equal(d.request, ParamSet::MEDIUM, "the stream hold survives a DFU");
+    zassert_true(gov.streamActive());
+}
+
+ZTEST(conn_param_governor, test_disconnect_clears_the_stream_hold) {
+    // The one that would be genuinely bad to get wrong: a hold surviving into the
+    // next connection pins the radio fast for a subscriber that no longer exists,
+    // draining the battery with nobody watching.
+    Governor gov(test_config());
+    const int64_t t = settle_to_slow(gov);
+
+    gov.step(Trigger::STREAM_STARTED, at(t + kSpacingMs, 0, 8));
+    zassert_true(gov.streamActive());
+
+    gov.step(Trigger::DISCONNECTED, at(t + kSpacingMs * 2, 0, 8));
+    zassert_false(gov.streamActive(), "a stream cannot survive its own link");
+
+    // Reconnect: normal discovery FAST, then a normal idle downgrade — no ghost hold.
+    Decision d = gov.step(Trigger::CONNECTED, at(0, 0));
+    zassert_equal(d.request, ParamSet::FAST);
+    zassert_false(gov.streamActive());
+    d = gov.step(Trigger::TIMER, at(kIdleMs, 0));
+    zassert_equal(d.request, ParamSet::SLOW, "idle clock must work again after reconnect");
+}
+
+ZTEST(conn_param_governor, test_stream_events_while_disconnected_are_ignored) {
+    Governor gov(test_config());
+
+    Decision d = gov.step(Trigger::STREAM_STARTED, at(1000, 1000, 8));
+    zassert_equal(d.request, ParamSet::NONE);
+    zassert_equal(gov.target(), ParamSet::NONE);
+}
+
+ZTEST(conn_param_governor, test_stream_start_respects_request_spacing) {
+    // The hold is not special-cased around the anti-ping-pong bound: a stream that
+    // starts immediately after another request is deferred and recomputed, not queued.
+    Governor gov(test_config());
+    Decision d = gov.step(Trigger::CONNECTED, at(0, 0));
+    zassert_equal(d.request, ParamSet::FAST);
+
+    d = gov.step(Trigger::STREAM_STARTED,
+                 at(kSpacingMs / 2, 0, Governor::kStreamFastRateHz));
+    // Already FAST, and a high-rate stream also wants FAST, so there is simply no edge.
+    zassert_equal(d.request, ParamSet::NONE);
+    zassert_equal(gov.target(), ParamSet::FAST);
+    zassert_true(gov.streamActive());
+}
+
+// The rate travels in Inputs, so a step that forgets to carry it must not silently
+// demote a running high-rate stream. This pins that desired() reads the live value rather
+// than a latched one - the reason setStreamRateHz() and its ordering contract were removed.
+ZTEST(conn_param_governor, test_stream_rate_is_read_live_not_latched) {
+    Governor gov(test_config());
+    const int64_t t = settle_to_slow(gov);
+
+    // Start modest: MEDIUM.
+    Decision d = gov.step(Trigger::STREAM_STARTED, at(t + kSpacingMs, 0, 8));
+    zassert_equal(d.request, ParamSet::MEDIUM);
+
+    // The app raises the rate for the wizard's tap-along burst. No new trigger is needed -
+    // the next step simply carries the new rate.
+    d = gov.step(Trigger::STREAM_STARTED,
+                 at(t + kSpacingMs * 2, 0, Governor::kStreamFastRateHz));
+    zassert_equal(d.request, ParamSet::FAST, "a raised rate must escalate the hold");
+
+    // ...and dropping it back returns to MEDIUM.
+    d = gov.step(Trigger::STREAM_STARTED, at(t + kSpacingMs * 3, 0, 8));
+    zassert_equal(d.request, ParamSet::MEDIUM, "a lowered rate must relax the hold");
 }
 
 ZTEST_SUITE(conn_param_governor, NULL, NULL, NULL, NULL, NULL);

@@ -31,6 +31,15 @@ ParamSet Governor::desired(Trigger trigger, const Inputs &in) const {
         return ParamSet::FAST;
     }
 
+    // An active telemetry stream holds the link up for as long as it runs. This sits
+    // below DFU (a firmware update still wins) and below the discovery fast path, but
+    // ABOVE the idle clock - the whole point is that outbound notifies do not refresh
+    // that clock, so without this a live meter would sink to SLOW and start arriving in
+    // 165 ms clumps while the user is dragging a slider against it.
+    if (stream_active_) {
+        return in.stream_rate_hz >= kStreamFastRateHz ? ParamSet::FAST : ParamSet::MEDIUM;
+    }
+
     // Clamp a last-activity stamp from before the connect (or a torn/unset
     // one) to "just now" rather than letting it look like ancient idleness.
     int64_t idle_ms = in.now_ms - in.last_activity_ms;
@@ -63,6 +72,7 @@ Decision Governor::step(Trigger trigger, const Inputs &in) {
         case Trigger::CONNECTED:
             connected_ = true;
             dfu_active_ = false;
+            stream_active_ = false;
             target_ = ParamSet::NONE;
             // First request after a connect must never be spacing-deferred.
             last_request_ms_ = INT64_MIN;
@@ -71,6 +81,10 @@ Decision Governor::step(Trigger trigger, const Inputs &in) {
         case Trigger::DISCONNECTED:
             connected_ = false;
             dfu_active_ = false;
+            // A stream cannot survive the link it was streaming over. Leaving this
+            // set would resurrect the hold on the next connect, pinning the radio
+            // fast for a subscriber that no longer exists.
+            stream_active_ = false;
             target_ = ParamSet::NONE;
             last_request_ms_ = INT64_MIN;
             return {ParamSet::NONE, nullptr, 0};
@@ -81,6 +95,14 @@ Decision Governor::step(Trigger trigger, const Inputs &in) {
 
         case Trigger::DFU_STOPPED:
             dfu_active_ = false;
+            break;
+
+        case Trigger::STREAM_STARTED:
+            stream_active_ = true;
+            break;
+
+        case Trigger::STREAM_STOPPED:
+            stream_active_ = false;
             break;
 
         case Trigger::ACTIVITY:
@@ -99,8 +121,10 @@ Decision Governor::step(Trigger trigger, const Inputs &in) {
     // quiet window expires. Steady SLOW needs no timer - only an external
     // event (activity, DFU, disconnect) can change the state.
     const auto downgrade_timer_ms = [&](ParamSet from) -> uint32_t {
-        if (dfu_active_) {
-            return 0;  // DFU_STOPPED / activity events drive the next change
+        if (dfu_active_ || stream_active_) {
+            // Pinned by an explicit hold: the next change can only come from the
+            // matching STOPPED edge (or a disconnect), never from the idle clock.
+            return 0;
         }
         uint64_t window;
         if (from == ParamSet::FAST) {
@@ -139,9 +163,10 @@ Decision Governor::step(Trigger trigger, const Inputs &in) {
 
     const char *reason;
     if (want == ParamSet::FAST) {
-        reason = dfu_active_ ? "SMP DFU boost" : "connect/discovery";
+        reason = dfu_active_ ? "SMP DFU boost"
+                             : (stream_active_ ? "telemetry stream" : "connect/discovery");
     } else if (want == ParamSet::MEDIUM) {
-        reason = "activity boost";
+        reason = stream_active_ ? "telemetry stream" : "activity boost";
     } else {
         reason = "idle downgrade";
     }

@@ -3,6 +3,7 @@
 #include <zephyr/ztest.h>
 
 #include "agc_controller.h"
+#include "audio_dsp.h" /* audio_dsp_gain_amplitude_ratio() for the input-referred test */
 
 namespace {
 /* Directly configurable provider; gate defaults to 0 so tests that aren't
@@ -249,6 +250,199 @@ ZTEST(agc_controller, test_reset_clears_state) {
     float before = ctrl.smoothedRms();
     ctrl.notifyGainChange(0);
     zassert_within(ctrl.smoothedRms(), before, 1e-9f);
+}
+
+/* ── Noise-floor estimate (the Audio Tuning screen's most useful number) ─── */
+
+/* Seeded once the smoothing window has FILLED — not from the first frame, and not from
+ * zero. A min-tracker starting at 0 would need its full ~5 minute rise to reach the real
+ * floor after every boot, reporting a silent room the whole way up; one seeded from an
+ * unconverged window latches ~1/32 of the truth and has the same problem. */
+ZTEST(agc_controller, test_noise_floor_seeds_once_the_window_has_filled) {
+    AgcController ctrl;
+    FakeAgcConfig cfg;
+
+    zassert_equal(ctrl.noiseFloor(), 0.0f, "unseeded floor must read zero, not a guess");
+
+    /* Still filling the smoothing window: smoothed_ is a mean over a window that starts
+     * full of zeros, so there is nothing honest to report yet. */
+    for (int i = 0; i < AgcController::kHistoryLen - 1; i++) {
+        ctrl.update(cfg, 0.004f, 100, AgcController::kGainPark, true);
+        zassert_equal(ctrl.noiseFloor(), 0.0f, "must not seed from an unconverged window");
+    }
+
+    /* Window full — now the level means something and the floor seeds from it. */
+    ctrl.update(cfg, 0.004f, 100, AgcController::kGainPark, true);
+    zassert_within(ctrl.noiseFloor(), 0.004f, 0.004f * 0.02f,
+                   "seeds from the settled level, not from a partially-filled window");
+}
+
+/* Down-fast is what makes it a FLOOR rather than an average: one quiet moment is evidence
+ * about the room, one loud moment is not. */
+ZTEST(agc_controller, test_noise_floor_drops_immediately_but_rises_slowly) {
+    AgcController ctrl;
+    FakeAgcConfig cfg;
+
+    /* Settle on a moderate level so the window is full and the floor is seeded there. */
+    for (int i = 0; i < 64; i++) {
+        ctrl.update(cfg, 0.004f, 200, AgcController::kGainPark, true);
+    }
+    const float settled = ctrl.noiseFloor();
+    zassert_within(settled, 0.004f, 0.004f * 0.05f, "floor seeds at the settled level");
+
+    /* Go loud. The floor must NOT chase it — that is the whole point of a min-tracker.
+     *
+     * State the bound against the GAP, not against the floor: the tracker closes a fixed
+     * FRACTION of the remaining distance each frame (1e-4, a ~320 s constant), so over 64
+     * frames it covers ~0.64% of however far away the loud level is. Expressed as a
+     * percentage of the floor that same motion looks much larger when the gap is wide,
+     * which is what made an earlier "< 1.05x the floor" version of this assertion fail on
+     * correct code. */
+    const float kLoud = 0.05f;
+    for (int i = 0; i < 64; i++) {
+        ctrl.update(cfg, kLoud, 900, AgcController::kGainPark, true);
+    }
+    zassert_true(ctrl.noiseFloor() < settled + (kLoud - settled) * 0.02f,
+                 "2 s of loud must close well under 2%% of the gap: floor %f, settled %f, "
+                 "loud %f",
+                 (double)ctrl.noiseFloor(), (double)settled, (double)kLoud);
+
+    /* Now go genuinely quiet. The floor must follow down promptly, because one quiet
+     * moment IS evidence about the room in a way one loud moment is not. */
+    for (int i = 0; i < 64; i++) {
+        ctrl.update(cfg, 0.0001f, 5, AgcController::kGainPark, true);
+    }
+    zassert_true(ctrl.noiseFloor() < settled / 10.0f,
+                 "floor must follow the room down quickly: got %f from %f",
+                 (double)ctrl.noiseFloor(), (double)settled);
+}
+
+/* Same reasoning as the noise gate itself: the room does not get louder because the AGC
+ * turned up, so the floor must be gain-invariant. */
+ZTEST(agc_controller, test_noise_floor_is_input_referred) {
+    FakeAgcConfig cfg;
+    AgcController parked;
+    AgcController amplified;
+
+    /* Same acoustic level, two different gains. At +10 dB the captured RMS is larger by
+     * the amplitude ratio, but the INPUT-referred floor should land in the same place. */
+    const int kSteps = 20; /* +10 dB */
+    const float kAcoustic = 0.001f;
+    const float amplified_rms = kAcoustic * audio_dsp_gain_amplitude_ratio(kSteps);
+
+    for (int i = 0; i < 64; i++) {
+        parked.update(cfg, kAcoustic, 50, AgcController::kGainPark, false);
+        amplified.update(cfg, amplified_rms, 50, (uint8_t)(AgcController::kGainPark + kSteps),
+                         false);
+    }
+
+    zassert_within(amplified.noiseFloor(), parked.noiseFloor(), parked.noiseFloor() * 0.02f,
+                   "input-referred floor must not depend on where the AGC sits: %f vs %f",
+                   (double)amplified.noiseFloor(), (double)parked.noiseFloor());
+}
+
+/* It is a measurement, not a control action — freezing the AGC must not blind it. */
+ZTEST(agc_controller, test_noise_floor_tracks_while_frozen) {
+    AgcController ctrl;
+    FakeAgcConfig cfg;
+
+    for (int i = 0; i < 32; i++) {
+        ctrl.update(cfg, 0.002f, 100, AgcController::kGainPark, false /* frozen */);
+    }
+    zassert_true(ctrl.noiseFloor() > 0.0f, "frozen must still measure the room");
+}
+
+/* ── framesSinceStep (how settled the AGC is) ────────────────────────────── */
+
+ZTEST(agc_controller, test_frames_since_step_counts_and_resets_on_a_step) {
+    AgcController ctrl;
+    FakeAgcConfig cfg;
+    cfg.rate = 1;
+    cfg.attack = 1;
+
+    for (int i = 0; i < 5; i++) {
+        ctrl.update(cfg, 0.001f, 100, AgcController::kGainPark, true);
+    }
+    zassert_equal(ctrl.framesSinceStep(), 5);
+
+    /* A clip forces a step, which restarts the count. */
+    const AgcDecision d =
+        ctrl.update(cfg, 0.001f, AgcController::kClipPeak, AgcController::kGainPark, true);
+    zassert_true(d.gain_steps < 0, "clip must step down");
+    zassert_equal(ctrl.framesSinceStep(), 0, "a gain step restarts the settle clock");
+}
+
+/* The |steps| > 4 flush zeroes the RMS window, so the noise floor must un-seed with it.
+ * Before this was fixed the next update() read a floor over 31 zeros + 1 real frame (~1/32
+ * of truth) and, since the tracker only snaps DOWN instantly, needed ~12 minutes to climb
+ * back — on the debug image, which is exactly who reads this meter. */
+ZTEST(agc_controller, test_large_gain_flush_unseeds_the_noise_floor) {
+    AgcController ctrl;
+    FakeAgcConfig cfg;
+
+    for (int i = 0; i < 64; i++) {
+        ctrl.update(cfg, 0.004f, 200, AgcController::kGainPark, true);
+    }
+    zassert_within(ctrl.noiseFloor(), 0.004f, 0.004f * 0.05f);
+
+    /* A manual "sound agc gain" jump — the only thing that produces |steps| > 4. */
+    ctrl.notifyGainChange(20);
+    zassert_equal(ctrl.noiseFloor(), 0.0f, "flush must un-seed the floor, not strand it");
+
+    /* Same ACOUSTIC level at the new gain: the captured RMS scales up with the gain, which
+     * is the whole point of the floor being input-referred. Feeding the same raw RMS here
+     * would model a quieter room and prove nothing about the fix. */
+    const uint8_t kNewGain = (uint8_t)(AgcController::kGainPark + 20);
+    const float kAmplified = 0.004f * audio_dsp_gain_amplitude_ratio(20);
+
+    /* The next frame must NOT latch a value read from a half-empty window. */
+    ctrl.update(cfg, kAmplified, 200, kNewGain, true);
+    zassert_equal(ctrl.noiseFloor(), 0.0f, "still filling: nothing honest to report yet");
+
+    for (int i = 1; i < AgcController::kHistoryLen; i++) {
+        ctrl.update(cfg, kAmplified, 200, kNewGain, true);
+    }
+    /* Re-seeded from a full window; input-referred, so back to the same acoustic 0.004. */
+    zassert_within(ctrl.noiseFloor(), 0.004f, 0.004f * 0.05f,
+                   "re-seeds from the refilled window, not from ~1/32 of it");
+}
+
+/* The small-step rescale path keeps its window, so it must NOT un-seed. */
+ZTEST(agc_controller, test_small_gain_step_preserves_the_noise_floor) {
+    AgcController ctrl;
+    FakeAgcConfig cfg;
+
+    for (int i = 0; i < 64; i++) {
+        ctrl.update(cfg, 0.004f, 200, AgcController::kGainPark, true);
+    }
+    const float before = ctrl.noiseFloor();
+
+    ctrl.notifyGainChange(2);
+    zassert_within(ctrl.noiseFloor(), before, before * 0.01f,
+                   "a rescaled window keeps its floor — only a flush discards it");
+}
+
+ZTEST(agc_controller, test_reset_clears_the_new_telemetry_state) {
+    AgcController ctrl;
+    FakeAgcConfig cfg;
+
+    for (int i = 0; i < 32; i++) {
+        ctrl.update(cfg, 0.002f, 100, AgcController::kGainPark, true);
+    }
+    zassert_true(ctrl.noiseFloor() > 0.0f);
+    zassert_true(ctrl.framesSinceStep() > 0);
+
+    /* reset() runs after a PDM stream restart; stale telemetry across that would misreport
+     * the room for the next five minutes. */
+    ctrl.reset();
+    zassert_equal(ctrl.noiseFloor(), 0.0f);
+    zassert_equal(ctrl.framesSinceStep(), 0);
+
+    /* And it must re-seed from a refilled window rather than crawl up from zero. */
+    for (int i = 0; i < AgcController::kHistoryLen; i++) {
+        ctrl.update(cfg, 0.004f, 100, AgcController::kGainPark, true);
+    }
+    zassert_within(ctrl.noiseFloor(), 0.004f, 0.004f * 0.02f);
 }
 
 ZTEST_SUITE(agc_controller, NULL, NULL, NULL, NULL, NULL);

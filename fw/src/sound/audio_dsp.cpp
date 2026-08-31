@@ -316,7 +316,17 @@ void audio_dsp_process(const int16_t *pcm, uint32_t seq, struct audio_analysis_r
             out->band_sigma[b] = flux_sigma;
         }
 
-        /* 4d. Beat: flux spike above adaptive threshold and noise floor.
+        /* SECOND COPY OF THIS FORMULA: resolve_threshold() in fw/src/sound/audio_telemetry.cpp
+         * re-derives the fire line from band_mean/band_sigma so the app can plot it. It is a
+         * re-derivation rather than an export because band_threshold[] would cost ~96 B of
+         * always-on RAM across the result queue and audio_dsp.h:95-97 freezes this struct's
+         * layout for the msgq/tap/extension ABI. If you add a threshold mode, change the floor
+         * rule, or move what these two slots carry, update that function in the same commit —
+         * otherwise the meter draws a line that beats visibly cross without firing, which is
+         * the exact confusion the telemetry stream exists to end. (beat_lab/report.py is a
+         * third copy, offline and non-shipping.)
+         *
+         * 4d. Beat: flux spike above adaptive threshold and noise floor.
          *     The floor and refractory apply identically in both modes — in
          *     mode 1 the floor is what keeps silence silent, since the median
          *     of an all-zero history is 0 and the threshold collapses to
