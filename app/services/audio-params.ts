@@ -727,101 +727,128 @@ function invertTwoSidedGeometric(
 }
 
 /**
- * Macro outputs are clamped to the parameter's own range before they are ever encoded.
+ * Macro outputs are clamped to the parameter's range before they are ever encoded.
  *
- * Without this, `alphaFromSensitivity(10)` evaluates to 0.09999999999999999 — a hair below the
- * firmware's 0.1 minimum — which the device would clamp on read and write back, making the
- * thumb twitch after a write for no reason a user could ever explain.
+ * With the curve factors derived from the same spec (max/default, min/default), the endpoint
+ * products round-trip float-exactly for every range checked, so no currently-known input
+ * produces an out-of-range value — this clamp is defense in depth, not a fix for a known case.
+ * It stays because the invariant it guarantees ("a macro can never emit a value the device
+ * would clamp and write back, twitching the thumb after a write") is worth one clampNumber,
+ * where the alternative is auditing float rounding against every range a device might publish.
+ * The historical motivating case: with the old hand-written `1 / 3` factor, step 10 evaluated
+ * to 0.09999999999999999, a hair below the firmware's 0.1 minimum.
+ *
+ * Pass `spec` when a device-resolved spec is in hand — the clamp then honors the range the
+ * firmware actually published rather than the app's mirror of it.
  */
-export function clampToSpec(key: AudioParamKey, value: number): number {
-    const spec = AUDIO_PARAMS[key];
-    return clampNumber(value, spec.min, spec.max);
+export function clampToSpec(key: AudioParamKey, value: number, spec?: AudioParamSpec): number {
+    const s = spec ?? AUDIO_PARAMS[key];
+    return clampNumber(value, s.min, s.max);
 }
 
 /**
  * One descriptor per macro, consumed by BOTH directions.
  *
- * The midpoint is READ FROM THE TABLE rather than restated, and the factors are written once
- * rather than once per direction. Previously each macro carried its midpoint and both factors
- * twice — six literal sites across three macros — none of them derived from the spec three
- * screens up that holds the same number. Retuning a default in the table without editing every
- * literal made forward and inverse disagree, and a device sitting on what used to be a macro
- * step then rendered "Custom" everywhere. The round-trip tests would have caught drift WITHIN a
- * pair but not between the table and the macros, which is the drift that could actually happen.
+ * The midpoint always comes from the spec's own default and the factors are FUNCTIONS of the
+ * spec, written once rather than once per direction. Previously each macro carried its midpoint
+ * and both factors twice — six literal sites across three macros — none of them derived from
+ * the spec three screens up that holds the same number. Retuning a default in the table without
+ * editing every literal made forward and inverse disagree, and a device sitting on what used to
+ * be a macro step then rendered "Custom" everywhere. The round-trip tests would have caught
+ * drift WITHIN a pair but not between the table and the macros, which is the drift that could
+ * actually happen.
+ *
+ * WHICH spec the factors are evaluated against is the caller's choice: every public macro
+ * function takes an optional device-RESOLVED spec (from `resolveAudioParams` + the #419 ranges
+ * blob) and falls back to the static mirror. This matters because the encode path deliberately
+ * clamps against the resolved spec — on a device publishing a narrower range than the mirror
+ * (say beatAlpha max = 10), a curve built from the mirror would compute 12.6 and 20.0 for the
+ * low steps, both encode-clamp to 10.0, and the read-back would flip the slider to "Custom"
+ * right after the user picked a step. Callers with a resolved spec must pass it to BOTH
+ * directions (forward and inverse), or the write and the thumb placement will disagree the
+ * same way.
  */
 interface MacroCurve {
     key: AudioParamKey;
     scale: MacroScale;
-    lowFactor: number;
-    highFactor: number;
+    lowFactor: (spec: AudioParamSpec) => number;
+    highFactor: (spec: AudioParamSpec) => number;
 }
 
-/** Midpoint always comes from the parameter's own default — never restated here. */
-function macroMid(curve: MacroCurve): number {
-    return AUDIO_PARAMS[curve.key].defaultValue;
+function macroSpec(curve: MacroCurve, spec?: AudioParamSpec): AudioParamSpec {
+    return spec ?? AUDIO_PARAMS[curve.key];
 }
 
-function macroForward(curve: MacroCurve, s: number): number {
+function macroForward(curve: MacroCurve, s: number, spec?: AudioParamSpec): number {
+    const sp = macroSpec(curve, spec);
     const raw = twoSidedGeometric(
         curve.scale,
         clampNumber(s, curve.scale.min, curve.scale.max),
-        macroMid(curve),
-        curve.lowFactor,
-        curve.highFactor,
+        sp.defaultValue,
+        curve.lowFactor(sp),
+        curve.highFactor(sp),
     );
-    return clampToSpec(curve.key, raw);
+    return clampNumber(raw, sp.min, sp.max);
 }
 
-function macroInverse(curve: MacroCurve, value: number): number | null {
+function macroInverse(curve: MacroCurve, value: number, spec?: AudioParamSpec): number | null {
+    const sp = macroSpec(curve, spec);
     return invertTwoSidedGeometric(
         curve.scale,
         value,
-        macroMid(curve),
-        curve.lowFactor,
-        curve.highFactor,
+        sp.defaultValue,
+        curve.lowFactor(sp),
+        curve.highFactor(sp),
     );
 }
 
 /**
- * Sensitivity endpoints are DERIVED from the parameter table, same rule as `macroMid`: a number
- * the table owns is never restated. Step 1 is therefore the firmware max — the whole reason the
- * scale is 1..20 is that step 1's old hand-picked 1.50 kept proving not low enough in the field,
- * and any hand-picked replacement would eventually do the same. Step 20 is the firmware min.
+ * Sensitivity endpoints are DERIVED from the spec, same rule as the midpoint: a number the
+ * spec owns is never restated. Step 1 is therefore the firmware max — the whole reason the
+ * scale is 1..20 is that step 1's old hand-picked 1.50 kept proving not low enough in the
+ * field, and any hand-picked replacement would eventually do the same. The top step is the
+ * firmware min.
  *
- * 10 = the firmware default (0.30), 1 = 20.0 (firmware max), 20 = 0.10 (firmware min).
+ * Against the shipped table: 10 = the default (0.30), 1 = 20.0 (max), 20 = 0.10 (min).
  */
 const ALPHA_CURVE: MacroCurve = {
     key: "beatAlpha",
     scale: SENSITIVITY_SCALE,
-    lowFactor: AUDIO_PARAMS.beatAlpha.max / AUDIO_PARAMS.beatAlpha.defaultValue,
-    highFactor: AUDIO_PARAMS.beatAlpha.min / AUDIO_PARAMS.beatAlpha.defaultValue,
+    lowFactor: spec => spec.max / spec.defaultValue,
+    highFactor: spec => spec.min / spec.defaultValue,
 };
+
 /**
- * Median mode. 10 = the firmware default (0.10), 1 = 2.0 (firmware max), 20 = 0.025.
+ * The most-sensitive delta the macro can reach — an ENDPOINT, pinned as one.
  *
- * The high factor stays a literal: this spec's min is 0 with `allowsZero`, so there is no
- * nonzero table endpoint to derive a geometric curve from — 0.025 is the same most-sensitive
- * value the 1..10 scale ended at.
+ * The spec's min is 0 with `allowsZero`, so there is no nonzero table endpoint to derive the
+ * high factor from; 0.025 is the same most-sensitive value the 1..10 scale ended at. Deriving
+ * the factor from this constant (rather than writing the ratio `1 / 4`) keeps the endpoint
+ * fixed if `beatSfDelta.defaultValue` is ever retuned — a ratio would silently move the top
+ * step along with the default, desensitizing the macro through a line nobody edited.
  */
+const DELTA_MOST_SENSITIVE = 0.025;
+
+/** Median mode. Against the shipped table: 10 = the default (0.10), 1 = 2.0 (max), 20 = 0.025. */
 const DELTA_CURVE: MacroCurve = {
     key: "beatSfDelta",
     scale: SENSITIVITY_SCALE,
-    lowFactor: AUDIO_PARAMS.beatSfDelta.max / AUDIO_PARAMS.beatSfDelta.defaultValue,
-    highFactor: 1 / 4,
+    lowFactor: spec => spec.max / spec.defaultValue,
+    highFactor: spec => DELTA_MOST_SENSITIVE / spec.defaultValue,
 };
 
-export function alphaFromSensitivity(s: number): number {
-    return macroForward(ALPHA_CURVE, s);
+export function alphaFromSensitivity(s: number, spec?: AudioParamSpec): number {
+    return macroForward(ALPHA_CURVE, s, spec);
 }
-export function sensitivityFromAlpha(alpha: number): number | null {
-    return macroInverse(ALPHA_CURVE, alpha);
+export function sensitivityFromAlpha(alpha: number, spec?: AudioParamSpec): number | null {
+    return macroInverse(ALPHA_CURVE, alpha, spec);
 }
 
-export function deltaFromSensitivity(s: number): number {
-    return macroForward(DELTA_CURVE, s);
+export function deltaFromSensitivity(s: number, spec?: AudioParamSpec): number {
+    return macroForward(DELTA_CURVE, s, spec);
 }
-export function sensitivityFromDelta(delta: number): number | null {
-    return macroInverse(DELTA_CURVE, delta);
+export function sensitivityFromDelta(delta: number, spec?: AudioParamSpec): number | null {
+    return macroInverse(DELTA_CURVE, delta, spec);
 }
 
 /**
@@ -837,8 +864,11 @@ export function sensitivityFromDelta(delta: number): number | null {
 const GATE_CURVE: MacroCurve = {
     key: "agcNoiseGateRms",
     scale: NOISE_SCALE,
-    lowFactor: 1 / 6,
-    highFactor: 20 / 3,
+    /* Hand-tuned to the measured band above, NOT spec-derived: the gate's full firmware range
+     * is enormously wider than its useful band, so a spec-derived curve would waste nearly the
+     * whole slider. A resolved spec still governs the midpoint and the clamp. */
+    lowFactor: () => 1 / 6,
+    highFactor: () => 20 / 3,
 };
 
 const MACRO_CURVES: Partial<Record<AudioParamKey, MacroCurve>> = {
@@ -856,27 +886,18 @@ const MACRO_CURVES: Partial<Record<AudioParamKey, MacroCurve>> = {
  * alpha and delta curves are independent calibrations of the same perceptual axis. Used to give a
  * preset one sensitivity intent that both threshold modes can carry.
  */
-export function macroScaleOf(key: AudioParamKey, value: number): number | null {
+export function macroScaleOf(key: AudioParamKey, value: number, spec?: AudioParamSpec): number | null {
     const curve = MACRO_CURVES[key];
     if (!curve) return null;
 
-    const mid = macroMid(curve);
-    const candidates = twoSidedGeometricCandidates(
-        curve.scale,
-        value,
-        mid,
-        curve.lowFactor,
-        curve.highFactor,
-    );
+    const sp = macroSpec(curve, spec);
+    const mid = sp.defaultValue;
+    const lowFactor = curve.lowFactor(sp);
+    const highFactor = curve.highFactor(sp);
+    const candidates = twoSidedGeometricCandidates(curve.scale, value, mid, lowFactor, highFactor);
     for (const candidate of candidates) {
         if (candidate < curve.scale.min || candidate > curve.scale.max) continue;
-        const reconstructed = twoSidedGeometric(
-            curve.scale,
-            candidate,
-            mid,
-            curve.lowFactor,
-            curve.highFactor,
-        );
+        const reconstructed = twoSidedGeometric(curve.scale, candidate, mid, lowFactor, highFactor);
         if (Math.abs(reconstructed - value) <= 1e-9 * Math.max(Math.abs(value), 1e-12)) {
             return candidate;
         }
@@ -896,14 +917,14 @@ export function macroScaleOf(key: AudioParamKey, value: number): number | null {
  * Compared in LOG space, because every macro curve is geometric: linear distance would call 0.31
  * nearer to 0.30 than 0.29 is, which is not what "nearest step" means on a ratio scale.
  */
-export function nearestMacroStep(key: AudioParamKey, value: number): number | null {
+export function nearestMacroStep(key: AudioParamKey, value: number, spec?: AudioParamSpec): number | null {
     const curve = MACRO_CURVES[key];
     if (!curve || !(value > 0)) return null;
 
     let best = curve.scale.min;
     let bestDistance = Infinity;
     for (let s = curve.scale.min; s <= curve.scale.max; s++) {
-        const candidate = macroForward(curve, s);
+        const candidate = macroForward(curve, s, spec);
         if (!(candidate > 0)) continue;
         const distance = Math.abs(Math.log(candidate / value));
         if (distance < bestDistance) {
@@ -914,13 +935,13 @@ export function nearestMacroStep(key: AudioParamKey, value: number): number | nu
     return best;
 }
 
-export function gateFromNoiseLevel(s: number | "off"): number {
+export function gateFromNoiseLevel(s: number | "off", spec?: AudioParamSpec): number {
     if (s === "off") return 0;
-    return macroForward(GATE_CURVE, s);
+    return macroForward(GATE_CURVE, s, spec);
 }
-export function noiseLevelFromGate(gate: number): number | "off" | null {
+export function noiseLevelFromGate(gate: number, spec?: AudioParamSpec): number | "off" | null {
     if (gate === 0) return "off";
-    return macroInverse(GATE_CURVE, gate);
+    return macroInverse(GATE_CURVE, gate, spec);
 }
 
 export interface BeatFeelPreset {

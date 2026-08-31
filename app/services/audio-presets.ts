@@ -20,6 +20,7 @@ import {
     alphaFromSensitivity,
     deltaFromSensitivity,
     formatParamValue,
+    macroScaleOf,
 } from "@/services/audio-params";
 
 export interface AudioPreset {
@@ -68,12 +69,37 @@ function factoryValues(): Record<AudioParamKey, number> {
  * bigger surprise than the one being fixed. The unused one is a single wasted GATT write, and it
  * is already correct if the mode is changed later.
  *
- * The scale position is the authored value because the two curves are independent calibrations
- * of the SAME perceptual scale, so position 4.6 means the same subjective sensitivity in either
- * mode. Deriving both from it is what stops the pair drifting.
+ * The scale position carries the intent because the two curves are independent calibrations
+ * of the SAME perceptual scale, so one position means the same subjective sensitivity in
+ * either mode. Deriving both from it is what stops the pair drifting.
  */
 function sensitivityValues(s: number): { beatAlpha: number; beatSfDelta: number } {
     return { beatAlpha: alphaFromSensitivity(s), beatSfDelta: deltaFromSensitivity(s) };
+}
+
+/**
+ * Author a preset's sensitivity by its tuned-by-ear ALPHA, not by a scale position.
+ *
+ * The positions used to be hand-recomputed literals (4.6 became 9.66 when the scale grew to
+ * 1..20), which is exactly the maintenance the macro layer exists to remove: the curve
+ * endpoints are derived from the parameter table, so any firmware range or default retune
+ * silently moves what a written-down position maps to, and someone recomputes three literals
+ * again. The alpha is the value that was actually chosen by listening; inverting it through
+ * `macroScaleOf` at module init makes "a retune of the CURVE must not retune the PRESETS"
+ * structural instead of test-enforced.
+ *
+ * The derived `beatSfDelta` is whatever the delta curve says at that position — it moved a few
+ * percent MORE sensitive for the below-default presets when the scale grew (the low half's
+ * per-step ratio changed), which is accepted and pinned in the tests. The throw is for a table
+ * edit that pushes an anchor outside the curve's range; the preset tests exercise this module,
+ * so it cannot get past CI.
+ */
+function sensitivityValuesForAlpha(alpha: number): { beatAlpha: number; beatSfDelta: number } {
+    const s = macroScaleOf("beatAlpha", alpha);
+    if (s === null) {
+        throw new Error(`preset alpha ${alpha} is outside the sensitivity curve's range`);
+    }
+    return sensitivityValues(s);
 }
 
 /**
@@ -103,11 +129,11 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             agcAttackFrames: 2,
             agcReleaseFrames: 10,
             // A touch below the default sensitivity: a loud room produces more candidate
-            // onsets, not fewer, so the bar for "that was a beat" goes up. (Scale 9.66 -> alpha
-            // 0.352, the value this preset has carried since it was a literal. Was 4.6 on the
-            // 1..10 scale; recomputed to hold alpha when the scale grew to 1..20 — the delta
-            // moved ~2%, accepted, since the curves are independent calibrations of one axis.)
-            ...sensitivityValues(9.66),
+            // onsets, not fewer, so the bar for "that was a beat" goes up. 0.352 is the value
+            // this preset has carried since it was a literal; the derived delta sits ~2%
+            // LOWER (slightly more sensitive on a median-mode board) than it did on the 1..10
+            // scale — accepted, and pinned in the tests.
+            ...sensitivityValuesForAlpha(0.352),
             beatRefractoryFrames: 6,
         },
     },
@@ -123,9 +149,9 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             agcTargetLow: 0.0012,
             agcReleaseFrames: 20,
             // More sensitive than default, so a brushed snare in a quiet passage still counts.
-            // (Scale 12.8 -> alpha 0.221, the previous literal. Was 6.4 on the 1..10 scale;
-            // the high half rescaled proportionally, so both alpha and delta carry over exactly.)
-            ...sensitivityValues(12.8),
+            // 0.221 is the previous literal; this anchor sits on the curve's high half, which
+            // rescaled proportionally when the scale grew, so the delta carried over exactly.
+            ...sensitivityValuesForAlpha(0.221),
             beatRefractoryFrames: 5,
         },
     },
@@ -139,10 +165,15 @@ export const BUILT_IN_PRESETS: AudioPreset[] = [
             // gap, so talking and clinking glasses do not drive the lights.
             agcNoiseGateRms: 0.0008,
             // Well below default sensitivity — the point is NOT to fire at conversation.
-            // (Scale 8.53 -> alpha 0.595, the previous literal. Was 3.3 on the 1..10 scale;
-            // recomputed to hold alpha when the scale grew to 1..20 — the delta moved ~10%,
-            // in the duller direction, which suits this preset's whole point.)
-            ...sensitivityValues(8.53),
+            // 0.595 is the previous literal, and it is what a mean-mode board (the shipped
+            // default) actually runs. The derived delta moved ~10% LOWER than its 1..10-scale
+            // value (0.180 -> 0.163) — on a MEDIAN-mode board this preset therefore fires
+            // slightly more easily than it used to, which runs against its name. Accepted:
+            // alpha is the tuned-by-ear trait and the default mode's behavior, the delta
+            // remains well below the default-sensitivity delta, and re-anchoring on delta
+            // would instead change the preset on every mean-mode board. Pinned in the tests
+            // so a further drift is a deliberate act.
+            ...sensitivityValuesForAlpha(0.595),
             beatRefractoryFrames: 12,
         },
     },

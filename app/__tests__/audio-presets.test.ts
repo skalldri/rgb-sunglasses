@@ -82,16 +82,28 @@ describe("built-in presets", () => {
     });
 
     it("kept each preset's beatAlpha when the sensitivity scale grew to 1..20", () => {
-        // The authored scale positions were recomputed for the 1..20 curve so that each
-        // preset's alpha — its headline trait, and the value these presets carried when they
-        // were literals — stayed put. A retune of the CURVE must not retune the PRESETS.
-        // (beatSfDelta drifts a few percent on the low-side presets, accepted: the two curves
-        // are independent calibrations of one axis and alpha is the one that was tuned by ear.)
+        // Each preset is authored by its tuned-by-ear ALPHA and the scale position is derived
+        // (sensitivityValuesForAlpha), so these are exact: a retune of the CURVE must not
+        // retune the PRESETS, structurally.
         const alphaOf = (id: string) =>
             BUILT_IN_PRESETS.find(p => p.id === id)!.values.beatAlpha as number;
-        expect(alphaOf("builtin:loud-club")).toBeCloseTo(0.352, 2);
-        expect(alphaOf("builtin:acoustic")).toBeCloseTo(0.221, 2);
-        expect(alphaOf("builtin:speech")).toBeCloseTo(0.595, 2);
+        expect(alphaOf("builtin:loud-club")).toBeCloseTo(0.352, 9);
+        expect(alphaOf("builtin:acoustic")).toBeCloseTo(0.221, 9);
+        expect(alphaOf("builtin:speech")).toBeCloseTo(0.595, 9);
+    });
+
+    it("pins each preset's derived beatSfDelta, so median-mode drift is a deliberate act", () => {
+        // The deltas are DERIVED (the position preserves alpha; delta follows the delta curve
+        // at that position), and when the scale grew to 1..20 the below-default deltas moved
+        // a few percent LOWER — i.e. slightly MORE sensitive on a median-mode board, which
+        // for speech runs against the preset's name (review #425). Accepted, with the
+        // reasoning at the preset definition — but pinned here, because these used to be
+        // fixed by literals and are otherwise fixed by nothing.
+        const deltaOf = (id: string) =>
+            BUILT_IN_PRESETS.find(p => p.id === id)!.values.beatSfDelta as number;
+        expect(deltaOf("builtin:loud-club")).toBeCloseTo(0.11208, 4);
+        expect(deltaOf("builtin:acoustic")).toBeCloseTo(0.068, 4);
+        expect(deltaOf("builtin:speech")).toBeCloseTo(0.16298, 4);
     });
 });
 

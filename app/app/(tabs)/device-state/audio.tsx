@@ -246,15 +246,21 @@ export default function AudioTuningScreen() {
     // showing nothing, so the label follows the mode too.
     const sensitivityKey: AudioParamKey = usesMedian ? "beatSfDelta" : "beatAlpha";
     const sensitivityRaw = valueOf(sensitivityKey);
+    /* Every macro call on this screen — both directions — gets the RESOLVED spec, for the same
+     * reason the encode paths below do: the curve endpoints derive from the spec's range, so a
+     * device publishing a range narrower than the mirror would otherwise have its low steps
+     * computed past its own max, encode-clamped together, and read back as "Custom". Forward
+     * and inverse must use the SAME spec or the thumb and the write disagree. */
     const sensitivity =
         sensitivityRaw === null
             ? null
             : usesMedian
-              ? sensitivityFromDelta(sensitivityRaw)
-              : sensitivityFromAlpha(sensitivityRaw);
+              ? sensitivityFromDelta(sensitivityRaw, specOf(sensitivityKey))
+              : sensitivityFromAlpha(sensitivityRaw, specOf(sensitivityKey));
 
     const gateRaw = valueOf("agcNoiseGateRms");
-    const noiseLevel = gateRaw === null ? null : noiseLevelFromGate(gateRaw);
+    const noiseLevel =
+        gateRaw === null ? null : noiseLevelFromGate(gateRaw, specOf("agcNoiseGateRms"));
 
     const refractory = valueOf("beatRefractoryFrames");
     const beatFeel = refractory === null ? null : beatFeelFromFrames(Math.round(refractory));
@@ -276,8 +282,11 @@ export default function AudioTuningScreen() {
      * inversion fail and the control would render "Custom" while the user was dragging it.
      */
     const sensitivityToParam = useCallback(
-        (step: number) => (usesMedian ? deltaFromSensitivity(step) : alphaFromSensitivity(step)),
-        [usesMedian],
+        (step: number) =>
+            usesMedian
+                ? deltaFromSensitivity(step, specOf("beatSfDelta"))
+                : alphaFromSensitivity(step, specOf("beatAlpha")),
+        [usesMedian, specOf],
     );
 
     /* Every encode path goes through the RESOLVED spec, so encodeParam clamps against the
@@ -300,24 +309,24 @@ export default function AudioTuningScreen() {
     );
 
     const noiseToParam = useCallback(
-        (step: number) => gateFromNoiseLevel(step === 0 ? "off" : step),
-        [],
+        (step: number) => gateFromNoiseLevel(step === 0 ? "off" : step, specOf("agcNoiseGateRms")),
+        [specOf],
     );
 
     const onNoiseSlide = useCallback(
         (step: number) => {
-            const spec = AUDIO_PARAMS.agcNoiseGateRms;
+            const spec = specOf("agcNoiseGateRms");
             writer.onSlide(spec.uuid, noiseToParam(step), v => encodeParam(spec, v));
         },
-        [noiseToParam, writer],
+        [noiseToParam, writer, specOf],
     );
 
     const onNoiseComplete = useCallback(
         (step: number) => {
-            const spec = AUDIO_PARAMS.agcNoiseGateRms;
+            const spec = specOf("agcNoiseGateRms");
             writer.onSlideComplete(spec.uuid, noiseToParam(step), v => encodeParam(spec, v));
         },
-        [noiseToParam, writer],
+        [noiseToParam, writer, specOf],
     );
 
     const onBeatFeel = useCallback(
@@ -469,7 +478,7 @@ export default function AudioTuningScreen() {
                              * below is actually followable. */
                             ghostValue={
                                 sensitivity === null && sensitivityRaw !== null
-                                    ? nearestMacroStep(sensitivityKey, sensitivityRaw)
+                                    ? nearestMacroStep(sensitivityKey, sensitivityRaw, specOf(sensitivityKey))
                                     : null
                             }
                             busy={busyOf(sensitivityKey)}
@@ -506,13 +515,13 @@ export default function AudioTuningScreen() {
                             value={noiseLevel === "off" ? 0 : noiseLevel}
                             ghostValue={
                                 noiseLevel === null && gateRaw !== null
-                                    ? nearestMacroStep("agcNoiseGateRms", gateRaw)
+                                    ? nearestMacroStep("agcNoiseGateRms", gateRaw, specOf("agcNoiseGateRms"))
                                     : null
                             }
                             busy={busyOf("agcNoiseGateRms")}
                             liveNote={
                                 noiseLevel === null && gateRaw !== null
-                                    ? `Custom (${formatParamValue(AUDIO_PARAMS.agcNoiseGateRms, gateRaw)}) - move the slider to take control`
+                                    ? `Custom (${formatParamValue(specOf("agcNoiseGateRms"), gateRaw)}) - move the slider to take control`
                                     : null
                             }
                             onSlide={onNoiseSlide}

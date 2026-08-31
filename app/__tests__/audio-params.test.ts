@@ -354,6 +354,15 @@ describe("macro mappings", () => {
         expect(gateFromNoiseLevel(20)).toBeCloseTo(0.004, 8);
     });
 
+    it("pins the delta macro's most-sensitive END, not its ratio to the default", () => {
+        // Retuning the default must not move the top step: with the old `1 / 4` ratio factor,
+        // a 0.10 -> 0.15 default retune silently desensitized the most-sensitive step to
+        // 0.0375 through a line nobody edited (review #425).
+        const retuned = { ...AUDIO_PARAMS.beatSfDelta, defaultValue: 0.15 };
+        expect(deltaFromSensitivity(SENSITIVITY_MAX, retuned)).toBeCloseTo(0.025, 9);
+        expect(deltaFromSensitivity(SENSITIVITY_DEFAULT, retuned)).toBeCloseTo(0.15, 9);
+    });
+
     it("relabels old-grid device values as Custom exactly once, with a sane thumb", () => {
         // 0.45 was step 4 on the old 1..10 curve. A device still holding it after the scale
         // change has no exact step (renders "Custom (0.45)"), and the thumb lands on a nearby
@@ -489,5 +498,46 @@ describe("nearestMacroStep (review #413)", () => {
 
     it("has no opinion about parameters that are not macro-backed", () => {
         expect(nearestMacroStep("fluxGamma", 500)).toBeNull();
+    });
+});
+
+describe("macro curves follow a device-RESOLVED spec (review #425)", () => {
+    /* A device publishing a NARROWER beatAlpha range than the mirror — the case the #419
+     * ranges feature exists for. The curve endpoints derive from the spec, so computing them
+     * from the static mirror would put the low steps past this device's max: 12.6 and 20.0
+     * both encode-clamp to 10.0, the steps collapse into one identical write, and the clamp
+     * read-back flips the slider to "Custom" right after the user picked a step. */
+    const narrowAlpha = { ...AUDIO_PARAMS.beatAlpha, max: 10 };
+
+    it("derives the low steps from the device's own max, so they stay distinct", () => {
+        expect(alphaFromSensitivity(SENSITIVITY_MIN, narrowAlpha)).toBe(10);
+        const step2 = alphaFromSensitivity(2, narrowAlpha);
+        expect(step2).toBeLessThan(10);
+        expect(step2).toBeGreaterThan(alphaFromSensitivity(3, narrowAlpha));
+    });
+
+    it("round-trips every step under the override, so a picked step never reads back Custom", () => {
+        for (let s = SENSITIVITY_MIN; s <= SENSITIVITY_MAX; s++) {
+            expect(sensitivityFromAlpha(alphaFromSensitivity(s, narrowAlpha), narrowAlpha)).toBe(s);
+        }
+    });
+
+    it("refuses to invert a mirror-curve value that is off the device's own grid", () => {
+        // Forward with one spec and inverse with another must not silently agree — the
+        // mirror's step 2 (12.5) is outside the narrow device's range entirely.
+        expect(sensitivityFromAlpha(alphaFromSensitivity(2), narrowAlpha)).toBeNull();
+    });
+
+    it("places the ghost thumb on the override grid", () => {
+        const v = alphaFromSensitivity(7, narrowAlpha);
+        expect(nearestMacroStep("beatAlpha", v, narrowAlpha)).toBe(7);
+    });
+
+    it("keeps the gate's hand-tuned band but honors the override's midpoint and clamp", () => {
+        // The gate curve is deliberately NOT spec-derived (its useful band is far narrower
+        // than its firmware range), but a resolved default still anchors the middle step.
+        const retunedGate = { ...AUDIO_PARAMS.agcNoiseGateRms, defaultValue: 0.001 };
+        expect(gateFromNoiseLevel(NOISE_LEVEL_DEFAULT, retunedGate)).toBeCloseTo(0.001, 9);
+        expect(gateFromNoiseLevel(NOISE_LEVEL_MAX, retunedGate)).toBeCloseTo(0.001 * (20 / 3), 9);
     });
 });

@@ -443,18 +443,19 @@ export function useAudioCalibration(deps: Deps) {
         roomResult.proposedFloor ??
         d.valueOf("beatFluxFloor") ??
         AUDIO_PARAMS.beatFluxFloor.defaultValue;
+      const currentValue = d.valueOf(sensitivityKey);
+      const currentRefractory = d.valueOf("beatRefractoryFrames") ?? 5;
       const sweep = sweepSensitivity(
         tapWin,
         taps,
         sensitivityCandidates(mode),
         floor,
+        currentValue,
       );
 
       if (!sweep.ok) {
         notes.push(sweep.reason);
       } else {
-        const currentValue = d.valueOf(sensitivityKey);
-        const currentRefractory = d.valueOf("beatRefractoryFrames") ?? 5;
         const before =
           currentValue !== null
             ? matchTaps(
@@ -482,6 +483,7 @@ export function useAudioCalibration(deps: Deps) {
         let bestF = sweep.best.f;
         let refractory = sweep.best.refractoryFrames;
         let refractoryBecause = "Chosen alongside the sensitivity.";
+        let relationNote: string | null = null;
 
         if (relation.kind === "double") {
           /* The anti-double refractory (just over half the TAPPED interval) can sit outside
@@ -505,25 +507,35 @@ export function useAudioCalibration(deps: Deps) {
             refractoryBecause = `Stops it firing twice per beat — match went ${Math.round(sweep.best.f * 100)}% to ${Math.round(fixed.f * 100)}%. Tuned to ~${Math.round(quality.bpm)} BPM songs, so refit if the set speeds up.`;
           } else {
             const ms = Math.round(relation.proposedRefractoryFrames * FRAME_MS);
-            notes.push(
-              `${relation.message} I could not fix that automatically — try Beat feel "Kick only", or a gap of about ${ms} ms in Advanced.`,
-            );
+            relationNote = `${relation.message} I could not fix that automatically — try Beat feel "Kick only", or a gap of about ${ms} ms in Advanced.`;
           }
         } else if (relation.kind === "half") {
           /* No proposal on purpose: the sweep already tried every sensitivity, and this WAS
            * the best fit — everything more sensitive matched the taps worse. Proposing
            * "one step up" would contradict the fit's own evidence. */
-          notes.push(
-            `${relation.message} Everything more sensitive matched your taps worse when I tried it, so Sensitivity stays at the best fit — more taps over a louder stretch of music may help.`,
-          );
+          relationNote = `${relation.message} Everything more sensitive matched your taps worse when I tried it, so Sensitivity stays at the best fit — more taps over a louder stretch of music may help.`;
         }
 
-        push(
-          sensitivityKey,
-          sweep.best.paramValue,
-          `Matched ${Math.round(bestF * 100)}% of your taps, up from ${Math.round(before * 100)}%.`,
-        );
-        push("beatRefractoryFrames", refractory, refractoryBecause);
+        if (relationNote) notes.push(relationNote);
+
+        /* Propose a change only when it is STRICTLY better than what the device already runs.
+         * On a clean recording the sweep's winner often only TIES the current settings — the
+         * taps carry no evidence for a change, and "matched 100%, same as before" is not a
+         * reason to move two parameters. This is the same gate the anti-double promotion above
+         * applies to itself, pointed at the status quo; it runs on the post-promotion bestF so
+         * a validated refractory fix can still rescue a tied sensitivity. */
+        if (currentValue !== null && bestF <= before + 1e-9) {
+          notes.push(
+            `Your current settings already matched ${Math.round(before * 100)}% of your taps and nothing I tried beat that, so Sensitivity has been left alone.`,
+          );
+        } else {
+          push(
+            sensitivityKey,
+            sweep.best.paramValue,
+            `Matched ${Math.round(bestF * 100)}% of your taps, up from ${Math.round(before * 100)}%.`,
+          );
+          push("beatRefractoryFrames", refractory, refractoryBecause);
+        }
       }
     }
 

@@ -567,6 +567,15 @@ export function sweepSensitivity(
   tapTimes: number[],
   candidateValues: { sensitivity: number; paramValue: number }[],
   floor: number,
+  /**
+   * The threshold value the device currently runs. Used ONLY to break exact score ties: on a
+   * clean recording (strong beats, near-zero inter-beat flux) every candidate above some level
+   * scores a perfect match, and the recording carries no evidence to separate them — the
+   * honest resolution is the candidate that moves the least from what the device already has,
+   * not the extreme. Without this, extending the candidate grid to the firmware max meant a
+   * 100%-match fit could walk a healthy detector to "reacts to almost nothing".
+   */
+  currentParamValue?: number | null,
 ): SweepResult {
   if (!win.hasStats) {
     return {
@@ -582,7 +591,16 @@ export function sweepSensitivity(
     };
   }
 
+  /* Log-space distance from the device's current value, for tie-breaking. The curves are
+   * geometric, so ratio distance is the right metric; a current of 0 (delta mode's "off") or
+   * none at all disables the preference and falls through to the direction tie-break. */
+  const distanceFromCurrent = (paramValue: number): number =>
+    currentParamValue != null && currentParamValue > 0 && paramValue > 0
+      ? Math.abs(Math.log(paramValue / currentParamValue))
+      : 0;
+
   let best: SweepCandidate | null = null;
+  let bestDistance = Infinity;
   let evaluated = 0;
 
   for (const cand of candidateValues) {
@@ -598,16 +616,24 @@ export function sweepSensitivity(
         precision: score.precision,
         recall: score.recall,
       };
+      const distance = distanceFromCurrent(cand.paramValue);
       if (
         best === null ||
         entry.f > best.f + 1e-9 ||
-        /* Tie-break toward the LESS sensitive setting. A false fire is far more visible on
-         * stage than a miss: the lights strobe on a hi-hat and the whole thing looks broken,
-         * where a missed beat just looks slightly lazy. */
+        /* Ties break toward the candidate CLOSEST to the device's current value: equal scores
+         * mean the recording cannot tell them apart, and moving further than the evidence
+         * justifies is pure overfit to tonight's set. Only when distances are also equal (or
+         * no current value is known) does the old direction rule apply — toward the LESS
+         * sensitive setting, because a false fire is far more visible on stage than a miss:
+         * the lights strobe on a hi-hat and the whole thing looks broken, where a missed beat
+         * just looks slightly lazy. */
         (Math.abs(entry.f - best.f) <= 1e-9 &&
-          entry.sensitivity < best.sensitivity)
+          (distance < bestDistance - 1e-12 ||
+            (Math.abs(distance - bestDistance) <= 1e-12 &&
+              entry.sensitivity < best.sensitivity)))
       ) {
         best = entry;
+        bestDistance = distance;
       }
     }
   }
