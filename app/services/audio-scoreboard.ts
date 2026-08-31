@@ -62,12 +62,14 @@ function pct(fraction: number): number {
  * How the surrounding screen is presenting sensitivity right now, so the advice can name a
  * control that actually exists there — and point the right way.
  *
- * THE DIRECTION IS THE POINT, not just the name. "Sensitivity" in Simple is a 1..10 macro;
- * the Advanced sliders it drives are THRESHOLDS and run inversely — alphaFromSensitivity maps
- * 1 -> 1.50 and 10 -> 0.10, deltaFromSensitivity 1 -> 0.40 and 10 -> 0.025. So "Turn
- * Sensitivity down", read by someone in Advanced looking at the slider whose friendlyLabel is
- * literally "Sensitivity" (it is beatAlpha's), tells them to drag it the way that makes the
- * firing WORSE. Naming the firmware label and the direction removes both halves of that.
+ * THE DIRECTION IS THE POINT, not just the name. "Sensitivity" in Simple is a 1..20 macro;
+ * the Advanced sliders it drives are THRESHOLDS and run inversely — step 1 maps to the
+ * parameter's MAX (`beatAlpha.max` / `beatSfDelta`'s top) and the top step to its most
+ * sensitive end (`beatAlpha.min` / the pinned delta endpoint), with the firmware default at
+ * the anchor step in between. So "Turn Sensitivity down", read by someone in Advanced looking
+ * at the slider whose friendlyLabel is literally "Sensitivity" (it is beatAlpha's), tells
+ * them to drag it the way that makes the firing WORSE. Naming the firmware label and the
+ * direction removes both halves of that.
  *
  * `key` follows the threshold shape, exactly as the Simple macro does: showing advice about
  * the parameter the device is not using is its own kind of wrong.

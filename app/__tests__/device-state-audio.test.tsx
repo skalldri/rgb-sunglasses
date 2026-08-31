@@ -12,14 +12,22 @@ import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
 import React from "react";
 
 import AudioTuningScreen from "@/app/(tabs)/device-state/audio";
-import { UUID_AUDIO_CONFIG_SERVICE } from "@/constants/bluetooth";
+import {
+    UUID_AUDIO_CONFIG_SERVICE,
+    UUID_AUDIO_PARAM_RANGES,
+    UUID_AUDIO_TELEMETRY_SERVICE,
+} from "@/constants/bluetooth";
 import * as BluetoothContext from "@/context/bluetooth-context";
+import { parseAudioParamRanges } from "@/services/audio-param-ranges";
 import {
     AUDIO_PARAMS,
     AUDIO_PARAM_ORDER,
+    SENSITIVITY_MAX,
     alphaFromSensitivity,
     encodeParam,
     gateFromNoiseLevel,
+    type AudioParamKey,
+    type AudioParamSpec,
 } from "@/services/audio-params";
 import { savePresets } from "@/services/audio-preset-store";
 import * as presetStore from "@/services/audio-preset-store";
@@ -75,6 +83,52 @@ function buildDevice(overrides: Partial<Record<keyof typeof AUDIO_PARAMS, number
             [UUID_AUDIO_CONFIG_SERVICE]: AUDIO_PARAM_ORDER.map(k => AUDIO_PARAMS[k].uuid),
         },
     };
+}
+
+/**
+ * Hand-built ranges blob (the wire format in services/audio-param-ranges.ts), mirroring the
+ * app table except where overridden — so a test can model a device whose firmware publishes a
+ * range the app's mirror does not know about.
+ */
+function makeRangesBlob(
+    rangeOverrides: Partial<Record<AudioParamKey, Partial<Pick<AudioParamSpec, "min" | "max">>>> = {},
+): string {
+    const bytes: number[] = [1, AUDIO_PARAM_ORDER.length];
+    const pushF32 = (v: number) => {
+        const buf = new ArrayBuffer(4);
+        new DataView(buf).setFloat32(0, v, true);
+        bytes.push(...new Uint8Array(buf));
+    };
+    AUDIO_PARAM_ORDER.forEach(key => {
+        const spec = AUDIO_PARAMS[key];
+        const o = rangeOverrides[key] ?? {};
+        bytes.push(spec.kind === "enum" ? 2 : spec.kind === "uint" ? 1 : 0);
+        bytes.push(0); // unit_len
+        bytes.push(0); // enum_len
+        pushF32(spec.defaultValue);
+        pushF32(o.min ?? spec.min);
+        pushF32(o.max ?? spec.max);
+        pushF32(0); // step 0 = keep the app's
+    });
+    let s = "";
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s);
+}
+
+/** buildDevice plus a telemetry service carrying the given ranges blob. */
+function buildDeviceWithRanges(blob: string) {
+    const device = buildDevice();
+    device.services.push({ uuid: UUID_AUDIO_TELEMETRY_SERVICE });
+    (device.characteristicsByService as Record<string, any>)[UUID_AUDIO_TELEMETRY_SERVICE] = {
+        [UUID_AUDIO_PARAM_RANGES]: {
+            characteristic: {},
+            value: blob,
+            name: "Audio Param Ranges",
+            cpfFormat: 0,
+            isUpdateInProgress: false,
+        },
+    };
+    return device;
 }
 
 function mockBluetooth(device: any, writeServiceCharacteristic = jest.fn().mockResolvedValue(true)) {
@@ -150,7 +204,7 @@ describe("AudioTuningScreen", () => {
             expect(write).toHaveBeenCalledWith(
                 UUID_AUDIO_CONFIG_SERVICE,
                 AUDIO_PARAMS.beatAlpha.uuid,
-                encodeParam(AUDIO_PARAMS.beatAlpha, alphaFromSensitivity(10)),
+                encodeParam(AUDIO_PARAMS.beatAlpha, alphaFromSensitivity(SENSITIVITY_MAX)),
             );
         });
 
@@ -191,12 +245,13 @@ describe("AudioTuningScreen", () => {
 
         it("keeps the Sensitivity slider LIVE on an off-grid board", async () => {
             /* Review #413. `value === null` meant two different things — "not read yet" and "off
-             * the 1..10 macro grid" — and disabling on both killed Simple mode on any board
+             * the macro grid" — and disabling on both killed Simple mode on any board
              * tuned over the shell. The caption in this exact state reads "Custom (…) - move the
              * slider to take control", so the screen was instructing a gesture it had disabled.
              *
-             * 0.77 is deliberately off every macro step (see audio-params.test.ts). */
-            const write = mockBluetooth(buildDevice({ beatAlpha: 0.77 }));
+             * 0.9 is deliberately off every macro step (see audio-params.test.ts; 0.77 held this
+             * role until the 1..20 grid put step 8 within inversion tolerance of it). */
+            const write = mockBluetooth(buildDevice({ beatAlpha: 0.9 }));
             const { getByTestId, getByText } = render(<AudioTuningScreen />);
 
             const slider = getByTestId("param-slider-beatAlpha");
@@ -207,6 +262,57 @@ describe("AudioTuningScreen", () => {
             // And the drag the caption asks for actually reaches the device.
             fireEvent(slider, "slidingComplete", 1);
             await waitFor(() => expect(write).toHaveBeenCalled());
+        });
+
+        it("computes the low steps from a device-published max, so they stay distinct (review #425)", async () => {
+            /* A device publishing beatAlpha max = 10 (narrower than the mirror's 20). The
+             * curve endpoints derive from the spec, so a mirror-built curve would compute 20.0
+             * and 12.6 for steps 1 and 2, encode-clamp BOTH to 10.0, and the read-back would
+             * flip the slider to Custom right after the user picked a step. With the resolved
+             * spec threaded through, step 2 lands strictly inside the device's own range. */
+            const blob = makeRangesBlob({ beatAlpha: { max: 10 } });
+            const write = mockBluetooth(buildDeviceWithRanges(blob));
+            const { getByTestId } = render(<AudioTuningScreen />);
+
+            // Position 1/19 of the 1..20 travel = step 2, the first step past the bottom.
+            fireEvent(getByTestId("param-slider-beatAlpha"), "slidingComplete", 1 / 19);
+
+            await waitFor(() => expect(write).toHaveBeenCalled());
+            const resolved = {
+                ...AUDIO_PARAMS.beatAlpha,
+                ...parseAudioParamRanges(blob)!.beatAlpha,
+            } as AudioParamSpec;
+            const expected = alphaFromSensitivity(2, resolved);
+            expect(expected).toBeLessThan(10); // distinct from step 1 = the device's max
+            expect(write).toHaveBeenCalledWith(
+                UUID_AUDIO_CONFIG_SERVICE,
+                AUDIO_PARAMS.beatAlpha.uuid,
+                encodeParam(resolved, expected),
+            );
+        });
+
+        it("keeps the noise macro inside a device-published gate range (review #425)", async () => {
+            /* The pre-existing counterexample from the PR thread: the noise handlers encoded
+             * against the static mirror. On a device publishing gate max = 0.002, the macro's
+             * top step (mirror value 0.004) must clamp to the device's own range. */
+            const blob = makeRangesBlob({ agcNoiseGateRms: { max: 0.002 } });
+            const write = mockBluetooth(buildDeviceWithRanges(blob));
+            const { getByTestId } = render(<AudioTuningScreen />);
+
+            fireEvent(getByTestId("param-slider-agcNoiseGateRms"), "slidingComplete", 1);
+
+            await waitFor(() => expect(write).toHaveBeenCalled());
+            const resolved = {
+                ...AUDIO_PARAMS.agcNoiseGateRms,
+                ...parseAudioParamRanges(blob)!.agcNoiseGateRms,
+            } as AudioParamSpec;
+            const expected = gateFromNoiseLevel(10, resolved);
+            expect(expected).toBeCloseTo(0.002, 9);
+            expect(write).toHaveBeenCalledWith(
+                UUID_AUDIO_CONFIG_SERVICE,
+                AUDIO_PARAMS.agcNoiseGateRms.uuid,
+                encodeParam(resolved, expected),
+            );
         });
 
         it("still disables a slider whose characteristic has not been read", () => {

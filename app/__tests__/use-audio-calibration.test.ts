@@ -20,7 +20,7 @@ import {
   COLLECTOR_MIN_FRAMES,
   type CollectorKind,
 } from "@/hooks/use-audio-calibration";
-import { AUDIO_PARAMS, type AudioParamKey } from "@/services/audio-params";
+import { AUDIO_PARAMS, alphaFromSensitivity, type AudioParamKey } from "@/services/audio-params";
 import {
   createTelemetryRing,
   pushTelemetryBytes,
@@ -566,14 +566,18 @@ describe("fitting", () => {
     act(() => result.current.fit());
 
     expect(result.current.state.phase).toBe("review");
+    /* This degenerate window (no stats, so every threshold is 0) makes the sweep's winner tie
+     * the CURRENT settings exactly — with the fix unpromoted, nothing is strictly better than
+     * the status quo, so the strictly-better gate now withholds both rows instead of proposing
+     * a lateral move. The manual note must still explain the double-firing. */
     const row = result.current.state.changes.find(
       (c) => c.key === "beatRefractoryFrames",
     );
-    expect(row?.newValue).not.toBe(14);
-    expect(row?.because).toBe("Chosen alongside the sensitivity.");
+    expect(row).toBeUndefined();
     expect(result.current.state.notes.join(" ")).toContain(
       "could not fix that automatically",
     );
+    expect(result.current.state.notes.join(" ")).toContain("left alone");
   });
 
   it("explains the every-other-beat case instead of proposing what the sweep rejected", () => {
@@ -631,6 +635,118 @@ describe("fitting", () => {
 
     expect(result.current.state.phase).toBe("review");
     expect(valueOfSpy).toHaveBeenCalledWith("beatFluxFloor");
+  });
+
+  it("can land in the extended low range the 1..20 sensitivity scale added", () => {
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // Every tap-window frame carries mean 0.1 / sigma 0.1, so a candidate alpha fires at flux
+    // above 0.1 + alpha*0.1. Taps land on flux-5.0 beats; an untapped 0.7 "hi-hat" sits between
+    // them (frame 13, past the sweep's largest refractory, so no refractory hides it). Any
+    // alpha below 6 fires on the hi-hat and loses precision — and the OLD 1..10 scale topped
+    // out at alpha 1.5, so every candidate it had lost this window. Only the extended range
+    // scores a perfect match; among the tied winners (7.87, 12.5, 20.0) the tie-break keeps
+    // the one closest to the device's current 0.3 — the fix the field needed, without the
+    // leap to firmware-max that the recording gives no evidence for.
+    act(() => result.current.startCollecting("taps"));
+    for (let k = 0; k < 10; k++) {
+      act(() => result.current.recordTap());
+      feed(h, 0.8, (n) =>
+        makeFrame({
+          tier: 2,
+          seq: n,
+          rmsInput: 0.01,
+          flux: n === 0 ? [5, 0, 0, 0] : n === 13 ? [0.7, 0, 0, 0] : [0, 0, 0, 0],
+          mean: [0.1, 0, 0, 0],
+          sigma: [0.1, 0, 0, 0],
+        }),
+      );
+    }
+    act(() => result.current.stopCollecting());
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    const row = result.current.state.changes.find((c) => c.key === "beatAlpha");
+    expect(row).toBeDefined();
+    // Step 3 — far beyond the old scale's alpha-1.5 ceiling, but the NEAREST tied winner.
+    expect(row?.newValue).toBeCloseTo(alphaFromSensitivity(3), 9);
+    expect(row?.newValue).toBeGreaterThan(1.5);
+  });
+
+  it("leaves a detector that already matches perfectly alone (review #425)", () => {
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // Beats only, no inter-beat flux, and the current alpha (default 0.3, threshold 0.13)
+    // already fires on exactly the tapped beats — a CLEAN recording. Every candidate from the
+    // default down to firmware-max alpha ties at a perfect match, and before the
+    // strictly-better gate this fit would still "propose" a sideways move (previously all the
+    // way to alpha 20, the least sensitive tied candidate). The recording carries no evidence
+    // for any change, and the honest fit says so.
+    act(() => result.current.startCollecting("taps"));
+    for (let k = 0; k < 10; k++) {
+      act(() => result.current.recordTap());
+      feed(h, 0.8, (n) =>
+        makeFrame({
+          tier: 2,
+          seq: n,
+          rmsInput: 0.01,
+          flux: n === 0 ? [5, 0, 0, 0] : [0, 0, 0, 0],
+          mean: [0.1, 0, 0, 0],
+          sigma: [0.1, 0, 0, 0],
+        }),
+      );
+    }
+    act(() => result.current.stopCollecting());
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    expect(
+      result.current.state.changes.find(
+        (c) => c.key === "beatAlpha" || c.key === "beatRefractoryFrames",
+      ),
+    ).toBeUndefined();
+    expect(result.current.state.notes.join(" ")).toContain("left alone");
+  });
+
+  it("sweeps the sensitive half past step 10, not just the first ten steps", () => {
+    const h = makeHarness();
+    const { result } = renderCal(h);
+    sitting(result, h, "background", 2, QUIET);
+    sitting(result, h, "music", 4, MUSIC);
+
+    // mean 0.1 / sigma 0.5, beats at flux 0.24 (decodes to ~0.2371 through the 0.5 dB wire
+    // ladder). A candidate alpha fires below 0.1 + alpha*0.5: step 10's default (0.30 ->
+    // threshold 0.25) MISSES, step 11 (0.2688 -> 0.2347) fires. Every winner therefore lives
+    // past step 10 — a sweep hardcoded to ten candidates (the old scale's count) matches no
+    // tap at all and proposes nothing, which is exactly the drift this test pins down.
+    act(() => result.current.startCollecting("taps"));
+    for (let k = 0; k < 10; k++) {
+      act(() => result.current.recordTap());
+      feed(h, 0.8, (n) =>
+        makeFrame({
+          tier: 2,
+          seq: n,
+          rmsInput: 0.01,
+          flux: n === 0 ? [0.24, 0, 0, 0] : [0, 0, 0, 0],
+          mean: [0.1, 0, 0, 0],
+          sigma: [0.5, 0, 0, 0],
+        }),
+      );
+    }
+    act(() => result.current.stopCollecting());
+    act(() => result.current.fit());
+
+    expect(result.current.state.phase).toBe("review");
+    const row = result.current.state.changes.find((c) => c.key === "beatAlpha");
+    expect(row).toBeDefined();
+    // Tie-break lands on the least sensitive candidate that still catches every tap: step 11.
+    expect(row?.newValue).toBeLessThan(AUDIO_PARAMS.beatAlpha.defaultValue);
   });
 
   it("keeps what was collected when a fit fails", () => {
