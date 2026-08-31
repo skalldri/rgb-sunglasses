@@ -30,6 +30,7 @@
  * and breaks every installed companion app. Append only.
  */
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 
@@ -233,6 +234,13 @@ static_assert(sizeof(kAudioParams) / sizeof(kAudioParams[0]) == kAudioParamCount
  * (std::string_view would do the same job but pulls a heavyweight header into every
  * consumer, including the native_sim replay app.)
  */
+/** constexpr strlen — the table's strings are compile-time literals. */
+constexpr size_t audioParamStrLen(const char *s) {
+    size_t n = 0;
+    while (s != nullptr && s[n] != '\0') n++;
+    return n;
+}
+
 constexpr bool audioParamStrEq(const char *a, const char *b) {
     while (*a != '\0' && *a == *b) {
         ++a;
@@ -322,6 +330,63 @@ constexpr uint32_t audioParamDefaultU() {
  * for a bad one, which is the property that actually matters. A self-check nobody has
  * watched reject something is indistinguishable from `return true`.
  * ------------------------------------------------------------------------- */
+
+/* ── Valid Range (0x2906) descriptor bytes ──────────────────────────────────────────────
+ *
+ * The descriptor's value is "lower inclusive then upper inclusive, each encoded in the format
+ * the characteristic's CPF declares" — so these are two little-endian IEEE-754 floats for a
+ * FLOAT32 characteristic and two little-endian uint32s for a UINT32 one. There is no generic
+ * numeric encoding to fall back on, and getting it wrong produces a plausible-looking range
+ * that is silently nonsense to every tool that renders it.
+ *
+ * Built here rather than at the declaration site so the descriptor and the bulk blob are two
+ * projections of the SAME table row and cannot drift.
+ */
+struct AudioParamRangeBytes {
+    uint8_t b[8];
+};
+
+/** The one place a 32-bit value becomes little-endian bytes on this wire. */
+constexpr void audioParamPutLe32(uint8_t *out, uint32_t v) {
+    out[0] = (uint8_t)(v & 0xFF);
+    out[1] = (uint8_t)((v >> 8) & 0xFF);
+    out[2] = (uint8_t)((v >> 16) & 0xFF);
+    out[3] = (uint8_t)((v >> 24) & 0xFF);
+}
+
+constexpr AudioParamRangeBytes audioParamRangeBytesFromU32(uint32_t lo, uint32_t hi) {
+    AudioParamRangeBytes out{};
+    audioParamPutLe32(&out.b[0], lo);
+    audioParamPutLe32(&out.b[4], hi);
+    return out;
+}
+
+/* Delegates rather than repeating the shift/mask ladder. Two copies had to be edited in
+ * lockstep, and a fix applied to one and not the other would produce descriptor bytes that
+ * differ by characteristic TYPE — precisely the plausible-looking-but-wrong range the comment
+ * above warns about. */
+constexpr AudioParamRangeBytes audioParamRangeBytesFromFloats(float lo, float hi) {
+    return audioParamRangeBytesFromU32(std::bit_cast<uint32_t>(lo),
+                                       std::bit_cast<uint32_t>(hi));
+}
+
+/** Descriptor bytes for a FLOAT32 parameter. */
+template <size_t I>
+constexpr AudioParamRangeBytes audioParamRangeBytesF() {
+    static_assert(I < kAudioParamCount, "parameter index out of range");
+    static_assert(kAudioParams[I].type == AudioParamType::F32,
+                  "float range bytes requested for a non-float parameter");
+    return audioParamRangeBytesFromFloats(kAudioParams[I].min, kAudioParams[I].max);
+}
+
+/** Descriptor bytes for a UINT32 or ENUM parameter. */
+template <size_t I>
+constexpr AudioParamRangeBytes audioParamRangeBytesU() {
+    static_assert(I < kAudioParamCount, "parameter index out of range");
+    static_assert(kAudioParams[I].type != AudioParamType::F32,
+                  "integer range bytes requested for a float parameter");
+    return audioParamRangeBytesFromU32((uint32_t)kAudioParams[I].min, (uint32_t)kAudioParams[I].max);
+}
 
 constexpr bool audioParamTableSelfCheck(const AudioParamSpec *params, size_t count) {
     for (size_t i = 0; i < count; ++i) {

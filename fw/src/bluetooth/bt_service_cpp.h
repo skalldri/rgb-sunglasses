@@ -750,20 +750,60 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
                 .perm = BT_GATT_PERM_READ,
             });
 
-        if constexpr (Notify) {
-            auto notifyAttrs = std::make_tuple(bt_gatt_attr{
-                .uuid = &kGattCccUuid.uuid,
-                .read = bt_gatt_attr_read_ccc,
-                .write = bt_gatt_attr_write_ccc,
-                .user_data = &ccc_data_,
+        /* Valid Range (0x2906), only for characteristics that opt in via
+         * BtGattValidRangeTraits.
+         *
+         * Emitted AFTER the CCC. The previous ordering put it between CPF and CCC with a
+         * comment claiming that preserved the CCC's position relative to the value handle —
+         * which is exactly backwards: it moved the CCC from value+3 to value+4. A bonded
+         * central that had cached the CCCD handle would then write its subscription to the
+         * Valid Range attribute instead, and notifications would silently never resume.
+         *
+         * Latent today, since all 14 opt-ins are Notify=false — but the next person to opt a
+         * notifiable characteristic into Valid Range would have trusted that comment. With
+         * the range last, the CCC keeps its offset and the invariant the comment asserts is
+         * actually true. */
+        if constexpr (BtGattValidRangeTraits<Self>::kSupported) {
+            auto rangeAttrs = std::make_tuple(bt_gatt_attr{
+                .uuid = &kGattValidRangeUuid.uuid,
+                .read = readValidRange,
+                .write = NULL,
+                .user_data = const_cast<void *>(
+                    static_cast<const void *>(BtGattValidRangeTraits<Self>::kBytes)),
                 .handle = 0,
-                .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                .perm = BT_GATT_PERM_READ,
             });
 
-            return std::tuple_cat(baseAttrs, notifyAttrs);
+            if constexpr (Notify) {
+                return std::tuple_cat(baseAttrs, ccAttrs(), rangeAttrs);
+            } else {
+                return std::tuple_cat(baseAttrs, rangeAttrs);
+            }
+        } else if constexpr (Notify) {
+            return std::tuple_cat(baseAttrs, ccAttrs());
         } else {
             return baseAttrs;
         }
+    }
+
+    auto ccAttrs() {
+        return std::make_tuple(bt_gatt_attr{
+            .uuid = &kGattCccUuid.uuid,
+            .read = bt_gatt_attr_read_ccc,
+            .write = bt_gatt_attr_write_ccc,
+            .user_data = &ccc_data_,
+            .handle = 0,
+            .perm = BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+        });
+    }
+
+    /* The attribute struct carries no length, so the size travels in the trait rather than
+     * being inferred from the buffer — a wrong length here would silently truncate the upper
+     * bound and read as a much narrower range to any tool that honours it. */
+    static ssize_t readValidRange(bt_conn *conn, const bt_gatt_attr *attr, void *buf, uint16_t len,
+                                  uint16_t offset) {
+        return bt_gatt_attr_read(conn, attr, buf, len, offset, attr->user_data,
+                                 BtGattValidRangeTraits<Self>::kSize);
     }
 
     void notify() {
@@ -890,6 +930,8 @@ class BtGattCharacteristicCommon : public BtGattAttrProviderBase {
     static constexpr bt_uuid_16 kGattCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
     static constexpr bt_uuid_16 kGattCpfUuid = BT_UUID_INIT_16(BT_UUID_GATT_CPF_VAL);
     static constexpr bt_uuid_16 kGattCccUuid = BT_UUID_INIT_16(BT_UUID_GATT_CCC_VAL);
+    static constexpr bt_uuid_16 kGattValidRangeUuid =
+        BT_UUID_INIT_16(BT_UUID_VALID_RANGE_VAL);
 
     T storage_ = Default;
     bool sendNotifications_ = false;
@@ -945,6 +987,98 @@ class BtGattAutoCharacteristicExt
     void assignAutoUuid(const bt_uuid_128 &serviceUuid, uint16_t characteristicId) {
         this->characteristic_uuid_ = composeAutoCharacteristicUuid(serviceUuid, characteristicId);
     }
+};
+
+/**
+ * @brief Read-only characteristic that serves bytes straight from rodata.
+ *
+ * WHY THIS EXISTS RATHER THAN BtGattAutoReadOnlyCharacteristic<..., Blob, kBlob>.
+ *
+ * The typed characteristics keep their value in a `storage_` member initialised from the
+ * NTTP default, which is correct for anything writable or notifiable but puts a COPY of a
+ * compile-time constant in RAM. Measured on the 346-byte audio parameter blob: it landed in
+ * `datas`, costing 346 B of RAM plus the same again in flash for the initialiser, to hold
+ * bytes that already existed in rodata and can never change.
+ *
+ * This serves the rodata directly, so the object costs a pointer, a length and the usual
+ * attribute scaffolding. Reads still fragment correctly — bt_gatt_attr_read honours `offset`
+ * — so a blob larger than the negotiated MTU works via ATT_READ_BLOB. (BtGattServer's own
+ * metadata blob already did exactly this ad hoc; this is that pattern made reusable.)
+ *
+ * Not suitable for anything that changes at runtime: there is no storage to change.
+ */
+template <StringLiteral Description>
+class BtGattRodataBlobCharacteristic : public BtGattAttrProviderBase {
+   public:
+    BtGattRodataBlobCharacteristic(const uint8_t *data, uint16_t size)
+        : data_(data), size_(size) {}
+
+    static constexpr const char *getDescription() { return Description.value; }
+    static constexpr bt_gatt_cpf getCpf() {
+        return bt_gatt_cpf{.format = BLE_GATT_CPF_FORMAT_STRUCT};
+    }
+
+    void assignAutoUuid(const bt_uuid_128 &serviceUuid, uint16_t characteristicId) {
+        characteristic_uuid_ = composeAutoCharacteristicUuid(serviceUuid, characteristicId);
+    }
+
+    constexpr auto getAttrsTuple() {
+        return std::make_tuple(
+            bt_gatt_attr{
+                .uuid = &kChrcUuid.uuid,
+                .read = bt_gatt_attr_read_chrc,
+                .write = NULL,
+                .user_data = &characteristic_,
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            },
+            bt_gatt_attr{
+                .uuid = &characteristic_uuid_.uuid,
+                .read = readBlob,
+                .write = NULL,
+                .user_data = this,
+                .handle = 0,
+                /* _AUTHEN to match every other characteristic on this device: the security
+                 * floor is L4, and a read-only blob is not a reason to open a hole in it. */
+                .perm = BT_GATT_PERM_READ_AUTHEN,
+            },
+            bt_gatt_attr{
+                .uuid = &kCudUuid.uuid,
+                .read = bt_gatt_attr_read_cud,
+                .write = NULL,
+                .user_data = const_cast<void *>(static_cast<const void *>(&Description.value)),
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            },
+            bt_gatt_attr{
+                .uuid = &kCpfUuid.uuid,
+                .read = bt_gatt_attr_read_cpf,
+                .write = NULL,
+                .user_data = &cpf_,
+                .handle = 0,
+                .perm = BT_GATT_PERM_READ,
+            });
+    }
+
+   private:
+    static ssize_t readBlob(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
+                            uint16_t len, uint16_t offset) {
+        bt_conn_activity_note();
+        auto *self = reinterpret_cast<BtGattRodataBlobCharacteristic *>(
+            const_cast<struct bt_gatt_attr *>(attr)->user_data);
+        return bt_gatt_attr_read(conn, attr, buf, len, offset, self->data_, self->size_);
+    }
+
+    static constexpr bt_uuid_16 kChrcUuid = BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
+    static constexpr bt_uuid_16 kCudUuid = BT_UUID_INIT_16(BT_UUID_GATT_CUD_VAL);
+    static constexpr bt_uuid_16 kCpfUuid = BT_UUID_INIT_16(BT_UUID_GATT_CPF_VAL);
+
+    const uint8_t *data_;
+    uint16_t size_;
+    bt_uuid_128 characteristic_uuid_{};
+    bt_gatt_chrc characteristic_ =
+        BT_GATT_CHRC_INIT(&characteristic_uuid_.uuid, 0U, BT_GATT_CHRC_READ);
+    bt_gatt_cpf cpf_ = getCpf();
 };
 
 /**

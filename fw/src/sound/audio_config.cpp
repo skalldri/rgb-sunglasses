@@ -14,6 +14,46 @@ constexpr bt_uuid_128 kAudioConfigServiceUuid = BT_UUID_INIT_128(
 
 BtGattPrimaryService<kAudioConfigServiceUuid> audioConfigPrimaryService;
 
+/* ── Valid Range (0x2906) opt-in ─────────────────────────────────────────────────────────
+ *
+ * These macros declare the characteristic type, its Valid Range trait specialisation, and the
+ * object as ONE unit, because the three have to agree and a hand-written trio would eventually
+ * not. The trait is keyed on the characteristic's own type, which is already unique per
+ * parameter (the settings key is a template argument), so no existing declaration anywhere
+ * else in the image is affected — BtGattValidRangeTraits defaults to kSupported = false.
+ *
+ * This is the standards-correct half of "how does a client learn the range". The companion app
+ * reads the bulk blob on the Audio Telemetry service instead, because discovery already
+ * performs ~170 sequential GATT reads and 14 more descriptor reads is the wrong trade there.
+ * These descriptors exist so a GENERIC tool — nRF Connect, LightBlue — can render the range
+ * without knowing anything about this project, which is exactly the situation you are in when
+ * the companion app is the thing misbehaving.
+ */
+/* ONE macro, parameterised by the C type and the one-letter suffix the table's helpers use.
+ *
+ * There were two near-identical 11-line bodies differing only in `float`/`uint32_t`,
+ * `audioParamDefaultF/U` and `audioParamRangeBytesF/U`. Any future change to the declaration
+ * shape had to be made to both, identically — and missing one would give float and integer
+ * parameters divergent GATT scaffolding that compiles perfectly well. Token pasting removes
+ * that possibility rather than documenting it. */
+#define AUDIO_PARAM_CHAR(varName, key, label, index, CTYPE, SUF)                           \
+    using varName##_t = BtGattPersistentCharacteristic<key, label, false, CTYPE,           \
+                                                       audioParamDefault##SUF<index>()>;   \
+    template <>                                                                            \
+    struct BtGattValidRangeTraits<varName##_t> {                                           \
+        static constexpr bool kSupported = true;                                           \
+        static constexpr AudioParamRangeBytes kRange = audioParamRangeBytes##SUF<index>();  \
+        static constexpr const uint8_t *kBytes = kRange.b;                                 \
+        static constexpr uint16_t kSize = sizeof(kRange.b);                                \
+    };                                                                                     \
+    varName##_t varName
+
+#define AUDIO_PARAM_CHAR_F(varName, key, label, index)                                     \
+    AUDIO_PARAM_CHAR(varName, key, label, index, float, F)
+
+#define AUDIO_PARAM_CHAR_U(varName, key, label, index)                                     \
+    AUDIO_PARAM_CHAR(varName, key, label, index, uint32_t, U)
+
 /* Notify=false on every characteristic in this service (it used to be true):
  * Android caps GATT notification registrations at ~15 per app
  * (BTA_GATTC_NOTIF_REG_MAX) and this service alone consumed 15 slots, silently
@@ -22,15 +62,12 @@ BtGattPrimaryService<kAudioConfigServiceUuid> audioConfigPrimaryService;
  * write-back that notify used to carry (getters clamp on read and assign the
  * clamped value back) now reaches the app via its read-back-after-write on
  * non-notifiable characteristics (app/context/bluetooth-context.tsx). */
-BtGattPersistentCharacteristic<"audio/flux_gamma", "Flux Gamma", false, float,
-                               audioParamDefaultF<kAudioParamFluxGamma>()>
-    audioFluxGamma;
+AUDIO_PARAM_CHAR_F(audioFluxGamma, "audio/flux_gamma", "Flux Gamma", kAudioParamFluxGamma);
 /* Default retuned 0.005 -> 0.08 (issue #264, post-Phase-3) — derivation in
  * DefaultAudioDspConfigProvider (audio_dsp.cpp). Provisioned boards keep their
  * persisted value; set it explicitly with "sound dsp set floor" when testing. */
-BtGattPersistentCharacteristic<"audio/beat_flux_floor", "Beat Flux Floor", false, float,
-                               audioParamDefaultF<kAudioParamBeatFluxFloor>()>
-    audioBeatFluxFloor;
+AUDIO_PARAM_CHAR_F(audioBeatFluxFloor, "audio/beat_flux_floor", "Beat Flux Floor",
+                   kAudioParamBeatFluxFloor);
 /* Default retuned 3.5 -> 0.3 in Phase 3 (issue #264) — derivation in
  * DefaultAudioDspConfigProvider (audio_dsp.cpp) and the PR body. NOTE this only
  * affects boards with no persisted value: an already-provisioned board keeps
@@ -39,43 +76,32 @@ BtGattPersistentCharacteristic<"audio/beat_flux_floor", "Beat Flux Floor", false
  * (Measured 2026-08-24 on the shared proto0: it reports 0.3000, i.e. the retuned
  * default. This comment used to assert the board still carried 1.5 from Phase 1 —
  * that was stale, so check with "sound dsp params" rather than assuming either.) */
-BtGattPersistentCharacteristic<"audio/beat_alpha", "Beat Alpha", false, float,
-                               audioParamDefaultF<kAudioParamBeatAlpha>()>
-    audioBeatAlpha;
-BtGattPersistentCharacteristic<"audio/beat_refractory_frames", "Beat Refractory Frames", false,
-                               uint32_t, audioParamDefaultU<kAudioParamBeatRefractoryFrames>()>
-    audioBeatRefractoryFrames;
+AUDIO_PARAM_CHAR_F(audioBeatAlpha, "audio/beat_alpha", "Beat Alpha", kAudioParamBeatAlpha);
+AUDIO_PARAM_CHAR_U(audioBeatRefractoryFrames, "audio/beat_refractory_frames",
+                   "Beat Refractory Frames", kAudioParamBeatRefractoryFrames);
 /* Target defaults retuned in Phase 2 (issue #264) from the ABGT 250 baseline
  * captures — derivation in DefaultAgcConfigProvider (sound.cpp) and the PR. */
-BtGattPersistentCharacteristic<"audio/agc_target_low", "AGC Target Low", false, float,
-                               audioParamDefaultF<kAudioParamAgcTargetLow>()>
-    audioAgcTargetLow;
-BtGattPersistentCharacteristic<"audio/agc_target_high", "AGC Target High", false, float,
-                               audioParamDefaultF<kAudioParamAgcTargetHigh>()>
-    audioAgcTargetHigh;
-BtGattPersistentCharacteristic<"audio/agc_rate_limit_frames", "AGC Rate Limit Frames", false,
-                               uint32_t, audioParamDefaultU<kAudioParamAgcRateLimitFrames>()>
-    audioAgcRateLimitFrames;
-BtGattPersistentCharacteristic<"audio/fft_smoothing_coeff", "FFT Smoothing Coeff", false, float,
-                               audioParamDefaultF<kAudioParamFftSmoothingCoeff>()>
-    audioFftSmoothingCoeff;
-BtGattPersistentCharacteristic<"audio/fft_energy_scale", "FFT Energy Scale", false, float,
-                               audioParamDefaultF<kAudioParamFftEnergyScale>()>
-    audioFftEnergyScale;
+AUDIO_PARAM_CHAR_F(audioAgcTargetLow, "audio/agc_target_low", "AGC Target Low",
+                   kAudioParamAgcTargetLow);
+AUDIO_PARAM_CHAR_F(audioAgcTargetHigh, "audio/agc_target_high", "AGC Target High",
+                   kAudioParamAgcTargetHigh);
+AUDIO_PARAM_CHAR_U(audioAgcRateLimitFrames, "audio/agc_rate_limit_frames",
+                   "AGC Rate Limit Frames", kAudioParamAgcRateLimitFrames);
+AUDIO_PARAM_CHAR_F(audioFftSmoothingCoeff, "audio/fft_smoothing_coeff", "FFT Smoothing Coeff",
+                   kAudioParamFftSmoothingCoeff);
+AUDIO_PARAM_CHAR_F(audioFftEnergyScale, "audio/fft_energy_scale", "FFT Energy Scale",
+                   kAudioParamFftEnergyScale);
 /* Phase 2 AGC tunables (issue #264) — appended AFTER the existing providers:
  * BtGattServer assigns UUIDs positionally, so appending preserves every
  * existing characteristic's UUID. */
-BtGattPersistentCharacteristic<"audio/agc_attack_frames", "AGC Attack Frames", false, uint32_t,
-                               audioParamDefaultU<kAudioParamAgcAttackFrames>()>
-    audioAgcAttackFrames;
-BtGattPersistentCharacteristic<"audio/agc_release_frames", "AGC Release Frames", false, uint32_t,
-                               audioParamDefaultU<kAudioParamAgcReleaseFrames>()>
-    audioAgcReleaseFrames;
+AUDIO_PARAM_CHAR_U(audioAgcAttackFrames, "audio/agc_attack_frames", "AGC Attack Frames",
+                   kAudioParamAgcAttackFrames);
+AUDIO_PARAM_CHAR_U(audioAgcReleaseFrames, "audio/agc_release_frames", "AGC Release Frames",
+                   kAudioParamAgcReleaseFrames);
 /* Default retuned 0.001 -> 0.0006 (issue #264, post-Phase-3) — derivation in
  * DefaultAgcConfigProvider (sound.cpp). Same persisted-value caveat as above. */
-BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", false, float,
-                               audioParamDefaultF<kAudioParamNoiseGateRms>()>
-    audioNoiseGateRms;
+AUDIO_PARAM_CHAR_F(audioNoiseGateRms, "audio/noise_gate_rms", "AGC Noise Gate RMS",
+                   kAudioParamNoiseGateRms);
 /* Phase 3 threshold-shape tunables (issue #264) — appended AFTER the existing
  * providers for the same positional-UUID reason as the Phase 2 block above.
  *
@@ -85,12 +111,9 @@ BtGattPersistentCharacteristic<"audio/noise_gate_rms", "AGC Noise Gate RMS", fal
  * call ~32 ms after an out-of-range write like mode=2 or sf_delta=5.0) reaches
  * the app through its read-back-after-write on non-notifiable characteristics
  * instead of through a notification. */
-BtGattPersistentCharacteristic<"audio/sf_delta", "Beat SF Delta", false, float,
-                               audioParamDefaultF<kAudioParamSfDelta>()>
-    audioSfDelta;
-BtGattPersistentCharacteristic<"audio/threshold_mode", "Beat Threshold Mode", false, uint32_t,
-                               audioParamDefaultU<kAudioParamThresholdMode>()>
-    audioThresholdMode;
+AUDIO_PARAM_CHAR_F(audioSfDelta, "audio/sf_delta", "Beat SF Delta", kAudioParamSfDelta);
+AUDIO_PARAM_CHAR_U(audioThresholdMode, "audio/threshold_mode", "Beat Threshold Mode",
+                   kAudioParamThresholdMode);
 
 BtGattServer audioConfigServer(audioConfigPrimaryService, audioFluxGamma, audioBeatFluxFloor,
                                audioBeatAlpha, audioBeatRefractoryFrames, audioAgcTargetLow,

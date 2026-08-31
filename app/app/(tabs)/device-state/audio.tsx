@@ -91,6 +91,7 @@ export default function AudioTuningScreen() {
         resolved,
         currentValues,
         valueOf,
+        specOf,
         busyOf,
         writeParam,
         writer,
@@ -223,10 +224,13 @@ export default function AudioTuningScreen() {
         [announce, presets],
     );
 
-    const showHelpFor = useCallback((key: AudioParamKey) => {
-        const spec = AUDIO_PARAMS[key];
-        setHelp({ title: spec.friendlyLabel, firmwareLabel: spec.firmwareLabel, body: spec.detail });
-    }, []);
+    const showHelpFor = useCallback(
+        (key: AudioParamKey) => {
+            const spec = specOf(key);
+            setHelp({ title: spec.friendlyLabel, firmwareLabel: spec.firmwareLabel, body: spec.detail });
+        },
+        [specOf],
+    );
 
     const closeHelp = useCallback(() => setHelp(null), []);
 
@@ -276,20 +280,23 @@ export default function AudioTuningScreen() {
         [usesMedian],
     );
 
+    /* Every encode path goes through the RESOLVED spec, so encodeParam clamps against the
+     * firmware's published range rather than the app's mirror of it. Reaching into
+     * AUDIO_PARAMS here is what made the whole ranges feature unobservable. */
     const onSensitivitySlide = useCallback(
         (step: number) => {
-            const spec = AUDIO_PARAMS[sensitivityKey];
+            const spec = specOf(sensitivityKey);
             writer.onSlide(spec.uuid, sensitivityToParam(step), v => encodeParam(spec, v));
         },
-        [sensitivityKey, sensitivityToParam, writer],
+        [sensitivityKey, sensitivityToParam, writer, specOf],
     );
 
     const onSensitivityComplete = useCallback(
         (step: number) => {
-            const spec = AUDIO_PARAMS[sensitivityKey];
+            const spec = specOf(sensitivityKey);
             writer.onSlideComplete(spec.uuid, sensitivityToParam(step), v => encodeParam(spec, v));
         },
-        [sensitivityKey, sensitivityToParam, writer],
+        [sensitivityKey, sensitivityToParam, writer, specOf],
     );
 
     const noiseToParam = useCallback(
@@ -454,7 +461,7 @@ export default function AudioTuningScreen() {
                                 // itself "beatAlpha" while writing SF Delta would be untappable by
                                 // name and confusing to debug.
                                 key: sensitivityKey,
-                                firmwareLabel: AUDIO_PARAMS[sensitivityKey].firmwareLabel,
+                                firmwareLabel: specOf(sensitivityKey).firmwareLabel,
                             }}
                             value={sensitivity}
                             /* Off-grid device: put the thumb on the nearest step and keep the
@@ -468,7 +475,7 @@ export default function AudioTuningScreen() {
                             busy={busyOf(sensitivityKey)}
                             liveNote={
                                 sensitivity === null && sensitivityRaw !== null
-                                    ? `Custom (${formatParamValue(AUDIO_PARAMS[sensitivityKey], sensitivityRaw)}) - move the slider to take control`
+                                    ? `Custom (${formatParamValue(specOf(sensitivityKey), sensitivityRaw)}) - move the slider to take control`
                                     : null
                             }
                             onSlide={onSensitivitySlide}
@@ -538,6 +545,7 @@ export default function AudioTuningScreen() {
                     <AdvancedGroups
                         resolved={resolved}
                         valueOf={valueOf}
+                        specOf={specOf}
                         busyOf={busyOf}
                         onWrite={writeParam}
                         onHelp={showHelpFor}
@@ -636,6 +644,7 @@ const GROUP_TITLES: Record<string, { title: string; subtitle?: string }> = {
 function AdvancedGroups({
     resolved,
     valueOf,
+    specOf,
     busyOf,
     onWrite,
     onHelp,
@@ -643,6 +652,7 @@ function AdvancedGroups({
 }: {
     resolved: ReturnType<typeof resolveAudioParams>;
     valueOf: (key: AudioParamKey) => number | null;
+    specOf: (key: AudioParamKey) => (typeof AUDIO_PARAMS)[AudioParamKey];
     busyOf: (key: AudioParamKey) => boolean;
     onWrite: (key: AudioParamKey, value: number) => Promise<boolean>;
     onHelp: (key: AudioParamKey) => void;
@@ -657,7 +667,7 @@ function AdvancedGroups({
         <>
             {groups.map(group => {
                 const keys = AUDIO_PARAM_ORDER.filter(key => {
-                    if (AUDIO_PARAMS[key].group !== group) return false;
+                    if (specOf(key).group !== group) return false;
                     if (!resolved.some(r => r.spec.key === key)) return false;
                     // Only one of alpha/sf_delta is in use at a time. Hiding the inactive one
                     // beats disabling it: a greyed-out slider still invites tuning attempts.
@@ -680,7 +690,10 @@ function AdvancedGroups({
                         </View>
 
                         {keys.map((key, index) => {
-                            const spec = AUDIO_PARAMS[key];
+                            /* The RESOLVED spec: min/max/step/enum labels come from the
+                             * firmware when it publishes them. Rendering from the static
+                             * table is what left sliders clamped to stale app-side ranges. */
+                            const spec = specOf(key);
                             const value = valueOf(key);
 
                             if (spec.kind === "enum") {

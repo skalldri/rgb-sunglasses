@@ -322,3 +322,7 @@ export const CLAMP_READBACK_DELAYS_MS = [150, 1200];
 export const UUID_AUDIO_TELEMETRY_SERVICE = "12345678-1234-5678-0009-56789abc0000";
 export const UUID_TELEMETRY_CONTROL       = "12345678-1234-5678-0009-56789abc0000"; // uint32, write-only command
 export const UUID_AUDIO_TELEMETRY         = "12345678-1234-5678-0009-56789abc0001"; // packed frame, notify
+// Read-only blob: range/default/step/unit/enum labels for all 14 audio tunables, generated at
+// compile time from fw/src/sound/audio_param_table.h. Long-read fragmentable, so it works at
+// MTU 23 via ATT_READ_BLOB. Decoder: services/audio-param-ranges.ts.
+export const UUID_AUDIO_PARAM_RANGES      = "12345678-1234-5678-0009-56789abc0002"; // ~346-byte struct, read-only
