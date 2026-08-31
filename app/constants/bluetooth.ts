@@ -7,7 +7,7 @@
 // before that fix landed.
 export const KnownServiceIds: { [key: string]: string } = {
     "12345678-1234-5678-0001-56789abc0000": "Core Config",
-    "12345678-1234-5678-0002-56789abc0000": "Audio Analysis Config",
+    "12345678-1234-5678-0002-56789abc0000": "Audio Tuning",
     "12345678-1234-5678-0003-56789abc0000": "Bootloader Info",
     "12345678-1234-5678-0004-56789abc0000": "MCUboot Updater",
     "12345678-1234-5678-0005-56789abc0000": "Battery",
@@ -98,6 +98,38 @@ export const UUID_CAPTURE_STATE       = "12345678-1234-5678-0008-56789abc0002"; 
 export const UUID_CAPTURE_ELAPSED_S   = "12345678-1234-5678-0008-56789abc0003"; // uint32, seconds, notify (1 Hz while recording)
 export const UUID_CAPTURE_REMAINING_S = "12345678-1234-5678-0008-56789abc0004"; // uint32, recordable seconds left
 export const UUID_CAPTURE_COUNT       = "12345678-1234-5678-0008-56789abc0005"; // uint32, capture files on the volume
+
+// Audio Analysis Config service (service ID 2) — the 14 AGC + beat-detection tunables the
+// Audio Tuning screen edits. Characteristic UUIDs are auto-assigned in firmware declaration
+// order, so these must match the BtGattServer argument order in fw/src/sound/audio_config.cpp;
+// the authoritative range/default/label for each is fw/src/sound/audio_param_table.h, mirrored
+// on this side in services/audio-params.ts.
+//
+// Every one of these is read/write and NOT notifiable — deliberately, because this service once
+// consumed Android's whole ~15-registration notification budget and starved SMP/DFU (see the
+// comment block at the top of fw/src/sound/audio_config.cpp). Values therefore reach the app via
+// scheduleClampReadBack()'s read-back-after-write, not via notifications.
+export const UUID_AUDIO_CONFIG_SERVICE          = "12345678-1234-5678-0002-56789abc0000";
+export const UUID_AUDIO_FLUX_GAMMA              = "12345678-1234-5678-0002-56789abc0000"; // float32
+export const UUID_AUDIO_BEAT_FLUX_FLOOR         = "12345678-1234-5678-0002-56789abc0001"; // float32
+export const UUID_AUDIO_BEAT_ALPHA              = "12345678-1234-5678-0002-56789abc0002"; // float32
+export const UUID_AUDIO_BEAT_REFRACTORY_FRAMES  = "12345678-1234-5678-0002-56789abc0003"; // uint32, 32 ms frames
+export const UUID_AUDIO_AGC_TARGET_LOW          = "12345678-1234-5678-0002-56789abc0004"; // float32
+export const UUID_AUDIO_AGC_TARGET_HIGH         = "12345678-1234-5678-0002-56789abc0005"; // float32
+export const UUID_AUDIO_AGC_RATE_LIMIT_FRAMES   = "12345678-1234-5678-0002-56789abc0006"; // uint32, 32 ms frames
+export const UUID_AUDIO_FFT_SMOOTHING_COEFF     = "12345678-1234-5678-0002-56789abc0007"; // float32, display only
+export const UUID_AUDIO_FFT_ENERGY_SCALE        = "12345678-1234-5678-0002-56789abc0008"; // float32, display only
+export const UUID_AUDIO_AGC_ATTACK_FRAMES       = "12345678-1234-5678-0002-56789abc0009"; // uint32, 32 ms frames
+export const UUID_AUDIO_AGC_RELEASE_FRAMES      = "12345678-1234-5678-0002-56789abc000a"; // uint32, 32 ms frames
+export const UUID_AUDIO_NOISE_GATE_RMS          = "12345678-1234-5678-0002-56789abc000b"; // float32
+export const UUID_AUDIO_SF_DELTA                = "12345678-1234-5678-0002-56789abc000c"; // float32
+export const UUID_AUDIO_THRESHOLD_MODE          = "12345678-1234-5678-0002-56789abc000d"; // uint32 enum
+
+// One audio analysis frame, in milliseconds. Mirrors kAudioParamFrameMs in
+// fw/src/sound/audio_param_table.h (and BLOCK_CAPTURE_TIME_MS in fw/src/sound/sound.h). Every
+// *_FRAMES characteristic above is counted in these, and the Audio Tuning screen presents them
+// as milliseconds because "160 ms" means something to a person and "5 frames" does not.
+export const AUDIO_FRAME_MS = 32;
 
 // Fixed characteristic UUID, identical across every animation service, exposing that
 // animation's human-readable name. Must match kAnimationNameCharacteristicUuid in
@@ -258,3 +290,20 @@ export const UUID_CPF_DESCRIPTOR = "00002904-0000-1000-8000-00805f9b34fb";
 export const UUID_CUD_DESCRIPTOR = "00002901-0000-1000-8000-00805f9b34fb";
 // Client Characteristic Configuration Descriptor UUID
 export const UUID_CCC_DESCRIPTOR = "00002902-0000-1000-8000-00805f9b34fb";
+
+/**
+ * When the app re-reads a non-notifiable characteristic after writing it, to make a firmware
+ * clamp visible in the UI.
+ *
+ * Two passes, not one: the clamp write-back happens whenever the owning firmware thread next
+ * runs its getter — normally ~32 ms, but a busy owner can push it past 150 ms, and a single
+ * fixed read would then return the still-unclamped value.
+ *
+ * EXPORTED because a second module depends on the LAST entry: the Audio Tuning slider's settle
+ * window (SETTLE_MS in hooks/use-audio-param-writer.ts) must outlast it, or the thumb is handed
+ * back to context before the clamped value lands and the snap looks random. That relation used
+ * to be two hand-copied literals in two files — this constant was declared inside the
+ * BluetoothProvider function body, so nothing could import it and nothing could check it.
+ * Retuning these delays silently broke the invariant with every test still green.
+ */
+export const CLAMP_READBACK_DELAYS_MS = [150, 1200];

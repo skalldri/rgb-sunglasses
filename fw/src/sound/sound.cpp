@@ -6,6 +6,7 @@
 #include <zephyr/drivers/vm3011/vm3011.h>
 #endif
 #include <math.h> /* sqrtf */
+#include <sound/audio_param_table.h>
 #include <stdio.h> /* snprintf (fmt_fixed4) */
 #include <stdlib.h>
 #include <string.h> /* memcpy (audio tap) */
@@ -93,60 +94,49 @@ int agc_gain_db10(uint8_t gain) { return (int)gain * 5 - 200; }
 class DefaultAgcConfigProvider : public AgcConfigProvider {
    public:
     float getTargetLow() override { return targetLow_; }
-    void setTargetLow(float value) override { targetLow_ = std::clamp(value, 0.001f, 0.1f); }
+    void setTargetLow(float value) override {
+        targetLow_ = audioParamClampF<kAudioParamAgcTargetLow>(value);
+    }
 
     float getTargetHigh() override { return targetHigh_; }
-    /* Clamp [0.02, 0.5]: the raised floor is deliberate settings migration for
-     * Phase 2's semantic change (attack compares INSTANTANEOUS RMS now) — see
-     * AudioConfig::getTargetHigh() in audio_config.cpp for the full rationale. */
-    void setTargetHigh(float value) override { targetHigh_ = std::clamp(value, 0.02f, 0.5f); }
+    /* The raised 0.02 floor is deliberate settings migration for Phase 2's semantic change
+     * (attack compares INSTANTANEOUS RMS now) — rationale in audio_param_table.h, which now
+     * owns the bound itself. */
+    void setTargetHigh(float value) override {
+        targetHigh_ = audioParamClampF<kAudioParamAgcTargetHigh>(value);
+    }
 
     uint32_t getRateLimitFrames() override { return rateLimitFrames_; }
     void setRateLimitFrames(uint32_t value) override {
-        rateLimitFrames_ = std::clamp<uint32_t>(value, 1, 100);
+        rateLimitFrames_ = audioParamClampU<kAudioParamAgcRateLimitFrames>(value);
     }
 
     uint32_t getAttackFrames() override { return attackFrames_; }
     void setAttackFrames(uint32_t value) override {
-        attackFrames_ = std::clamp<uint32_t>(value, 1, 20);
+        attackFrames_ = audioParamClampU<kAudioParamAgcAttackFrames>(value);
     }
 
     uint32_t getReleaseFrames() override { return releaseFrames_; }
     void setReleaseFrames(uint32_t value) override {
-        releaseFrames_ = std::clamp<uint32_t>(value, 1, 100);
+        releaseFrames_ = audioParamClampU<kAudioParamAgcReleaseFrames>(value);
     }
 
     float getNoiseGateRms() override { return noiseGateRms_; }
     void setNoiseGateRms(float value) override {
-        noiseGateRms_ = std::clamp(value, 0.0f, 0.02f);
+        noiseGateRms_ = audioParamClampF<kAudioParamNoiseGateRms>(value);
     }
 
    private:
-    /* Defaults (and clamps) mirror the BT-backed AudioConfig in audio_config.cpp.
-     * Targets derived from the ABGT 250 baseline captures (Phase 2 PR):
-     *  - targetLow 0.002: release creep stops where mic self-noise meets it
-     *    (~+11 dB), instead of ramping to +20 dB; music smoothed RMS at the
-     *    converged gain (median 0.0045) sits well above it → 0 steps in 60 s
-     *    of music (was 22).
-     *  - targetHigh 0.05: attack headroom ~11 dB above music's p99
-     *    instantaneous RMS at listening volume — attack only engages on
-     *    genuinely loud (festival) input; the near-clip peak path is the
-     *    hard ceiling.
-     *  - noiseGate 0.001: true-silence detector at parked/low gains (room
-     *    noise ≈ 0.0006 at 0 dB); gates only 0.2% of music frames. */
-    float targetLow_ = 0.002f;
-    float targetHigh_ = 0.05f;
-    uint32_t rateLimitFrames_ = 10;
-    uint32_t attackFrames_ = 3;
-    uint32_t releaseFrames_ = 15;
-    /* Retuned 0.001 -> 0.0006 (issue #264, post-Phase-3) in response to a field
-     * report: with music playing the glasses sometimes did not react at all,
-     * and turning the volume up fixed it. Measured cause — the gate sat ABOVE
-     * the bottom half of real music. Smoothed input-referred RMS over the
-     * corpus: quiet room p95 0.00049, but normal-volume music p5 0.00061 and a
-     * whole normal-volume capture had 52.9% of its frames below the 0.001 gate,
-     * i.e. all beat output suppressed. See docs/plans/2026-08-02-*.md §5.5.1. */
-    float noiseGateRms_ = 0.0006f;
+    /* Defaults and clamp ranges both come from audio_param_table.h, which is also where the
+     * ABGT 250 baseline derivation of the targets and the field-report retune of the noise
+     * gate are written down. This provider is what native_sim tests and the pre-binding boot
+     * window see; AudioConfig (audio_config.cpp) reads the same table. */
+    float targetLow_ = audioParamDefaultF<kAudioParamAgcTargetLow>();
+    float targetHigh_ = audioParamDefaultF<kAudioParamAgcTargetHigh>();
+    uint32_t rateLimitFrames_ = audioParamDefaultU<kAudioParamAgcRateLimitFrames>();
+    uint32_t attackFrames_ = audioParamDefaultU<kAudioParamAgcAttackFrames>();
+    uint32_t releaseFrames_ = audioParamDefaultU<kAudioParamAgcReleaseFrames>();
+    float noiseGateRms_ = audioParamDefaultF<kAudioParamNoiseGateRms>();
 };
 
 DefaultAgcConfigProvider sDefaultAgcProvider;

@@ -1,3 +1,4 @@
+import { CLAMP_READBACK_DELAYS_MS } from "@/constants/bluetooth";
 import { describeWriteError } from "@/services/ble-errors";
 import { McuMgrClient } from "@/services/mcumgr";
 import { createContext, Dispatch, ReactNode, SetStateAction, useCallback, useContext, useMemo, useRef, useState } from "react";
@@ -242,13 +243,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     // re-read shortly after a successful write so the UI settles on the value the firmware
     // actually runs. The delay lets that device-side write-back land first; reading
     // immediately would race it.
-    // Two passes, not one. The clamp write-back happens whenever the owning thread next
-    // runs its getter — normally ~32 ms, but a busy owner (e.g. the audio DSP thread
-    // during a PDM overrun self-heal) can push it well past 150 ms, and a single fixed
-    // read would then return the still-unclamped value, leaving the UI showing a number
-    // the firmware never runs with no correction channel until the next connect. The
-    // second pass costs one read only on writes to non-notifiable characteristics.
-    const CLAMP_READBACK_DELAYS_MS = [150, 1200];
+    // Delays live in constants/bluetooth.ts, not here. They used to be declared in this
+    // function body, which put them out of reach of the one other module that depends on
+    // them — the slider settle window has to outlast the last pass (see SETTLE_MS in
+    // hooks/use-audio-param-writer.ts). Two hand-copied literals in two files is not an
+    // invariant; retuning these silently broke it with every test still green.
     // `baselineValue` is what the app believes the characteristic holds as this write
     // settles; `apply` is expected to compare-and-swap against it (see the call sites).
     const scheduleClampReadBack = useCallback((charInfo: CharacteristicInfo, baselineValue: string,

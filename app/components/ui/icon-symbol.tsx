@@ -30,6 +30,9 @@ const MAPPING = {
   'play.fill': 'play-arrow',
   'checkmark.square.fill': 'check-box',
   'square': 'check-box-outline-blank',
+  // Audio Tuning (help affordance on each parameter row + the Controls tile).
+  'questionmark': 'help-outline',
+  'waveform': 'graphic-eq',
 } as IconMapping;
 
 /**
