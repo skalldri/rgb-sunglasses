@@ -59,7 +59,7 @@ gets continuously more expensive above it, so an unwrapped accumulator makes an
 extension run at full speed for a minute or two and then degrade — invisibly to a
 short test, because the accumulator resets every time the extension is activated.
 
-This is not hypothetical: both extensions in this registry shipped with it. Issue
+This is not hypothetical: the first two extensions in this registry shipped with it. Issue
 [#304](https://github.com/skalldri/rgb-sunglasses/issues/304) — plasma's per-tick cost
 climbed 3.4 ms -> 25 ms over five minutes and missed essentially every frame.
 
