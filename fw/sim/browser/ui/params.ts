@@ -176,10 +176,13 @@ export class ParamPanel {
     });
 
     const sync = () => {
-      /* Round-trip through float32 already happened in the host slot; showing
-       * up to 7 significant digits reproduces any float32 exactly without
-       * trailing binary noise (same idea as the app's formatFloat32). */
-      const v = Number(host.paramF32(index).toPrecision(7));
+      /* 9 significant digits (FLT_DECIMAL_DIG) is the minimum that
+       * round-trips EVERY float32 — 7 (FLT_DIG) is the opposite guarantee
+       * (decimal->float32->decimal) and collapses distinct values like
+       * 16777216 and 16777218. The app's formatFloat32 deliberately keeps 7
+       * to hide binary noise from end users; the sim is a debugging tool, so
+       * it shows the true value even when that looks like 0.00499999989. */
+      const v = Number(host.paramF32(index).toPrecision(9));
       box.value = String(v);
       chip.textContent = String(v);
     };

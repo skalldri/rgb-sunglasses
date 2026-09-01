@@ -26,6 +26,8 @@ import {
   RGBX_PARAM_STRING_MAX,
   RgbxParamType,
   TickInputs,
+  f32FromBits,
+  f32ToBits,
   makeZeroInputs,
   setStringSlot,
   writeInputs,
@@ -321,18 +323,14 @@ export class SimHost {
    * pattern in the shared u32 slot (matching the device's wire encoding). */
   setParamF32(index: number, value: number): void {
     if (index >= 0 && index < RGBX_MAX_PARAMS) {
-      const scratch = new DataView(new ArrayBuffer(4));
-      scratch.setFloat32(0, value, true);
-      this.paramValues[index] = scratch.getUint32(0, true);
+      this.paramValues[index] = f32ToBits(value);
     }
   }
 
   /** Reads a FLOAT param's current value as a JS number (bit-cast of the
    * stored u32 slot). */
   paramF32(index: number): number {
-    const scratch = new DataView(new ArrayBuffer(4));
-    scratch.setUint32(0, this.paramValues[index] ?? 0, true);
-    return scratch.getFloat32(0, true);
+    return f32FromBits(this.paramValues[index] ?? 0);
   }
 
   /** Writes a string param by PARAM index (maps to its string slot). */

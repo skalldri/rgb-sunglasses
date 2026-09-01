@@ -77,6 +77,17 @@ void apply_blob(const Blob &blob, const extension_manifest::Metadata &meta,
         if (meta.params[p].type == RGBX_PARAM_BOOL) {
             value = value != 0 ? 1u : 0u;
         }
+        /* Every live write path rejects non-finite floats, but the blob is
+         * not one of them: NVS carries no payload CRC in this build, the
+         * fingerprint covers count/type/name but never values, and the
+         * settings shell can write arbitrary bytes under this key. A NaN
+         * restored here would defeat every range clamp in the extension (all
+         * comparisons false) with nothing telling the user the stored value
+         * is bad — keep the caller's seeded default instead. */
+        if (meta.params[p].type == RGBX_PARAM_FLOAT &&
+            extension_manifest::f32_bits_non_finite(value)) {
+            continue;
+        }
         paramValues[p] = value;
     }
     for (size_t s = 0; s < meta.stringParamCount; s++) {

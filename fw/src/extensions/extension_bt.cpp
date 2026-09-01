@@ -268,29 +268,22 @@ ssize_t write_param(struct bt_conn *, const struct bt_gatt_attr *attr, const voi
             }
             return len;
         }
-        case RGBX_PARAM_FLOAT: {
-            if (offset != 0 || len != sizeof(uint32_t)) {
-                return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-            }
-            uint32_t value;
-            memcpy(&value, buf, sizeof(value));
-            /* Reject non-finite payloads (NaN/Inf: exponent bits all set)
-             * with an ATT error — never accept-and-correct (see the GATT
-             * write-rejection rule in fw/CLAUDE.md). A NaN reaching an
-             * extension's math is an ugly, hard-to-trace failure mode, and
-             * the app's float input can encode one from "Infinity". */
-            if ((value & 0x7F800000u) == 0x7F800000u) {
-                return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
-            }
-            extension_host::setParamValue(ctx->slot, ctx->index, value);
-            return len;
-        }
         default: {
             if (offset != 0 || len != sizeof(uint32_t)) {
                 return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
             }
             uint32_t value;
             memcpy(&value, buf, sizeof(value));
+            /* FLOAT shares the raw 4-byte wire shape but rejects non-finite
+             * payloads (NaN/Inf) with an ATT error — never accept-and-correct
+             * (see the GATT write-rejection rule in fw/CLAUDE.md). A NaN
+             * reaching an extension's math defeats every range clamp (all
+             * comparisons false), and a rejected default could never be
+             * written back. */
+            if (info->type == RGBX_PARAM_FLOAT &&
+                extension_manifest::f32_bits_non_finite(value)) {
+                return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+            }
             extension_host::setParamValue(ctx->slot, ctx->index, value);
             return len;
         }

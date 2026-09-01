@@ -91,6 +91,26 @@ test("a FLOAT param rejects non-finite and non-numeric tokens", () => {
     () => new TimelineRunner([{ atMs: 0, set: { gain: "Infinity" } }]).pump(host),
     /expects a finite float/,
   );
+  // Number(" ") is 0 and Number("0x10") is 16 — both must error rather than
+  // silently landing a value the docs' decimal grammar does not admit.
+  assert.throws(
+    () => new TimelineRunner([{ atMs: 0, set: { gain: " " } }]).pump(host),
+    /expects a finite float/,
+  );
+  assert.throws(
+    () => new TimelineRunner([{ atMs: 0, set: { gain: "0x10" } }]).pump(host),
+    /expects a finite float/,
+  );
+});
+
+test("FLOAT accepts signed, fractional, and exponent decimal forms", () => {
+  const { host, calls } = mockHost([{ name: "gain", type: RgbxParamType.Float }]);
+  new TimelineRunner([
+    { atMs: 0, set: { gain: "-0.5" } },
+    { atMs: 0, set: { gain: ".25" } },
+    { atMs: 0, set: { gain: "1e-3" } },
+  ]).pump(host);
+  assert.deepEqual(calls, ["f32 0=-0.5", "f32 0=0.25", "f32 0=0.001"]);
 });
 
 test("a decimal on a non-FLOAT param stays an error, not a truncation", () => {

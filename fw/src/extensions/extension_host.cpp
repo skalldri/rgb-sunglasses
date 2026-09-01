@@ -1508,19 +1508,23 @@ int cmd_ext_stats(const struct shell *sh, size_t, char **) {
     return 0;
 }
 
-/* True iff the float whose IEEE-754 bits are `bits` is NaN or +/-Inf
- * (exponent field all ones). Bit test rather than isfinite() so the check is
- * identical to the GATT write path's (extension_bt.cpp write_param). */
-bool f32_bits_non_finite(uint32_t bits) { return (bits & 0x7F800000u) == 0x7F800000u; }
-
 /* Renders a FLOAT param value with 4 decimal places via fixed-point integers
  * ("1.5000", "-0.0123"): CONFIG_CBPRINTF_FP_SUPPORT is disabled project-wide
  * (~10KB FLASH, issue #79), so %f prints its own literal specifier. Same
  * approach as fmt_fixed4() in src/sound/sound.cpp, which is deliberately
- * file-local there — duplicated (in reduced form: non-finite values are
- * unrepresentable in a param slot, the write paths reject them) rather than
- * hoisting audio-subsystem internals into a shared header. */
+ * file-local there — duplicated in reduced form rather than hoisting
+ * audio-subsystem internals into a shared header. Every write path rejects
+ * non-finite values (extension_manifest::f32_bits_non_finite), but this
+ * still guards them itself: casting a non-finite or >= 2^32 float to
+ * unsigned is undefined, and a formatter must not be the thing that trusts
+ * every other path. */
 const char *fmt_param_f32(uint32_t bits, char *buf, size_t len) {
+    if (extension_manifest::f32_bits_non_finite(bits)) {
+        snprintf(buf, len, "%s", (bits & 0x007FFFFFu) != 0 ? "nan"
+                                 : (bits & 0x80000000u)   ? "-inf"
+                                                          : "inf");
+        return buf;
+    }
     float v;
     memcpy(&v, &bits, sizeof(v));
     const char *sign = "";
@@ -1528,14 +1532,22 @@ const char *fmt_param_f32(uint32_t bits, char *buf, size_t len) {
         sign = "-";
         v = -v;
     }
-    /* Above this, (unsigned)(v * 10000) overflows 32 bits; fall back to the
-     * raw whole part, losing decimals rather than printing garbage. */
-    if (v >= 400000.0f) {
-        snprintf(buf, len, "%s%u", sign, (unsigned)v);
-    } else {
-        const unsigned scaled = (unsigned)(v * 10000.0f + 0.5f);
-        snprintf(buf, len, "%s%u.%04u", sign, scaled / 10000u, scaled % 10000u);
+    if (v >= 4294967296.0f) {
+        /* (unsigned)v is undefined from 2^32 up; a float32 this large has no
+         * fractional part anyway, and the hex bits printed alongside are the
+         * faithful representation. */
+        snprintf(buf, len, "%s>=2^32", sign);
+        return buf;
     }
+    /* Split whole/frac separately (rather than one *10000 scale) so decimals
+     * survive the entire representable range below 2^32 without overflow. */
+    unsigned whole = (unsigned)v;
+    unsigned frac = (unsigned)((v - (float)whole) * 10000.0f + 0.5f);
+    if (frac >= 10000u) {
+        whole++;
+        frac -= 10000u;
+    }
+    snprintf(buf, len, "%s%u.%04u", sign, whole, frac);
     return buf;
 }
 
@@ -1574,7 +1586,8 @@ int cmd_ext_param(const struct shell *sh, size_t argc, char **argv) {
             char *end = nullptr;
             const float f = strtof(argv[3], &end);
             memcpy(&value, &f, sizeof(value));
-            if (end == argv[3] || *end != '\0' || f32_bits_non_finite(value)) {
+            if (end == argv[3] || *end != '\0' ||
+                extension_manifest::f32_bits_non_finite(value)) {
                 shell_error(sh, "not a finite float: '%s'", argv[3]);
                 return -EINVAL;
             }

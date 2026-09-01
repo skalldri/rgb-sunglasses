@@ -161,8 +161,9 @@ size_t paramCount(size_t slot);
 /** @brief Validated description of one parameter, or nullptr. */
 const ParamInfo *paramInfo(size_t slot, size_t index);
 
-/** @brief Current scalar (UINT32/COLOR/BOOL) value of a parameter; 0 if out
- *  of range. For STRING params the value is unspecified — use
+/** @brief Current scalar (UINT32/COLOR/BOOL/FLOAT) value of a parameter; 0
+ *  if out of range. FLOAT values are the raw IEEE-754 bit pattern in the
+ *  shared u32 slot. For STRING params the value is unspecified — use
  *  paramString(). */
 uint32_t paramValue(size_t slot, size_t index);
 

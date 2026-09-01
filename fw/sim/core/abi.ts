@@ -30,6 +30,21 @@ export enum RgbxParamType {
   Float = 4,
 }
 
+const f32Scratch = new DataView(new ArrayBuffer(4));
+
+/** Decodes a FLOAT param's raw u32 slot word into a JS number. */
+export function f32FromBits(bits: number): number {
+  f32Scratch.setUint32(0, bits >>> 0, true);
+  return f32Scratch.getFloat32(0, true);
+}
+
+/** Encodes a JS number as the IEEE-754 float32 bit pattern a FLOAT param
+ * slot stores. */
+export function f32ToBits(value: number): number {
+  f32Scratch.setFloat32(0, value, true);
+  return f32Scratch.getUint32(0, true);
+}
+
 /** struct rgbx_inputs field offsets (wasm32 == ARM EABI, ILP32). */
 export const INPUTS = {
   dtMs: 0,

@@ -16,6 +16,7 @@ import {
   LIVE_PIXEL_COUNT,
   toDisplayedFrame,
 } from "../core/display";
+import { RgbxParamType, f32FromBits } from "../core/abi";
 import type { FaultInfo } from "../core/host";
 import type { ManifestMetadata } from "../core/manifest";
 import type { Scenario } from "../core/scenario";
@@ -332,8 +333,13 @@ export function buildReport(args: ReportArgs): Record<string, unknown> {
         metadata?.params.map((p, i) => ({
           index: i,
           name: p.name,
-          type: ["uint32", "color", "bool", "string"][p.type],
-          default: p.type === 3 ? metadata.stringDefaults[p.stringSlot] : p.defaultValue,
+          type: ["uint32", "color", "bool", "string", "float32"][p.type],
+          default:
+            p.type === RgbxParamType.String
+              ? metadata.stringDefaults[p.stringSlot]
+              : p.type === RgbxParamType.Float
+                ? f32FromBits(p.defaultValue)
+                : p.defaultValue,
         })) ?? [],
     },
     run: {

@@ -51,6 +51,23 @@ enum class Result {
 const char *result_str(Result r);
 
 /**
+ * @brief True iff the float whose IEEE-754 bits are @p bits is NaN or +/-Inf
+ * (exponent field all ones).
+ *
+ * The single definition of the non-finite test every FLOAT-param guard uses —
+ * manifest default validation, the GATT write path (extension_bt.cpp), the
+ * shell write path (extension_host.cpp) and persisted-blob restore
+ * (extension_param_persistence.cpp). A bit test rather than isfinite() so it
+ * works on raw slot words without a float in hand.
+ *
+ * @param bits Raw IEEE-754 float32 bit pattern.
+ * @return true when the bits encode NaN or +/-Inf.
+ */
+inline constexpr bool f32_bits_non_finite(uint32_t bits) {
+    return (bits & 0x7F800000u) == 0x7F800000u;
+}
+
+/**
  * @brief Region-membership predicate supplied by the caller.
  * @return true if [ptr, ptr+len) lies wholly inside memory the extension
  *         owns (its llext regions on target; a fake window in tests).

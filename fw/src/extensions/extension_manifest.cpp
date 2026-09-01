@@ -125,11 +125,11 @@ Result validate(const struct rgbx_manifest *manifest, const Env &env, Metadata &
                  * those bits, so the whole downstream value path (persistence
                  * blob, GATT read/write, inputs copy) carries floats
                  * unchanged. The manifest is untrusted, so a non-finite
-                 * default (exponent bits all set) is rejected here just like
-                 * the GATT/shell write paths reject non-finite writes — NaN
-                 * defeats every range clamp downstream (all comparisons
-                 * false), and once changed it could never be written back. */
-                if ((desc.default_value.u32 & 0x7F800000u) == 0x7F800000u) {
+                 * default is rejected here just like the GATT/shell write
+                 * paths reject non-finite writes — NaN defeats every range
+                 * clamp downstream (all comparisons false), and once changed
+                 * it could never be written back. */
+                if (f32_bits_non_finite(desc.default_value.u32)) {
                     return Result::BadFloatDefault;
                 }
                 info.defaultValue = desc.default_value.u32;
