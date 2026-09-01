@@ -39,6 +39,27 @@ export function applyParam(host: SimHost, name: string, rawValue: number | strin
     host.setStringParam(idx, String(rawValue));
     return null;
   }
+  if (type === RgbxParamType.Float) {
+    // Floats get their own parse: "0.5" is not scalar-shaped to
+    // parseScalarParamValue (nor should it become so — 0.5 on a UINT32
+    // param must stay an error, not a silent truncation), and setParam's
+    // `>>> 0` would zero it. Strings are matched against an explicit decimal
+    // grammar rather than Number(): Number(" ") is 0 (a whitespace value
+    // would silently zero the param) and Number("0x10") is 16 while the docs
+    // promise decimals only. Non-finite numbers are rejected like the
+    // device's GATT write path.
+    const value =
+      typeof rawValue === "number"
+        ? rawValue
+        : /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(rawValue.trim())
+          ? Number(rawValue.trim())
+          : NaN;
+    if (!Number.isFinite(value)) {
+      return `param "${name}" expects a finite float, got "${rawValue}"`;
+    }
+    host.setParamF32(idx, value);
+    return null;
+  }
   const value = parseScalarParamValue(rawValue);
   if (value === null) {
     return `param "${name}" expects a number (decimal, 0x hex, or true/false), got "${rawValue}"`;

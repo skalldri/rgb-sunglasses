@@ -1508,6 +1508,49 @@ int cmd_ext_stats(const struct shell *sh, size_t, char **) {
     return 0;
 }
 
+/* Renders a FLOAT param value with 4 decimal places via fixed-point integers
+ * ("1.5000", "-0.0123"): CONFIG_CBPRINTF_FP_SUPPORT is disabled project-wide
+ * (~10KB FLASH, issue #79), so %f prints its own literal specifier. Same
+ * approach as fmt_fixed4() in src/sound/sound.cpp, which is deliberately
+ * file-local there — duplicated in reduced form rather than hoisting
+ * audio-subsystem internals into a shared header. Every write path rejects
+ * non-finite values (extension_manifest::f32_bits_non_finite), but this
+ * still guards them itself: casting a non-finite or >= 2^32 float to
+ * unsigned is undefined, and a formatter must not be the thing that trusts
+ * every other path. */
+const char *fmt_param_f32(uint32_t bits, char *buf, size_t len) {
+    if (extension_manifest::f32_bits_non_finite(bits)) {
+        snprintf(buf, len, "%s", (bits & 0x007FFFFFu) != 0 ? "nan"
+                                 : (bits & 0x80000000u)   ? "-inf"
+                                                          : "inf");
+        return buf;
+    }
+    float v;
+    memcpy(&v, &bits, sizeof(v));
+    const char *sign = "";
+    if (v < 0.0f) {
+        sign = "-";
+        v = -v;
+    }
+    if (v >= 4294967296.0f) {
+        /* (unsigned)v is undefined from 2^32 up; a float32 this large has no
+         * fractional part anyway, and the hex bits printed alongside are the
+         * faithful representation. */
+        snprintf(buf, len, "%s>=2^32", sign);
+        return buf;
+    }
+    /* Split whole/frac separately (rather than one *10000 scale) so decimals
+     * survive the entire representable range below 2^32 without overflow. */
+    unsigned whole = (unsigned)v;
+    unsigned frac = (unsigned)((v - (float)whole) * 10000.0f + 0.5f);
+    if (frac >= 10000u) {
+        whole++;
+        frac -= 10000u;
+    }
+    snprintf(buf, len, "%s%u.%04u", sign, whole, frac);
+    return buf;
+}
+
 int cmd_ext_param(const struct shell *sh, size_t argc, char **argv) {
     if (argc != 3 && argc != 4) {
         shell_error(sh, "Usage: ext param <slot> <index> [<value>]");
@@ -1534,9 +1577,25 @@ int cmd_ext_param(const struct shell *sh, size_t argc, char **argv) {
     }
 
     if (argc == 4) {
-        uint32_t value = strtoul(argv[3], nullptr, 0);
-        if (info->type == RGBX_PARAM_BOOL) {
-            value = value ? 1 : 0;
+        uint32_t value;
+        if (info->type == RGBX_PARAM_FLOAT) {
+            /* Same rejection set as the GATT write path: a complete, finite
+             * float or nothing (parse_finite_float in sound.cpp carries the
+             * full rationale for refusing NaN — range checks are all false
+             * against it, so it poisons comparisons silently). */
+            char *end = nullptr;
+            const float f = strtof(argv[3], &end);
+            memcpy(&value, &f, sizeof(value));
+            if (end == argv[3] || *end != '\0' ||
+                extension_manifest::f32_bits_non_finite(value)) {
+                shell_error(sh, "not a finite float: '%s'", argv[3]);
+                return -EINVAL;
+            }
+        } else {
+            value = strtoul(argv[3], nullptr, 0);
+            if (info->type == RGBX_PARAM_BOOL) {
+                value = value ? 1 : 0;
+            }
         }
         setParamValue(slot, index, value);
     }
@@ -1549,6 +1608,12 @@ int cmd_ext_param(const struct shell *sh, size_t argc, char **argv) {
             shell_print(sh, "%s.%s = 0x%06x", sSlots[slot].meta.displayName, info->name,
                         value & 0x00FFFFFF);
             break;
+        case RGBX_PARAM_FLOAT: {
+            char buf[24];
+            shell_print(sh, "%s.%s = %s (0x%08x)", sSlots[slot].meta.displayName, info->name,
+                        fmt_param_f32(value, buf, sizeof(buf)), value);
+            break;
+        }
         default:
             shell_print(sh, "%s.%s = %u (0x%x)", sSlots[slot].meta.displayName, info->name,
                         value, value);

@@ -73,6 +73,19 @@ enum rgbx_param_type {
                             *   BLE value) */
     RGBX_PARAM_STRING = 3, /**< UTF-8 string, at most RGBX_PARAM_STRING_MAX-1
                             *   bytes (text field in the companion app) */
+    RGBX_PARAM_FLOAT = 4,  /**< IEEE-754 float32 (numeric field in the
+                            *   companion app). The value RIDES IN THE SAME
+                            *   uint32_t params[] slot as the scalar types, as
+                            *   its raw bit pattern — read it with
+                            *   rgbx::Animation::paramF32() (or an equivalent
+                            *   memcpy bit-cast), never an integer conversion.
+                            *   Requires firmware/SDK >= the release that
+                            *   introduced it: older hosts reject the whole
+                            *   manifest with "bad param type". Adding this
+                            *   enumerator changes no struct layout, so the
+                            *   ABI version stays 1 (same policy as the
+                            *   optional-exports note below: version bumps are
+                            *   reserved for breaking layout changes). */
 };
 
 /**
@@ -83,6 +96,9 @@ union rgbx_param_default {
     uint32_t u32;     /**< RGBX_PARAM_UINT32 */
     uint32_t color;   /**< RGBX_PARAM_COLOR, 0x00RRGGBB */
     uint32_t boolean; /**< RGBX_PARAM_BOOL, 0 or 1 */
+    float f32;        /**< RGBX_PARAM_FLOAT (same 4-byte slot: sizeof(float)
+                       *   == sizeof(uint32_t) on both ABI targets, so this
+                       *   member changes no layout) */
     const char *str;  /**< RGBX_PARAM_STRING; must point at a NUL-terminated
                        *   string literal inside the extension image, at most
                        *   RGBX_PARAM_STRING_MAX-1 bytes long */
@@ -183,6 +199,22 @@ struct rgbx_inputs {
  */
 #define RGBX_PARAM_STR(name_, default_str_) \
     {(name_), RGBX_PARAM_STRING, {.str = (default_str_)}}
+
+/**
+ * @brief Initializer for one RGBX_PARAM_FLOAT rgbx_param_desc entry.
+ *
+ * Kept separate from RGBX_PARAM() because that macro hardcodes the `.u32`
+ * union member; a float default must initialize `.f32` so the compiler stores
+ * the IEEE-754 bit pattern rather than an integer conversion.
+ *
+ * @param name_        Display name (CUD string); must be a string literal.
+ * @param default_f32_ Initial value, before any BLE write arrives. Must be a
+ *                     finite float constant (the host rejects writes of
+ *                     NaN/Inf, so a non-finite default would be unwritable
+ *                     back once changed).
+ */
+#define RGBX_PARAM_F32(name_, default_f32_) \
+    {(name_), RGBX_PARAM_FLOAT, {.f32 = (default_f32_)}}
 
 /**
  * @brief Byte offset of pixel (x, y) in #rgbx_framebuffer for a display `w`

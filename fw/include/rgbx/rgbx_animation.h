@@ -154,6 +154,22 @@ class Animation {
      *  @return The current value, or false if i is out of range. */
     bool paramBool(size_t i) const { return paramU32(i) != 0u; }
 
+    /** @brief Value of FLOAT parameter i.
+     *
+     *  The float rides in the shared uint32_t params[] slot as its raw
+     *  IEEE-754 bit pattern (see RGBX_PARAM_FLOAT), so this accessor
+     *  bit-casts via memcpy — a static_cast would silently yield the
+     *  integer-converted value instead.
+     *
+     *  @param i Parameter index in manifest declaration order.
+     *  @return The current value, or 0.0f if i is out of range. */
+    float paramF32(size_t i) const {
+        const uint32_t bits = paramU32(i);
+        float value;
+        __builtin_memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+
     /** @brief Value of STRING parameter i.
      *
      *  String values live in rgbx_inputs::param_strings, slotted by

@@ -236,6 +236,26 @@ const bt_gatt_attr *find_char_value(uint16_t serviceStartHandle, const bt_uuid *
     return found;
 }
 
+/* Reads the CPF descriptor's format byte for the characteristic whose value
+ * attribute is `valueAttr`, or 0 if there is none. append_characteristic()
+ * lays out declaration/value/CUD/CPF, so the CPF sits within 2 handles of the
+ * value (the window deliberately stops before the next declaration). The CPF
+ * wire form (bt_gatt_attr_read_cpf) is format(1) exponent(1) unit(2) ns(1)
+ * description(2); byte 0 is the format. */
+uint8_t read_cpf_format(const bt_gatt_attr *valueAttr) {
+    const bt_gatt_attr *cpfAttr = nullptr;
+    bt_gatt_foreach_attr_type(valueAttr->handle + 1, valueAttr->handle + 2, BT_UUID_GATT_CPF,
+                              nullptr, 1, single_match_iter, &cpfAttr);
+    if (cpfAttr == nullptr) {
+        return 0;
+    }
+    uint8_t wire[7] = {};
+    if (cpfAttr->read(nullptr, cpfAttr, wire, sizeof(wire), 0) < 1) {
+        return 0;
+    }
+    return wire[0];
+}
+
 ssize_t do_read(const bt_gatt_attr *attr, void *buf, size_t bufLen) {
     return attr->read(nullptr, attr, buf, bufLen, 0);
 }
@@ -401,11 +421,12 @@ ZTEST(extension_bt, test_param_characteristics) {
     reset_fake_slot(slot);
     sFakeSlots[slot].loaded = true;
     strncpy(sFakeSlots[slot].name, "Params", sizeof(sFakeSlots[slot].name) - 1);
-    sFakeSlots[slot].paramCount = 4;
+    sFakeSlots[slot].paramCount = 5;
     set_param(slot, 0, "Speed", RGBX_PARAM_UINT32, 42);
     set_param(slot, 1, "Hue", RGBX_PARAM_COLOR, 0x00112233);
     set_param(slot, 2, "Enabled", RGBX_PARAM_BOOL, 0);
     set_param(slot, 3, "Label", RGBX_PARAM_STRING, 0, "hi");
+    set_param(slot, 4, "Gain", RGBX_PARAM_FLOAT, 0x3FC00000u); /* 1.5f bit pattern */
 
     const uint16_t animId = extension_host::kAnimationIdBase + slot;
     const bt_uuid_128 svcUuid = BT_ANIMATION_SERVICE_UUID(animId);
@@ -414,13 +435,21 @@ ZTEST(extension_bt, test_param_characteristics) {
     const bt_gatt_attr *svcAttr = find_primary_service(svcUuid);
     zassert_not_null(svcAttr);
 
-    bt_uuid_128 paramUuid[4];
-    const bt_gatt_attr *paramAttr[4];
-    for (uint16_t i = 0; i < 4; i++) {
+    bt_uuid_128 paramUuid[5];
+    const bt_gatt_attr *paramAttr[5];
+    for (uint16_t i = 0; i < 5; i++) {
         paramUuid[i] = composeAutoCharacteristicUuid(svcUuid, static_cast<uint16_t>(i + 1));
         paramAttr[i] = find_char_value(svcAttr->handle, &paramUuid[i].uuid);
         zassert_not_null(paramAttr[i], "missing param characteristic %u", i);
     }
+
+    /* Every param type advertises its CPF format — this is what the app keys
+     * its widget choice on, and it was previously untested entirely. */
+    zassert_equal(read_cpf_format(paramAttr[0]), BLE_GATT_CPF_FORMAT_UINT32);
+    zassert_equal(read_cpf_format(paramAttr[1]), BLE_GATT_CPF_FORMAT_RGB888);
+    zassert_equal(read_cpf_format(paramAttr[2]), BLE_GATT_CPF_FORMAT_BOOLEAN);
+    zassert_equal(read_cpf_format(paramAttr[3]), BLE_GATT_CPF_FORMAT_UTF8S);
+    zassert_equal(read_cpf_format(paramAttr[4]), BLE_GATT_CPF_FORMAT_FLOAT32);
 
     /* UINT32 "Speed". */
     uint32_t u32 = 0;
@@ -472,6 +501,28 @@ ZTEST(extension_bt, test_param_characteristics) {
     memset(longPad, 'a', sizeof(longPad));
     zassert_equal(do_write(paramAttr[3], longPad, sizeof(longPad), 0),
                  BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN));
+
+    /* FLOAT "Gain" — the value rides as its raw IEEE-754 bit pattern in the
+     * same 4-byte LE wire shape as UINT32. */
+    uint32_t gainBits = 0;
+    zassert_equal(do_read(paramAttr[4], &gainBits, sizeof(gainBits)), sizeof(gainBits));
+    zassert_equal(gainBits, 0x3FC00000u, "float default must read back bit-exact (1.5f)");
+    const uint32_t quarter = 0x3E800000u; /* 0.25f */
+    zassert_equal(do_write(paramAttr[4], &quarter, sizeof(quarter)), sizeof(quarter));
+    zassert_equal(extension_host::paramValue(slot, 4), quarter);
+    /* Non-finite payloads are refused with an ATT error and leave the value
+     * untouched (never accept-and-correct — see fw/CLAUDE.md's GATT write
+     * rule). */
+    const uint32_t nanBits = 0x7FC00000u;
+    zassert_equal(do_write(paramAttr[4], &nanBits, sizeof(nanBits)),
+                  BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED));
+    const uint32_t negInfBits = 0xFF800000u;
+    zassert_equal(do_write(paramAttr[4], &negInfBits, sizeof(negInfBits)),
+                  BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED));
+    zassert_equal(extension_host::paramValue(slot, 4), quarter,
+                  "rejected write must not change the value");
+    zassert_equal(do_write(paramAttr[4], shortBuf, sizeof(shortBuf)),
+                  BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN));
 
     /* Defensive branch: paramInfo() unexpectedly returns nullptr for an
      * in-range index. */

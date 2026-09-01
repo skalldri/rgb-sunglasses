@@ -146,9 +146,47 @@ export class ParamPanel {
         return this.buildString(host, info, index, body, chip);
       case RgbxParamType.Color:
         return this.buildColor(host, info, index, body, chip);
+      case RgbxParamType.Float:
+        return this.buildFloat(host, info, index, body, chip);
       default:
         return this.buildUint(host, info, index, body, chip);
     }
+  }
+
+  /* buildUint cannot be reused for floats: its write path truncates
+   * (Math.trunc + `>>> 0`), and paramValues[index] holds the float's raw bit
+   * pattern, not a displayable number. */
+  private buildFloat(
+    host: SimHost,
+    info: ParamInfo,
+    index: number,
+    body: HTMLElement,
+    chip: HTMLElement,
+  ): Row {
+    const box = el<HTMLInputElement>("input", { type: "number", step: "any", class: "num" });
+    body.append(box);
+
+    box.addEventListener("change", () => {
+      const v = Number(box.value);
+      if (box.value !== "" && Number.isFinite(v)) {
+        host.setParamF32(index, v);
+      }
+      sync();
+      this.onChange();
+    });
+
+    const sync = () => {
+      /* 9 significant digits (FLT_DECIMAL_DIG) is the minimum that
+       * round-trips EVERY float32 — 7 (FLT_DIG) is the opposite guarantee
+       * (decimal->float32->decimal) and collapses distinct values like
+       * 16777216 and 16777218. The app's formatFloat32 deliberately keeps 7
+       * to hide binary noise from end users; the sim is a debugging tool, so
+       * it shows the true value even when that looks like 0.00499999989. */
+      const v = Number(host.paramF32(index).toPrecision(9));
+      box.value = String(v);
+      chip.textContent = String(v);
+    };
+    return { info, index, sync };
   }
 
   private buildUint(
@@ -317,6 +355,7 @@ function typeName(type: RgbxParamType): string {
     case RgbxParamType.Color: return "color";
     case RgbxParamType.Bool: return "bool";
     case RgbxParamType.String: return "string";
+    case RgbxParamType.Float: return "float32";
     default: return `type ${type}`;
   }
 }

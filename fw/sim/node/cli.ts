@@ -41,7 +41,8 @@ run flags:
                                Recorded ticks are still numbered from 0.
   --seed N                     RNG seed (default: scenario's, else 0)
   --param Name=value           initial param override (repeatable; COLOR
-                               accepts 0xMMRRGGBB with the mode byte)
+                               accepts 0xMMRRGGBB with the mode byte; FLOAT
+                               params take a decimal like 0.5)
   --json                       print the full report JSON to stdout
   --ascii N                    embed N ASCII frame samples (default 3)
   --png-every N                write frames/tick-*.png every N ticks

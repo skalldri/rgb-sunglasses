@@ -89,25 +89,27 @@ void reset_arena() {
 
 ZTEST(extension_manifest_suite, test_happy_path_copies_everything) {
     reset_arena();
-    auto *params = arena_params(5);
+    auto *params = arena_params(6);
     params[0] = RGBX_PARAM("Speed", RGBX_PARAM_UINT32, 50);
     params[1] = RGBX_PARAM("Color", RGBX_PARAM_COLOR, 0x00FF40FFu);
     params[2] = RGBX_PARAM("Crash", RGBX_PARAM_BOOL, 7); /* clamped to 1 */
     params[3] = {sArena.str("Message"), RGBX_PARAM_STRING, {.str = sArena.str("HELLO")}};
     params[4] = {sArena.str("Label"), RGBX_PARAM_STRING, {.str = nullptr}};
+    params[5] = RGBX_PARAM_F32("Gain", 1.5f);
     /* param name pointers for the scalar macros are string literals OUTSIDE
      * the arena — fix them up to arena copies. */
     params[0].name = sArena.str("Speed");
     params[1].name = sArena.str("Color");
     params[2].name = sArena.str("Crash");
-    auto *m = make_manifest(params, 5);
+    params[5].name = sArena.str("Gain");
+    auto *m = make_manifest(params, 6);
 
     Metadata out;
     zassert_equal(validate(m, test_env(), out), Result::Ok);
     zassert_equal(strcmp(out.displayName, "Test Extension"), 0);
     zassert_equal(out.width, kW);
     zassert_equal(out.height, kH);
-    zassert_equal(out.paramCount, 5u);
+    zassert_equal(out.paramCount, 6u);
     zassert_equal(out.stringParamCount, 2u);
     zassert_equal(strcmp(out.params[0].name, "Speed"), 0);
     zassert_equal(out.params[0].type, RGBX_PARAM_UINT32);
@@ -119,6 +121,12 @@ ZTEST(extension_manifest_suite, test_happy_path_copies_everything) {
     zassert_equal(out.params[4].stringSlot, 1);
     zassert_equal(out.stringDefaults[1][0], '\0', "NULL string default reads as empty");
     zassert_equal(out.params[0].stringSlot, extension_manifest::kNoStringSlot);
+    /* FLOAT defaults must round-trip as the raw IEEE-754 bit pattern
+     * (1.5f == 0x3FC00000), never an integer conversion. */
+    zassert_equal(out.params[5].type, RGBX_PARAM_FLOAT);
+    zassert_equal(out.params[5].defaultValue, 0x3FC00000u,
+                  "FLOAT default must be the bit pattern, not (uint32_t)1.5");
+    zassert_equal(out.params[5].stringSlot, extension_manifest::kNoStringSlot);
 }
 
 ZTEST(extension_manifest_suite, test_abi_version_mismatch_rejected) {
@@ -228,6 +236,37 @@ ZTEST(extension_manifest_suite, test_bad_param_type_rejected) {
     reset_arena();
     auto *params = arena_params(1);
     params[0] = {sArena.str("p"), static_cast<enum rgbx_param_type>(99), {.u32 = 0}};
+    auto *m = make_manifest(params, 1);
+    Metadata out;
+    zassert_equal(validate(m, test_env(), out), Result::BadParamType);
+}
+
+ZTEST(extension_manifest_suite, test_non_finite_float_default_rejected) {
+    /* The manifest is untrusted: a crafted default_value can carry any bit
+     * pattern, and NaN would defeat every downstream range clamp (all
+     * comparisons false) while being unwritable back over BLE/shell (the
+     * write paths reject non-finite values). */
+    const uint32_t badBits[] = {0x7FC00000u /* NaN */, 0x7F800000u /* +Inf */,
+                                0xFF800000u /* -Inf */};
+    for (uint32_t bits : badBits) {
+        reset_arena();
+        auto *params = arena_params(1);
+        params[0] = {sArena.str("g"), RGBX_PARAM_FLOAT, {.u32 = bits}};
+        auto *m = make_manifest(params, 1);
+        Metadata out;
+        zassert_equal(validate(m, test_env(), out), Result::BadFloatDefault,
+                      "bits 0x%08x must be rejected", bits);
+    }
+}
+
+ZTEST(extension_manifest_suite, test_first_unassigned_type_rejected) {
+    /* RGBX_PARAM_FLOAT + 1 is the first value with no meaning yet; asserting
+     * it still rejects proves the validation switch stayed closed when FLOAT
+     * was added (the same guarantee an older host gives a FLOAT manifest). */
+    reset_arena();
+    auto *params = arena_params(1);
+    params[0] = {sArena.str("p"), static_cast<enum rgbx_param_type>(RGBX_PARAM_FLOAT + 1),
+                 {.u32 = 0}};
     auto *m = make_manifest(params, 1);
     Metadata out;
     zassert_equal(validate(m, test_env(), out), Result::BadParamType);

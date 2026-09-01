@@ -64,6 +64,7 @@ constexpr bt_gatt_cpf kCpfUtf8 = {.format = BLE_GATT_CPF_FORMAT_UTF8S};
 constexpr bt_gatt_cpf kCpfBool = {.format = BLE_GATT_CPF_FORMAT_BOOLEAN};
 constexpr bt_gatt_cpf kCpfUint32 = {.format = BLE_GATT_CPF_FORMAT_UINT32};
 constexpr bt_gatt_cpf kCpfColor = {.format = BLE_GATT_CPF_FORMAT_RGB888};
+constexpr bt_gatt_cpf kCpfFloat32 = {.format = BLE_GATT_CPF_FORMAT_FLOAT32};
 
 /* Context handed to per-parameter read/write callbacks via attr->user_data. */
 struct ParamCtx {
@@ -273,6 +274,16 @@ ssize_t write_param(struct bt_conn *, const struct bt_gatt_attr *attr, const voi
             }
             uint32_t value;
             memcpy(&value, buf, sizeof(value));
+            /* FLOAT shares the raw 4-byte wire shape but rejects non-finite
+             * payloads (NaN/Inf) with an ATT error — never accept-and-correct
+             * (see the GATT write-rejection rule in fw/CLAUDE.md). A NaN
+             * reaching an extension's math defeats every range clamp (all
+             * comparisons false), and a rejected default could never be
+             * written back. */
+            if (info->type == RGBX_PARAM_FLOAT &&
+                extension_manifest::f32_bits_non_finite(value)) {
+                return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+            }
             extension_host::setParamValue(ctx->slot, ctx->index, value);
             return len;
         }
@@ -481,6 +492,13 @@ int extension_bt_register(size_t slot) {
                 break;
             case RGBX_PARAM_STRING:
                 cpf = &kCpfUtf8;
+                break;
+            case RGBX_PARAM_FLOAT:
+                /* The raw 4-byte LE value path (read_param/write_param
+                 * default branches) is already bit-exact IEEE-754 float32
+                 * little-endian, which is what CPF 0x14 promises — only the
+                 * advertised format differs from UINT32. */
+                cpf = &kCpfFloat32;
                 break;
             default:
                 cpf = &kCpfUint32;

@@ -89,18 +89,22 @@ ZTEST(extension_metadata_blob_suite, test_multi_entry_round_trip_preserves_order
     entryCount++;
     zassert_true(append(buf, sizeof(buf), &pos, 0x1A /* RGB888 */, "Color"));
     entryCount++;
+    zassert_true(append(buf, sizeof(buf), &pos, 0x14 /* FLOAT32 */, "Gain"));
+    entryCount++;
 
     size_t total = finish(buf, pos, entryCount);
 
-    DecodedEntry entries[4];
-    size_t count = decode(buf, total, entries, 4);
-    zassert_equal(count, 4u);
+    DecodedEntry entries[5];
+    size_t count = decode(buf, total, entries, 5);
+    zassert_equal(count, 5u);
     zassert_equal(strcmp(entries[0].name, "Animation Name"), 0);
     zassert_equal(strcmp(entries[1].name, "Is Active"), 0);
     zassert_equal(strcmp(entries[2].name, "Speed"), 0);
     zassert_equal(entries[2].cpfFormat, 0x08);
     zassert_equal(strcmp(entries[3].name, "Color"), 0);
     zassert_equal(entries[3].cpfFormat, 0x1A);
+    zassert_equal(strcmp(entries[4].name, "Gain"), 0);
+    zassert_equal(entries[4].cpfFormat, 0x14);
 }
 
 ZTEST(extension_metadata_blob_suite, test_append_truncates_overlong_name_defensively) {

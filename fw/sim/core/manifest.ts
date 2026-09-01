@@ -22,6 +22,7 @@ export enum ManifestResult {
   BadParamType = "BadParamType",
   TooManyStringParams = "TooManyStringParams",
   BadStringDefault = "BadStringDefault",
+  BadFloatDefault = "BadFloatDefault",
 }
 
 /** Mirrors extension_manifest::result_str(). */
@@ -37,6 +38,7 @@ export function manifestResultStr(r: ManifestResult): string {
     case ManifestResult.BadParamType: return "bad param type";
     case ManifestResult.TooManyStringParams: return "too many string params";
     case ManifestResult.BadStringDefault: return "bad string param default";
+    case ManifestResult.BadFloatDefault: return "non-finite float param default";
   }
 }
 
@@ -175,6 +177,17 @@ export function validateManifest(
     switch (type) {
       case RgbxParamType.Uint32:
       case RgbxParamType.Color:
+        info.defaultValue = defaultRaw;
+        break;
+      case RgbxParamType.Float:
+        /* FLOAT defaults are already the IEEE-754 bit pattern in the
+         * manifest's 4-byte default slot — carried raw, exactly like the
+         * firmware's extension_manifest.cpp, which also rejects non-finite
+         * defaults (NaN/Inf: exponent bits all set) the same way the write
+         * paths do. */
+        if ((defaultRaw & 0x7f800000) === 0x7f800000) {
+          return { result: ManifestResult.BadFloatDefault };
+        }
         info.defaultValue = defaultRaw;
         break;
       case RgbxParamType.Bool:

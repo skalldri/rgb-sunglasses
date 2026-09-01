@@ -81,7 +81,8 @@ The report (`report.json`, schema `rgbx-sim-report/1`; printed with
   `rgbx_init`, `[tick N]` for the tick that emitted it.
 
 Useful flags: `--param Name=value` (repeatable; COLOR takes `0xMMRRGGBB`
-with the mode byte in `MM`), `--seed N`, `--ticks N`, `--png-every 30`
+with the mode byte in `MM`, FLOAT params take a decimal like `0.5`),
+`--seed N`, `--ticks N`, `--png-every 30`
 (PNG frames an agent can Read — ×10 upscale, bezel-painted cutout),
 `--ansi 3` (live terminal preview), `--post-brightness` (render artifacts
 as the wearer sees them), `--budget-ms/--backstop-ms`.

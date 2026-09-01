@@ -77,19 +77,27 @@ override it to signal real boundaries).
 Up to `RGBX_MAX_PARAMS` (16) parameters, each surfaced as a BLE
 characteristic with the same presentation format the built-ins use:
 
-| Type                | App control  | Value                                        |
-| ------------------- | ------------ | -------------------------------------------- |
-| `RGBX_PARAM_UINT32` | number field | `rgbx_inputs.params[i]`                      |
-| `RGBX_PARAM_COLOR`  | color picker | `params[i]` as `0x00RRGGBB`                  |
-| `RGBX_PARAM_BOOL`   | toggle       | `params[i]` as 0/1                           |
-| `RGBX_PARAM_STRING` | text field   | `rgbx_inputs.param_strings[s]` (see below)   |
+| Type                | App control   | Value                                        |
+| ------------------- | ------------- | -------------------------------------------- |
+| `RGBX_PARAM_UINT32` | number field  | `rgbx_inputs.params[i]`                      |
+| `RGBX_PARAM_COLOR`  | color picker  | `params[i]` as `0x00RRGGBB`                  |
+| `RGBX_PARAM_BOOL`   | toggle        | `params[i]` as 0/1                           |
+| `RGBX_PARAM_STRING` | text field    | `rgbx_inputs.param_strings[s]` (see below)   |
+| `RGBX_PARAM_FLOAT`  | decimal field | `params[i]` as IEEE-754 float32 bits — read via `paramF32(i)` |
 
 Declare them with `RGBX_PARAM(name, type, default)` /
-`RGBX_PARAM_STR(name, "default")`. String values are capped at
-`RGBX_PARAM_STRING_MAX-1` (31) bytes, at most `RGBX_MAX_STRING_PARAMS` (4)
-per extension; the *i-th string-typed param in declaration order* reads from
-`param_strings[i]` (the C++ wrapper's `paramString(index)` does this mapping
-for you).
+`RGBX_PARAM_STR(name, "default")` / `RGBX_PARAM_F32(name, default)`. String
+values are capped at `RGBX_PARAM_STRING_MAX-1` (31) bytes, at most
+`RGBX_MAX_STRING_PARAMS` (4) per extension; the *i-th string-typed param in
+declaration order* reads from `param_strings[i]` (the C++ wrapper's
+`paramString(index)` does this mapping for you).
+
+`RGBX_PARAM_FLOAT` values ride in the shared `params[i]` slot as their raw
+bit pattern — always read them with the C++ wrapper's `paramF32(i)` (or an
+equivalent `memcpy` bit-cast); an integer conversion silently yields
+nonsense. An extension declaring a FLOAT param loads only on firmware ≥ the
+release that introduced the type — older hosts reject the whole manifest
+with "bad param type" (there is no per-param degrade path).
 
 ### Inputs
 

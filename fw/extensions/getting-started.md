@@ -81,7 +81,7 @@ walkthrough and show the raw-C equivalent at the end.
 
 Parameters are how the companion app controls your animation. Each one becomes
 a BLE characteristic and shows up automatically in the app — you write no app
-code. There are four types:
+code. There are five types:
 
 | Type | Control in the app | You read it with |
 | ---- | ------------------ | ---------------- |
@@ -89,6 +89,7 @@ code. There are four types:
 | `RGBX_PARAM_COLOR` | color picker | `paramColor(i)` → `0x00RRGGBB` |
 | `RGBX_PARAM_BOOL` | toggle | `paramBool(i)` |
 | `RGBX_PARAM_STRING` | text field | `paramString(i)` |
+| `RGBX_PARAM_FLOAT` | decimal field | `paramF32(i)` |
 
 Declare them where you instantiate your animation:
 
@@ -97,10 +98,20 @@ RGBX_ANIMATION(Starter, "Starter", WIDTH, HEIGHT,
                RGBX_PARAM("Speed",  RGBX_PARAM_UINT32, 20),
                RGBX_PARAM("Color",  RGBX_PARAM_COLOR,  0x00FF0080),
                RGBX_PARAM("Mirror", RGBX_PARAM_BOOL,   0),
-               RGBX_PARAM_STR("Label", "rgbx"));
+               RGBX_PARAM_STR("Label", "rgbx"),
+               RGBX_PARAM_F32("Gain", 1.0f));
 ```
 
 You get up to 16 parameters, of which at most 4 may be strings (31 bytes each).
+
+> **Float params need their own macro and accessor.** Declare with
+> `RGBX_PARAM_F32(...)`, never `RGBX_PARAM("Gain", RGBX_PARAM_FLOAT, 1.5)` —
+> that compiles, but stores `(uint32_t)1.5 == 1` in the union's integer
+> member, which read back as float bits is ~1.4e-45, so your default is
+> silently ~0. Read with `paramF32(i)`; `paramU32(i)` on a float param
+> returns the raw IEEE-754 bit pattern. Float params also require firmware
+> at or above the release that introduced them — an older device rejects the
+> whole extension with "bad param type".
 
 > **Index by declaration order.** `paramU32(0)` is the first parameter listed,
 > and there is no name lookup. Give the indices names — an `enum` at the top of
