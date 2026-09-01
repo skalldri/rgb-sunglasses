@@ -64,6 +64,7 @@ constexpr bt_gatt_cpf kCpfUtf8 = {.format = BLE_GATT_CPF_FORMAT_UTF8S};
 constexpr bt_gatt_cpf kCpfBool = {.format = BLE_GATT_CPF_FORMAT_BOOLEAN};
 constexpr bt_gatt_cpf kCpfUint32 = {.format = BLE_GATT_CPF_FORMAT_UINT32};
 constexpr bt_gatt_cpf kCpfColor = {.format = BLE_GATT_CPF_FORMAT_RGB888};
+constexpr bt_gatt_cpf kCpfFloat32 = {.format = BLE_GATT_CPF_FORMAT_FLOAT32};
 
 /* Context handed to per-parameter read/write callbacks via attr->user_data. */
 struct ParamCtx {
@@ -265,6 +266,23 @@ ssize_t write_param(struct bt_conn *, const struct bt_gatt_attr *attr, const voi
                 return BT_GATT_ERR(offset != 0 ? BT_ATT_ERR_INVALID_OFFSET
                                                : BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
             }
+            return len;
+        }
+        case RGBX_PARAM_FLOAT: {
+            if (offset != 0 || len != sizeof(uint32_t)) {
+                return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+            }
+            uint32_t value;
+            memcpy(&value, buf, sizeof(value));
+            /* Reject non-finite payloads (NaN/Inf: exponent bits all set)
+             * with an ATT error — never accept-and-correct (see the GATT
+             * write-rejection rule in fw/CLAUDE.md). A NaN reaching an
+             * extension's math is an ugly, hard-to-trace failure mode, and
+             * the app's float input can encode one from "Infinity". */
+            if ((value & 0x7F800000u) == 0x7F800000u) {
+                return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+            }
+            extension_host::setParamValue(ctx->slot, ctx->index, value);
             return len;
         }
         default: {
@@ -481,6 +499,13 @@ int extension_bt_register(size_t slot) {
                 break;
             case RGBX_PARAM_STRING:
                 cpf = &kCpfUtf8;
+                break;
+            case RGBX_PARAM_FLOAT:
+                /* The raw 4-byte LE value path (read_param/write_param
+                 * default branches) is already bit-exact IEEE-754 float32
+                 * little-endian, which is what CPF 0x14 promises — only the
+                 * advertised format differs from UINT32. */
+                cpf = &kCpfFloat32;
                 break;
             default:
                 cpf = &kCpfUint32;

@@ -41,6 +41,18 @@ class CppTest : public rgbx::Animation {
                 if (invert) {
                     v = 255u - v;
                 }
+                /* Gain exercises the FLOAT param path end to end — the value
+                 * arrives as an IEEE-754 bit pattern in the shared u32 slot
+                 * and paramF32() bit-casts it back. Clamped so a wild BLE
+                 * write can only wash the plasma out, not overflow the cast. */
+                float gain = paramF32(3);
+                if (gain < 0.0f) {
+                    gain = 0.0f;
+                } else if (gain > 4.0f) {
+                    gain = 4.0f;
+                }
+                const uint32_t scaled = static_cast<uint32_t>(static_cast<float>(v) * gain);
+                v = (scaled > 255u) ? 255u : scaled;
                 setPixel(x, y, static_cast<uint8_t>(cr * v / 255),
                          static_cast<uint8_t>(cg * v / 255),
                          static_cast<uint8_t>(cb * v / 255));
@@ -66,4 +78,5 @@ class CppTest : public rgbx::Animation {
 
 RGBX_ANIMATION(CppTest, "C++ Test", 40, 12, RGBX_PARAM("Speed", RGBX_PARAM_UINT32, 50),
                RGBX_PARAM("Color", RGBX_PARAM_COLOR, 0x00FF40FF),
-               RGBX_PARAM("Invert", RGBX_PARAM_BOOL, 0));
+               RGBX_PARAM("Invert", RGBX_PARAM_BOOL, 0),
+               RGBX_PARAM_F32("Gain", 1.0f));

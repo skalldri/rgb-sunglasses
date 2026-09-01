@@ -111,6 +111,12 @@ Iterate here until the sim is clean, THEN do the ARM build (§2) — both must p
   `paramString(index)` does the mapping for you. Limits: `RGBX_MAX_PARAMS` (16)
   params total, `RGBX_MAX_STRING_PARAMS` (4) strings, each ≤ `RGBX_PARAM_STRING_MAX-1`
   (31) bytes.
+- **FLOAT params are bit patterns, not integers.** An `RGBX_PARAM_FLOAT` value
+  rides in the shared u32 `params[i]` slot as raw IEEE-754 bits — declare with
+  `RGBX_PARAM_F32(name, default)` and read with `paramF32(i)`; `paramU32(i)` on a
+  float param returns the bit pattern, and casting it yields nonsense. FLOAT
+  needs firmware/SDK ≥ the release that introduced it: an older host rejects the
+  whole manifest ("bad param type"), it does not skip the param.
 - **Render near full-scale (255) channel values.** The pattern controller multiplies
   every pixel by the global brightness factor (default 0.02); an animation drawing at
   32/255 is invisible and looks exactly like a crash.

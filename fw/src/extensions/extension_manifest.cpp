@@ -54,6 +54,8 @@ const char *result_str(Result r) {
             return "too many string params";
         case Result::BadStringDefault:
             return "bad string param default";
+        case Result::BadFloatDefault:
+            return "non-finite float param default";
     }
     return "unknown";
 }
@@ -115,6 +117,21 @@ Result validate(const struct rgbx_manifest *manifest, const Env &env, Metadata &
         switch (desc.type) {
             case RGBX_PARAM_UINT32:
             case RGBX_PARAM_COLOR:
+                info.defaultValue = desc.default_value.u32;
+                break;
+            case RGBX_PARAM_FLOAT:
+                /* FLOAT rides in the same 4-byte slot as its IEEE-754 bit
+                 * pattern; reading the union's u32 member captures exactly
+                 * those bits, so the whole downstream value path (persistence
+                 * blob, GATT read/write, inputs copy) carries floats
+                 * unchanged. The manifest is untrusted, so a non-finite
+                 * default (exponent bits all set) is rejected here just like
+                 * the GATT/shell write paths reject non-finite writes — NaN
+                 * defeats every range clamp downstream (all comparisons
+                 * false), and once changed it could never be written back. */
+                if ((desc.default_value.u32 & 0x7F800000u) == 0x7F800000u) {
+                    return Result::BadFloatDefault;
+                }
                 info.defaultValue = desc.default_value.u32;
                 break;
             case RGBX_PARAM_BOOL:

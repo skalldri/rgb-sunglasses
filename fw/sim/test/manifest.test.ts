@@ -80,19 +80,22 @@ test("accepts a well-formed manifest and slots string params", () => {
       { name: "Msg", type: RgbxParamType.String, defaultStr: "HELLO" },
       { name: "On", type: RgbxParamType.Bool, defaultValue: 7 }, // clamps to 1
       { name: "Msg2", type: RgbxParamType.String, defaultStr: "" },
+      { name: "Gain", type: RgbxParamType.Float, defaultValue: 0x3fc00000 }, // 1.5f bits
     ],
   });
   const out = validateManifest(memory, manifestAddr, ENV);
   assert.equal(out.result, ManifestResult.Ok);
   const meta = out.metadata!;
   assert.equal(meta.displayName, "Kitchen Sink");
-  assert.equal(meta.paramCount, 4);
+  assert.equal(meta.paramCount, 5);
   assert.equal(meta.stringParamCount, 2);
   assert.equal(meta.params[0].stringSlot, 0xff);
   assert.equal(meta.params[1].stringSlot, 0); // 1st string param -> slot 0
   assert.equal(meta.params[2].defaultValue, 1); // BOOL clamped
   assert.equal(meta.params[3].stringSlot, 1); // 2nd string param -> slot 1
   assert.equal(meta.stringDefaults[0], "HELLO");
+  assert.equal(meta.params[4].defaultValue, 0x3fc00000); // FLOAT keeps raw bits
+  assert.equal(meta.params[4].stringSlot, 0xff);
 });
 
 test("BadManifestPointer before any field read", () => {
@@ -147,6 +150,21 @@ test("long display name truncates to 23 bytes (kMaxNameLen 24)", () => {
 test("BadParamType on out-of-enum type", () => {
   const { memory, manifestAddr } = buildMemory({ params: [{ type: 9 }] });
   assert.equal(validateManifest(memory, manifestAddr, ENV).result, ManifestResult.BadParamType);
+});
+
+test("BadFloatDefault on non-finite FLOAT default bits", () => {
+  // NaN, +Inf, -Inf — the write paths reject non-finite values, so a
+  // non-finite default must be rejected at validation, like the firmware.
+  for (const bits of [0x7fc00000, 0x7f800000, 0xff800000]) {
+    const { memory, manifestAddr } = buildMemory({
+      params: [{ name: "Gain", type: RgbxParamType.Float, defaultValue: bits }],
+    });
+    assert.equal(
+      validateManifest(memory, manifestAddr, ENV).result,
+      ManifestResult.BadFloatDefault,
+      `bits 0x${bits.toString(16)} must be rejected`,
+    );
+  }
 });
 
 test("TooManyStringParams at the fifth string param", () => {

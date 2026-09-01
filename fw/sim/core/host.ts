@@ -308,11 +308,31 @@ export class SimHost {
     }
   }
 
-  /** Sets a scalar param (raw word — COLOR values keep their mode byte). */
+  /** Sets a scalar param (raw word — COLOR values keep their mode byte).
+   * For FLOAT params this takes the raw BIT PATTERN; use setParamF32() to
+   * set one from a JS number — `value >>> 0` here truncates 0.5 to 0. */
   setParam(index: number, value: number): void {
     if (index >= 0 && index < RGBX_MAX_PARAMS) {
       this.paramValues[index] = value >>> 0;
     }
+  }
+
+  /** Sets a FLOAT param from a JS number, storing its IEEE-754 float32 bit
+   * pattern in the shared u32 slot (matching the device's wire encoding). */
+  setParamF32(index: number, value: number): void {
+    if (index >= 0 && index < RGBX_MAX_PARAMS) {
+      const scratch = new DataView(new ArrayBuffer(4));
+      scratch.setFloat32(0, value, true);
+      this.paramValues[index] = scratch.getUint32(0, true);
+    }
+  }
+
+  /** Reads a FLOAT param's current value as a JS number (bit-cast of the
+   * stored u32 slot). */
+  paramF32(index: number): number {
+    const scratch = new DataView(new ArrayBuffer(4));
+    scratch.setUint32(0, this.paramValues[index] ?? 0, true);
+    return scratch.getFloat32(0, true);
   }
 
   /** Writes a string param by PARAM index (maps to its string slot). */

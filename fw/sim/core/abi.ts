@@ -24,6 +24,10 @@ export enum RgbxParamType {
   Color = 1,
   Bool = 2,
   String = 3,
+  /** IEEE-754 float32 riding in the shared u32 params[] slot as its raw bit
+   * pattern — never store an integer-truncated value for these (see
+   * SimHost.setParamF32). */
+  Float = 4,
 }
 
 /** struct rgbx_inputs field offsets (wasm32 == ARM EABI, ILP32). */

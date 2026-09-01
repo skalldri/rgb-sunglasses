@@ -127,6 +127,45 @@ ZTEST(extension_param_persistence_suite, test_fill_and_apply_blob_round_trip) {
     zassert_equal(strcmp(loadedStrings[0], "hello"), 0);
 }
 
+ZTEST(extension_param_persistence_suite, test_fill_and_apply_blob_float_bits_round_trip) {
+    // FLOAT params persist as their raw IEEE-754 bit pattern in the same u32
+    // slot as the other scalars — no clamp, no conversion, bit-exact.
+    Metadata meta = make_metadata(1, 0);
+    meta.params[0].type = RGBX_PARAM_FLOAT;
+
+    uint32_t savedParams[RGBX_MAX_PARAMS] = {0x3E800000u};  // 0.25f
+    char savedStrings[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX] = {};
+    Blob blob;
+    fill_blob(blob, meta, savedParams, savedStrings);
+
+    uint32_t loadedParams[RGBX_MAX_PARAMS] = {};
+    char loadedStrings[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX] = {};
+    apply_blob(blob, meta, loadedParams, loadedStrings);
+
+    zassert_equal(loadedParams[0], 0x3E800000u, "float bits must round-trip unmodified");
+}
+
+ZTEST(extension_param_persistence_suite, test_apply_blob_discarded_when_param_became_float) {
+    // Same count, but a param changed type UINT32 -> FLOAT (e.g. an extension
+    // migrating a x10 fixed-point knob to a real float). The old integer bytes
+    // must never be reinterpreted as float bits: the fingerprint folds in the
+    // type, so the blob is discarded and the float default kept.
+    Metadata savedMeta = make_metadata(1, 0);  // UINT32
+    uint32_t savedParams[RGBX_MAX_PARAMS] = {85};  // old "x10" integer value
+    char savedStrings[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX] = {};
+    Blob blob;
+    fill_blob(blob, savedMeta, savedParams, savedStrings);
+
+    Metadata newMeta = make_metadata(1, 0);
+    newMeta.params[0].type = RGBX_PARAM_FLOAT;
+    uint32_t loadedParams[RGBX_MAX_PARAMS] = {0x41080000u};  // seeded default 8.5f
+    char loadedStrings[RGBX_MAX_STRING_PARAMS][RGBX_PARAM_STRING_MAX] = {};
+    apply_blob(blob, newMeta, loadedParams, loadedStrings);
+
+    zassert_equal(loadedParams[0], 0x41080000u,
+                  "retyped-to-float param must discard the blob, default kept");
+}
+
 ZTEST(extension_param_persistence_suite, test_apply_blob_clamps_bool_params) {
     Metadata meta = make_metadata(1, 0);
     meta.params[0].type = RGBX_PARAM_BOOL;

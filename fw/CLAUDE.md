@@ -234,7 +234,7 @@ App modules are compiled via `target_sources_ifdef(CONFIG_<MODULE> app PRIVATE .
 
 Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_CBPRINTF_FP_SUPPORT=n`); `CONFIG_SIZE_OPTIMIZATIONS=y` lives in the proto0 **board** conf, not `prj.conf`.
 
-**No `%f`/`%g` in log or shell format strings.** `CONFIG_CBPRINTF_FP_SUPPORT` and `CONFIG_PICOLIBC_IO_FLOAT` are disabled (~10KB FLASH, issue #79 ROM pass); a `%f` prints the literal specifier instead of the value (no crash). Print floats via integer fixed-point instead — see `fmt_fixed4()` / `agc_gain_db10()` in `src/sound/sound.cpp` (the only float-printing code in the app).
+**No `%f`/`%g` in log or shell format strings.** `CONFIG_CBPRINTF_FP_SUPPORT` and `CONFIG_PICOLIBC_IO_FLOAT` are disabled (~10KB FLASH, issue #79 ROM pass); a `%f` prints the literal specifier instead of the value (no crash). Print floats via integer fixed-point instead — see `fmt_fixed4()` / `agc_gain_db10()` in `src/sound/sound.cpp`, or `fmt_param_f32()` in `src/extensions/extension_host.cpp` (the FLOAT extension-param shell path).
 
 **Logging an enum OR a `bool` from C++ prints GARBAGE without an `(int)` cast.** `LOG_*("%d", someEnum)` / `LOG_*("%d", someBool)` from a `.cpp` file silently prints the true value in the low byte with three bytes of adjacent stack in the upper bits — e.g. `BT_SECURITY_L4` (literally `4`) printed as `59609092` (`0x038D9004`), and `err 2` as `66701314` (`0x03F9C802`). It does **not** crash and it is **not** obviously wrong at a glance, which is what makes it expensive: it cost most of a debugging session on a real BLE pairing failure (2026-08-14) because `PIN_OR_KEY_MISSING` was unreadable.
 

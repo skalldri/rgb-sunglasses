@@ -40,6 +40,11 @@ enum class Result {
     BadStringDefault,    /**< a string default outside the extension, not
                           *   NUL-terminated, or longer than
                           *   RGBX_PARAM_STRING_MAX-1 bytes */
+    BadFloatDefault,     /**< a FLOAT default whose bits are NaN or +/-Inf —
+                          *   the GATT/shell write paths refuse non-finite
+                          *   values, so a non-finite default could never be
+                          *   restored once changed, and a NaN reaching an
+                          *   extension's math defeats every range clamp */
 };
 
 /** @brief Human-readable name for a Result (for log messages). */
@@ -67,7 +72,8 @@ inline constexpr uint8_t kNoStringSlot = 0xFF;
 struct ParamInfo {
     char name[extension_host::kMaxParamNameLen]; /**< always NUL-terminated */
     enum rgbx_param_type type;
-    uint32_t defaultValue; /**< scalar types; BOOL clamped to 0/1 */
+    uint32_t defaultValue; /**< scalar types; BOOL clamped to 0/1; FLOAT is
+                            *   the raw IEEE-754 bit pattern */
     uint8_t stringSlot; /**< for STRING params: index into
                          *   rgbx_inputs.param_strings / stringDefaults
                          *   (declaration order among string params);
