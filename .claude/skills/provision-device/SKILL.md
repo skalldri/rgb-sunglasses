@@ -78,7 +78,8 @@ Over `mcp__serial__*`:
 - `glim list` (or the `rgb_sunglasses.glim_list` plugin tool) — expect both `nyan_cat.glim` and `bad_apple.glim`.
 - `ext list` — expect `hello` and `cpptest` (the in-repo dev extensions; a
   device that has also synced from a release will additionally show the
-  registry extensions, e.g. `demo_wave` and `plasma`), none marked `[FAULTED]`.
+  registry extensions, e.g. `demo_wave`, `plasma` and `mask_eyes`), none marked
+  `[FAULTED]`.
 
 Note on the in-repo dev extensions: provisioning **deliberately (re)installs
 them**, including on a board whose owner previously removed `hello` through

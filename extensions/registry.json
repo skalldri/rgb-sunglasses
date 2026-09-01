@@ -16,6 +16,14 @@
       "description": "Audio-reactive wave: parameterized crest color and speed, amplitude swells with audio energy, beats flash the crest column",
       "author": "skalldri",
       "license": "MIT"
+    },
+    {
+      "name": "mask_eyes",
+      "repo": "https://github.com/skalldri/rgbx-mask-eyes",
+      "rev": "3c72f799ed8545d2f1a7a8c5522bb1f1bd924735",
+      "description": "Symbolic LED eyes with glitchy transitions, modelled on Watch_Dogs 2's Wrench: idles on X X, tilts and vigorous head motion via the IMU, startles on sharp sound, plus manual expressions on the buttons; Calm/Lively profiles with numeric override params",
+      "author": "skalldri",
+      "license": "MIT"
     }
   ]
 }
