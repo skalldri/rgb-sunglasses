@@ -34,9 +34,13 @@ rationale is in
    CI green is the floor, not the bar.
 
 Once merged, every `fw-v*` firmware release rebuilds your extension from its
-pinned rev against that release's SDK and attaches `<name>.llext` as a
-release asset. The companion app then installs it onto devices automatically
-(it syncs every `.llext` asset on the latest firmware release). A build
+pinned rev against that release's SDK and attaches two release assets:
+`<name>.llext` (debug info stripped — the file that reaches devices) and
+`<name>.llext.debug` (the same partial link with its DWARF kept, for
+resolving a fault PC offset against exactly the object that shipped; see
+`fw/docs/standalone-extension-repos.md`). The companion app then installs the
+`.llext` onto devices automatically (it syncs every asset ending in `.llext`
+on the latest firmware release, so the `.debug` sidecar is ignored). A build
 failure at release time (e.g. after an ABI bump) drops your extension from
 that release — visibly, in the release workflow summary — without blocking
 the firmware; fix and PR a new rev to ride the next release.

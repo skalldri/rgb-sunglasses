@@ -142,10 +142,15 @@ jobs:
           pattern: community-ext-*
           merge-multiple: true
           path: community
+      # Each .llext ships with its .llext.debug sidecar (the unstripped
+      # partial link) so a released build's fault PC offset can be resolved
+      # with addr2line/gdb. The app's extension sync only considers assets
+      # ending in ".llext" (isValidExtensionAssetName), so the sidecars are
+      # never installed onto devices.
       - name: Attach community .llext files
         run: |
           shopt -s nullglob
-          files=(community/*.llext)
+          files=(community/*.llext community/*.llext.debug)
           if [ ${#files[@]} -eq 0 ]; then
             echo "no community extension artifacts to attach"
             exit 0

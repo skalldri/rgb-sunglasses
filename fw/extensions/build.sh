@@ -7,6 +7,9 @@
 # Outputs <name>.llext files into <build-dir>/extensions/, ready to copy to
 # the board's /NAND:/ext/ over USB mass storage (mount, cp, sync, umount,
 # then reboot the board so the firmware re-mounts FAT and re-discovers).
+# Each comes with a <name>.llext.debug sidecar (the same object with its
+# DWARF still attached) for resolving a fault PC offset — never copy those
+# to the board; provision-device.sh's *.llext glob deliberately skips them.
 #
 # That USB copy is the loop for LOCAL builds. Extensions that ship on a GitHub
 # release reach end users a different way: the companion app's firmware-update
@@ -67,6 +70,7 @@ fi
 CC="$TOOLCHAIN_BIN/arm-zephyr-eabi-gcc"
 CXX="$TOOLCHAIN_BIN/arm-zephyr-eabi-g++"
 LD="$TOOLCHAIN_BIN/arm-zephyr-eabi-ld"
+OBJCOPY="$TOOLCHAIN_BIN/arm-zephyr-eabi-objcopy"
 
 # 1. (Re)generate the EDK. The llext-edk target does NOT notice new/changed
 #    headers on its own, so force it by deleting the stale tarball first.
@@ -117,7 +121,13 @@ for dir in "$EXT_SRC_DIR"/*/; do
     # ("Region 0 ELF file range ... overlaps with 1"). A plain `ld -r` packs
     # all text sections contiguously ahead of rodata/data/bss. Harmless for
     # plain-C extensions.
-    "$LD" -r "$obj" -o "$OUT_DIR/$name.llext"
+    # Same split as the SDK's rgbx_add_extension: the partial link keeps its
+    # DWARF in <name>.llext.debug, and the file that ships to the device is
+    # the debug-stripped copy (the loader only reads SHF_ALLOC sections, so
+    # DWARF is pure upload/NAND cost). --strip-debug keeps .symtab/.strtab,
+    # which the loader relocates through.
+    "$LD" -r "$obj" -o "$OUT_DIR/$name.llext.debug"
+    "$OBJCOPY" --strip-debug "$OUT_DIR/$name.llext.debug" "$OUT_DIR/$name.llext"
     rm -f "$obj"
     # `wc -c` rather than stat: -c%s is GNU-only and macOS stat wants -f%z, so
     # the size printed empty there ("built ... ( bytes)").

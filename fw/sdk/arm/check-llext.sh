@@ -33,6 +33,13 @@
 #     this script (stamped by package-sdk.sh from the board .conf), falling
 #     back to grepping the board .conf directly when running from the
 #     monorepo source tree — never a hardcoded copy.
+#  4. No DWARF: the shipped .llext must carry no .debug_* / .rel.debug_*
+#     sections. The loader never reads them (non-SHF_ALLOC), but they were
+#     ~90% of the file — i.e. ~90% of every BLE upload and of the NAND
+#     footprint. rgbx_add_extension strips them into <name>.llext.debug;
+#     this check keeps a hand-rolled build from shipping the fat file.
+#     (.symtab/.strtab are NOT debug info: the loader relocates through
+#     them and check 1 reads them — --strip-debug keeps them.)
 #
 # Parsing note: readelf -S -W output is processed in plain bash ($((16#...)))
 # rather than awk — the "[ Nr]" column splits inconsistently for awk, and
@@ -106,10 +113,19 @@ exported_size=0
 alloc_total=0
 nobits_count=0
 nobits_names=""
+debug_count=0
+debug_bytes=0
 # Per-region merged file spans: "<min_off> <max_end>" (empty = no sections).
 declare -A region_min region_max
 
 while read -r name type _addr off size _es flg _rest; do
+    # Check 4 bookkeeping (non-alloc sections, so before the SHF_ALLOC filter).
+    case "$name" in
+        .debug_*|.rel.debug_*|.rela.debug_*)
+            debug_count=$((debug_count + 1))
+            debug_bytes=$((debug_bytes + 16#$size))
+            ;;
+    esac
     case "$flg" in *A*) ;; *) continue ;; esac
     size_dec=$((16#$size))
     [ "$size_dec" -gt 0 ] || continue
@@ -189,7 +205,16 @@ elif [ "$alloc_total" -ge $((HEAP_LIMIT * 8 / 10)) ]; then
     echo "$LLEXT: warning: allocatable sections total $alloc_total bytes (>= 80% of the $HEAP_LIMIT-byte llext heap)" >&2
 fi
 
+# --- 4. no DWARF in the shipped file -----------------------------------------
+if [ "$debug_count" -gt 0 ]; then
+    echo "$LLEXT: carries $debug_count .debug_* section(s), $debug_bytes bytes of DWARF - strip before shipping" >&2
+    echo "  The device never loads them; they only inflate the BLE upload and the NAND footprint." >&2
+    echo "  rgbx_add_extension does this for you (objcopy --strip-debug <name>.llext.debug <name>.llext);" >&2
+    echo "  a hand-rolled build must do the same and keep the unstripped file as <name>.llext.debug." >&2
+    fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
     exit 1
 fi
-echo "$LLEXT: OK (alloc $alloc_total bytes, $((exported_size / 8)) exported symbols, heap limit $HEAP_LIMIT)"
+echo "$LLEXT: OK (alloc $alloc_total bytes, $((exported_size / 8)) exported symbols, heap limit $HEAP_LIMIT, no debug sections)"

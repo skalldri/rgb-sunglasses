@@ -54,6 +54,9 @@ set(CMAKE_CXX_COMPILER "${_rgbx_arm_root}/bin/${_rgbx_arm_prefix}-g++")
 set(CMAKE_LINKER "${_rgbx_arm_root}/bin/${_rgbx_arm_prefix}-ld" CACHE FILEPATH "")
 set(CMAKE_NM "${_rgbx_arm_root}/bin/${_rgbx_arm_prefix}-nm" CACHE FILEPATH "")
 set(CMAKE_READELF "${_rgbx_arm_root}/bin/${_rgbx_arm_prefix}-readelf" CACHE FILEPATH "")
+# objcopy splits the shipped .llext (debug stripped) from its .llext.debug
+# sidecar (full DWARF) — see rgbx_add_extension.
+set(CMAKE_OBJCOPY "${_rgbx_arm_root}/bin/${_rgbx_arm_prefix}-objcopy" CACHE FILEPATH "")
 
 # The exact flag surface an on-device .llext needs (mirrors what the Zephyr
 # EDK emits for this SoC, minus host paths): Cortex-M33 hard-float
@@ -62,7 +65,9 @@ set(CMAKE_READELF "${_rgbx_arm_root}/bin/${_rgbx_arm_prefix}-readelf" CACHE FILE
 # -O2 is pinned deliberately: the undefined-symbol surface (__aeabi_*
 # helpers vs inline FPU/UDIV instructions) is codegen-dependent, so the
 # optimization level is part of the reproducibility contract — do not let
-# CMAKE_BUILD_TYPE vary it.
+# CMAKE_BUILD_TYPE vary it. -g is kept on purpose: the DWARF never reaches
+# the device (rgbx_add_extension strips it into the .llext.debug sidecar),
+# and it is what makes a faulting extension's PC resolvable to a source line.
 set(_rgbx_arm_common "-mcpu=cortex-m33 -mthumb -mfloat-abi=hard -mfpu=fpv5-sp-d16 -mlong-calls -DLL_EXTENSION_BUILD -O2 -g")
 set(CMAKE_C_FLAGS_INIT "${_rgbx_arm_common}")
 set(CMAKE_CXX_FLAGS_INIT "${_rgbx_arm_common} -std=c++23 -fno-exceptions -fno-rtti")

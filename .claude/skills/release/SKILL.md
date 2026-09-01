@@ -10,7 +10,7 @@ files need editing** for any release track.
 
 | Track | Tag convention | CI workflow | Artifact |
 |---|---|---|---|
-| Firmware | `fw-vX.Y.Z` | `release.yaml` | `dfu_application_proto0.zip`, `dfu_application_dk.zip`, plus one bare `<name>.llext` per community-registry extension (built by the sandboxed `community-extensions.yml` reusable workflow from `extensions/registry.json`, then attached + published by `attach-community`; in-repo extensions are dev tools and never attach) |
+| Firmware | `fw-vX.Y.Z` | `release.yaml` | `dfu_application_proto0.zip`, `dfu_application_dk.zip`, plus one bare `<name>.llext` (debug-stripped) and its `<name>.llext.debug` DWARF sidecar per community-registry extension (built by the sandboxed `community-extensions.yml` reusable workflow from `extensions/registry.json`, then attached + published by `attach-community`; in-repo extensions are dev tools and never attach) |
 | App | `app-vX.Y.Z` | `app-release.yml` | `rgb-sunglasses-<version>.apk` + iOS build on TestFlight + Google Play AAB (track from the `PLAY_TRACK` repo variable, default `internal`) |
 | MCUboot bootloader | `mcuboot-vX.Y.Z` | `mcuboot-release.yaml` | `mcuboot-<version>-proto0.bin` |
 
@@ -26,7 +26,9 @@ files need editing** for any release track.
 the newest release of ANY track and broke the update check (PRs #55/#57) — and
 matches firmware zips by `proto0`/`dk` substring (`findAssetForBoard`) and the APK
 by `.apk` suffix (`findApkAsset`). Renaming assets breaks the in-app updater.
-The extension assets must stay bare `<name>.llext` files — never a zip bundle with
+The extension assets must stay bare `<name>.llext` files (plus the
+`<name>.llext.debug` sidecar, which the app's extension sync ignores because it
+matches on the `.llext` suffix) — never a zip bundle with
 `proto0`/`dk` in its name, which could shadow the `dfu_application_*.zip` match
 (the `dk` rule still matters even though main no longer ships a DK zip: the app
 matches `dk` against older releases). Since issue #203, firmware releases attach
@@ -205,16 +207,20 @@ The app tag is **annotated** (`-a -m`): its message becomes the Google Play
 - **Firmware releases are born as DRAFTS**: `release.yaml`'s release job creates
   the release with `draft: true`, and its `attach-community` job publishes it
   (`--draft=false`) only after attaching whatever community-extension `.llext`
-  assets built successfully (see `extensions/README.md`). So a firmware release
+  (+ `.llext.debug` sidecar) assets built successfully (see
+  `extensions/README.md`). So a firmware release
   visible as draft mid-run is normal — wait for `attach-community`. If THAT job
   itself failed, the release stays draft (deliberately — an incomplete asset
   list must not go live), and recovery is NOT just undrafting: first attach the
   community assets the run already built, THEN publish —
   ```bash
   gh run download <release-run-id> --pattern 'community-ext-*' --dir /tmp/community
-  gh release upload fw-v<version> /tmp/community/*/*.llext --clobber
+  gh release upload fw-v<version> /tmp/community/*/*.llext /tmp/community/*/*.llext.debug --clobber
   gh release edit fw-v<version> --draft=false
   ```
+  (`gh run download` unpacks each artifact into its own subdirectory, hence
+  the `*/`; the `.llext.debug` glob is the DWARF sidecar that must ride along
+  so a released build's fault PC can be symbolicated later.)
   Undrafting without the upload publishes exactly the incomplete asset list the
   draft gate exists to prevent (the app's extension management compares the
   device against every `.llext` on the latest release — a missing asset makes

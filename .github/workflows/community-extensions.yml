@@ -150,10 +150,17 @@ jobs:
             exit 1
           fi
           test -f "$RUNNER_TEMP/b-wasm/$EXT_NAME.wasm"
+          # The .llext.debug sidecar (same partial link, DWARF kept) rides
+          # along so a fault PC offset on a released build can be resolved
+          # against exactly the object that shipped. The SDK rule emits it
+          # unconditionally, so its absence means a stale/foreign SDK.
+          test -f "$RUNNER_TEMP/b-arm/$EXT_NAME.llext.debug"
           mkdir -p "$RUNNER_TEMP/out"
-          cp "$RUNNER_TEMP/b-arm/$EXT_NAME.llext" "$RUNNER_TEMP/out/"
+          cp "$RUNNER_TEMP/b-arm/$EXT_NAME.llext" "$RUNNER_TEMP/b-arm/$EXT_NAME.llext.debug" "$RUNNER_TEMP/out/"
 
       - uses: actions/upload-artifact@v6
         with:
           name: community-ext-${{ matrix.ext.name }}
-          path: ${{ runner.temp }}/out/*.llext
+          path: |
+            ${{ runner.temp }}/out/*.llext
+            ${{ runner.temp }}/out/*.llext.debug

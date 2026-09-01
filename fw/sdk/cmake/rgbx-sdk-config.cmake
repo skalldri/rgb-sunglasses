@@ -88,8 +88,12 @@ endif()
 # One extension = one translation unit (matching the device build and the
 # on-device single-TU convention). Produces:
 #   arm:  <build>/<name>.llext   (compile -> mandatory `ld -r` partial link
-#          -> check-llext.sh gate: undefined symbols vs the device's export
-#          table, section layout, 24 KB llext heap fit)
+#          -> objcopy --strip-debug -> check-llext.sh gate: undefined symbols
+#          vs the device's export table, section layout, 24 KB llext heap
+#          fit, no debug sections left)
+#         <build>/<name>.llext.debug  (the unstripped partial link: same
+#          code, plus DWARF — ships as a release asset next to the .llext so
+#          a fault PC offset can be resolved with addr2line/gdb)
 #   wasm: <build>/<name>.wasm    (TU + sim shims, reactor model, rgbx exports
 #          -> check-wasm.mjs gate: zero imports + required exports)
 #   rgbx-v2: <build>/<name>.wasm + <build>/<name>.rgbx (freestanding guest,
@@ -121,19 +125,32 @@ function(rgbx_add_extension name)
         # loader rejects the file); applied uniformly, matching
         # fw/extensions/build.sh. The gate runs in the same command chain so
         # a gate failure fails the build.
+        #
+        # The partial link lands in <name>.llext.debug (full DWARF, since the
+        # toolchain compiles with -g) and the shipped <name>.llext is that
+        # file with the debug sections stripped. The device loader only ever
+        # reads SHF_ALLOC sections, so DWARF costs nothing at runtime — but it
+        # was ~90% of the file (a 73 KB mask_eyes.llext carried 5.6 KB of
+        # loadable code), i.e. ~90% of every BLE upload and of the NAND
+        # footprint. --strip-debug (not --strip-all) keeps .symtab/.strtab:
+        # the loader needs them for relocation and the gate needs them for
+        # `nm -u`. The .debug sidecar is a first-class output so the release
+        # workflow can attach it next to the .llext.
         set(_llext "${CMAKE_CURRENT_BINARY_DIR}/${name}.llext")
+        set(_llext_debug "${_llext}.debug")
         add_custom_command(
-            OUTPUT "${_llext}"
-            COMMAND "${CMAKE_LINKER}" -r $<TARGET_OBJECTS:${name}_obj> -o "${_llext}"
+            OUTPUT "${_llext}" "${_llext_debug}"
+            COMMAND "${CMAKE_LINKER}" -r $<TARGET_OBJECTS:${name}_obj> -o "${_llext_debug}"
+            COMMAND "${CMAKE_OBJCOPY}" --strip-debug "${_llext_debug}" "${_llext}"
             COMMAND bash "${_RGBX_SDK_ROOT}/arm/check-llext.sh"
                     --nm "${CMAKE_NM}" --readelf "${CMAKE_READELF}"
                     --allowed "${_RGBX_SDK_ROOT}/arm/allowed-symbols.txt"
                     "${_llext}"
             DEPENDS ${name}_obj $<TARGET_OBJECTS:${name}_obj>
-            COMMENT "Linking (ld -r) and gating ${name}.llext"
+            COMMENT "Linking (ld -r), stripping and gating ${name}.llext"
             VERBATIM
             COMMAND_EXPAND_LISTS)
-        add_custom_target(${name}_llext ALL DEPENDS "${_llext}")
+        add_custom_target(${name}_llext ALL DEPENDS "${_llext}" "${_llext_debug}")
     elseif(RGBX_TARGET STREQUAL "wasm")
         # The wasm side only exists in a packaged SDK tree (package-sdk.sh
         # copies the sim shims in); fail with the actual cause rather than a
