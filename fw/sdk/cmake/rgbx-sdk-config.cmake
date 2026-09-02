@@ -231,6 +231,7 @@ function(rgbx_add_extension name)
                     "${_RGBX_SDK_ROOT}/wasm-v2/check-rgbx-v2.mjs"
                     "${_RGBX_SDK_ROOT}/wasm-v2/package-rgbx.mjs"
                     "${_RGBX_SDK_ROOT}/wasm-v2/rgbx-v2-policy.mjs"
+                    "${_RGBX_SDK_ROOT}/wasm-v2/rgbx-v2-host.mjs"
             COMMENT "Preparing, gating, and packaging ${name}.rgbx"
             VERBATIM)
         add_custom_target(${name}_rgbx ALL DEPENDS "${_wasm}" "${_rgbx}")
