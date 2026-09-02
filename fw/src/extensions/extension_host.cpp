@@ -608,6 +608,19 @@ void latch_crash(FaultRecord &rec, const Slot &slot) {
     sPendingCrash = {};
 }
 
+/* One crash-site address for the fault log. An address outside the extension (the
+ * sandbox entry, a firmware export) has no section offset — printing "?+0x0" for it
+ * reads like a corrupt record, so say what it is instead. */
+void log_crash_address(const char *label, const FaultAddress &a) {
+    if (a.region == FaultRegion::Outside) {
+        LOG_ERR("    %s 0x%08x  (outside the extension; resolve against zephyr.elf)", label,
+                (unsigned)a.addr);
+    } else {
+        LOG_ERR("    %s 0x%08x = %s+0x%x", label, (unsigned)a.addr,
+                fault_region_section(a.region), (unsigned)a.offset);
+    }
+}
+
 /* @param resetParams true only for faults that occur AFTER params were delivered
  * to the extension (tick-time crashes) — a persisted value could be the cause, so
  * reset it. false for load/init-time failures, which the params can't have caused
@@ -631,11 +644,9 @@ void sandbox_fault(Slot &slot, const char *what, bool resetParams, uint32_t cpuU
      * post-mortem for a console that wasn't) is `ext faults`. */
     const FaultRecord &rec = sFaults[slotIndex];
     if (rec.haveCrash) {
-        LOG_ERR("  reason %u (%s): pc 0x%08x = %s+0x%x, lr 0x%08x = %s+0x%x", rec.crashReason,
-                fault_reason_describe(rec.crashReason), (unsigned)rec.crashPc.addr,
-                fault_region_section(rec.crashPc.region), (unsigned)rec.crashPc.offset,
-                (unsigned)rec.crashLr.addr, fault_region_section(rec.crashLr.region),
-                (unsigned)rec.crashLr.offset);
+        LOG_ERR("  reason %u (%s)", rec.crashReason, fault_reason_describe(rec.crashReason));
+        log_crash_address("pc", rec.crashPc);
+        log_crash_address("lr", rec.crashLr);
     }
 
     slot.faulted = true;

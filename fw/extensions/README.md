@@ -349,20 +349,26 @@ of the extension's sections each one landed in, and latches the result in the
 slot's `ext faults` record along with a recipe:
 
 ```
-[3] 'Mask Eyes': sandbox thread died mid-tick (CPU fault inside the extension)
-      at 81234 ms uptime (5120 ms ago), 1 time(s) since clear
-      cpu 312 us / wall 340 us  (budget 50000 us / backstop 150000 us)
+[2] 'Hello Extension': sandbox thread died mid-tick (CPU fault inside the extension)
+      at 56328 ms uptime (15290 ms ago), 1 time(s) since clear
+      cpu 0 us / wall 1609253 us  (budget 50000 us / backstop 500000 us)
       crashed: reason 19 (MemManage fault: data access outside the sandbox)
-      pc 0x20034dd4 = .text+0x9d4
-      lr 0x20034c11 = .text+0x811
-      resolve with the release's mask_eyes.llext.debug sidecar:
-        arm-none-eabi-addr2line -f -j .text -e mask_eyes.llext.debug 0x9d4 0x811
+      pc 0x2004291c = .text+0x11c
+      lr 0x00027350  (outside the extension — a firmware export or the sandbox entry; resolve against zephyr.elf)
+      resolve with the release's hello.llext.debug sidecar:
+        arm-none-eabi-addr2line -f -j .text -e hello.llext.debug 0x11c
       params reset to manifest defaults: yes
+      currently: FAULTED
 ```
 
+(That is a real record — `hello` with its `Crash` param set, proto0, 2026-09-02.
+The recipe line answers `rgbx_tick` / `hello.c:137`, the deliberate kernel-SRAM
+write; the LR resolves against `zephyr.elf` to the host's `sandbox_entry`, which is
+what a crash directly inside `rgbx_tick` always looks like.)
+
 Run the printed line against the sidecar from the **same release** the device is
-running (`gh release download fw-vX.Y.Z -p 'mask_eyes.llext.debug'`) and it names
-the function and `file:line` for both addresses. The same information is in the
+running (`gh release download fw-vX.Y.Z -p 'hello.llext.debug'`) and it names the
+function and `file:line` for every in-extension address. The same information is in the
 `LOG_ERR` at fault time, but the latched record survives the UART backlog scrolling
 away, which is the whole point of `ext faults`.
 
@@ -370,14 +376,16 @@ Two things to know when reading it:
 
 - **The offsets are section-relative, never the runtime address.** The sidecar is
   an `ld -r` relocatable, so its DWARF addresses count from the start of each
-  section; that is why the recipe passes `-j .text` with `0x9d4`, not `0x20034dd4`.
+  section; that is why the recipe passes `-j .text` with `0x11c`, not `0x2004291c`.
   Feeding addr2line the raw PC returns `??:0`.
 - **An address marked "outside the extension" belongs to `zephyr.elf`, not the
-  sidecar.** The PC lands there when the extension called a firmware export
-  (`memcpy`, `sinf`, `printk`) with a bad argument, or jumped through a null or
-  wild function pointer; the LR then usually still points into the extension and
-  tells you which call site. For the firmware side, `arm-none-eabi-addr2line -e
-  fw/build/fw/zephyr/zephyr.elf 0x<addr>` against the matching build.
+  sidecar.** The LR is outside whenever the crash is directly in `rgbx_tick` or
+  `rgbx_init` (the caller is the host's sandbox entry, as above). The PC lands
+  there when the extension called a firmware export (`memcpy`, `sinf`, `printk`)
+  with a bad argument, or jumped through a null or wild function pointer; the LR
+  then usually still points into the extension and tells you which call site. For
+  the firmware side, `arm-none-eabi-addr2line -e fw/build/fw/zephyr/zephyr.elf
+  0x<addr>` against the matching build.
 
 The reason code is Zephyr's `k_fatal_error_reason` (generic 0-4) or the Cortex-M
 arch reason (16+); the parenthetical is the readable name. `MemManage fault: data
