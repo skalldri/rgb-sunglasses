@@ -30,6 +30,7 @@
 #include <animations/color_mode_source.h>
 #include <extensions/extension_animation_proxy.h>
 #include <extensions/extension_bt.h>
+#include <extensions/extension_fault_pc.h>
 #include <extensions/extension_host.h>
 #include <extensions/extension_manifest.h>
 #include <extensions/extension_param_persistence.h>
@@ -66,6 +67,46 @@ static_assert(RGBX_AUDIO_NUM_DISPLAY_BUCKETS == AUDIO_NUM_DISPLAY_BUCKETS,
 #endif
 
 LOG_MODULE_REGISTER(ext_host);
+
+/* extension_fault_pc.h restates llext's region order and Zephyr's fatal-reason codes
+ * numerically so its native_sim suite needs no SDK headers. Pin every restated value
+ * to the real definition here, where both are visible, so an upstream renumbering
+ * breaks the build instead of mislabelling a crash. */
+static_assert(static_cast<int>(extension_host::FaultRegion::Text) == LLEXT_MEM_TEXT &&
+                  static_cast<int>(extension_host::FaultRegion::Data) == LLEXT_MEM_DATA &&
+                  static_cast<int>(extension_host::FaultRegion::Rodata) == LLEXT_MEM_RODATA &&
+                  static_cast<int>(extension_host::FaultRegion::Bss) == LLEXT_MEM_BSS &&
+                  extension_host::kFaultRegionCount == LLEXT_MEM_PARTITIONS,
+              "FaultRegion must mirror llext's partition region order");
+static_assert(extension_host::kReasonCpuException == K_ERR_CPU_EXCEPTION &&
+                  extension_host::kReasonSpuriousIrq == K_ERR_SPURIOUS_IRQ &&
+                  extension_host::kReasonStackChkFail == K_ERR_STACK_CHK_FAIL &&
+                  extension_host::kReasonKernelOops == K_ERR_KERNEL_OOPS &&
+                  extension_host::kReasonKernelPanic == K_ERR_KERNEL_PANIC &&
+                  extension_host::kReasonArchStart == K_ERR_ARCH_START,
+              "fault reason constants must match zephyr/fatal_types.h");
+#if defined(CONFIG_CPU_CORTEX_M)
+static_assert(extension_host::kReasonArmMemGeneric == K_ERR_ARM_MEM_GENERIC &&
+                  extension_host::kReasonArmMemStacking == K_ERR_ARM_MEM_STACKING &&
+                  extension_host::kReasonArmMemUnstacking == K_ERR_ARM_MEM_UNSTACKING &&
+                  extension_host::kReasonArmMemDataAccess == K_ERR_ARM_MEM_DATA_ACCESS &&
+                  extension_host::kReasonArmMemInstructionAccess ==
+                      K_ERR_ARM_MEM_INSTRUCTION_ACCESS &&
+                  extension_host::kReasonArmBusGeneric == K_ERR_ARM_BUS_GENERIC &&
+                  extension_host::kReasonArmBusPreciseDataBus == K_ERR_ARM_BUS_PRECISE_DATA_BUS &&
+                  extension_host::kReasonArmBusImpreciseDataBus ==
+                      K_ERR_ARM_BUS_IMPRECISE_DATA_BUS &&
+                  extension_host::kReasonArmBusInstructionBus == K_ERR_ARM_BUS_INSTRUCTION_BUS &&
+                  extension_host::kReasonArmUsageGeneric == K_ERR_ARM_USAGE_GENERIC &&
+                  extension_host::kReasonArmUsageDiv0 == K_ERR_ARM_USAGE_DIV_0 &&
+                  extension_host::kReasonArmUsageUnalignedAccess ==
+                      K_ERR_ARM_USAGE_UNALIGNED_ACCESS &&
+                  extension_host::kReasonArmUsageStackOverflow == K_ERR_ARM_USAGE_STACK_OVERFLOW &&
+                  extension_host::kReasonArmUsageNoCoprocessor == K_ERR_ARM_USAGE_NO_COPROCESSOR &&
+                  extension_host::kReasonArmUsageUndefinedInstruction ==
+                      K_ERR_ARM_USAGE_UNDEFINED_INSTRUCTION,
+              "fault reason constants must match zephyr/arch/arm/arch.h");
+#endif
 
 namespace extension_host {
 namespace {
@@ -189,6 +230,27 @@ struct k_thread sSandboxThread;
 bool sSandboxAlive = false;
 int sActiveSlot = -1;       // slot the pattern controller should tick (-1 none)
 int sPendingLoadSlot = -1;  // slot awaiting its lazy first-tick load (-1 none)
+
+/* Crash-site capture for the `ext faults` record (the addr2line gap behind PR #429's
+ * `.llext.debug` sidecars: a fault reason alone names nothing in the extension's
+ * source). noteSandboxFault() runs INSIDE k_sys_fatal_error_handler() — exception
+ * context, IRQs locked, on the sandbox thread's stack — so it cannot take sHostLock
+ * and cannot rely on sResident: runtime_load() starts the thread BEFORE it fills
+ * sResident.ext, and rgbx_init() runs (and can fault) in that window. sCrashExt is
+ * therefore published right before k_thread_start() and cleared by unload_resident()
+ * after the thread is aborted; between those two points it is the llext whose region
+ * table the faulting PC/LR are resolved against. The resolved record then waits in
+ * sPendingCrash until the pattern-controller thread's next tick() observes the dead
+ * sandbox and calls sandbox_fault(), which folds it into the FaultRecord under the
+ * lock. Single-writer, single-reader, with the k_thread_abort / k_thread_join
+ * hand-off between them; the register values are plain 32-bit stores. */
+const struct llext *sCrashExt = nullptr;
+struct PendingCrash {
+    bool valid = false;
+    unsigned int reason = 0;
+    FaultAddress pc;
+    FaultAddress lr;
+} sPendingCrash;
 
 /* Color-mode resolution for extension COLOR params (issue #259): one resolver
  * per param INDEX, shared across slots — only the active slot ever ticks, and
@@ -411,6 +473,9 @@ void sandbox_stop() {
  * only — no FS I/O — so this is safe on the BLE RX thread too). */
 void unload_resident() {
     sandbox_stop();
+    /* Only after sandbox_stop(): the fault handler dereferences sCrashExt from the
+     * sandbox thread, which is guaranteed gone once k_thread_abort() returns. */
+    sCrashExt = nullptr;
     if (sResident.ext != nullptr) {
         llext_unload(&sResident.ext);
     }
@@ -471,6 +536,19 @@ struct FaultRecord {
      * there — see the note in cmd_ext_faults(). */
     bool wallBackstop;
     bool paramsReset;
+    /* Crash site, present only when the sandbox thread actually took a CPU fault
+     * (sPendingCrash was valid when the fault was folded in). A budget/backstop verdict
+     * with no fault has nothing here; a fault whose verdict happened to be reported as
+     * a budget overrun (a crash mid-tick still ends the tick's CPU accounting late)
+     * still carries it — the crash is the diagnosis, the verdict is incidental. */
+    bool haveCrash;
+    unsigned int crashReason;
+    FaultAddress crashPc;
+    FaultAddress crashLr;
+    /* The .llext FILE name (not the display name): the addr2line recipe printed by
+     * cmd_ext_faults() names `<file>.debug`, the sidecar PR #429 publishes beside the
+     * release asset. Copied for the same reason `name` is. */
+    char file[extension_registry::kMaxNameLen];
 };
 
 FaultRecord sFaults[kMaxExtensions];
@@ -498,6 +576,49 @@ void latch_fault(size_t slotIndex, const char *name, const char *what, bool rese
     rec.haveMeasurements = haveMeasurements;
     rec.wallBackstop = wallBackstop;
     rec.paramsReset = resetParams;
+    /* Discovery-time callers have no crash site and no resident llext; sandbox_fault()
+     * fills these in afterwards when it has one. Cleared here so a record re-latched by a
+     * later discovery failure can't carry a stale crash from a previous tick fault. */
+    rec.haveCrash = false;
+    rec.crashReason = 0;
+    rec.crashPc = FaultAddress{};
+    rec.crashLr = FaultAddress{};
+    rec.file[0] = '\0';
+}
+
+/* Folds the fault handler's pending crash record (if any) into the slot's latched
+ * FaultRecord and consumes it, so a later non-crash verdict on the same slot can't
+ * inherit it. Runs under sHostLock like every other FaultRecord writer; the pending
+ * record's writer (the sandbox thread, in exception context) is dead by the time
+ * anyone gets here — sandbox_fault() is only reached after the tick observed the
+ * thread gone or the verdict fired, and sandbox_stop() aborts it before the tick
+ * returns either way. */
+void latch_crash(FaultRecord &rec, const Slot &slot) {
+    const char *file = extension_registry::name(slot.fileIndex);
+    strncpy(rec.file, (file != nullptr) ? file : "?", sizeof(rec.file) - 1);
+    rec.file[sizeof(rec.file) - 1] = '\0';
+
+    if (!sPendingCrash.valid) {
+        return;
+    }
+    rec.haveCrash = true;
+    rec.crashReason = sPendingCrash.reason;
+    rec.crashPc = sPendingCrash.pc;
+    rec.crashLr = sPendingCrash.lr;
+    sPendingCrash = {};
+}
+
+/* One crash-site address for the fault log. An address outside the extension (the
+ * sandbox entry, a firmware export) has no section offset — printing "?+0x0" for it
+ * reads like a corrupt record, so say what it is instead. */
+void log_crash_address(const char *label, const FaultAddress &a) {
+    if (a.region == FaultRegion::Outside) {
+        LOG_ERR("    %s 0x%08x  (outside the extension; resolve against zephyr.elf)", label,
+                (unsigned)a.addr);
+    } else {
+        LOG_ERR("    %s 0x%08x = %s+0x%x", label, (unsigned)a.addr,
+                fault_region_section(a.region), (unsigned)a.offset);
+    }
 }
 
 /* @param resetParams true only for faults that occur AFTER params were delivered
@@ -513,8 +634,20 @@ void sandbox_fault(Slot &slot, const char *what, bool resetParams, uint32_t cpuU
     /* Latch BEFORE anything else touches the slot: unload_resident() and the param reset
      * below both mutate state a reader would want, and a second fault during recovery
      * must not lose the first record. */
-    latch_fault(static_cast<size_t>(&slot - sSlots), slot.meta.displayName, what, resetParams,
-                haveMeasurements, cpuUs, wallUs, wallBackstop);
+    const size_t slotIndex = static_cast<size_t>(&slot - sSlots);
+    latch_fault(slotIndex, slot.meta.displayName, what, resetParams, haveMeasurements, cpuUs,
+                wallUs, wallBackstop);
+    latch_crash(sFaults[slotIndex], slot);
+
+    /* The crash site goes to the log too, for the case where the console IS attached:
+     * one line an operator can paste straight into addr2line. The full recipe (and the
+     * post-mortem for a console that wasn't) is `ext faults`. */
+    const FaultRecord &rec = sFaults[slotIndex];
+    if (rec.haveCrash) {
+        LOG_ERR("  reason %u (%s)", rec.crashReason, fault_reason_describe(rec.crashReason));
+        log_crash_address("pc", rec.crashPc);
+        log_crash_address("lr", rec.crashLr);
+    }
 
     slot.faulted = true;
     unload_resident();
@@ -552,6 +685,34 @@ void sandbox_fault(Slot &slot, const char *what, bool resetParams, uint32_t cpuU
 
 bool isCurrentSandboxThread() {
     return k_current_get() == &sSandboxThread;
+}
+
+/* Exception context (see the sPendingCrash comment): no lock, no logging, no allocation
+ * — just read two registers out of the stacked frame, classify them against the
+ * resident llext's region table, and park the result for sandbox_fault(). `esf` is
+ * null when Zephyr has no frame to hand over (a fault raised from a context where
+ * it did not save one); sCrashExt is null only if a fault lands before runtime_load()
+ * published it or after unload_resident() cleared it, neither of which can happen on
+ * the sandbox thread itself, but cheap to guard against. The reason is recorded
+ * even when the addresses can't be — it is still the most useful single number. */
+void noteSandboxFault(unsigned int reason, const struct arch_esf *esf) {
+    sPendingCrash = {};
+    sPendingCrash.valid = true;
+    sPendingCrash.reason = reason;
+    if (esf == nullptr || sCrashExt == nullptr) {
+        return;
+    }
+
+    FaultRegionSpan spans[kFaultRegionCount];
+    for (size_t r = 0; r < kFaultRegionCount; r++) {
+        spans[r].base = reinterpret_cast<uintptr_t>(sCrashExt->mem[r]);
+        spans[r].size = sCrashExt->mem_size[r];
+    }
+    /* The stacked PC is the faulting instruction (or the one after, for an imprecise
+     * BusFault — the sub-reason says which); the stacked LR is the return address of
+     * the current function, Thumb bit and all. */
+    sPendingCrash.pc = locate_fault_address(esf->basic.pc, spans);
+    sPendingCrash.lr = locate_fault_address(strip_thumb_bit(esf->basic.lr), spans);
 }
 
 }  // namespace extension_host
@@ -828,6 +989,11 @@ struct LoadFailure {
 bool runtime_load(size_t slotIndex, k_timepoint_t deadline, LoadFailure *fail = nullptr) {
     Slot &slot = sSlots[slotIndex];
 
+    /* A stale pending crash from a previous sandbox (one that faulted after its verdict
+     * was already latched and consumed) must not be attributed to this activation —
+     * neither to a load failure below nor to a fault of the new sandbox. */
+    sPendingCrash = {};
+
     char path[64];
     if (!extension_registry::full_path(slot.fileIndex, path, sizeof(path))) {
         return false;
@@ -902,6 +1068,10 @@ bool runtime_load(size_t slotIndex, k_timepoint_t deadline, LoadFailure *fail = 
         llext_unload(&ext);
         return false;
     }
+    /* Publish the region table for the fault handler BEFORE the thread can run —
+     * rgbx_init() executes (and can fault) as soon as it starts, before sResident is
+     * filled in below. */
+    sCrashExt = ext;
     k_thread_start(tid);
     sSandboxAlive = true;
 
@@ -1665,6 +1835,56 @@ int cmd_ext_shuffle(const struct shell *sh, size_t argc, char **argv) {
     return 0;
 }
 
+/* Prints one register of a crash site: raw value, then the section-relative form when
+ * it fell inside the extension. An address outside every region is a firmware export
+ * (memcpy, sinf, printk), a wild function pointer, or the sandbox entry trampoline,
+ * and belongs to zephyr.elf rather than the sidecar — say so instead of printing a
+ * meaningless offset. */
+void print_fault_address(const struct shell *sh, const char *label, const FaultAddress &a) {
+    if (a.region == FaultRegion::Outside) {
+        shell_print(sh, "      %s 0x%08x  (outside the extension — a firmware export or the "
+                        "sandbox entry; resolve against zephyr.elf)",
+                    label, (unsigned)a.addr);
+    } else {
+        shell_print(sh, "      %s 0x%08x = %s+0x%x", label, (unsigned)a.addr,
+                    fault_region_section(a.region), (unsigned)a.offset);
+    }
+}
+
+/* The crash site plus a copy-pasteable recipe. The sidecar is an `ld -r` relocatable, so
+ * its DWARF addresses are section-relative — hence `-j <section>` with the offset, never
+ * the runtime address. One recipe line per section that appears (pc and lr are usually
+ * both .text, so usually one), and none when neither register is inside the extension. */
+void print_crash_site(const struct shell *sh, const FaultRecord &rec) {
+    shell_print(sh, "      crashed: reason %u (%s)", rec.crashReason,
+                fault_reason_describe(rec.crashReason));
+    print_fault_address(sh, "pc", rec.crashPc);
+    print_fault_address(sh, "lr", rec.crashLr);
+
+    const bool pcIn = rec.crashPc.region != FaultRegion::Outside;
+    const bool lrIn = rec.crashLr.region != FaultRegion::Outside;
+    if (!pcIn && !lrIn) {
+        return;
+    }
+    shell_print(sh, "      resolve with the release's %s.debug sidecar:", rec.file);
+    if (pcIn && lrIn && rec.crashPc.region == rec.crashLr.region) {
+        shell_print(sh, "        arm-none-eabi-addr2line -f -j %s -e %s.debug 0x%x 0x%x",
+                    fault_region_section(rec.crashPc.region), rec.file,
+                    (unsigned)rec.crashPc.offset, (unsigned)rec.crashLr.offset);
+        return;
+    }
+    if (pcIn) {
+        shell_print(sh, "        arm-none-eabi-addr2line -f -j %s -e %s.debug 0x%x",
+                    fault_region_section(rec.crashPc.region), rec.file,
+                    (unsigned)rec.crashPc.offset);
+    }
+    if (lrIn) {
+        shell_print(sh, "        arm-none-eabi-addr2line -f -j %s -e %s.debug 0x%x",
+                    fault_region_section(rec.crashLr.region), rec.file,
+                    (unsigned)rec.crashLr.offset);
+    }
+}
+
 /* Reports every latched fault. Deliberately prints even for slots that are no longer
  * faulted: the case this exists for is a TRANSIENT fault that cleared on the next
  * `ext select`, which `ext list` shows as perfectly healthy. */
@@ -1709,6 +1929,9 @@ int cmd_ext_faults(const struct shell *sh, size_t, char **) {
             }
         } else {
             shell_print(sh, "      no tick measured (load/init or discovery-time failure)");
+        }
+        if (rec.haveCrash) {
+            print_crash_site(sh, rec);
         }
         shell_print(sh, "      params reset to manifest defaults: %s",
                     rec.paramsReset ? "yes" : "no");

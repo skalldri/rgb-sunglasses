@@ -12,6 +12,12 @@
 #include <cstddef>
 #include <cstdint>
 
+/* Zephyr's exception frame (zephyr/arch/arm/cortex_m/exception.h). Forward-declared
+ * at GLOBAL scope on purpose: `const struct arch_esf *` first seen inside the
+ * extension_host namespace below would declare a new, unrelated
+ * extension_host::arch_esf and the fatal handler's call would not compile. */
+struct arch_esf;
+
 /**
  * @file
  * @brief extension_host — kernel-side owner of sandboxed LLEXT animation
@@ -249,6 +255,16 @@ void set_button_source(AnimationButtonSource *source);
 
 /** Lock-free exception-context ownership check for the shared fatal handler. */
 bool isCurrentSandboxThread();
+
+/** @brief Records the faulting PC/LR from the exception frame of a sandbox
+ *  fault, for the `ext faults` record that the host latches once the pattern
+ *  controller observes the dead thread.
+ *
+ *  Called from `k_sys_fatal_error_handler()` — exception context, IRQs
+ *  locked — only after `isCurrentSandboxThread()` returned true. Takes no
+ *  lock and dereferences nothing but the frame and the resident llext's own
+ *  region table. Safe to call with a null `esf` (nothing is recorded). */
+void noteSandboxFault(unsigned int reason, const struct arch_esf *esf);
 
 }  // namespace extension_host
 
