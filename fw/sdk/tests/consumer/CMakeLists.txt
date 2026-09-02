@@ -37,13 +37,12 @@ project(rgbx_sdk_consumer C CXX)
 include("${RGBX_SDK_SOURCE_DIR}/cmake/rgbx-sdk-config.cmake")
 
 if(RGBX_TARGET STREQUAL "rgbx-v2")
-    get_filename_component(_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
+    # Plasma used to be built here from an in-repo copy of its source. The
+    # canonical source lives in its own repository now; sdk-ci rebuilds that
+    # pinned revision through fw/sdk/tests/build-pinned-plasma.sh instead.
     rgbx_add_extension(rgbx_v2_test
         SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/rgbx_v2_test.c"
         MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/rgbx_v2_test.json")
-    rgbx_add_extension(plasma_v2_sdk_test
-        SOURCES "${_repo_root}/fw/src/animations/plasma_v2.c"
-        MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/plasma_v2.json")
 else()
     get_filename_component(_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
     rgbx_add_extension(hello SOURCES "${_repo_root}/fw/extensions/hello/hello.c")

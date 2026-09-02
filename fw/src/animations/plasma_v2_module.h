@@ -2,15 +2,17 @@
 
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Stuart Alldritt
-// Full MIT permission notice: plasma_v2.LICENSE.
+// Full MIT permission notice: fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.LICENSE.
 
 #include <cstddef>
 #include <cstdint>
 
-// Memoryless RGBX v2 form of plasma_v2.c, compiled with LLVM 18.1.8 at
-// -O2 with compressed relocations, then stripped of the linker's unused table
-// and memory declarations. The guest emits palette luma spans; the host writes
-// native 32-bit RGB pixels.
+// Memoryless RGBX v2 form of the canonical Plasma source, compiled with LLVM
+// 18.1.8 at -O2 with compressed relocations, then stripped of the linker's
+// unused table and memory declarations. The guest emits palette luma spans;
+// the host writes native 32-bit RGB pixels. This one predates the pinned SDK
+// build and is kept as its own fixture; plasma_v2_sdk_module.h is the module
+// rebuilt from the pinned external revision.
 // SHA-256: 0682e6320e3bcaa9474551b8a08853dd5a39466b7dd03c98c53fea4086f6b41b.
 inline constexpr uint8_t kPlasmaV2Module[] = {
   0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x1f, 0x05, 0x60, 0x01, 0x7f, 0x01, 0x7f,

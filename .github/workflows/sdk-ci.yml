@@ -21,8 +21,7 @@ on:
       # from the SDK, so an edit to any of them must run this job.
       - 'fw/tests/extensions/rgbx_package/src/rgbx_v2_test_package.h'
       - 'fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.h'
-      - 'fw/src/animations/plasma_v2.c'
-      - 'fw/src/animations/plasma_v2.LICENSE'
+      - 'fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.LICENSE'
       - 'fw/sim/shim/**'
       - 'fw/sim/scripts/**'
       - 'fw/sim/build-extensions.sh'
@@ -51,8 +50,7 @@ on:
       # from the SDK, so an edit to any of them must run this job.
       - 'fw/tests/extensions/rgbx_package/src/rgbx_v2_test_package.h'
       - 'fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.h'
-      - 'fw/src/animations/plasma_v2.c'
-      - 'fw/src/animations/plasma_v2.LICENSE'
+      - 'fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.LICENSE'
       - 'fw/sim/shim/**'
       - 'fw/sim/scripts/**'
       - 'fw/sim/build-extensions.sh'
@@ -74,6 +72,14 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # This job configures and builds a third-party repository (the pinned
+          # Plasma revision, below), and a CMake configure is arbitrary code
+          # execution. Same containment community-extensions.yml uses for the
+          # same reason: no stored credential for that code to read. Nothing
+          # here pushes, and package-sdk.sh is told its version explicitly, so
+          # it never needs git for anything but a local read.
+          persist-credentials: false
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -258,15 +264,13 @@ jobs:
               -DRGBX_STRICT_TOOLCHAIN=ON
             cmake --build "$build_dir"
           done
-          for name in rgbx_v2_test plasma_v2_sdk_test; do
-            cmp "$RUNNER_TEMP/b-rgbx-v2-a/$name.wasm" \
-                "$RUNNER_TEMP/b-rgbx-v2-b/$name.wasm"
-            cmp "$RUNNER_TEMP/b-rgbx-v2-a/$name.rgbx" \
-                "$RUNNER_TEMP/b-rgbx-v2-b/$name.rgbx"
-            RGBX_SDK_MANIFEST="$SDK_DIR/sdk-manifest.json" \
-                node "$SDK_DIR/wasm-v2/check-rgbx-v2.mjs" \
-                "$RUNNER_TEMP/b-rgbx-v2-a/$name.wasm"
-          done
+          cmp "$RUNNER_TEMP/b-rgbx-v2-a/rgbx_v2_test.wasm" \
+              "$RUNNER_TEMP/b-rgbx-v2-b/rgbx_v2_test.wasm"
+          cmp "$RUNNER_TEMP/b-rgbx-v2-a/rgbx_v2_test.rgbx" \
+              "$RUNNER_TEMP/b-rgbx-v2-b/rgbx_v2_test.rgbx"
+          RGBX_SDK_MANIFEST="$SDK_DIR/sdk-manifest.json" \
+              node "$SDK_DIR/wasm-v2/check-rgbx-v2.mjs" \
+              "$RUNNER_TEMP/b-rgbx-v2-a/rgbx_v2_test.wasm"
 
           # One rejection per admission dimension of the gate, and one per
           # manifest field the firmware later trusts.
@@ -280,19 +284,52 @@ jobs:
           # device parsers, so a change in the compiler, the post-link gate,
           # or the package builder has to show up as a diff here.
           node fw/sdk/tests/bytes-to-header.mjs \
-              "$RUNNER_TEMP/b-rgbx-v2-a/plasma_v2_sdk_test.wasm" \
-              "$RUNNER_TEMP/plasma_v2_sdk_module.h" kPlasmaV2SdkModule MIT \
-              "Copyright (c) 2026 Stuart Alldritt" \
-              "fw/src/animations/plasma_v2.LICENSE"
-          cmp "$RUNNER_TEMP/plasma_v2_sdk_module.h" \
-              fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.h
-          node fw/sdk/tests/bytes-to-header.mjs \
               "$RUNNER_TEMP/b-rgbx-v2-a/rgbx_v2_test.rgbx" \
               "$RUNNER_TEMP/rgbx_v2_test_package.h" kRgbxV2TestPackage MIT \
               "Copyright (c) 2026 Stuart Alldritt" \
               "fw/sdk/LICENSE"
           cmp "$RUNNER_TEMP/rgbx_v2_test_package.h" \
               fw/tests/extensions/rgbx_package/src/rgbx_v2_test_package.h
+
+      # Plasma's canonical source is not in this repository. Rebuild it from
+      # the revision fw/sdk/tests/plasma-v2-pin.json pins, against the SDK
+      # packaged above, and require both that the module still hashes to the
+      # pinned digest and that it is byte-for-byte the fixture the firmware
+      # suites embed. That is what replaces the in-repo copy: the fixture
+      # stays re-derivable, and a change to the pinned source, the compiler,
+      # the post-link gate, or the package builder shows up here.
+      #
+      # This is the step that builds third-party code in this job. It is
+      # contained the same way community-extensions.yml contains the community
+      # matrix: read-only permissions, no secrets, no persisted credentials,
+      # and a pinned full-SHA revision that has to be reachable from the
+      # repository's own advertised refs. See build-pinned-plasma.sh.
+      - name: Rebuild Plasma from its pinned external revision
+        # A provisional pin names a revision that is not merged upstream. The
+        # builder refuses one unless this allowance is set, and it is set on
+        # pull requests only. That does not stop such a pin from being merged:
+        # its own pull request is green by design so the change can be
+        # reviewed. It stops main from staying green with one, because this
+        # step's push-to-main run gets no allowance and fails until the pin is
+        # repointed. release.yaml never runs sdk-ci, so a release is protected
+        # transitively by main being green, not by a gate the release runs.
+        env:
+          RGBX_PLASMA_ALLOW_PROVISIONAL: ${{ github.event_name == 'pull_request' && '1' || '' }}
+        run: |
+          # The committed header embeds a copy of an MIT-licensed module, so
+          # the permission notice it names has to travel with it in-tree.
+          test -f fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.LICENSE
+          fw/sdk/tests/build-pinned-plasma.sh "$SDK_DIR" "$RUNNER_TEMP/plasma"
+          RGBX_SDK_MANIFEST="$SDK_DIR/sdk-manifest.json" \
+              node "$SDK_DIR/wasm-v2/check-rgbx-v2.mjs" \
+              "$RUNNER_TEMP/plasma/plasma.wasm"
+          node fw/sdk/tests/bytes-to-header.mjs \
+              "$RUNNER_TEMP/plasma/plasma.wasm" \
+              "$RUNNER_TEMP/plasma_v2_sdk_module.h" kPlasmaV2SdkModule MIT \
+              "Copyright (c) 2026 Stuart Alldritt" \
+              "fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.LICENSE"
+          cmp "$RUNNER_TEMP/plasma_v2_sdk_module.h" \
+              fw/tests/extensions/wasm_mvp_runtime/src/plasma_v2_sdk_module.h
 
   # Warnings-are-errors gate for the extension API docs published at
   # https://rgb-sunglasses.autom8ed.com/api. The SAME build runs in pages.yml

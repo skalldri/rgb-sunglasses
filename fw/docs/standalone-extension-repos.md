@@ -252,13 +252,16 @@ publishes the exact `rgbx-sdk` tarball and digest. Template and effect PRs then
 update their two-line release pin. An ad-hoc CI artifact is validation evidence,
 not a supported SDK dependency.
 
-The SDK gate builds both a minimal public-header consumer and the reviewed
-integer/Q15 Plasma conformance source in two independent build directories and
-requires byte-identical Wasm and RGBX packages. The generated Plasma module is
-also bound to a checked header and executed by the ARM/QEMU firmware suite,
-which proves that the release compiler's output is admitted by Wasm3 and still
-matches the legacy per-pixel oracle rather than only passing a Node-side shape
-check.
+The SDK gate builds a minimal public-header consumer in two independent build
+directories and requires byte-identical Wasm and RGBX packages. The integer/Q15
+Plasma conformance module is no longer built from an in-repo copy of its
+source: the gate clones the revision `fw/sdk/tests/plasma-v2-pin.json` pins,
+builds that revision's `rgbx-v2` target against the same SDK, and requires both
+the module and the package to hash to their pinned digests. That module is also
+bound to a checked
+header and executed by the ARM/QEMU firmware suite, which proves that the
+release compiler's output is admitted by Wasm3 and still matches the legacy
+per-pixel oracle rather than only passing a Node-side shape check.
 
 **Consumption mechanism (implementation amendment):** the template downloads
 and extracts the SDK **before `project()`** via `file(DOWNLOAD ...
@@ -330,6 +333,24 @@ activation.
 Location is deliberately **outside `fw/`** so registry PRs never trigger the
 firmware build (`build.yaml` gates on `fw/**`) — that path split is the
 failure-isolation seam between community code and firmware CI.
+
+That seam separates two kinds of pin, and the location is what distinguishes
+them. A **distribution pin** selects code a release ships to devices; it lives
+outside `fw/` (this file) and must not trigger the firmware build. A
+**fixture-provenance pin** selects bytes a firmware test embeds; it lives
+inside `fw/` (`fw/sdk/tests/plasma-v2-pin.json`) and must trigger the firmware
+gates, because a change to it changes what the firmware suites run. The same
+upstream repository can carry both: `plasma` is pinned here for its `.llext`
+distribution and there for its RGBX v2 conformance module, independently.
+A fixture pin may be marked provisional while it names a revision that is not
+merged upstream. CI then passes the build's allowance on pull requests only,
+which does not stop such a pin from being merged (its own PR is green by
+design, so the change can be reviewed); it stops main from staying green with
+one, because the push-to-main run of sdk-ci gets no allowance and fails until
+the pin is repointed. `release.yaml` never runs sdk-ci, so a release is not
+protected by a gate it runs itself; it is protected transitively, by main being
+green before a release is cut. The Plasma pin is not provisional: it names the
+merged `skalldri/rgbx-plasma` revision.
 
 ```json
 {
