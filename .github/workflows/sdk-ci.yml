@@ -79,6 +79,27 @@ jobs:
         with:
           node-version: 20
 
+      # Hermetic, and cheap relative to the builds below, so it runs before
+      # them: a resolver that cannot survive two overlapping resolves breaks
+      # every consumer of the SDK, not just this job.
+      - name: Toolchain resolver concurrency, straggler and lock regression
+        # The suite waits on cache locks. It shortens the resolvers' own wait
+        # budget for its own runs, and this bound is the backstop: a wedge here
+        # fails the job in minutes rather than sitting until the job timeout.
+        timeout-minutes: 10
+        run: fw/sdk/tests/test-toolchain-resolver.sh
+
+      # Scoped to the two resolvers and their suite deliberately: they are the
+      # shell that ships inside the SDK tarball, and widening this step would
+      # mean either a red build for an unrelated file or silencing someone
+      # else's warning from this PR.
+      - name: Shellcheck the toolchain resolvers
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck fw/sdk/scripts/install-arm-toolchain.sh \
+                     fw/sim/scripts/install-toolchain.sh \
+                     fw/sdk/tests/test-toolchain-resolver.sh
+
       - uses: ./.github/actions/arm-gnu-toolchain
       - uses: ./.github/actions/wasi-sdk-scoped
 
