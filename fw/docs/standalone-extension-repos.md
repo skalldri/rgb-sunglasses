@@ -20,15 +20,19 @@ eventual "extension store":
 1. Fork the `rgbx-extension-template` repo (its example source is the Hello
    kitchen-sink extension).
 2. Implement the animation; `./build.sh` produces both a simulator `.wasm`
-   and a device `.llext`.
+   and a device `.llext` (debug info stripped), plus a `.llext.debug` sidecar
+   — the same partial link with its DWARF kept, see §8.1.
 3. Test by dragging the `.wasm` onto the hosted simulator. Optionally USB-copy
-   the `.llext` to a device's `/NAND:/ext/` for on-hardware testing.
+   the `.llext` to a device's `/NAND:/ext/` for on-hardware testing (never the
+   `.llext.debug`).
 4. Submit a PR to this repo adding one entry to `extensions/registry.json`.
 5. On the next `fw-v*` release, release CI rebuilds the extension from its pinned
-   SHA and attaches the `.llext` as a release asset — at which point the
-   companion app's existing extension sync (`app/services/extension-sync.ts`)
-   installs it onto devices **with zero app changes**, because it already syncs
-   every `*.llext` asset on the firmware release.
+   SHA and attaches the `.llext` and its `.llext.debug` as release assets — at
+   which point the companion app's existing extension sync
+   (`app/services/extension-sync.ts`) installs it onto devices **with zero app
+   changes**, because it already syncs every asset ending in `.llext` on the
+   firmware release (the `.debug` sidecar is filtered out by that same suffix
+   check).
 
 **Goals**: no Zephyr/west/NCS requirement for extension developers; one pinned,
 reproducible toolchain per side; every failure that used to appear as a silent
@@ -176,6 +180,8 @@ rgbx-sdk-<fw-version>/
     check-llext.sh                       nm -u gate against allowed-symbols.txt
                                          + readelf -S layout check (§4.1 risk b)
                                          + alloc-section size vs 24 KB llext heap
+                                         + no .debug_* sections left in the shipped
+                                           file (§8.1)
   wasm/
     shim/include/...                     copied from fw/sim/shim/include/
     shim/sim_shim.c                      copied from fw/sim/shim/ (printk -> log buffer)
@@ -207,8 +213,10 @@ rgbx-sdk-<fw-version>/
 `rgbx_add_extension(<name> SOURCES <one .c or .cpp>)` branches on `RGBX_TARGET`
 (set by whichever toolchain file configured the build):
 
-- **arm**: compile the TU → mandatory `ld -r` custom command → `.llext` →
-  POST_BUILD `check-llext.sh`.
+- **arm**: compile the TU → mandatory `ld -r` custom command →
+  `<name>.llext.debug` (full DWARF) → `objcopy --strip-debug` → `<name>.llext`
+  → `check-llext.sh` on the stripped file. Both files are outputs of the one
+  custom command; the sidecar is what §8.1 attaches to releases.
 - **wasm**: `add_executable` of the TU + `sim_shim.c` + `abi_offsets.c` with
   `-O2 -mexec-model=reactor` and `-Wl,--export-if-defined=` for the five
   required rgbx symbols + `rgbx_good_moment` + `rgbx_sim_log_buf`/`_len`
@@ -291,7 +299,8 @@ CMakePresets.json         version-3 presets (works on CMake 3.21, which is
                           "arm" and "wasm" (separate binary dirs, each
                           selecting the SDK toolchain file via RGBX_TARGET)
 build.sh                  wrapper running both presets in sequence, yielding
-                          build/arm/<name>.llext AND build/wasm/<name>.wasm
+                          build/arm/<name>.llext (+ <name>.llext.debug, §8.1)
+                          AND build/wasm/<name>.wasm
                           (no `cmake --workflow` — that needs CMake >= 3.25)
 cmake/fw-release.cmake    set(RGBX_FW_RELEASE "fw-v1.4.0")
                           set(RGBX_SDK_SHA256 "<sha256 of the release asset>")
@@ -361,7 +370,8 @@ New workflow `.github/workflows/community-extensions.yml`, two triggers:
    pin) → `check-llext.sh` + `check-wasm.mjs`.
 2. **`workflow_call` from `release.yaml`** — identical build at release time;
    an `attach-community` job with `if: always()` collects whichever per-entry
-   artifacts succeeded and runs `gh release upload` for the `.llext` files.
+   artifacts succeeded and runs `gh release upload` for the `.llext` files and
+   their `.llext.debug` sidecars (§8.1).
 
 Building against the *release's* SDK rather than the extension's own pin is
 deliberate: every `.llext` shipped on release X is compiled against release X's
@@ -405,7 +415,52 @@ Compatibility chain:
   (`fw/src/extensions/extension_manifest.cpp`); wasm-side layout drift fails
   the build via `abi_offsets.c` static asserts before the sim ever sees it.
 
-## 9. Security and trust (proportionate v1)
+### 8.1 Debug info: stripped from the `.llext`, shipped as `<name>.llext.debug`
+
+The ARM toolchain file compiles with `-O2 -g`, and until fw-v3.7.0 the `.llext`
+that shipped was the raw `ld -r` output — DWARF included. Measured on the
+fw-v3.7.0 assets: `demo_wave.llext` 12,344 B with 2,551 B of SHF_ALLOC
+sections, `plasma.llext` 39,604 / 2,656, `mask_eyes.llext` 73,296 / 5,581 —
+i.e. ~90% of every file was `.debug_*`. The device never reads those sections
+(`llext_fs_loader` copies SHF_ALLOC sections one at a time into the llext
+heap, so the 24 KB heap was never at risk), but the bytes are 100% of the BLE
+upload time and the `/NAND:/ext/` footprint.
+
+`rgbx_add_extension` now emits two files from one custom command:
+
+| File | Contents | Goes where |
+|---|---|---|
+| `<name>.llext.debug` | the `ld -r` partial link, DWARF intact | release asset only; never a device |
+| `<name>.llext` | `objcopy --strip-debug` of the above | release asset **and** device (`extension-sync.ts` matches on the `.llext` suffix, so the sidecar is ignored) |
+
+`--strip-debug`, not `--strip-all`: `.symtab`/`.strtab` stay, because the
+loader relocates through them and `check-llext.sh`'s `nm -u` gate reads them.
+`check-llext.sh` gates the *stripped* file and additionally fails if any
+`.debug_*` / `.rel.debug_*` section survives, so a hand-rolled build that
+skips the strip is rejected rather than shipping the fat file. The in-repo
+EDK path (`fw/extensions/build.sh`) does the same split.
+
+Why the strip lives in this repo's SDK rule rather than in each extension
+repo: release CI rebuilds every registry entry against *this* checkout's SDK
+(§7), so one change here strips every community extension on the next
+`fw-v*` release with no upstream PRs, and the sidecar is by construction the
+same object as the shipped file — not a separate build that may differ.
+
+The sidecar is for post-mortem symbolication: `-g` is what makes a faulting
+extension's PC resolvable to a source line. `.llext.debug` is a relocatable
+object, so addresses in it are section-relative — a fault report needs the
+PC **and** the load address of the extension's text region
+(`ext->mem[LLEXT_MEM_TEXT]`), and the offset between them is what
+`arm-none-eabi-addr2line -f -j .text -e <name>.llext.debug 0x<pc - text_base>`
+resolves (`-j .text` because the object is relocatable, so addresses are
+section-relative; verified against the mask_eyes build — `rgbx_tick` at
+`.text+0x9d4` resolves to `src/main.cpp:676`).
+Through fw-v3.7.0 the firmware's fault path logged neither value
+(`sandbox_fatal_handler.cpp` discarded the `esf`; `ext faults` latched the
+verdict, not the PC). PR #430 closes that gap: the handler captures PC and LR,
+the host converts them to section offsets, and `ext faults` prints the
+`addr2line -j .text` line ready to run — see `fw/extensions/README.md`
+"Resolving a crash to a source line".
 
 Where third-party code executes, and what contains it:
 
