@@ -455,10 +455,12 @@ PC **and** the load address of the extension's text region
 resolves (`-j .text` because the object is relocatable, so addresses are
 section-relative; verified against the mask_eyes build — `rgbx_tick` at
 `.text+0x9d4` resolves to `src/main.cpp:676`).
-As of fw-v3.7.0 the firmware's fault path does not yet log either value
-(`sandbox_fatal_handler.cpp` discards the `esf`; `ext faults` latches the
-verdict, not the PC) — closing that gap is firmware work tracked separately
-from this SDK change.
+Through fw-v3.7.0 the firmware's fault path logged neither value
+(`sandbox_fatal_handler.cpp` discarded the `esf`; `ext faults` latched the
+verdict, not the PC). PR #430 closes that gap: the handler captures PC and LR,
+the host converts them to section offsets, and `ext faults` prints the
+`addr2line -j .text` line ready to run — see `fw/extensions/README.md`
+"Resolving a crash to a source line".
 
 Where third-party code executes, and what contains it:
 
