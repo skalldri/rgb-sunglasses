@@ -36,7 +36,7 @@ device was flashed.
 | Effect | Role | RGBX v2 status | Remaining work |
 | --- | --- | --- | --- |
 | `cpptest` | In-repo development and C++ integration fixture | Behaviorally ported. QEMU matches the legacy integer plasma output for state, speed, color, and invert changes. | Reproducible phone compiler lowering, RGBX packaging, production loader integration, proto0 timing. |
-| `plasma` | Registry-shipped community effect | Behaviorally ported as a firmware conformance fixture. The memoryless guest uses a bounded Q15 recurrence and palette/luma spans; QEMU compares every channel against the legacy three-sine formula within one value. | Move the canonical source and deterministic package build to `skalldri/rgbx-plasma`, then consume its registry-pinned revision and digest here. |
+| `plasma` | Registry-shipped community effect | Behaviorally ported as a firmware conformance fixture, and consumed from its own repository: `fw/sdk/tests/plasma-v2-pin.json` pins the revision and the expected module digest, and CI rebuilds that revision against this checkout's SDK and requires the result to be the committed fixture byte for byte. The memoryless guest uses a bounded Q15 recurrence and palette/luma spans; QEMU compares every channel against the legacy three-sine formula within one value. | None. |
 | `demo_wave` | Registry-shipped community effect | Not ported. | Needs bounded sine, audio display buckets, beat inputs, and `set_good_moment`. |
 | `hello` | In-repo development and sandbox recovery fixture | Not ported. | Needs string parameters, buttons, IMU, audio buckets and beats, good-moment signaling, and replacements for deliberate crash and hang test hooks. |
 
@@ -139,7 +139,9 @@ A production migration additionally requires:
 
 1. Move the deterministic RGBX v2 compiler/package workflow into
    `rgbx-extension-template`, then move canonical Plasma source into
-   `rgbx-plasma`.
+   `rgbx-plasma`. The firmware side of this is done: it carries no Plasma
+   source, only the pin in `fw/sdk/tests/plasma-v2-pin.json` and the rebuild
+   that checks the committed fixture against it.
 2. Port `demo_wave` against the input and good-moment contract, keeping its
    canonical source in its registry repository.
 3. Port the safe portions of `hello`; keep deliberate crash and hang coverage

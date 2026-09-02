@@ -68,6 +68,9 @@ for (const [i, ext] of registry.extensions.entries()) {
   // Charset-tight on purpose: registry values are interpolated into CI
   // context, so this is an injection surface, not just a format check.
   // GitHub owner names are alphanumeric+hyphen; repo names add . and _.
+  // The repo and rev patterns below are deliberately mirrored in
+  // fw/sdk/tests/build-pinned-plasma.sh, which validates the same shapes for
+  // the fixture-provenance pin; keep the two in step.
   if (typeof ext?.repo === "string" && !/^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(ext.repo)) {
     errors.push(`${where}: repo must be https://github.com/<owner>/<name> with only [A-Za-z0-9._-] segments`);
   }
