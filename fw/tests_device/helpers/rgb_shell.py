@@ -90,7 +90,7 @@ class RgbShell:
     def wait_for_quiet(self, window: float = 1.0, max_wait: float = 30.0) -> None:
         """Wait until the console has been silent for `window` seconds.
 
-        Boot floods the console (llext relocation logs, USB bring-up) for
+        Boot floods the console (extension discovery, BT/USB bring-up) for
         several seconds after the prompt first appears; a command's echo can
         get smeared across those log lines and never match (hardware-observed
         on the first suite run). Fixtures call this once before starting.
