@@ -42,11 +42,18 @@ bool isSandboxThread() {
 }  // namespace
 
 extern "C" void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf* esf) {
-    ARG_UNUSED(esf);
     if (reason != K_ERR_KERNEL_PANIC && isSandboxThread()) {
         LOG_ERR("fault (reason %u) in extension sandbox, aborting only that thread", reason);
+#if defined(CONFIG_APP_EXTENSION_HOST)
+        /* Capture the crash site for `ext faults` (only the LLEXT host has a native PC
+         * to resolve — a Wasm trap is reported by the interpreter, not the CPU). */
+        if (extension_host::isCurrentSandboxThread()) {
+            extension_host::noteSandboxFault(reason, esf);
+        }
+#endif
         return;
     }
+    ARG_UNUSED(esf);
 
 #if !defined(CONFIG_LOG_MODE_MINIMAL)
     log_panic();
