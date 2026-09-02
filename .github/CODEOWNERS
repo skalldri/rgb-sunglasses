@@ -1,0 +1,4 @@
+# Default code owner for the whole repository: every PR automatically requests a
+# review from @skalldri. Add more specific patterns below this line if a subtree
+# ever needs a different owner (later matches take precedence).
+* @skalldri
