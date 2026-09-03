@@ -9,5 +9,5 @@ target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/fft
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/animation_registry.cpp)
 target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src/animations/animation_base.cpp)
 
-target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src)
+target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src ${CMAKE_CURRENT_LIST_DIR}/../../../include)
 target_compile_options(app PRIVATE -Wno-error=comment)

@@ -139,8 +139,9 @@ BtGattAutoReadNotifyCharacteristic<"Audio Telemetry", AudioTelemetryPacked, Audi
     audioTelemetry;
 
 /* Served straight from rodata rather than through a typed characteristic: the typed ones keep
- * a `storage_` copy of the NTTP default, which put all ~413 bytes of this compile-time constant
- * into RAM (measured: `datas` grew by 412 B). BtGattRodataBlobCharacteristic costs a pointer
+ * a `storage_` copy of the NTTP default, which put the whole compile-time constant into RAM
+ * (measured when the blob was 346 B: `datas` grew by 412 B; it is ~413 B now).
+ * BtGattRodataBlobCharacteristic costs a pointer
  * and a length instead. Reads still fragment via ATT_READ_BLOB, so it works at MTU 23. */
 BtGattRodataBlobCharacteristic<"Audio Param Ranges"> audioParamRanges(kAudioParamBlob.data(),
                                                                      kAudioParamBlobSize);

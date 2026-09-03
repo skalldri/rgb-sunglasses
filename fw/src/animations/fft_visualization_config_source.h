@@ -9,9 +9,8 @@
  *
  * Its own header — not fft_bars_animation.h — so that the two things that need the
  * INTERFACE (AudioConfig, which implements it, and the `sound dsp params` diagnostic, which
- * prints through an injected pointer) never include the concrete animation class. The
- * animation consumes the interface; the sound layer stays below it (same one-directional
- * rule as the BT/animation split — see fw/CLAUDE.md).
+ * prints through an injected pointer) never include the concrete animation class: the
+ * sound layer knows the five numbers, not the animation that draws them.
  *
  * The native_sim DI suite (fw/tests/animations/fft_bars_animation_di/) installs its own
  * fake, or calls FftBarsAnimation::clearConfigSource() to exercise the constexpr fallbacks in

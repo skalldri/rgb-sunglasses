@@ -13,9 +13,6 @@ static constexpr float kEnergyScale = audioParamDefaultF<kAudioParamFftEnergySca
 static constexpr float kFloorDb = audioParamDefaultF<kAudioParamFftFloorDb>();
 static constexpr float kRangeDb = audioParamDefaultF<kAudioParamFftRangeDb>();
 static constexpr float kTiltDbPerOctave = audioParamDefaultF<kAudioParamFftTiltDbOct>();
-static_assert(kEnergyScale == kFftBarEnergyScaleUnity,
-              "audio/fft_energy_scale's default must be the 0 dB point of the legacy gain, "
-              "or a virgin board renders with a gain offset");
 
 /* ── Gradient constants ──────────────────────────────────────────────────────
  * Traditional VU colours: green (bottom, silence) → orange → red (top, clip).
@@ -95,12 +92,13 @@ void FftBarsAnimation::clearConfigSource() {
 
 /* Bound on the owed-steps pool, sized to the msgq depth. Worst-case tick cost:
  * 12 steps x 24 buckets = 288 float multiply-adds, ~2-3 us on this M33+FPU at
- * 128 MHz — noise against the 33.3 ms frame budget. The mapping's 20 log10f
- * calls run once per NEW frame, not per step: picolibc's single-precision
- * log10f is a ~30-instruction argument-reduction + polynomial with no divide
- * loop, ~100-200 cycles on this core, so 20 calls are 2,000-4,000 cycles =
- * 16-31 us per 32 ms frame (<0.1 % of a core, upper bound quoted; estimated
- * from the instruction count, not profiled on the board). */
+ * 128 MHz — noise against the 33.3 ms frame budget. The mapping's logarithms
+ * run once per NEW frame, not per step: one logf per bucket (20) plus one
+ * log10f for the legacy gain, hoisted into the effective floor. picolibc's
+ * single-precision log is a ~30-instruction argument-reduction + polynomial
+ * with no divide loop, ~100-200 cycles on this core, so 21 calls are
+ * 2,100-4,200 cycles = 16-33 us per 32 ms frame (<0.1 % of a core, upper
+ * bound quoted; estimated from the instruction count, not profiled). */
 static constexpr uint32_t kMaxPendingEmaSteps =
     FftBarsAnimation::kMaxCatchupFrames * FftBarsAnimation::kEmaStepsPerFrame;
 
@@ -132,11 +130,6 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
 
     const float smoothingCoeff =
         configSource_ ? configSource_->getSmoothingCoeff() : kSmoothingCoeff;
-    const FftBarWindow window =
-        configSource_ ? FftBarWindow{configSource_->getFloorDb(), configSource_->getRangeDb(),
-                                     configSource_->getTiltDbPerOctave(),
-                                     configSource_->getEnergyScale()}
-                      : FftBarWindow{kFloorDb, kRangeDb, kTiltDbPerOctave, kEnergyScale};
 
     size_t numBuckets = audioSource_->numDisplayBuckets();
     if (numBuckets > kMaxDisplayBuckets) {
@@ -167,11 +160,20 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     /* The EMA target is the dB-window mapping of the newest frame's power
      * (fft_bar_mapping.h). Recomputed only when a frame actually arrived: the
      * source is last-frame-wins, so between frames the target cannot change,
-     * and this keeps the log10f cost per frame rather than per render tick. */
+     * and this keeps the log cost (and the four config-source reads) per
+     * frame rather than per render tick. The legacy gain is folded into the
+     * floor once here, so each bucket is one SDK call with one logf. */
     if (haveNewFrame) {
+        const FftBarWindow window =
+            configSource_ ? FftBarWindow{configSource_->getFloorDb(), configSource_->getRangeDb(),
+                                         configSource_->getTiltDbPerOctave(),
+                                         configSource_->getEnergyScale()}
+                          : FftBarWindow{kFloorDb, kRangeDb, kTiltDbPerOctave, kEnergyScale};
+        const float effectiveFloorDb = fft_bar_effective_floor_db(window);
         for (size_t bucket = 0; bucket < numBuckets; bucket++) {
-            target_[bucket] =
-                fft_bar_height(audioSource_->getDisplayBucketEnergy(bucket), bucket, window);
+            target_[bucket] = rgbx_audio_bar_height(audioSource_->getDisplayBucketEnergy(bucket),
+                                                    bucket, effectiveFloorDb, window.rangeDb,
+                                                    window.tiltDbPerOctave);
         }
     }
 

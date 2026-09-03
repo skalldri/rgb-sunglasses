@@ -106,7 +106,10 @@ sources read as zeros):
 
 - **IMU** — `accel[3]` (m/s²), `gyro[3]` (rad/s).
 - **Audio** — `audio_band_energy[4]` + `audio_beat[4]` (beat detector) and
-  `audio_display_bucket[20]` (~0..1 spectrum buckets for bar graphs).
+  `audio_display_bucket[20]` (raw FFT power per spectrum bucket, spanning
+  ~60 dB from bass to treble — map through `rgbx/rgbx_audio_bars.h`'s
+  `rgbx_audio_bar_height()` for bar graphs; it is the same dB window the
+  built-in FFT Bars animation uses).
 - **Buttons** — `buttons_pressed` bitmask, pressed-since-last-tick; proto0:
   bit 0=Up, 1=Left, 2=Right, 3=Down, 4=Wake.
 

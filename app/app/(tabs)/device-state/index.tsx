@@ -84,7 +84,7 @@ export default function DeviceStateMenuScreen() {
             // which is the entire reason the dedicated screen exists.
             service.uuid !== UUID_AUDIO_CONFIG_SERVICE &&
             // Audio Telemetry is machinery, not a setting: a write-only control word, a
-            // packed binary stream, and a 346-byte metadata blob. Rendered generically it is
+            // packed binary stream, and a ~413-byte metadata blob. Rendered generically it is
             // a raw UUID heading over three meaningless boxes — and writing the control word
             // by hand would arm a stream with no subscriber, which the firmware rejects.
             // Hardware-found 2026-08-25: it showed up in Settings as a bare

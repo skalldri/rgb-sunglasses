@@ -9,4 +9,4 @@ project(fft_bar_mapping_tests)
 # straight into the test app - no animation, sound or BT plumbing.
 target_sources(app PRIVATE src/main.cpp)
 
-target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src)
+target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../src ${CMAKE_CURRENT_LIST_DIR}/../../../include)

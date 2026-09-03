@@ -1,4 +1,3 @@
-#include <animations/fft_bar_mapping.h> /* kFftBarEnergyScaleUnity static_assert below */
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
 #include <sound/audio_config.h>
@@ -131,12 +130,6 @@ BtGattServer audioConfigServer(audioConfigPrimaryService, audioFluxGamma, audioB
                                audioNoiseGateRms, audioSfDelta, audioThresholdMode,
                                audioFftFloorDb, audioFftRangeDb, audioFftTiltDbOct);
 BT_GATT_SERVER_REGISTER(audioConfigServerStatic, audioConfigServer);
-
-/* The legacy energy-scale parameter is now a relative gain around its own default
- * (fft_bar_mapping.h). If that default ever moved without moving the unity point, every
- * board with no persisted value would render with a silent gain offset. */
-static_assert(audioParamDefaultF<kAudioParamFftEnergyScale>() == kFftBarEnergyScaleUnity,
-              "audio/fft_energy_scale default must equal kFftBarEnergyScaleUnity");
 
 /* The settings key and CUD label at each declaration above must be spelled as string
  * literals (they are StringLiteral NTTPs, so they cannot be generated from the table).

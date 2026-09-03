@@ -196,14 +196,18 @@ height = clamp((dB + tilt·octaves[b] + gain − floorDb) / rangeDb, 0, 1)
 The ceiling (floor + range) is 0 dB, i.e. E = 1.0 — the level at which the AGC's attack path is about to
 turn the mic down — so the red top rows keep their VU meaning. Smoothing the clamped height rather than the
 linear power makes attack and release symmetric in dB and stops an over-ceiling spike from pinning the bar
-for several steps after it has passed. The animation recomputes the 20 `log10f` targets only when a new
-analysis frame arrives (~30 µs per 32 ms), not per render tick.
+for several steps after it has passed. The animation recomputes the 20 bucket targets only when a new
+analysis frame arrives (20 `logf` + one for the gain, ~16–31 µs per 32 ms by instruction count), not per
+render tick.
 
 Two things to know when tuning: bucket energies are **post-gain** (a +20 dB AGC setting lifts every bar by
 20 dB), and the proto0 nose cutout removes the bottom 2/4/6 rows of the five innermost columns, so buckets
 15–19 only show once their bar exceeds that height. `sound dsp params` prints the live window;
 `fw/tools/gen_fft_bar_vectors.cpp` emits the fixture that pins the app's TypeScript mirror
-(`app/services/fft-bar-mapping.ts`) and the Python analysis tooling to the firmware's numbers.
+(`app/services/fft-bar-mapping.ts`) to the firmware's numbers.
+
+The formula and octave table are also the SDK's `rgbx/rgbx_audio_bars.h`, so an extension can draw the
+same bars from `audio_display_bucket[]` without re-deriving the window (the `hello` sample does).
 
 ## Bottom line
 

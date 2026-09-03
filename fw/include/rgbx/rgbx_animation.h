@@ -243,8 +243,12 @@ class Animation {
     /** @brief Energy of one fine-grained spectrum bucket, for bar-graph style
      *  visualisation.
      *  @param i Bucket index, 0 .. numDisplayBuckets()-1.
-     *  @return Bucket energy normalized to roughly 0..1, or 0 if i is out of
-     *          range. */
+     *  @return Raw bucket power (mean |X_k|^2 over the bucket's FFT bins — NOT
+     *          normalised: bass sits near 0.04–1, treble near 1e-5, a ~60 dB
+     *          tilt), or 0 if i is out of range. Map it through the dB window
+     *          in rgbx_audio_bars.h (rgbx_audio_bar_height()) before drawing a
+     *          bar; a linear `value * 255` pins the bass and never lights the
+     *          treble. */
     float displayBucket(size_t i) const {
         return (i < RGBX_AUDIO_NUM_DISPLAY_BUCKETS) ? rgbx_inputs.audio_display_bucket[i]
                                                     : 0.0f;

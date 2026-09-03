@@ -1,6 +1,9 @@
 #include <animations/animation_renderer.h>
 #include <animations/fft_bars_animation.h>
+#include <sound/audio_param_table.h>
 #include <zephyr/ztest.h>
+
+#include <initializer_list>
 
 namespace {
 /* 4 test display buckets.
@@ -47,15 +50,16 @@ class MutableAudioSource : public AnimationAudioSource {
     uint32_t framesPerUpdate_ = 1;
 };
 
-/* A scriptable FftVisualizationConfigSource. Defaults to the table values, so a test
- * that installs it unchanged must render exactly like one that cleared the source. */
+/* A scriptable FftVisualizationConfigSource. Initialised FROM the table, so a test that
+ * installs it unchanged must render exactly like one that cleared the source, and a
+ * retune cannot silently desync the fake. */
 class FakeFftConfig : public FftVisualizationConfigSource {
    public:
-    float smoothing = 0.3f;
-    float energyScale = 20.0f;
-    float floorDb = -36.0f;
-    float rangeDb = 36.0f;
-    float tilt = 3.0f;
+    float smoothing = audioParamDefaultF<kAudioParamFftSmoothingCoeff>();
+    float energyScale = audioParamDefaultF<kAudioParamFftEnergyScale>();
+    float floorDb = audioParamDefaultF<kAudioParamFftFloorDb>();
+    float rangeDb = audioParamDefaultF<kAudioParamFftRangeDb>();
+    float tilt = audioParamDefaultF<kAudioParamFftTiltDbOct>();
 
     float getSmoothingCoeff() const override { return smoothing; }
     float getEnergyScale() const override { return energyScale; }
@@ -424,18 +428,32 @@ ZTEST(fft_bars_animation_di_tests, test_frame_catchup_is_bounded) {
 
 /* ── The dB-window mapping (2026-09-03) ──────────────────────────────────── */
 
-/* Render bucket 0 at `energy` for `ticks` 33 ms ticks and return its bar height in rows. */
-static size_t renderRows(FftBarsAnimation *anim, MutableAudioSource &audio, float energy,
-                         int ticks) {
+/* Drive `ticks` 33 ms ticks with every bucket in `energies` set (the rest at zero) and
+ * return the bar height in rows of column `x`. */
+struct BucketEnergy {
+    size_t bucket;
+    float energy;
+};
+
+static size_t renderRowsAt(FftBarsAnimation *anim, MutableAudioSource &audio,
+                           std::initializer_list<BucketEnergy> energies, int ticks, size_t x) {
     audio.resetAll();
-    audio.setEnergy(0, energy);
+    for (const BucketEnergy &be : energies) {
+        audio.setEnergy(be.bucket, be.energy);
+    }
     anim->init();
     CapturingTestRenderer renderer;
     for (int i = 0; i < ticks; i++) {
         resetCapture();
         anim->tick(renderer, 33);
     }
-    return barRows(0);
+    return barRows(x);
+}
+
+/* The common case: bucket 0 alone, read back from its own column. */
+static size_t renderRows(FftBarsAnimation *anim, MutableAudioSource &audio, float energy,
+                         int ticks) {
+    return renderRowsAt(anim, audio, {{0, energy}}, ticks, 0);
 }
 
 /* The installed config source's window is what maps power to height: E = 0.1 lights a
@@ -509,16 +527,7 @@ ZTEST(fft_bars_animation_di_tests, test_tilt_lifts_high_bucket) {
     anim->setAudioSource(audio);
 
     auto rowsFor = [&](size_t x) {
-        audio.resetAll();
-        audio.setEnergy(0, 0.03f);
-        audio.setEnergy(3, 0.03f);
-        anim->init();
-        CapturingTestRenderer renderer;
-        for (int i = 0; i < 20; i++) {
-            resetCapture();
-            anim->tick(renderer, 33);
-        }
-        return barRows(x);
+        return renderRowsAt(anim, audio, {{0, 0.03f}, {3, 0.03f}}, 20, x);
     };
 
     zassert_equal(rowsFor(0), 2u, "bucket 0 at −15.2 dB: 2 of 4 rows");

@@ -3,9 +3,8 @@
  * fixture after any change to fw/src/animations/fft_bar_mapping.h or the FFT display
  * defaults in fw/src/sound/audio_param_table.h (from the repo root):
  *
- *   g++ -std=c++2b -I fw/src -I fw/src/sound -o /tmp/gen_fft_bars fw/tools/gen_fft_bar_vectors.cpp -lm
+ *   g++ -std=c++2b -I fw/src -I fw/src/sound -I fw/include -o /tmp/gen_fft_bars fw/tools/gen_fft_bar_vectors.cpp -lm
  *   /tmp/gen_fft_bars > app/__tests__/fixtures/fft-bar-vectors.json
- *   cp app/__tests__/fixtures/fft-bar-vectors.json fw/tools/tests/fixtures/fft_bar_vectors.json
  */
 
 import vector from "./fixtures/fft-bar-vectors.json";

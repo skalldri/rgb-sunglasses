@@ -85,7 +85,7 @@ export function useAudioParams(): UseAudioParamsResult {
    * stays authoritative — the seam resolveAudioParams was built with.
    *
    * Keyed on the characteristic's VALUE, not on selectedDevice: depending on the whole device
-   * object re-parsed a 346-byte blob and minted a new overrides identity on every unrelated
+   * object re-parsed a ~413-byte blob and minted a new overrides identity on every unrelated
    * mutation of it, which then invalidated `resolved` and everything derived from it. */
   const rangesValue =
     selectedDevice?.characteristicsByService?.[UUID_AUDIO_TELEMETRY_SERVICE]?.[

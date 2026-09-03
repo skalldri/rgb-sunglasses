@@ -66,8 +66,8 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
     static constexpr size_t kMaxDisplayBuckets = 24;
 
     /* Per-bucket bar-height fraction the EMA is converging toward: the dB-window mapping
-     * of the NEWEST analysis frame's bucket power (fft_bar_height), recomputed only when a
-     * new frame has arrived — 20 log10f calls per 32 ms, not per render tick. */
+     * of the NEWEST analysis frame's bucket power (fft_bar_mapping.h), recomputed only
+     * when a new frame has arrived — 20 logf + 1 log10f per 32 ms, not per render tick. */
     float target_[kMaxDisplayBuckets] = {};
 
     /* Per-bucket smoothed bar height in [0, 1] (exponential moving average of target_).

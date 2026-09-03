@@ -28,8 +28,33 @@ ZTEST(fft_bar_mapping, test_defaults_match_param_table) {
     zassert_equal(kDefaults.rangeDb, audioParamDefaultF<kAudioParamFftRangeDb>());
     zassert_equal(kDefaults.tiltDbPerOctave, audioParamDefaultF<kAudioParamFftTiltDbOct>());
     zassert_equal(kDefaults.energyScale, audioParamDefaultF<kAudioParamFftEnergyScale>());
-    zassert_equal(kFftBarEnergyScaleUnity, audioParamDefaultF<kAudioParamFftEnergyScale>(),
-                  "the legacy scale's 0 dB point must be its table default");
+    /* The SDK header's literal defaults (it cannot see the table) — static_asserted in
+     * fft_bar_mapping.h, pinned here too so the record survives a refactor. */
+    zassert_equal(RGBX_AUDIO_BAR_FLOOR_DB, kDefaults.floorDb);
+    zassert_equal(RGBX_AUDIO_BAR_RANGE_DB, kDefaults.rangeDb);
+    zassert_equal(RGBX_AUDIO_BAR_TILT_DB_PER_OCTAVE, kDefaults.tiltDbPerOctave);
+}
+
+/* The firmware mapping is the SDK mapping plus the legacy gain: with the gain at unity
+ * the two must agree exactly, and a gain must equal a floor shift. */
+ZTEST(fft_bar_mapping, test_matches_sdk_helper) {
+    const float probes[] = {1e-6f, 3e-5f, 1e-3f, 0.039f, 0.3f, 1.0f, 5.0f};
+    for (float e : probes) {
+        for (size_t b = 0; b < AUDIO_NUM_DISPLAY_BUCKETS; b += 5) {
+            zassert_equal(fft_bar_height(e, b, kDefaults),
+                          rgbx_audio_bar_height(e, b, RGBX_AUDIO_BAR_FLOOR_DB,
+                                                RGBX_AUDIO_BAR_RANGE_DB,
+                                                RGBX_AUDIO_BAR_TILT_DB_PER_OCTAVE),
+                          "E = %g bucket %zu: firmware and SDK mapping differ", (double)e, b);
+        }
+    }
+    FftBarWindow louder = kDefaults;
+    louder.energyScale = 200.0f; /* +10 dB */
+    zassert_within(fft_bar_effective_floor_db(louder), kDefaults.floorDb - 10.0f, kTol);
+    zassert_within(fft_bar_height(0.01f, 0, louder),
+                   rgbx_audio_bar_height(0.01f, 0, kDefaults.floorDb - 10.0f, kDefaults.rangeDb,
+                                         kDefaults.tiltDbPerOctave),
+                   kTol);
 }
 
 /* ── Power → dB ──────────────────────────────────────────────────────────── */
@@ -111,19 +136,19 @@ ZTEST(fft_bar_mapping, test_out_of_range_bucket_gets_no_tilt) {
 /* ── Tilt ────────────────────────────────────────────────────────────────── */
 
 ZTEST(fft_bar_mapping, test_tilt_offsets) {
-    zassert_equal(kFftBarBucketOctaves[0], 0.0f, "bucket 0 is the tilt reference");
+    zassert_equal(rgbx_audio_bar_octaves[0], 0.0f, "bucket 0 is the tilt reference");
     for (size_t b = 1; b < AUDIO_NUM_DISPLAY_BUCKETS; b++) {
-        zassert_true(kFftBarBucketOctaves[b] > kFftBarBucketOctaves[b - 1],
+        zassert_true(rgbx_audio_bar_octaves[b] > rgbx_audio_bar_octaves[b - 1],
                      "octave table must be strictly increasing (bucket %zu)", b);
     }
     /* Bucket 19 (2.9 kHz) is 4.72 octaves above bucket 0 (109 Hz). */
-    zassert_within(kFftBarBucketOctaves[AUDIO_NUM_DISPLAY_BUCKETS - 1], 4.724f, 0.01f);
+    zassert_within(rgbx_audio_bar_octaves[AUDIO_NUM_DISPLAY_BUCKETS - 1], 4.724f, 0.01f);
 
     /* Same power, higher bucket → taller bar, by tilt × octaves over the range. */
     const float e = 0.01f; /* −20 dB */
     const float h0 = fft_bar_height(e, 0, kDefaults);
     const float h19 = fft_bar_height(e, 19, kDefaults);
-    zassert_within(h19 - h0, kDefaults.tiltDbPerOctave * kFftBarBucketOctaves[19] / kDefaults.rangeDb,
+    zassert_within(h19 - h0, kDefaults.tiltDbPerOctave * rgbx_audio_bar_octaves[19] / kDefaults.rangeDb,
                    kTol);
 
     /* tilt = 0 makes every bucket render identically. */
@@ -144,9 +169,9 @@ ZTEST(fft_bar_mapping, test_octave_table_matches_bucket_bins) {
         const float centre =
             (float)(audio_display_bucket_start[b] + audio_display_bucket_end[b]) / 2.0f;
         const float octaves = log2f(centre / centre0);
-        zassert_within(kFftBarBucketOctaves[b], octaves, 0.01f,
+        zassert_within(rgbx_audio_bar_octaves[b], octaves, 0.01f,
                        "bucket %zu: table says %g octaves, bins say %g", b,
-                       (double)kFftBarBucketOctaves[b], (double)octaves);
+                       (double)rgbx_audio_bar_octaves[b], (double)octaves);
     }
 }
 

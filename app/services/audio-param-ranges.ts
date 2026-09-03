@@ -56,9 +56,15 @@ export function parseAudioParamRanges(
    * back to its own table for all 14 it *did* know — including retuned defaults like
    * beat_alpha 3.5 -> 0.3, which is the motivating example for the whole feature.
    *
-   * A count SMALLER than expected is still fatal: this app would be reading entries that do
-   * not exist, and there is no prefix to trust. */
-  if (count < AUDIO_PARAM_ORDER.length) return null;
+   * A count SMALLER than expected is an OLDER firmware (first reachable when the table grew
+   * 14 -> 17 with the FFT Bars dB mapping): its entries are still the same trusted prefix,
+   * just fewer of them, and the parameters it lacks are exactly the ones resolveAudioParams()
+   * already omits when their characteristics are absent. Refusing here would drop the
+   * device-authoritative ranges for every parameter the app DOES share with that firmware —
+   * the same staleness in the other direction. So decode min(count, known) entries; a
+   * count of 0 is a malformed blob and stays fatal. */
+  if (count === 0) return null;
+  const known = Math.min(count, AUDIO_PARAM_ORDER.length);
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const out: Partial<Record<AudioParamKey, Partial<AudioParamSpec>>> = {};
@@ -75,9 +81,9 @@ export function parseAudioParamRanges(
     return s;
   };
 
-  /* Only the prefix this app understands. Entries beyond it belong to parameters this build
+  /* Only the prefix both sides understand. Entries beyond it belong to parameters this build
    * has no UI for, and the trailing-bytes rule below covers them. */
-  for (let i = 0; i < AUDIO_PARAM_ORDER.length; i++) {
+  for (let i = 0; i < known; i++) {
     if (o >= bytes.length) return null;
     const type = bytes[o];
     o += 1;

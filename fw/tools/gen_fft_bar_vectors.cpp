@@ -1,14 +1,14 @@
 /* Emits the FFT Bars display-mapping test vectors as JSON, computed by the firmware's own
- * header (fw/src/animations/fft_bar_mapping.h), so the companion app's TypeScript mirror
- * (app/services/fft-bar-mapping.ts) and the beat_lab Python mirror can be pinned to the
- * exact numbers the glasses draw.
+ * header (fw/src/animations/fft_bar_mapping.h, over the SDK's rgbx_audio_bars.h), so the
+ * companion app's TypeScript mirror (app/services/fft-bar-mapping.ts) is pinned to the
+ * exact numbers the glasses draw. It is the only consumer today; any future mirror (e.g.
+ * offline capture-scoring tooling) should read the same app fixture rather than a copy.
  *
  * Regenerate after any change to the mapping, the octave table or the table defaults
  * (from the repo root):
  *
- *   g++ -std=c++2b -I fw/src -I fw/src/sound -o /tmp/gen_fft_bars fw/tools/gen_fft_bar_vectors.cpp -lm
+ *   g++ -std=c++2b -I fw/src -I fw/src/sound -I fw/include -o /tmp/gen_fft_bars fw/tools/gen_fft_bar_vectors.cpp -lm
  *   /tmp/gen_fft_bars > app/__tests__/fixtures/fft-bar-vectors.json
- *   cp app/__tests__/fixtures/fft-bar-vectors.json fw/tools/tests/fixtures/fft_bar_vectors.json
  */
 #include <cstdio>
 
@@ -43,7 +43,7 @@ int main() {
            kFftBarPowerFloor);
     printf("  \"bucketOctaves\": [");
     for (size_t b = 0; b < AUDIO_NUM_DISPLAY_BUCKETS; b++) {
-        printf("%s%.9g", b ? ", " : "", kFftBarBucketOctaves[b]);
+        printf("%s%.9g", b ? ", " : "", rgbx_audio_bar_octaves[b]);
     }
     printf("],\n");
     printf("  \"vectors\": [\n");

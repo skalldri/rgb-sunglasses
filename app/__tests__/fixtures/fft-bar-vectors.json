@@ -9,17 +9,17 @@
     {"name": "mid_window", "power": 0.0158489328, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": -18, "fraction": 0.5, "rows12": 6},
     {"name": "at_ceiling", "power": 1, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": 0, "fraction": 1, "rows12": 12},
     {"name": "above_ceiling", "power": 1000, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": 30, "fraction": 1, "rows12": 12},
-    {"name": "tv_bucket0_median", "power": 0.0390000008, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": -14.0893545, "fraction": 0.608628988, "rows12": 7},
-    {"name": "tv_bucket0_max", "power": 1.87, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": 2.71841621, "fraction": 1, "rows12": 12},
+    {"name": "tv_bucket0_median", "power": 0.0390000008, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": -14.0893526, "fraction": 0.608629107, "rows12": 7},
+    {"name": "tv_bucket0_max", "power": 1.87, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": 2.71841598, "fraction": 1, "rows12": 12},
     {"name": "tv_bucket19_median", "power": 2.99999992e-05, "bucket": 19, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": -45.2287865, "fraction": 0.137311518, "rows12": 2},
-    {"name": "legacy_saturation_point", "power": 0.0500000007, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": -13.0103006, "fraction": 0.638602793, "rows12": 8},
+    {"name": "legacy_saturation_point", "power": 0.0500000007, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": -13.0102997, "fraction": 0.638602793, "rows12": 8},
     {"name": "tilt_bucket5", "power": 0.00999999978, "bucket": 5, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": -20, "fraction": 0.641327739, "rows12": 8},
     {"name": "tilt_bucket19", "power": 0.00999999978, "bucket": 19, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 20, "powerDb": -20, "fraction": 0.838111162, "rows12": 10},
     {"name": "no_tilt_bucket19", "power": 0.00999999978, "bucket": 19, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 0, "energyScale": 20, "powerDb": -20, "fraction": 0.444444448, "rows12": 5},
     {"name": "gain_plus10", "power": 0.00999999978, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 200, "powerDb": -20, "fraction": 0.722222209, "rows12": 9},
     {"name": "gain_minus10", "power": 0.00999999978, "bucket": 0, "floorDb": -36, "rangeDb": 36, "tiltDbPerOctave": 3, "energyScale": 2, "powerDb": -20, "fraction": 0.166666672, "rows12": 2},
     {"name": "narrow_window_low", "power": 0.0199999996, "bucket": 0, "floorDb": -20, "rangeDb": 12, "tiltDbPerOctave": 0, "energyScale": 20, "powerDb": -16.9897003, "fraction": 0.250858307, "rows12": 3},
-    {"name": "narrow_window_high", "power": 0.200000003, "bucket": 0, "floorDb": -20, "rangeDb": 12, "tiltDbPerOctave": 0, "energyScale": 20, "powerDb": -6.98970032, "fraction": 1, "rows12": 12},
+    {"name": "narrow_window_high", "power": 0.200000003, "bucket": 0, "floorDb": -20, "rangeDb": 12, "tiltDbPerOctave": 0, "energyScale": 20, "powerDb": -6.98969984, "fraction": 1, "rows12": 12},
     {"name": "extreme_window", "power": 9.99999997e-07, "bucket": 19, "floorDb": -80, "rangeDb": 80, "tiltDbPerOctave": 12, "energyScale": 1000, "powerDb": -60, "fraction": 1, "rows12": 12}
   ]
 }

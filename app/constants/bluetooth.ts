@@ -330,4 +330,4 @@ export const UUID_AUDIO_TELEMETRY         = "12345678-1234-5678-0009-56789abc000
 // Read-only blob: range/default/step/unit/enum labels for all 17 audio tunables, generated at
 // compile time from fw/src/sound/audio_param_table.h. Long-read fragmentable, so it works at
 // MTU 23 via ATT_READ_BLOB. Decoder: services/audio-param-ranges.ts.
-export const UUID_AUDIO_PARAM_RANGES      = "12345678-1234-5678-0009-56789abc0002"; // ~346-byte struct, read-only
+export const UUID_AUDIO_PARAM_RANGES      = "12345678-1234-5678-0009-56789abc0002"; // ~413-byte struct, read-only
