@@ -119,6 +119,10 @@ state rather than burning the whole deadline. And it never takes a screenshot.
 `uiautomator dump` costs 2.3–2.9 s idle, degrading to 11–16 s with unparseable output
 under BLE load. Never trust a single sample.
 
+For the firmware-update flow specifically — which phase to target, the manual gate at
+"Ready to restart" that no hardware or log signal will ever announce, and the slot-hash
+check afterwards — use `/ota-via-app`; it wraps this loop in the full step 5a sequence.
+
 ## Confirming a tap actually worked
 
 Only a **state change** counts:

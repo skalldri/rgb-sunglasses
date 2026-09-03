@@ -119,7 +119,10 @@ notify reception, always release both locks) and *why* the gate exists (PR #89).
 MCUmgr-related.** Run a real firmware update from the companion app, end to end:
 open the Firmware Update modal (image state / slot info / board detect must populate
 with **no** `SMP request timeout after 5000ms`), select a `.zip`, and let the upload
-run to completion. Record the result in the PR body.
+run to completion. Record the result in the PR body. **Follow `/ota-via-app`** — it
+carries the flow's state machine and the only wait that works (poll the flow's step
+title; the flow parks at "Ready to restart" until tapped, resets nothing on its own,
+and logs nothing, so hardware-reset and logcat watchers both fail silently).
 
 The OTA path is uniquely fragile and uniquely invisible: SMP is the **last**
 notification the app registers, so it is the first casualty of anything that consumes
