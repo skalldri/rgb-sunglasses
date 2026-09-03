@@ -1,6 +1,6 @@
 #pragma once
 
-#include <animations/fft_bars_animation.h>
+#include <animations/fft_visualization_config_source.h>
 #include <singleton.h>
 #include <sound/audio_dsp.h>
 #include <sound/sound.h>

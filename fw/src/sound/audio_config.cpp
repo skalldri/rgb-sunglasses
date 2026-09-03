@@ -1,3 +1,4 @@
+#include <animations/fft_bar_mapping.h> /* kFftBarEnergyScaleUnity static_assert below */
 #include <bluetooth/bt_service_cpp.h>
 #include <bluetooth/persistent_characteristic.h>
 #include <sound/audio_config.h>
@@ -516,6 +517,7 @@ float AudioConfig::getTiltDbPerOctave() const {
 void audio_dsp_bind_default_bt_dependencies() {
     audio_dsp_set_config_provider(&AudioConfig::getInstance());
     sound_set_agc_config_provider(&AudioConfig::getInstance());
+    sound_set_fft_visualization_source(&AudioConfig::getInstance());
 
     /* Read every parameter once so a persisted out-of-range or non-finite value is corrected
      * NOW rather than whenever its consumer happens to run.

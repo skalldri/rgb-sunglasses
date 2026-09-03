@@ -3,38 +3,7 @@
 #include <animations/animation.h>
 #include <animations/animation_audio_source.h>
 #include <animations/fft_bar_mapping.h>
-
-/**
- * @brief Runtime-tunable spectrogram visualization parameters.
- *
- * Decouples fft_bars_animation.cpp from any concrete BT/Settings-backed implementation:
- * the native_sim ztest suite (fw/tests/animations/fft_bars_animation_di/) installs its own
- * fake, or calls clearConfigSource() to exercise the constexpr fallbacks in tick() (which
- * static_assert equal to the audio_param_table.h defaults).
- *
- * The five values describe the dB-window mapping in fft_bar_mapping.h: floor/range/tilt
- * are the window, energyScale is the legacy relative-gain knob, and smoothingCoeff is the
- * per-step EMA weight applied to the resulting bar HEIGHT.
- */
-class FftVisualizationConfigSource {
-   public:
-    virtual ~FftVisualizationConfigSource() = default;
-
-    /** EMA weight applied to the newest bar height; 1-this is applied to history. */
-    virtual float getSmoothingCoeff() const = 0;
-
-    /** Legacy `audio/fft_energy_scale`: relative gain, 0 dB at kFftBarEnergyScaleUnity. */
-    virtual float getEnergyScale() const = 0;
-
-    /** dB of bucket power at which a bar starts to light. */
-    virtual float getFloorDb() const = 0;
-
-    /** dB from an empty bar to a full one. */
-    virtual float getRangeDb() const = 0;
-
-    /** Pink-noise compensation, dB added per octave above bucket 0. */
-    virtual float getTiltDbPerOctave() const = 0;
-};
+#include <animations/fft_visualization_config_source.h>
 
 class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animation::FftBars> {
    public:
@@ -48,10 +17,6 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
     /* Back to the constexpr fallbacks. The animation is a singleton, so a config source
      * installed by one native_sim test would otherwise leak into the next. */
     void clearConfigSource();
-
-    /* The installed source, or nullptr when running on the fallbacks. Read-only access
-     * for diagnostics (`sound dsp params` prints the display window through it). */
-    const FftVisualizationConfigSource *configSource() const { return configSource_; }
 
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;

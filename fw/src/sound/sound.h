@@ -65,6 +65,17 @@ extern struct k_msgq audio_result_q;
 void sound_set_agc_config_provider(AgcConfigProvider *provider);
 
 /**
+ * @brief Injects the FFT Bars display window for the `sound dsp params` diagnostic.
+ *
+ * Interface-only (animations/fft_visualization_config_source.h): the sound layer prints the
+ * window through this pointer and never includes the concrete animation. Bound by
+ * audio_dsp_bind_default_bt_dependencies() alongside the other providers; nullptr (the
+ * default) simply omits the line.
+ */
+class FftVisualizationConfigSource;
+void sound_set_fft_visualization_source(const FftVisualizationConfigSource *source);
+
+/**
  * @brief Run a capture synchronously, dispatching to the tap or direct path.
  *
  * Extracted from the shell command so the background capture worker

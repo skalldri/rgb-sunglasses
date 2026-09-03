@@ -95,8 +95,12 @@ void FftBarsAnimation::clearConfigSource() {
 
 /* Bound on the owed-steps pool, sized to the msgq depth. Worst-case tick cost:
  * 12 steps x 24 buckets = 288 float multiply-adds, ~2-3 us on this M33+FPU at
- * 128 MHz — noise against the 33.3 ms frame budget. The 20 log10f calls of the
- * mapping run once per NEW frame (~30 us per 32 ms), not per step. */
+ * 128 MHz — noise against the 33.3 ms frame budget. The mapping's 20 log10f
+ * calls run once per NEW frame, not per step: picolibc's single-precision
+ * log10f is a ~30-instruction argument-reduction + polynomial with no divide
+ * loop, ~100-200 cycles on this core, so 20 calls are 2,000-4,000 cycles =
+ * 16-31 us per 32 ms frame (<0.1 % of a core, upper bound quoted; estimated
+ * from the instruction count, not profiled on the board). */
 static constexpr uint32_t kMaxPendingEmaSteps =
     FftBarsAnimation::kMaxCatchupFrames * FftBarsAnimation::kEmaStepsPerFrame;
 
