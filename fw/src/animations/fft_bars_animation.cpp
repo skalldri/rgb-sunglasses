@@ -1,21 +1,29 @@
 #include <animations/fft_bars_animation.h>
+#include <sound/audio_param_table.h>
 
 /* Width of each rendered bar in display pixels. */
 static constexpr size_t kBarWidthPx = 1;
 
-/* Maps mean bucket power to a bar-height fraction in [0, 1].
- * Tune empirically: kEnergyScale=20 means energy=0.05 fills the display. */
-static constexpr float kEnergyScale = 20.0f;
-
-/* Exponential moving average: weight applied to the newest energy sample.
- * The complementary weight (1 - kSmoothingCoeff) is applied to the previous
- * smoothed value.  Lower = slower/smoother, higher = faster/more reactive. */
-static constexpr float kSmoothingCoeff = 0.3f;
+/* Fallbacks used when no FftVisualizationConfigSource is installed (the native_sim DI
+ * suite, or a build without the BT-backed AudioConfig). Pinned to the table so the
+ * BT-free path and a virgin board render identically; the mapping itself is documented
+ * in fft_bar_mapping.h. */
+static constexpr float kSmoothingCoeff = audioParamDefaultF<kAudioParamFftSmoothingCoeff>();
+static constexpr float kEnergyScale = audioParamDefaultF<kAudioParamFftEnergyScale>();
+static constexpr float kFloorDb = audioParamDefaultF<kAudioParamFftFloorDb>();
+static constexpr float kRangeDb = audioParamDefaultF<kAudioParamFftRangeDb>();
+static constexpr float kTiltDbPerOctave = audioParamDefaultF<kAudioParamFftTiltDbOct>();
+static_assert(kEnergyScale == kFftBarEnergyScaleUnity,
+              "audio/fft_energy_scale's default must be the 0 dB point of the legacy gain, "
+              "or a virgin board renders with a gain offset");
 
 /* ── Gradient constants ──────────────────────────────────────────────────────
  * Traditional VU colours: green (bottom, silence) → orange → red (top, clip).
  * Each lit pixel is coloured by its absolute row position so the hue conveys
- * how close the bar is to clipping, independent of per-bar height. */
+ * how close the bar is to clipping, independent of per-bar height. With the dB
+ * window's ceiling at 0 dB (E = 1.0 — see fft_bar_mapping.h) the red rows are
+ * lit only when the AGC's attack path is about to turn the mic down, so the
+ * colour keeps its meter meaning. */
 struct GradientStop {
     uint8_t r, g, b;
 };
@@ -77,19 +85,25 @@ void FftBarsAnimation::setConfigSource(FftVisualizationConfigSource &source) {
     configSource_ = &source;
 }
 
+void FftBarsAnimation::clearConfigSource() {
+    configSource_ = nullptr;
+}
+
 /* kEmaStepsPerFrame / kAudioFrameMs / kMaxCatchupFrames moved to the class
  * (fft_bars_animation.h) so the audio adapter can BUILD_ASSERT them against the
  * sound pipeline's exported constants (PR #378 review round 9). */
 
 /* Bound on the owed-steps pool, sized to the msgq depth. Worst-case tick cost:
  * 12 steps x 24 buckets = 288 float multiply-adds, ~2-3 us on this M33+FPU at
- * 128 MHz — noise against the 33.3 ms frame budget. */
+ * 128 MHz — noise against the 33.3 ms frame budget. The 20 log10f calls of the
+ * mapping run once per NEW frame (~30 us per 32 ms), not per step. */
 static constexpr uint32_t kMaxPendingEmaSteps =
     FftBarsAnimation::kMaxCatchupFrames * FftBarsAnimation::kEmaStepsPerFrame;
 
 void FftBarsAnimation::init() {
     for (size_t b = 0; b < kMaxDisplayBuckets; b++) {
-        smoothed_[b] = 0.0f;
+        target_[b] = 0.0f;
+        height_[b] = 0.0f;
     }
     lastFrameCount_ = audioSource_ ? audioSource_->frameCount() : 0;
     pendingEmaSteps_ = 0;
@@ -114,14 +128,18 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
 
     const float smoothingCoeff =
         configSource_ ? configSource_->getSmoothingCoeff() : kSmoothingCoeff;
-    const float energyScale = configSource_ ? configSource_->getEnergyScale() : kEnergyScale;
+    const FftBarWindow window =
+        configSource_ ? FftBarWindow{configSource_->getFloorDb(), configSource_->getRangeDb(),
+                                     configSource_->getTiltDbPerOctave(),
+                                     configSource_->getEnergyScale()}
+                      : FftBarWindow{kFloorDb, kRangeDb, kTiltDbPerOctave, kEnergyScale};
 
     size_t numBuckets = audioSource_->numDisplayBuckets();
     if (numBuckets > kMaxDisplayBuckets) {
         numBuckets = kMaxDisplayBuckets;
     }
 
-    /* Update smoothed energies with an exponential moving average driven by
+    /* Update smoothed heights with an exponential moving average driven by
      * NEWLY-ARRIVED analysis frames (no frames -> no movement), prorated over
      * wall time: arriving frames deposit kEmaStepsPerFrame steps into a pool,
      * and each tick withdraws up to dt's worth (carry-remainder). At the 30 Hz
@@ -133,12 +151,24 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     const uint32_t frameCount = audioSource_->frameCount();
     uint32_t newFrames = frameCount - lastFrameCount_;
     lastFrameCount_ = frameCount;
+    const bool haveNewFrame = newFrames != 0;
     if (newFrames > kMaxCatchupFrames) {
         newFrames = kMaxCatchupFrames;  /* delta capped BEFORE the multiply */
     }
     pendingEmaSteps_ += newFrames * kEmaStepsPerFrame;
     if (pendingEmaSteps_ > kMaxPendingEmaSteps) {
         pendingEmaSteps_ = kMaxPendingEmaSteps;
+    }
+
+    /* The EMA target is the dB-window mapping of the newest frame's power
+     * (fft_bar_mapping.h). Recomputed only when a frame actually arrived: the
+     * source is last-frame-wins, so between frames the target cannot change,
+     * and this keeps the log10f cost per frame rather than per render tick. */
+    if (haveNewFrame) {
+        for (size_t bucket = 0; bucket < numBuckets; bucket++) {
+            target_[bucket] =
+                fft_bar_height(audioSource_->getDisplayBucketEnergy(bucket), bucket, window);
+        }
     }
 
     prorateRemainderMs_ += kEmaStepsPerFrame * (uint32_t)timeSinceLastTickMs;
@@ -148,17 +178,21 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     pendingEmaSteps_ -= emaSteps;
 
     for (size_t bucket = 0; bucket < numBuckets; bucket++) {
-        float energy = audioSource_->getDisplayBucketEnergy(bucket);
+        const float target = target_[bucket];
         for (uint32_t s = 0; s < emaSteps; s++) {
-            smoothed_[bucket] =
-                smoothingCoeff * energy + (1.0f - smoothingCoeff) * smoothed_[bucket];
+            height_[bucket] = smoothingCoeff * target + (1.0f - smoothingCoeff) * height_[bucket];
         }
     }
 
     /* Mirrored layout: the left half of the display shows buckets low→high
      * (bucket 0 at the outer left edge, highest bucket at the centre-left).
      * The right half mirrors this symmetrically (highest bucket at centre-right,
-     * bucket 0 at the outer right edge). */
+     * bucket 0 at the outer right edge).
+     *
+     * Known limitation on proto0 (accepted 2026-09-03): the nose cutout removes
+     * the bottom 2/4/6 rows of the innermost columns (fw/src/led_config.h
+     * kFrameLedsOnRow), so buckets 15–19 (1.9–3 kHz) are only visible once their
+     * bar exceeds that height. The treble tilt helps; it does not remap them. */
     size_t halfWidth = W / 2;
     size_t bucketsPerHalf = halfWidth / kBarWidthPx;
     if (bucketsPerHalf > numBuckets) {
@@ -166,7 +200,7 @@ void FftBarsAnimation::tick(AnimationRenderer &renderer, size_t timeSinceLastTic
     }
 
     for (size_t bucket = 0; bucket < bucketsPerHalf; bucket++) {
-        float fraction = smoothed_[bucket] * energyScale;
+        float fraction = height_[bucket];
         if (fraction > 1.0f) {
             fraction = 1.0f;
         }

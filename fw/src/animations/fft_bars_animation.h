@@ -2,23 +2,38 @@
 
 #include <animations/animation.h>
 #include <animations/animation_audio_source.h>
+#include <animations/fft_bar_mapping.h>
 
 /**
  * @brief Runtime-tunable spectrogram visualization parameters.
  *
  * Decouples fft_bars_animation.cpp from any concrete BT/Settings-backed implementation:
- * the native_sim ztest suite (fw/tests/animations/fft_bars_animation_di/) never calls
- * setConfigSource(), so tick() always falls back to the historical constexpr defaults.
+ * the native_sim ztest suite (fw/tests/animations/fft_bars_animation_di/) installs its own
+ * fake, or calls clearConfigSource() to exercise the constexpr fallbacks in tick() (which
+ * static_assert equal to the audio_param_table.h defaults).
+ *
+ * The five values describe the dB-window mapping in fft_bar_mapping.h: floor/range/tilt
+ * are the window, energyScale is the legacy relative-gain knob, and smoothingCoeff is the
+ * per-step EMA weight applied to the resulting bar HEIGHT.
  */
 class FftVisualizationConfigSource {
    public:
     virtual ~FftVisualizationConfigSource() = default;
 
-    /** EMA weight applied to the newest energy sample; 1-this is applied to history. */
+    /** EMA weight applied to the newest bar height; 1-this is applied to history. */
     virtual float getSmoothingCoeff() const = 0;
 
-    /** Maps mean bucket power to a bar-height fraction in [0, 1]. */
+    /** Legacy `audio/fft_energy_scale`: relative gain, 0 dB at kFftBarEnergyScaleUnity. */
     virtual float getEnergyScale() const = 0;
+
+    /** dB of bucket power at which a bar starts to light. */
+    virtual float getFloorDb() const = 0;
+
+    /** dB from an empty bar to a full one. */
+    virtual float getRangeDb() const = 0;
+
+    /** Pink-noise compensation, dB added per octave above bucket 0. */
+    virtual float getTiltDbPerOctave() const = 0;
 };
 
 class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animation::FftBars> {
@@ -27,8 +42,16 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
     void setAudioSource(AnimationAudioSource &source);
 
     /* Injected by src/bluetooth/animation_adapters/fft_bars_animation_bt.cpp. Optional -
-     * tick() falls back to the historical constexpr defaults when unset. */
+     * tick() falls back to the constexpr table defaults when unset. */
     void setConfigSource(FftVisualizationConfigSource &source);
+
+    /* Back to the constexpr fallbacks. The animation is a singleton, so a config source
+     * installed by one native_sim test would otherwise leak into the next. */
+    void clearConfigSource();
+
+    /* The installed source, or nullptr when running on the fallbacks. Read-only access
+     * for diagnostics (`sound dsp params` prints the display window through it). */
+    const FftVisualizationConfigSource *configSource() const { return configSource_; }
 
     void init() override;
     void tick(AnimationRenderer &renderer, size_t timeSinceLastTickMs) override;
@@ -74,16 +97,25 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
     AnimationAudioSource *audioSource_ = nullptr;
     FftVisualizationConfigSource *configSource_ = nullptr;
 
-    /* Per-bucket smoothed energy (exponential moving average).
-     * Sized to hold the maximum number of display buckets we ever expect. */
+    /* Sized to hold the maximum number of display buckets we ever expect. */
     static constexpr size_t kMaxDisplayBuckets = 24;
-    float smoothed_[kMaxDisplayBuckets] = {};
+
+    /* Per-bucket bar-height fraction the EMA is converging toward: the dB-window mapping
+     * of the NEWEST analysis frame's bucket power (fft_bar_height), recomputed only when a
+     * new frame has arrived — 20 log10f calls per 32 ms, not per render tick. */
+    float target_[kMaxDisplayBuckets] = {};
+
+    /* Per-bucket smoothed bar height in [0, 1] (exponential moving average of target_).
+     * Smoothing the clamped height rather than the linear power is what makes attack and
+     * release symmetric in dB and stops an over-ceiling spike from pinning the bar for
+     * several steps after it has passed. */
+    float height_[kMaxDisplayBuckets] = {};
 
     /* audioSource_->frameCount() at the last tick — the EMA advances per NEW
      * analysis frame, not per render tick (issue #376).
      *
      * Concurrency (PR #378 review round 6): init() resets this, pendingEmaSteps_,
-     * prorateRemainderMs_ and smoothed_[] on whatever thread called
+     * prorateRemainderMs_, target_[] and height_[] on whatever thread called
      * pattern_controller_change_to_animation() (BT RX, shell, SMP workqueue),
      * while tick() read-modify-writes them on the render thread. Normally that's
      * sequenced — init() runs before currentAnimation flips, so the render thread
@@ -94,7 +126,7 @@ class FftBarsAnimation : public BaseAnimationTemplate<FftBarsAnimation, Animatio
      * aligned 32-bit word (no tearing on the M33 or native_sim), so the worst
      * case is a lost frame-count snapshot — a delta capped at kMaxCatchupFrames,
      * a few extra EMA steps — or one tick rendering from a half-reset
-     * smoothed_[]. The adapter's atomic frameCount_
+     * height_[]. The adapter's atomic frameCount_
      * (audio_animations_sound.cpp) addresses this same window for the
      * cross-thread COUNTER read; it is not evidence the rest is synchronized. */
     uint32_t lastFrameCount_ = 0;

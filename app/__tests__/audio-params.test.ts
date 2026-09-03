@@ -63,6 +63,9 @@ const FIRMWARE_TABLE: { key: AudioParamKey; min: number; max: number; def: numbe
     { key: "agcNoiseGateRms", min: 0, max: 0.02, def: 0.0006, uuidSuffix: "000b" },
     { key: "beatSfDelta", min: 0, max: 2, def: 0.1, uuidSuffix: "000c" },
     { key: "beatThresholdMode", min: 0, max: 1, def: 0, uuidSuffix: "000d" },
+    { key: "fftFloorDb", min: -80, max: 0, def: -36, uuidSuffix: "000e" },
+    { key: "fftRangeDb", min: 6, max: 80, def: 36, uuidSuffix: "000f" },
+    { key: "fftTiltDbOct", min: 0, max: 12, def: 3, uuidSuffix: "0010" },
 ];
 
 describe("parameter table integrity", () => {

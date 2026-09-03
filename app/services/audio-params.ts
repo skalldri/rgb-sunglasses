@@ -25,7 +25,10 @@ import {
     UUID_AUDIO_BEAT_FLUX_FLOOR,
     UUID_AUDIO_BEAT_REFRACTORY_FRAMES,
     UUID_AUDIO_FFT_ENERGY_SCALE,
+    UUID_AUDIO_FFT_FLOOR_DB,
+    UUID_AUDIO_FFT_RANGE_DB,
     UUID_AUDIO_FFT_SMOOTHING_COEFF,
+    UUID_AUDIO_FFT_TILT_DB_OCT,
     UUID_AUDIO_FLUX_GAMMA,
     UUID_AUDIO_NOISE_GATE_RMS,
     UUID_AUDIO_SF_DELTA,
@@ -54,7 +57,10 @@ export type AudioParamKey =
     | "agcReleaseFrames"
     | "agcNoiseGateRms"
     | "beatSfDelta"
-    | "beatThresholdMode";
+    | "beatThresholdMode"
+    | "fftFloorDb"
+    | "fftRangeDb"
+    | "fftTiltDbOct";
 
 export type AudioParamGroup = "agc" | "beat" | "display";
 
@@ -283,7 +289,7 @@ export const AUDIO_PARAMS: Record<AudioParamKey, AudioParamSpec> = {
         cpfFormat: BLE_GATT_CPF_FORMAT_FLOAT32,
         kind: "float",
         firmwareLabel: "FFT Energy Scale",
-        friendlyLabel: "Bar height",
+        friendlyLabel: "Bar gain",
         group: "display",
         min: 0.1,
         max: 1000,
@@ -291,11 +297,12 @@ export const AUDIO_PARAMS: Record<AudioParamKey, AudioParamSpec> = {
         scale: "log",
         displayUnit: "raw",
         decimals: 1,
-        help: "How tall the bars are drawn. Does not affect beat detection.",
+        help: "Shifts every bar up or down together. Does not affect beat detection.",
         detail:
-            "Purely cosmetic - it scales how tall the bars are drawn from the same measurements, " +
-            "and changes nothing about how beats are detected. Raise it if the bars look flat, " +
-            "lower it if they are always pinned at the top. Default 20.",
+            "A relative gain on the bar display: 20 is neutral, 200 lifts every bar by 10 dB, " +
+            "2 lowers it by 10 dB. Purely cosmetic - it changes nothing about how beats are " +
+            "detected. Prefer Bar floor and Bar span for shaping the display; this knob exists " +
+            "so older tuning still does something sensible. Default 20.",
         advancedOnly: true,
     },
     agcAttackFrames: {
@@ -413,6 +420,78 @@ export const AUDIO_PARAMS: Record<AudioParamKey, AudioParamSpec> = {
             "measured worse on this hardware. Try it only if Average will not behave.",
         advancedOnly: true,
     },
+    // FFT Bars dB-window mapping (fw/src/animations/fft_bar_mapping.h). The bar is a dB meter:
+    //   height = clamp((10·log10(power) + tilt·octaves + gain − floor) / range, 0, 1)
+    // Appended after the Phase 3 block; an older firmware simply lacks these three
+    // characteristics and resolveAudioParams() omits them.
+    fftFloorDb: {
+        key: "fftFloorDb",
+        uuid: UUID_AUDIO_FFT_FLOOR_DB,
+        cpfFormat: BLE_GATT_CPF_FORMAT_FLOAT32,
+        kind: "float",
+        firmwareLabel: "FFT Floor dB",
+        friendlyLabel: "Bar floor",
+        group: "display",
+        min: -80,
+        max: 0,
+        defaultValue: -36,
+        scale: "linear",
+        step: 1,
+        displayUnit: "raw",
+        decimals: 0,
+        help: "The level (dB) where a bar starts to light. Does not affect beat detection.",
+        detail:
+            "Bucket power below this draws nothing. Raise it if a quiet room still draws bars, " +
+            "lower it if the treble never appears. With the default span the top of every bar " +
+            "is 0 dB, the level the mic gain is about to be turned down at, so red means red. " +
+            "Default -36 dB.",
+        advancedOnly: true,
+    },
+    fftRangeDb: {
+        key: "fftRangeDb",
+        uuid: UUID_AUDIO_FFT_RANGE_DB,
+        cpfFormat: BLE_GATT_CPF_FORMAT_FLOAT32,
+        kind: "float",
+        firmwareLabel: "FFT Range dB",
+        friendlyLabel: "Bar span",
+        group: "display",
+        min: 6,
+        max: 80,
+        defaultValue: 36,
+        scale: "linear",
+        step: 1,
+        displayUnit: "raw",
+        decimals: 0,
+        help: "How many dB an empty bar needs to become a full one. Does not affect beat detection.",
+        detail:
+            "The dynamic range of the display. 36 dB over the 12-row panel is 3 dB per row, about " +
+            "one noticeable loudness step each. Narrower makes the bars twitchier and pins them " +
+            "sooner; wider makes them calmer and flatter. Default 36 dB.",
+        advancedOnly: true,
+    },
+    fftTiltDbOct: {
+        key: "fftTiltDbOct",
+        uuid: UUID_AUDIO_FFT_TILT_DB_OCT,
+        cpfFormat: BLE_GATT_CPF_FORMAT_FLOAT32,
+        kind: "float",
+        firmwareLabel: "FFT Tilt dB/Octave",
+        friendlyLabel: "Treble lift",
+        group: "display",
+        min: 0,
+        max: 12,
+        defaultValue: 3,
+        scale: "linear",
+        step: 0.5,
+        displayUnit: "raw",
+        decimals: 1,
+        help: "Lifts the higher-frequency bars so they are not buried under the bass. Does not affect beat detection.",
+        detail:
+            "Music and rooms have far more energy at low frequencies, so with no lift the bass " +
+            "bars fill while the treble bars stay dark. 3 dB per octave (the pink-noise slope) " +
+            "gives the top bar about 14 dB of lift over the bottom one. 0 turns it off. " +
+            "Default 3 dB/octave.",
+        advancedOnly: true,
+    },
 };
 
 /**
@@ -434,6 +513,9 @@ export const AUDIO_PARAM_ORDER: AudioParamKey[] = [
     "agcNoiseGateRms",
     "beatSfDelta",
     "beatThresholdMode",
+    "fftFloorDb",
+    "fftRangeDb",
+    "fftTiltDbOct",
 ];
 
 /* ------------------------------------------------------------------------------------------

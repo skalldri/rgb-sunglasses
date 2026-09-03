@@ -1,0 +1,6 @@
+tests:
+  animations.fft_bar_mapping:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

@@ -169,6 +169,42 @@ Suggested constants (tune on hardware):
 
 **Phase 5 — Tempo tracking (2–3 days).** Maintain a 4 s ring buffer of the ODF, run autocorrelation over τ ∈ [37, 125] every 250 ms with a log-Gaussian BPM prior centered at 120 BPM, expose current BPM and beat phase. Optional: add Ellis-style DP beat-time prediction so visual effects can pre-trigger a few ms ahead of the beat for perfect sync. Optional: switch to Scheirer's comb-filter bank if BPM tracking is unstable.
 
+## FFT Bars display mapping (2026-09-03)
+
+The bucket energies the DSP exports (`display_bucket_energy[20]`, mean |X_k|² per bucket from the
+**unscaled** 512-pt Hann `arm_rfft_fast_f32` of ±1-normalised PCM) are not a display quantity. Measured
+on proto0 with a TV playing at moderate volume and the AGC at +20 dB, bucket 0's median was 0.039 while
+buckets 14–19 sat at 3e-5..6e-5 — a ~60 dB tilt across the 20 buckets on top of ~30 dB of dynamics within
+each. The original animation mapped them linearly (`clamp(E × 20)`, i.e. full height at E = 0.05), which
+pinned bucket 0 on 46 % of frames and never lit anything above 600 Hz.
+
+`fw/src/animations/fft_bar_mapping.h` replaces that with a dB meter:
+
+```
+dB     = 10·log10(max(E, 1e-9))                          // E ≤ 0 or NaN → no bar at all
+height = clamp((dB + tilt·octaves[b] + gain − floorDb) / rangeDb, 0, 1)
+```
+
+| tunable (`audio_param_table.h`) | default | meaning |
+|---|---|---|
+| `audio/fft_floor_db` | −36 dB | power at which a bar starts to light |
+| `audio/fft_range_db` | 36 dB | empty → full; 3 dB per row on the 12-row panel (≈ one JND per row) |
+| `audio/fft_tilt_db_oct` | 3 dB/oct | pink-noise lift × `log2(centre_b / centre_0)`; bucket 19 gets +14 dB |
+| `audio/fft_energy_scale` | 20 | legacy knob, now a relative gain `10·log10(scale / 20)` |
+| `audio/fft_smoothing_coeff` | 0.3 | EMA weight per step, applied to the **height**, 3 steps per analysis frame |
+
+The ceiling (floor + range) is 0 dB, i.e. E = 1.0 — the level at which the AGC's attack path is about to
+turn the mic down — so the red top rows keep their VU meaning. Smoothing the clamped height rather than the
+linear power makes attack and release symmetric in dB and stops an over-ceiling spike from pinning the bar
+for several steps after it has passed. The animation recomputes the 20 `log10f` targets only when a new
+analysis frame arrives (~30 µs per 32 ms), not per render tick.
+
+Two things to know when tuning: bucket energies are **post-gain** (a +20 dB AGC setting lifts every bar by
+20 dB), and the proto0 nose cutout removes the bottom 2/4/6 rows of the five innermost columns, so buckets
+15–19 only show once their bar exceeds that height. `sound dsp params` prints the live window;
+`fw/tools/gen_fft_bar_vectors.cpp` emits the fixture that pins the app's TypeScript mirror
+(`app/services/fft-bar-mapping.ts`) and the Python analysis tooling to the firmware's numbers.
+
 ## Bottom line
 
 The platform fits the problem with two orders of magnitude of margin: a 512-point f32 RFFT runs in 180 µs on a 128 MHz Cortex-M33F, mel filterbanks add microseconds, and the entire DSP pipeline plus a 144-LED WS2812 strip fits in under 20 KB of RAM. The path of least regret is to layer complexity in clear phases — Patin energy → CMSIS-DSP FFT → log-mag spectral flux → autocorrelation tempo — pulling implementation patterns from the Teensy Audio Library (CMSIS-DSP usage), WLED-MM (post-FFT pipeline and AGC), BTrack (complex spectral difference math), and Zephyr's own `samples/drivers/audio/dmic` and `samples/drivers/led/led_strip` (platform glue). The two non-obvious pitfalls are the WS2812 SPI-backend instability on nRF53 (use I2S) and the Patin threshold constants being tied to 44.1 kHz units (use the units-agnostic `μ + α·σ` form instead). Everything else is well-trodden ground with public reference code.

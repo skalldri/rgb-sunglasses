@@ -10,6 +10,41 @@
  * Used for display visualisation; beat detection uses AUDIO_NUM_BANDS. */
 #define AUDIO_NUM_DISPLAY_BUCKETS 20
 
+/* Display bucket boundaries (inclusive FFT bin indices; bin width 31.25 Hz at a 512-pt FFT
+ * of 16 kHz audio), modelled on a professional VU meter and capped at 3 kHz. Each previous
+ * 10-bucket range is split in two at a natural frequency boundary. Bin 1 (31 Hz) is
+ * sub-bass below the PDM mic's range and is skipped for display (beat band 0 keeps it —
+ * see audio_dsp.cpp).
+ *
+ * Bucket  0:  bins   2–  5   62– 156 Hz  (low bass)
+ * Bucket  1:  bins   6–  9  188– 281 Hz  (upper bass)
+ * Bucket  2:  bins  10– 11  313– 344 Hz  (VU 300–450 lower half)
+ * Bucket  3:  bins  12– 14  375– 438 Hz  (VU 300–450 upper half)
+ * Bucket  4:  bins  15– 16  469– 500 Hz  (VU 450–600 lower half)
+ * Bucket  5:  bins  17– 19  531– 594 Hz  (VU 450–600 upper half)
+ * Bucket  6:  bins  20– 24  625– 750 Hz  (VU 600–750)
+ * Bucket  7:  bins  25– 28  781– 875 Hz  (VU 750–900)
+ * Bucket  8:  bins  29– 32  906–1000 Hz  (VU 900–1000)
+ * Bucket  9:  bins  33– 38 1031–1188 Hz  (VU 1000–1200)
+ * Bucket 10:  bins  39– 44 1219–1375 Hz  (VU 1200–1400)
+ * Bucket 11:  bins  45– 48 1406–1500 Hz  (VU 1400–1500)
+ * Bucket 12:  bins  49– 54 1531–1688 Hz  (VU 1500–1700)
+ * Bucket 13:  bins  55– 57 1719–1781 Hz  (VU 1700–1800)
+ * Bucket 14:  bins  58– 60 1813–1875 Hz  (VU 1800–2000 lower half)
+ * Bucket 15:  bins  61– 64 1906–2000 Hz  (VU 1800–2000 upper half)
+ * Bucket 16:  bins  65– 72 2031–2250 Hz  (VU 2000–2500 lower half)
+ * Bucket 17:  bins  73– 80 2281–2500 Hz  (VU 2000–2500 upper half)
+ * Bucket 18:  bins  81– 88 2531–2750 Hz  (VU 2500–3000 lower half)
+ * Bucket 19:  bins  89– 96 2781–3000 Hz  (VU 2500–3000 upper half)
+ *
+ * Exported (rather than file-static in audio_dsp.cpp) so the FFT Bars display mapping's
+ * per-bucket octave table (animations/fft_bar_mapping.h) can be checked against the bins it
+ * was derived from by a test, instead of being a second hand-typed copy of this layout. */
+inline constexpr uint16_t audio_display_bucket_start[AUDIO_NUM_DISPLAY_BUCKETS] = {
+    2, 6, 10, 12, 15, 17, 20, 25, 29, 33, 39, 45, 49, 55, 58, 61, 65, 73, 81, 89};
+inline constexpr uint16_t audio_display_bucket_end[AUDIO_NUM_DISPLAY_BUCKETS] = {
+    5, 9, 11, 14, 16, 19, 24, 28, 32, 38, 44, 48, 54, 57, 60, 64, 72, 80, 88, 96};
+
 /**
  * @brief Runtime-tunable beat-detection parameters (Level 3 spectral flux ODF).
  *

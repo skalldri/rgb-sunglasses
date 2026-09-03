@@ -6,6 +6,9 @@
 #include <zephyr/drivers/vm3011/vm3011.h>
 #endif
 #include <math.h> /* sqrtf */
+#if defined(CONFIG_ANIMATION_FFT_BARS)
+#include <animations/fft_bars_animation.h> /* `sound dsp params` prints the bar window */
+#endif
 #include <sound/audio_param_table.h>
 #if defined(CONFIG_APP_AUDIO_TELEMETRY)
 #include <sound/audio_telemetry.h>
@@ -2681,6 +2684,21 @@ static int cmd_sound_dsp_params(const struct shell *shell, size_t argc, char **a
                 mode == AUDIO_THRESHOLD_MODE_MEDIAN_DELTA ? "median + sf_delta"
                                                           : "mean + alpha*sigma",
                 fmt_fixed4(p->getSfDelta(), b4, sizeof(b4)));
+#if defined(CONFIG_ANIMATION_FFT_BARS)
+    /* Display-only window of the FFT Bars animation (animations/fft_bar_mapping.h) — printed
+     * here so an on-device check of "what are the bars drawing against" is one command. */
+    if (const FftVisualizationConfigSource *fft = FftBarsAnimation::getInstance()->configSource()) {
+        char f1[16], f2[16], f3[16], f4[16], f5[16];
+        shell_print(shell,
+                    "fft bars: floor %s dB | range %s dB | tilt %s dB/oct | gain scale %s | "
+                    "smoothing %s",
+                    fmt_fixed4(fft->getFloorDb(), f1, sizeof(f1)),
+                    fmt_fixed4(fft->getRangeDb(), f2, sizeof(f2)),
+                    fmt_fixed4(fft->getTiltDbPerOctave(), f3, sizeof(f3)),
+                    fmt_fixed4(fft->getEnergyScale(), f4, sizeof(f4)),
+                    fmt_fixed4(fft->getSmoothingCoeff(), f5, sizeof(f5)));
+    }
+#endif
     return 0;
 }
 

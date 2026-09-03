@@ -54,4 +54,7 @@ class AudioConfig : public Singleton<AudioConfig>,
     // FftVisualizationConfigSource
     float getSmoothingCoeff() const override;
     float getEnergyScale() const override;
+    float getFloorDb() const override;
+    float getRangeDb() const override;
+    float getTiltDbPerOctave() const override;
 };
