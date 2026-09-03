@@ -35,6 +35,7 @@
 #include <stdbool.h>
 
 #include <rgbx/rgbx_api.h>
+#include <rgbx/rgbx_audio_bars.h>
 #include <zephyr/kernel.h>
 #include <zephyr/llext/symbol.h>
 
@@ -188,16 +189,17 @@ void rgbx_tick(void)
 	 * column 0 is this animation's natural cycle boundary. */
 	rgbx_good_moment = (base == 0u) ? 1u : 0u;
 
-	/* --- audio: bottom row = 20-bucket spectrum, top row = beat flash --- */
+	/* --- audio: bottom row = 20-bucket spectrum, top row = beat flash ---
+	 *
+	 * The buckets are raw FFT power spanning ~60 dB across the row (bass near 1,
+	 * treble near 1e-5), so `bucket * 255` would pin the bass and never light
+	 * the treble. rgbx_audio_bar_height() is the same dB window + treble lift
+	 * the built-in FFT Bars animation draws with. */
 	for (uint32_t bkt = 0; bkt < RGBX_AUDIO_NUM_DISPLAY_BUCKETS; bkt++) {
-		float e = rgbx_inputs.audio_display_bucket[bkt];
-		if (e < 0.0f) {
-			e = 0.0f;
-		}
-		if (e > 1.0f) {
-			e = 1.0f;
-		}
-		const uint8_t v = (uint8_t)(e * 255.0f);
+		const float h = rgbx_audio_bar_height(rgbx_inputs.audio_display_bucket[bkt], bkt,
+						      RGBX_AUDIO_BAR_FLOOR_DB, RGBX_AUDIO_BAR_RANGE_DB,
+						      RGBX_AUDIO_BAR_TILT_DB_PER_OCTAVE);
+		const uint8_t v = (uint8_t)(h * 255.0f);
 		set_px(bkt * 2u, HEIGHT - 1u, v, v, 0);
 		set_px(bkt * 2u + 1u, HEIGHT - 1u, v, v, 0);
 	}

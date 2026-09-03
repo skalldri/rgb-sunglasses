@@ -114,12 +114,21 @@ AUDIO_PARAM_CHAR_F(audioNoiseGateRms, "audio/noise_gate_rms", "AGC Noise Gate RM
 AUDIO_PARAM_CHAR_F(audioSfDelta, "audio/sf_delta", "Beat SF Delta", kAudioParamSfDelta);
 AUDIO_PARAM_CHAR_U(audioThresholdMode, "audio/threshold_mode", "Beat Threshold Mode",
                    kAudioParamThresholdMode);
+/* FFT Bars dB-window mapping (2026-09-03) — appended AFTER the Phase 3 block, same
+ * positional-UUID reason. Display-only: read by FftBarsAnimation::tick() through the
+ * FftVisualizationConfigSource interface, never by the DSP thread. Derivation of the
+ * defaults is in audio_param_table.h; the mapping is animations/fft_bar_mapping.h. */
+AUDIO_PARAM_CHAR_F(audioFftFloorDb, "audio/fft_floor_db", "FFT Floor dB", kAudioParamFftFloorDb);
+AUDIO_PARAM_CHAR_F(audioFftRangeDb, "audio/fft_range_db", "FFT Range dB", kAudioParamFftRangeDb);
+AUDIO_PARAM_CHAR_F(audioFftTiltDbOct, "audio/fft_tilt_db_oct", "FFT Tilt dB/Octave",
+                   kAudioParamFftTiltDbOct);
 
 BtGattServer audioConfigServer(audioConfigPrimaryService, audioFluxGamma, audioBeatFluxFloor,
                                audioBeatAlpha, audioBeatRefractoryFrames, audioAgcTargetLow,
                                audioAgcTargetHigh, audioAgcRateLimitFrames, audioFftSmoothingCoeff,
                                audioFftEnergyScale, audioAgcAttackFrames, audioAgcReleaseFrames,
-                               audioNoiseGateRms, audioSfDelta, audioThresholdMode);
+                               audioNoiseGateRms, audioSfDelta, audioThresholdMode,
+                               audioFftFloorDb, audioFftRangeDb, audioFftTiltDbOct);
 BT_GATT_SERVER_REGISTER(audioConfigServerStatic, audioConfigServer);
 
 /* The settings key and CUD label at each declaration above must be spelled as string
@@ -173,6 +182,12 @@ static_assert(audioParamStrEq(kAudioParams[kAudioParamSfDelta].key, "audio/sf_de
 static_assert(audioParamStrEq(kAudioParams[kAudioParamSfDelta].label, "Beat SF Delta"));
 static_assert(audioParamStrEq(kAudioParams[kAudioParamThresholdMode].key, "audio/threshold_mode"));
 static_assert(audioParamStrEq(kAudioParams[kAudioParamThresholdMode].label, "Beat Threshold Mode"));
+static_assert(audioParamStrEq(kAudioParams[kAudioParamFftFloorDb].key, "audio/fft_floor_db"));
+static_assert(audioParamStrEq(kAudioParams[kAudioParamFftFloorDb].label, "FFT Floor dB"));
+static_assert(audioParamStrEq(kAudioParams[kAudioParamFftRangeDb].key, "audio/fft_range_db"));
+static_assert(audioParamStrEq(kAudioParams[kAudioParamFftRangeDb].label, "FFT Range dB"));
+static_assert(audioParamStrEq(kAudioParams[kAudioParamFftTiltDbOct].key, "audio/fft_tilt_db_oct"));
+static_assert(audioParamStrEq(kAudioParams[kAudioParamFftTiltDbOct].label, "FFT Tilt dB/Octave"));
 
 /* The table stores the threshold-mode bounds as plain numbers so it stays free of project
  * headers; this is where they are tied back to the real enum. */
@@ -465,18 +480,46 @@ float AudioConfig::getEnergyScale() const {
     return clamped;
 }
 
+float AudioConfig::getFloorDb() const {
+    float value = audioFftFloorDb;
+    float clamped = audioParamClampF<kAudioParamFftFloorDb>(value);
+    if (clamped != value) {
+        audioFftFloorDb = clamped;
+    }
+    return clamped;
+}
+
+float AudioConfig::getRangeDb() const {
+    float value = audioFftRangeDb;
+    float clamped = audioParamClampF<kAudioParamFftRangeDb>(value);
+    if (clamped != value) {
+        audioFftRangeDb = clamped;
+    }
+    return clamped;
+}
+
+float AudioConfig::getTiltDbPerOctave() const {
+    float value = audioFftTiltDbOct;
+    float clamped = audioParamClampF<kAudioParamFftTiltDbOct>(value);
+    if (clamped != value) {
+        audioFftTiltDbOct = clamped;
+    }
+    return clamped;
+}
+
 void audio_dsp_bind_default_bt_dependencies() {
     audio_dsp_set_config_provider(&AudioConfig::getInstance());
     sound_set_agc_config_provider(&AudioConfig::getInstance());
+    sound_set_fft_visualization_source(&AudioConfig::getInstance());
 
     /* Read every parameter once so a persisted out-of-range or non-finite value is corrected
      * NOW rather than whenever its consumer happens to run.
      *
      * The getters clamp on read and write the clamped value back, which is the migration
      * mechanism — but that only fires when something calls them. Twelve of these are read by
-     * the DSP thread every 32 ms frame, so they self-heal almost immediately. The two FFT
-     * parameters are read ONLY by FftBarsAnimation::tick(), i.e. only while that one animation
-     * is selected, so without this a bad persisted value for them would survive indefinitely
+     * the DSP thread every 32 ms frame, so they self-heal almost immediately. The five FFT
+     * display parameters are read ONLY by FftBarsAnimation::tick(), i.e. only while that one
+     * animation is selected, so without this a bad persisted value for them would survive indefinitely
      * (and be re-flushed to NVS by the settings debounce) on a device running any other
      * animation. Cheap insurance: one read each, once, at bind time.
      *
@@ -500,4 +543,7 @@ void audio_dsp_bind_default_bt_dependencies() {
     (void)cfg.getNoiseGateRms();
     (void)cfg.getSmoothingCoeff();
     (void)cfg.getEnergyScale();
+    (void)cfg.getFloorDb();
+    (void)cfg.getRangeDb();
+    (void)cfg.getTiltDbPerOctave();
 }

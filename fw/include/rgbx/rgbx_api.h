@@ -168,8 +168,13 @@ struct rgbx_inputs {
     uint8_t audio_beat[RGBX_AUDIO_NUM_BANDS];
     /**< 1 if a beat was detected in that band this frame, else 0 */
     float audio_display_bucket[RGBX_AUDIO_NUM_DISPLAY_BUCKETS];
-    /**< fine-grained spectrum buckets for bar-graph visualisation,
-     *   normalized to roughly 0..1, low frequencies first */
+    /**< fine-grained spectrum buckets for bar-graph visualisation, low
+     *   frequencies first (62 Hz–3 kHz). Each is the mean |X_k|^2 over the
+     *   bucket's bins of an unscaled 512-pt Hann FFT of the ±1-normalised PCM —
+     *   NOT normalised to 0..1: bass buckets reach ~1 on loud music while treble
+     *   buckets sit near 1e-5, a ~60 dB tilt. Map through log10 (a dB window)
+     *   before drawing bars; the built-in FFT Bars animation uses a 36 dB window
+     *   ending at 0 dB (E = 1.0) plus a 3 dB/octave treble lift. */
 
     uint32_t buttons_pressed;
     /**< bit i set = button i was pressed since the previous tick. proto0

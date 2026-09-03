@@ -646,7 +646,9 @@ const GROUP_TITLES: Record<string, { title: string; subtitle?: string }> = {
         title: "Bar display only",
         // Without this, non-experts spend ten minutes tuning the visualiser and wondering why
         // beat detection has not changed.
-        subtitle: "These only change the bar visualiser. They do not affect beat detection.",
+        subtitle:
+            "These only change the bar visualiser (a dB meter: floor, span, treble lift, gain). " +
+            "They do not affect beat detection.",
     },
 };
 

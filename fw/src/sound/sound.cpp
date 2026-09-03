@@ -5,7 +5,8 @@
 #if defined(CONFIG_VM3011)
 #include <zephyr/drivers/vm3011/vm3011.h>
 #endif
-#include <math.h> /* sqrtf */
+#include <animations/fft_visualization_config_source.h> /* `sound dsp params` window print */
+#include <math.h>                                        /* sqrtf */
 #include <sound/audio_param_table.h>
 #if defined(CONFIG_APP_AUDIO_TELEMETRY)
 #include <sound/audio_telemetry.h>
@@ -145,6 +146,14 @@ class DefaultAgcConfigProvider : public AgcConfigProvider {
 DefaultAgcConfigProvider sDefaultAgcProvider;
 AgcConfigProvider *sAgcProvider = &sDefaultAgcProvider;
 }  // namespace
+
+/* Display-only: read by `sound dsp params`, never by the DSP thread. Interface pointer so
+ * this file stays below the animation layer (see sound.h). */
+const FftVisualizationConfigSource *sFftVisualizationSource = nullptr;
+
+void sound_set_fft_visualization_source(const FftVisualizationConfigSource *source) {
+    sFftVisualizationSource = source;
+}
 
 void sound_set_agc_config_provider(AgcConfigProvider *provider) {
     sAgcProvider = provider ? provider : &sDefaultAgcProvider;
@@ -2681,6 +2690,19 @@ static int cmd_sound_dsp_params(const struct shell *shell, size_t argc, char **a
                 mode == AUDIO_THRESHOLD_MODE_MEDIAN_DELTA ? "median + sf_delta"
                                                           : "mean + alpha*sigma",
                 fmt_fixed4(p->getSfDelta(), b4, sizeof(b4)));
+    /* Display-only window of the FFT Bars animation (animations/fft_bar_mapping.h) — printed
+     * here so an on-device check of "what are the bars drawing against" is one command. */
+    if (const FftVisualizationConfigSource *fft = sFftVisualizationSource) {
+        char f1[16], f2[16], f3[16], f4[16], f5[16];
+        shell_print(shell,
+                    "fft bars: floor %s dB | range %s dB | tilt %s dB/oct | gain scale %s | "
+                    "smoothing %s",
+                    fmt_fixed4(fft->getFloorDb(), f1, sizeof(f1)),
+                    fmt_fixed4(fft->getRangeDb(), f2, sizeof(f2)),
+                    fmt_fixed4(fft->getTiltDbPerOctave(), f3, sizeof(f3)),
+                    fmt_fixed4(fft->getEnergyScale(), f4, sizeof(f4)),
+                    fmt_fixed4(fft->getSmoothingCoeff(), f5, sizeof(f5)));
+    }
     return 0;
 }
 

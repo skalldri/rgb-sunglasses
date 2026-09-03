@@ -145,10 +145,32 @@ describe("parseAudioParamRanges — refusals", () => {
     expect(out!.beatAlpha!.min).toBeCloseTo(V.expect[2].min, 6);
   });
 
-  it("still refuses a SHORTER table, where there is no trustworthy prefix", () => {
+  it("decodes the prefix an OLDER firmware's shorter table sends", () => {
+    // First reachable in the field when the table grew 14 -> 17 (the FFT Bars dB mapping):
+    // a newer app on fw-v3.8.1 gets count = 14. Its 14 entries are still the same trusted
+    // prefix, and refusing them dropped the device-authoritative ranges for every parameter
+    // the app DID share with that firmware. The three missing keys are simply absent, as
+    // resolveAudioParams() already tolerates for absent characteristics.
     const short = [...V.bytes];
-    short[1] = AUDIO_PARAM_ORDER.length - 1;
-    expect(parseAudioParamRanges(toBase64(short))).toBeNull();
+    const knownCount = AUDIO_PARAM_ORDER.length - 3;
+    short[1] = knownCount;
+
+    const out = parseAudioParamRanges(toBase64(short));
+    expect(out).not.toBeNull();
+    expect(Object.keys(out!)).toHaveLength(knownCount);
+    for (const key of AUDIO_PARAM_ORDER.slice(0, knownCount)) {
+      expect(out![key]).toBeDefined();
+    }
+    for (const key of AUDIO_PARAM_ORDER.slice(knownCount)) {
+      expect(out![key]).toBeUndefined();
+    }
+    expect(out!.beatAlpha!.min).toBeCloseTo(V.expect[2].min, 6);
+  });
+
+  it("refuses an empty table", () => {
+    const empty = [...V.bytes];
+    empty[1] = 0;
+    expect(parseAudioParamRanges(toBase64(empty))).toBeNull();
   });
 
   it("refuses a truncated blob rather than applying a partial result", () => {

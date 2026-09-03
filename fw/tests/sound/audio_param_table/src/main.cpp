@@ -1,7 +1,7 @@
 /* Unit tests for the audio parameter table (fw/src/sound/audio_param_table.h).
  *
  * That header is the single source of truth for the default value, the clamp
- * range and the GATT ordering of all 14 tunable audio parameters. Before it
+ * range and the GATT ordering of all 17 tunable audio parameters. Before it
  * existed, each of those facts was written out FOUR times — in
  * DefaultAudioDspConfigProvider (audio_dsp.cpp), DefaultAgcConfigProvider
  * (sound.cpp), AudioConfig (audio_config.cpp) and the native_sim replay app's
@@ -57,6 +57,10 @@ constexpr HistoricalParam kHistoricalParams[] = {
     /* 11 */ {"audio/noise_gate_rms", "AGC Noise Gate RMS", true, 0.0006f, 0.0f, 0.02f},
     /* 12 */ {"audio/sf_delta", "Beat SF Delta", true, 0.10f, 0.0f, 2.0f},
     /* 13 */ {"audio/threshold_mode", "Beat Threshold Mode", false, 0.0f, 0.0f, 1.0f},
+    /* FFT Bars dB-window mapping, appended 2026-09-03 (derivation in audio_param_table.h). */
+    /* 14 */ {"audio/fft_floor_db", "FFT Floor dB", true, -36.0f, -80.0f, 0.0f},
+    /* 15 */ {"audio/fft_range_db", "FFT Range dB", true, 36.0f, 6.0f, 80.0f},
+    /* 16 */ {"audio/fft_tilt_db_oct", "FFT Tilt dB/Octave", true, 3.0f, 0.0f, 12.0f},
 };
 
 constexpr size_t kHistoricalCount = sizeof(kHistoricalParams) / sizeof(kHistoricalParams[0]);
@@ -230,6 +234,9 @@ ZTEST(audio_param_table, test_defaults_match_history) {
     zassert_equal(audioParamDefaultF<kAudioParamNoiseGateRms>(), 0.0006f);
     zassert_equal(audioParamDefaultF<kAudioParamSfDelta>(), 0.10f);
     zassert_equal(audioParamDefaultU<kAudioParamThresholdMode>(), 0u);
+    zassert_equal(audioParamDefaultF<kAudioParamFftFloorDb>(), -36.0f);
+    zassert_equal(audioParamDefaultF<kAudioParamFftRangeDb>(), 36.0f);
+    zassert_equal(audioParamDefaultF<kAudioParamFftTiltDbOct>(), 3.0f);
 }
 
 /* Every default must survive its own clamp — otherwise a virgin board would boot

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <animations/fft_bars_animation.h>
+#include <animations/fft_visualization_config_source.h>
 #include <singleton.h>
 #include <sound/audio_dsp.h>
 #include <sound/sound.h>
@@ -54,4 +54,7 @@ class AudioConfig : public Singleton<AudioConfig>,
     // FftVisualizationConfigSource
     float getSmoothingCoeff() const override;
     float getEnergyScale() const override;
+    float getFloorDb() const override;
+    float getRangeDb() const override;
+    float getTiltDbPerOctave() const override;
 };

@@ -433,7 +433,10 @@ describe("AudioTuningScreen", () => {
             fireEvent.press(getByText("Advanced"));
 
             expect(
-                getByText("These only change the bar visualiser. They do not affect beat detection."),
+                getByText(
+                    "These only change the bar visualiser (a dB meter: floor, span, treble lift, gain). " +
+                        "They do not affect beat detection.",
+                ),
             ).toBeTruthy();
         });
 

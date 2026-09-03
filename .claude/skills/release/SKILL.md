@@ -140,6 +140,14 @@ last `fw-v*` tag; if either applies, the notes need a prominent **Upgrading** se
 Confirm the check ran even when the answer is no ("GATT layout unchanged since
 fw-vX.Y.Z") so the omission is a decision rather than an oversight.
 
+Two non-obvious triggers for that check: **a `kAudioParams` row** (`fw/src/sound/
+audio_param_table.h`) is a characteristic on the Audio Analysis Config service, and
+that service sorts FIRST among the app's static services (linker `SORT_BY_NAME` on the
+`BT_GATT_SERVER_REGISTER` name), so appending one shifts the handles of every later
+service including SMP/DFU; the Audio Param Ranges blob grows with it, which older apps
+tolerate. And a `.conf`-only change can never move the layout — but a Kconfig that
+gates a service (`CONFIG_APP_*`) can.
+
 **One-time note for the first releases carrying extension management** (fw
 PR #303 / app PR #305, design `fw/docs/extension-management.md` §8): firmware
 updates **no longer auto-install every release extension**. The update flow

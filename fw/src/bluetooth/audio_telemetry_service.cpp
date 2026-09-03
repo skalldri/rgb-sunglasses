@@ -79,12 +79,12 @@ static_assert(AUDIO_TELEMETRY_UNNEGOTIATED_ATT_PAYLOAD ==
               "the telemetry codec and bt_gatt_traits.h disagree on the unnegotiated ATT floor");
 
 /* Slot 2: the bulk parameter metadata the Audio Tuning screen's sliders need — range,
- * default, step, unit and enum labels for all 14 tunables, in one read.
+ * default, step, unit and enum labels for all 17 tunables, in one read.
  *
  * It lives HERE rather than on the audio config service (2) for the same reason the stream
  * does: that service's every characteristic is notify=false because it once exhausted
  * Android's ~15-registration budget, and it is the service the app enumerates parameter by
- * parameter. Adding a 346-byte blob to it would be read on every discovery of every
+ * parameter. Adding a ~413-byte blob to it would be read on every discovery of every
  * parameter-bearing screen. Here it is read once, on the tuning screen's focus, by a client
  * that already wants the telemetry service.
  *
@@ -139,8 +139,9 @@ BtGattAutoReadNotifyCharacteristic<"Audio Telemetry", AudioTelemetryPacked, Audi
     audioTelemetry;
 
 /* Served straight from rodata rather than through a typed characteristic: the typed ones keep
- * a `storage_` copy of the NTTP default, which put all 346 bytes of this compile-time constant
- * into RAM (measured: `datas` grew by 412 B). BtGattRodataBlobCharacteristic costs a pointer
+ * a `storage_` copy of the NTTP default, which put the whole compile-time constant into RAM
+ * (measured when the blob was 346 B: `datas` grew by 412 B; it is ~413 B now).
+ * BtGattRodataBlobCharacteristic costs a pointer
  * and a length instead. Reads still fragment via ATT_READ_BLOB, so it works at MTU 23. */
 BtGattRodataBlobCharacteristic<"Audio Param Ranges"> audioParamRanges(kAudioParamBlob.data(),
                                                                      kAudioParamBlobSize);

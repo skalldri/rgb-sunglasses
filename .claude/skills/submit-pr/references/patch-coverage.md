@@ -53,8 +53,27 @@ for l in open(info, encoding="utf-8", errors="replace"):
 # 3. Patch coverage = covered / total, over added lines that are executable
 #    (an added line only counts if lcov emitted a DA record for it — comments,
 #    braces and declarations have none and are correctly ignored).
-tot = cov = 0
+#
+#    A changed file with NO SF: record at all is a file no native_sim suite
+#    compiles (audio_config.cpp, sound.cpp, the BT adapters — issue #83). lcov
+#    cannot see any of its lines, so silently dropping them from the
+#    denominator overstates the result. Those files are listed separately
+#    with a rough count of their code-looking added lines; the printed
+#    percentage covers only what lcov measured, and the summary says so.
+seen = set()
+for l in open(info, encoding="utf-8", errors="replace"):
+    if l.startswith("SF:"):
+        p = l[3:].strip(); m = next((a for a in added if p.endswith(a)), None)
+        if m: seen.add(m)
+tot = cov = 0; unmeasured = {}
 for path, lns in sorted(added.items()):
+    if path not in seen:
+        src = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        code = [ln for ln in sorted(lns) if ln - 1 < len(src)
+                and src[ln - 1].strip() not in ("", "{", "}", "};")
+                and not src[ln - 1].strip().startswith(("//", "/*", "*", "#include"))]
+        unmeasured[path] = len(code)
+        continue
     h = hits.get(path, {})
     exe = [ln for ln in lns if ln in h]
     c = sum(1 for ln in exe if h[ln] > 0)
@@ -62,11 +81,21 @@ for path, lns in sorted(added.items()):
     miss = sorted(ln for ln in exe if h[ln] == 0)
     print(f"{path}: {c}/{len(exe)} added lines covered"
           + (f"  MISSING: {miss}" if miss else ""))
+for path, n in sorted(unmeasured.items()):
+    print(f"{path}: UNMEASURED — no lcov record (not compiled by any native_sim "
+          f"suite, or declarations only); ~{n} code-looking added lines; issue #83")
 pct = 100 * cov / tot if tot else 0.0
-print(f"\nPATCH COVERAGE: {cov}/{tot} = {pct:.1f}%")
+print(f"\nPATCH COVERAGE: {cov}/{tot} = {pct:.1f}% of the lines lcov could see"
+      + (f"; {sum(unmeasured.values())} added lines in {len(unmeasured)} "
+         f"uncompiled file(s) are NOT in that figure" if unmeasured else ""))
 sys.exit(0 if (tot == 0 or pct > 70.0) else 1)
 PY
 ```
+
+Report the result in the PR body the way the script prints it: "N/M = X% of
+the lines lcov could see; <files> unmeasured (#83)" — never a bare "100%" when
+the UNMEASURED line printed anything. Those additions still need on-device
+verification, and the body should say what covered them.
 
 The script prints per-file coverage (naming the exact uncovered line numbers so
 you know what to test), a `PATCH COVERAGE: <cov>/<tot> = <pct>%` summary line,

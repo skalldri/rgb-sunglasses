@@ -100,7 +100,7 @@ export const UUID_CAPTURE_ELAPSED_S   = "12345678-1234-5678-0008-56789abc0003"; 
 export const UUID_CAPTURE_REMAINING_S = "12345678-1234-5678-0008-56789abc0004"; // uint32, recordable seconds left
 export const UUID_CAPTURE_COUNT       = "12345678-1234-5678-0008-56789abc0005"; // uint32, capture files on the volume
 
-// Audio Analysis Config service (service ID 2) — the 14 AGC + beat-detection tunables the
+// Audio Analysis Config service (service ID 2) — the 17 AGC + beat-detection + bar-display tunables the
 // Audio Tuning screen edits. Characteristic UUIDs are auto-assigned in firmware declaration
 // order, so these must match the BtGattServer argument order in fw/src/sound/audio_config.cpp;
 // the authoritative range/default/label for each is fw/src/sound/audio_param_table.h, mirrored
@@ -125,6 +125,11 @@ export const UUID_AUDIO_AGC_RELEASE_FRAMES      = "12345678-1234-5678-0002-56789
 export const UUID_AUDIO_NOISE_GATE_RMS          = "12345678-1234-5678-0002-56789abc000b"; // float32
 export const UUID_AUDIO_SF_DELTA                = "12345678-1234-5678-0002-56789abc000c"; // float32
 export const UUID_AUDIO_THRESHOLD_MODE          = "12345678-1234-5678-0002-56789abc000d"; // uint32 enum
+// FFT Bars dB-window mapping (fw ≥ the 2026-09-03 release; fw/src/animations/fft_bar_mapping.h).
+// Appended after the Phase 3 block — positional UUIDs, never reorder.
+export const UUID_AUDIO_FFT_FLOOR_DB            = "12345678-1234-5678-0002-56789abc000e"; // float32 dB, display only
+export const UUID_AUDIO_FFT_RANGE_DB            = "12345678-1234-5678-0002-56789abc000f"; // float32 dB, display only
+export const UUID_AUDIO_FFT_TILT_DB_OCT         = "12345678-1234-5678-0002-56789abc0010"; // float32 dB/octave, display only
 
 // One audio analysis frame, in milliseconds. Mirrors kAudioParamFrameMs in
 // fw/src/sound/audio_param_table.h (and BLOCK_CAPTURE_TIME_MS in fw/src/sound/sound.h). Every
@@ -322,7 +327,7 @@ export const CLAMP_READBACK_DELAYS_MS = [150, 1200];
 export const UUID_AUDIO_TELEMETRY_SERVICE = "12345678-1234-5678-0009-56789abc0000";
 export const UUID_TELEMETRY_CONTROL       = "12345678-1234-5678-0009-56789abc0000"; // uint32, write-only command
 export const UUID_AUDIO_TELEMETRY         = "12345678-1234-5678-0009-56789abc0001"; // packed frame, notify
-// Read-only blob: range/default/step/unit/enum labels for all 14 audio tunables, generated at
+// Read-only blob: range/default/step/unit/enum labels for all 17 audio tunables, generated at
 // compile time from fw/src/sound/audio_param_table.h. Long-read fragmentable, so it works at
 // MTU 23 via ATT_READ_BLOB. Decoder: services/audio-param-ranges.ts.
-export const UUID_AUDIO_PARAM_RANGES      = "12345678-1234-5678-0009-56789abc0002"; // ~346-byte struct, read-only
+export const UUID_AUDIO_PARAM_RANGES      = "12345678-1234-5678-0009-56789abc0002"; // ~413-byte struct, read-only

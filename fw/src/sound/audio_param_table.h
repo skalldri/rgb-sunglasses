@@ -2,7 +2,7 @@
 
 /**
  * @file audio_param_table.h
- * @brief Single source of truth for the 14 tunable audio parameters.
+ * @brief Single source of truth for the 17 tunable audio parameters.
  *
  * Before this table existed the default value and the clamp range of every audio
  * parameter were written out FOUR times, with no cross-check:
@@ -84,6 +84,9 @@ enum : size_t {
     kAudioParamNoiseGateRms,
     kAudioParamSfDelta,
     kAudioParamThresholdMode,
+    kAudioParamFftFloorDb,
+    kAudioParamFftRangeDb,
+    kAudioParamFftTiltDbOct,
     kAudioParamCount,
 };
 
@@ -219,6 +222,41 @@ inline constexpr AudioParamSpec kAudioParams[] = {
      * static_asserts that they do. */
     {"audio/threshold_mode", "Beat Threshold Mode", AudioParamType::ENUM, 0.0f, 0.0f, 1.0f, 1.0f,
      "", "Average (mean + alpha x sigma)\nMedian (median + delta)"},
+
+    /* --- FFT bar visualisation, dB-window mapping (no effect on beat detection) ---
+     *
+     * Appended AFTER the Phase 3 block for the positional-UUID reason at the top of this
+     * file. Together with fft_smoothing_coeff and fft_energy_scale above these describe
+     * the mapping in animations/fft_bar_mapping.h:
+     *   height = clamp((10·log10(E) + tilt·octaves[b] + gain(energy_scale) − floor) / range)
+     *
+     * Derived from a proto0 capture (2026-09-03, TV at moderate volume, AGC at +20 dB):
+     * per-bucket median bin power was 0.039 (b0, −14 dB) down to 3e-5 (b19, −45 dB), a
+     * ~60 dB tilt; the old linear `clamp(E·20)` pinned bucket 0 on 46 % of frames and
+     * never lit anything above 600 Hz. */
+
+    /* dB of bucket power at which a bar starts to light. −36 with the 36 dB range puts the
+     * ceiling at 0 dB (E = 1.0), which is where the AGC's attack path is about to turn the
+     * mic down — so a red top row means what it means on a VU meter. With the default tilt
+     * the TV capture's quietest buckets (−45 dB + 14 dB tilt) land 1–2 rows up, bucket 0's
+     * median at 61 %, and music (AGC-converged peaks ≈ −2…+4 dB) tops out with red on
+     * beats. Raise it if a quiet room at +20 dB gain still draws bars. */
+    {"audio/fft_floor_db", "FFT Floor dB", AudioParamType::F32, -36.0f, -80.0f, 0.0f, 1.0f, "dB",
+     nullptr},
+
+    /* dB from an empty bar to a full one. 36 over the 12-row proto0 panel is 3 dB per row —
+     * about one just-noticeable loudness step per row and four "twice as loud" doublings
+     * over the full bar. Floor + RANGE rather than floor + ceiling so the two clamp ranges
+     * alone guarantee a positive window (the table has no cross-parameter validation). */
+    {"audio/fft_range_db", "FFT Range dB", AudioParamType::F32, 36.0f, 6.0f, 80.0f, 1.0f, "dB",
+     nullptr},
+
+    /* Pink-noise compensation: dB added per octave of a bucket's centre frequency above
+     * bucket 0 (109 Hz), so the mid and treble buckets get usable height instead of sitting
+     * 30–45 dB under the bass. 3 dB/oct is the pink slope; bucket 19 (2.9 kHz, 4.72 oct)
+     * gets +14 dB. 0 disables it. */
+    {"audio/fft_tilt_db_oct", "FFT Tilt dB/Octave", AudioParamType::F32, 3.0f, 0.0f, 12.0f, 0.5f,
+     "dB/oct", nullptr},
 };
 
 static_assert(sizeof(kAudioParams) / sizeof(kAudioParams[0]) == kAudioParamCount,

@@ -166,7 +166,7 @@ const float tilt = accelX() / 9.81f;      /* roughly -1..1 */
 /* Audio — 4 coarse bands with beat flags, plus 20 spectrum buckets. */
 const bool kick = isBeat(0);              /* beat in the lowest band */
 const float level = bandEnergy(0);
-const float bucket = displayBucket(3);    /* ~0..1, for bar graphs */
+const float bucket = displayBucket(3);    /* raw power — see rgbx_audio_bars.h for bars */
 
 /* Buttons — pressed since the previous tick, so this fires once per press. */
 if (buttonWasPressed(0)) {                /* proto0: 0=Up 1=Left 2=Right 3=Down */
@@ -389,10 +389,16 @@ class Starter : public rgbx::Animation {
             }
         }
 
-        /* Bottom row: the audio spectrum, one column per bucket. */
+        /* Bottom row: the audio spectrum, one column per bucket. The buckets are
+         * raw FFT power spanning ~60 dB, so they go through the SDK's dB window
+         * (rgbx/rgbx_audio_bars.h) rather than a linear clamp. */
         const int buckets = static_cast<int>(numDisplayBuckets());
         for (int i = 0; i < buckets && i < WIDTH; i++) {
-            const uint8_t v = scale(255u, displayBucket(static_cast<size_t>(i)));
+            const float h = rgbx_audio_bar_height(displayBucket(static_cast<size_t>(i)),
+                                                  static_cast<size_t>(i),
+                                                  RGBX_AUDIO_BAR_FLOOR_DB, RGBX_AUDIO_BAR_RANGE_DB,
+                                                  RGBX_AUDIO_BAR_TILT_DB_PER_OCTAVE);
+            const uint8_t v = scale(255u, h);
             drawAt(i, HEIGHT - 1, v, v, v);
         }
     }
@@ -580,8 +586,12 @@ void rgbx_tick(void) {
         }
     }
 
+    /* Raw FFT power spanning ~60 dB — the SDK's dB window, not a linear clamp. */
     for (i = 0; i < (int)RGBX_AUDIO_NUM_DISPLAY_BUCKETS && i < WIDTH; i++) {
-        const uint8_t v = scale(255u, rgbx_inputs.audio_display_bucket[i]);
+        const float h = rgbx_audio_bar_height(rgbx_inputs.audio_display_bucket[i], (size_t)i,
+                                              RGBX_AUDIO_BAR_FLOOR_DB, RGBX_AUDIO_BAR_RANGE_DB,
+                                              RGBX_AUDIO_BAR_TILT_DB_PER_OCTAVE);
+        const uint8_t v = scale(255u, h);
         draw_at(i, HEIGHT - 1, v, v, v);
     }
 }
