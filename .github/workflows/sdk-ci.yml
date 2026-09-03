@@ -163,15 +163,18 @@ jobs:
         run: |
           TC="$(fw/sdk/scripts/install-arm-toolchain.sh)"
           NM="$TC/bin/arm-none-eabi-nm"
-          # hello may need only memset + printk + vprintk; cpptest must need
-          # nothing. vprintk joined the list with issue #351: hello routes its
-          # first-tick line through a va_list helper so that the sanctioned
+          # hello may need only memset + printk + vprintk + logf; cpptest must
+          # need nothing. vprintk joined the list with issue #351: hello routes
+          # its first-tick line through a va_list helper so that the sanctioned
           # vprintk export has automated cover on both targets (the sim side
-          # asserts its exact output in host.integration.test.ts). This list
-          # stays exhaustive on purpose — widen it only for a symbol something
-          # deliberately calls.
+          # asserts its exact output in host.integration.test.ts). logf joined
+          # with the FFT Bars dB mapping (PR #436): hello draws its spectrum row
+          # through rgbx/rgbx_audio_bars.h, whose one import is logf — so the
+          # sample also proves that allow-listed libm export resolves on both
+          # targets. This list stays exhaustive on purpose — widen it only for a
+          # symbol something deliberately calls.
           for sym in $("$NM" -u "$RUNNER_TEMP/b-arm/hello.llext" | awk '{print $NF}'); do
-            case "$sym" in memset|printk|vprintk) ;; *) echo "unexpected undefined symbol in hello.llext: $sym"; exit 1 ;; esac
+            case "$sym" in memset|printk|vprintk|logf) ;; *) echo "unexpected undefined symbol in hello.llext: $sym"; exit 1 ;; esac
           done
           # ...and vprintk must actually be there, or the cover above is a
           # no-op the next refactor deletes without noticing.
