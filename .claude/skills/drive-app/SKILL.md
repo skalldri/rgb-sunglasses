@@ -8,6 +8,9 @@ description: Drive the companion app on the physical phone reliably — press th
 Hold the `app` hardware lock first (root CLAUDE.md "Hardware locking"). Everything below
 is `mcp__execbro__*`; the hook denies these without the lock.
 
+Which phone is attached changes what works: per-phone tap reliability, BLE strictness and
+OxygenOS quirks are in [references/phones.md](references/phones.md).
+
 This skill exists because of a real, expensive failure (2026-08-07): an agent spent
 several minutes of a validation run failing to press an `Install` button, then several
 more timing out on waits for a screen that had already changed. Both failures had

@@ -21,6 +21,18 @@ The summary lines land at the end of build output as
 `Memory region  Used Size  Region Size  %age Used` with `FLASH:` and `RAM:` rows —
 one block per image; the appcore app image is the one that matters here.
 
+**A before/after diff of the FLASH/RAM totals can have the wrong SIGN.** Under
+`CONFIG_USERSPACE` the gperf-generated `kobject_data` section is sized by a perfect hash
+over kernel-object *addresses*, so any change that shifts the layout resizes it by
+kilobytes in either direction, unrelated to what the change actually costs. Measured
+2026-08-11 adding two GATT characteristics (issue #148): the totals moved −2,720 B FLASH /
+−5,216 B RAM, which reads as a saving, while the change itself cost **+2,904 B FLASH /
++412 B RAM** — `kobject_data` had simply hashed 5,632 B smaller. Attribute cost from the
+map's per-output-section deltas (`text`/`rodata`/`datas`/`bss`), and treat a
+`kobject_data` delta as noise to be reported separately, never as part of the change's
+cost. Same family as the unexplained `kMaxAttrs` nonlinearity documented in the comment
+above `kMaxAttrs` in `fw/src/extensions/extension_bt.cpp`.
+
 ## Current envelope — historically observed as of 2026-07, re-verify from build output
 
 - **The legacy DK board (dk-support branch) ran at 92–94% appcore FLASH** — the

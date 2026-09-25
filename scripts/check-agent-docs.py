@@ -422,7 +422,7 @@ class Checker:
     DOC_REF_RE = re.compile(
         r"(?P<root>root\s+)?`?(?P<doc>(?:fw/|app/)?CLAUDE\.md|\.claude/(?:rules|skills|agents)/[\w./-]+\.md"
         r"|docs/agent-incidents\.md)`?(?:'s)?,?\s*(?:§\s*)?"
-        r"(?:\"(?P<q1>[^\"\n]{3,})\"|“(?P<q2>[^”\n]{3,})”|`#{2,4}\s+(?P<h>[^`\n]+)`|#(?P<slug>[a-z0-9-]+))"
+        r"(?:\"(?P<q1>[^\"\n]{3,})\"|“(?P<q2>[^”\n]{3,})”|`#{2,4}\s+(?P<h>[^`\n]+)`|#(?P<slug>[a-z0-9_-]+))"
     )
     # docs/plans/ is dated history; the checker and its tests quote refs as test data.
     C7_SKIP_PREFIXES = ("docs/plans/", "app/node_modules/", "fw/tests/fixtures", "app/patches/",

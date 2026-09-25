@@ -174,5 +174,5 @@ EOF
 ```
 
 Report the PR URL to the user. For responding to review comments later (the pending-
-review 422 trap and its workaround), see root CLAUDE.md "GitHub PR review comments via
-`gh api`".
+review 422 trap and its workaround), see
+[references/gh-review-comments.md](references/gh-review-comments.md).

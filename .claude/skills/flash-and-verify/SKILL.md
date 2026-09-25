@@ -24,6 +24,10 @@ If the poll fails, someone else holds it — report the holder and stop; don't s
 
 ## 2. Pre-flash gates (hardware iterations are slow — verify before flashing)
 
+0. Read the relevant source to confirm your assumptions (Kconfig deps, handler logic, buffer
+   sizes). Check Kconfig symbol names in the NCS source (`/root/ncs/v3.1.1/` devcontainer,
+   `~/ncs/v3.1.1/` macOS), never from web search. Verify memory-accounting claims against the
+   linker map, not footprint scripts (`/rom-ram-budget`).
 1. Build first: `/build-proto0`.
 2. If the change involves Kconfig, confirm it actually landed before flashing:
    ```bash
