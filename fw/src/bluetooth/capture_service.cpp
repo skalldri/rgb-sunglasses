@@ -37,7 +37,8 @@ enum : uint32_t {
 
 /* Bespoke rather than the persistence mixin: this one has a fallible side effect,
  * so it needs onWriteChecked. A start can legitimately fail (no space, already
- * running), and the app has to SEE that — per fw/CLAUDE.md, refusing a write means
+ * running), and the app has to SEE that — per .claude/rules/ble-gatt-contract.md,
+ * refusing a write means
  * returning an ATT error, never "success plus a corrective notify", because the
  * app's optimistic update lands after the response and would paper over it. */
 class CaptureControlCharacteristic

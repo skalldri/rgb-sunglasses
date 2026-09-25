@@ -3,9 +3,13 @@ name: flash-and-verify
 description: "Flash firmware to the physical board over J-Link and verify it on-device via the serial shell — the full hardware iteration loop (build → flash → verify), including USB re-enumeration handling and MCUmgr OTA updates. HARDWARE skill: requires the board lock for the whole loop."
 ---
 
-Read `fw/CLAUDE.md` first if you haven't — it is the authoritative memory for every mechanism below; this skill sequences it into one loop.
+Read `fw/CLAUDE.md` first if you haven't. This skill sequences the loop; the mechanisms live in its
+references: [references/serial-shell.md](references/serial-shell.md) (ports, `mcp__serial__*`, shell
+quirks, useful commands, ttyACM shifts), [references/jlink.md](references/jlink.md) (J-Link fast path,
+staged-OTA revert), [references/mcumgr.md](references/mcumgr.md) (MCUmgr, image layout, OTA flow) and
+[references/macos-host.md](references/macos-host.md) (Mac Mini differences).
 
-**Platform routing**: in the Linux devcontainer with a J-Link attached, use the J-Link fast path (§3). On a **macOS host** (e.g. the Mac Mini — see `fw/CLAUDE.md` "macOS host"), there is no J-Link/SEGGER tooling: flash via the MCUmgr OTA path (§6, `fw/scripts/mcumgr-flash.sh`), skip `fix-usb-dev-nodes.sh` (Linux-only; macOS manages /dev itself), and read every `/dev/ttyACM*` reference as `/dev/cu.usbmodem*` (`/check-hardware` identifies them on both OSes). OTA covers app + netcore images, and MCUboot alone can go via the `mcuboot_update` sideload/commit shell path — only a b0n (netcore bootloader) reflash still needs the devcontainer + J-Link.
+**Platform routing**: in the Linux devcontainer with a J-Link attached, use the J-Link fast path (§3). On a **macOS host** (e.g. the Mac Mini — see `references/macos-host.md`), there is no J-Link/SEGGER tooling: flash via the MCUmgr OTA path (§6, `fw/scripts/mcumgr-flash.sh`), skip `fix-usb-dev-nodes.sh` (Linux-only; macOS manages /dev itself), and read every `/dev/ttyACM*` reference as `/dev/cu.usbmodem*` (`/check-hardware` identifies them on both OSes). OTA covers app + netcore images, and MCUboot alone can go via the `mcuboot_update` sideload/commit shell path — only a b0n (netcore bootloader) reflash still needs the devcontainer + J-Link.
 
 > **DANGER — this loop never writes power/PD registers.** On-device verification here is read-only shell diagnostics only. Anything beyond that on the TPS25750/BQ25792 (register writes, 4CC tasks, `power pd patch`, `power bq charge/adc/pfm/freq/temp_override`, `power boost`) goes through root `CLAUDE.md`'s "NEVER write unverified commands or data into hardware parts" rule: obtain the datasheet/TRM first or stop and ask the user. A hallucinated 4CC write already bricked a part once (2026-07-05).
 
@@ -24,6 +28,10 @@ If the poll fails, someone else holds it — report the holder and stop; don't s
 
 ## 2. Pre-flash gates (hardware iterations are slow — verify before flashing)
 
+0. Read the relevant source to confirm your assumptions (Kconfig deps, handler logic, buffer
+   sizes). Check Kconfig symbol names in the NCS source (`/root/ncs/v3.1.1/` devcontainer,
+   `~/ncs/v3.1.1/` macOS), never from web search. Verify memory-accounting claims against the
+   linker map, not footprint scripts (`/rom-ram-budget`).
 1. Build first: `/build-proto0`.
 2. If the change involves Kconfig, confirm it actually landed before flashing:
    ```bash
@@ -39,7 +47,7 @@ fw/scripts/jlink-flash.sh /path/to/build    # explicit build dir
 fw/scripts/jlink-flash.sh -- --skip-rebuild # args after -- forward to west flash
 ```
 
-It self-gates on the `board` lock (refuses without it), auto-detects the J-Link serial, runs a `west build` no-op check, then flashes netcore + appcore via nrfutil (~30-45 s). This is the only routine way to reflash bootloaders — b0n always; MCUboot alone also has the `mcuboot_update sideload`/`commit` shell path (see `fw/CLAUDE.md` "Useful shell commands"). MCUmgr below updates application images only. **If a flash fails**: rerun `fw/scripts/fix-usb-dev-nodes.sh`, retry — this converges on the 2nd attempt. If the node is fine but flashing repeatedly dies at the same verify step with SWD/DebugPort errors, that's the APPROTECT lockout — symptom table and `nrfutil device recover` procedure live in `/debug-fw`.
+It self-gates on the `board` lock (refuses without it), auto-detects the J-Link serial, runs a `west build` no-op check, then flashes netcore + appcore via nrfutil (~30-45 s). This is the only routine way to reflash bootloaders — b0n always; MCUboot alone also has the `mcuboot_update sideload`/`commit` shell path (see `references/serial-shell.md` "Useful shell commands"). MCUmgr below updates application images only. **If a flash fails**: rerun `fw/scripts/fix-usb-dev-nodes.sh`, retry — this converges on the 2nd attempt. If the node is fine but flashing repeatedly dies at the same verify step with SWD/DebugPort errors, that's the APPROTECT lockout — symptom table and `nrfutil device recover` procedure live in `/debug-fw`.
 
 ## 4. USB re-enumeration — after every flash or reset
 
@@ -49,11 +57,11 @@ It self-gates on the `board` lock (refuses without it), auto-detects the J-Link 
 
 ## 5. Verify on-device via the serial shell
 
-**`mcp__serial__*` tools only — never raw Bash on `/dev/ttyACM*`** (races the MCP reader thread; see `fw/CLAUDE.md` "Serial Console"). Wait for the `uart:~$` prompt before commanding. A backlog of old `[00:00:00.xxx]` boot logs on port-open is not a fresh reboot — check `kernel uptime`.
+**`mcp__serial__*` tools only — never raw Bash on `/dev/ttyACM*`** (races the MCP reader thread; see `references/serial-shell.md`). Wait for the `uart:~$` prompt before commanding. A backlog of old `[00:00:00.xxx]` boot logs on port-open is not a fresh reboot — check `kernel uptime`.
 
 - **Animations**: use the plugin tools `mcp__serial__rgb_sunglasses_set_animation` / `get_animation` / `clear_indicator` (and `glim_list`/`glim_select`/`glim_set_loop_mode`), not hand-rolled `anim` writes. `set_animation` clears the BT indicator first and verifies via `anim get` — a raw `anim set` leaves an active advertising/connecting overlay masking the animation you're trying to see.
 - **Read-only diagnostics** (all safe): `bt_conn_info` (actual negotiated LE connection parameters), `power bq status` (battery/VBUS voltage, current, charge status), `ext stats` (extension tick timing), `kernel thread list`, `mcuboot_version`.
-- **Cross-check app-visible behavior against the shell as source of truth.** A BLE write that "looked right" in the app UI can be an optimistic update masking a failed write/notify — confirm the value via the shell (`anim get`, `glim get_selected`, ...) before calling it verified (house norm; see app/CLAUDE.md "Verifying a write/notify round-trip").
+- **Cross-check app-visible behavior against the shell as source of truth.** A BLE write that "looked right" in the app UI can be an optimistic update masking a failed write/notify — confirm the value via the shell (`anim get`, `glim get_selected`, ...) before calling it verified (house norm; see `.claude/skills/submit-pr/references/device-verification.md` "Verifying a write/notify round-trip").
 
 ## 6. MCUmgr OTA path (no J-Link needed; app images only)
 
@@ -79,11 +87,11 @@ mcumgr $CONN reset
 # wait ~15 s for re-enumeration, then /check-hardware (step 4)
 ```
 
-After a successful test boot, `mcumgr $CONN image confirm` (or let the app confirm over BLE) — otherwise MCUboot reverts on the next reset. On failure to boot it reverts automatically. Size/rate figures as of 2026-07 — re-verify.
+MCUboot is **overwrite-only** (`.claude/rules/fw-sysbuild-mcuboot.md`): the tested image is installed on that reset and there is **no revert** — `mcumgr $CONN image confirm` afterwards is bookkeeping, not a safety net, and a bad image needs re-flashing. Verify the running version/hash (`references/mcumgr.md`). Size/rate figures as of 2026-07 — re-verify.
 
 ## 7. Installing files (GLIM assets / .llext extensions)
 
-The board's 4 MiB FAT disk mounts over USB mass storage — find/mount procedure: `fw/CLAUDE.md` "USB Flash Disk (`/NAND:` ...)". Copy `.glim` files to the mounted disk's `glim/` dir, `.llext` extensions to `ext/`, then **`sync` → `umount` → REBOOT the board** (warm reboot is enough) — both registries scan at boot only, and writing while the firmware has the volume mounted corrupts reads until reboot.
+The board's ~6.9 MiB FAT disk mounts over USB mass storage — find/mount procedure: `.claude/skills/provision-device/references/nand-disk.md`. Copy `.glim` files to the mounted disk's `glim/` dir, `.llext` extensions to `ext/`, then **`sync` → `umount` → REBOOT the board** (warm reboot is enough) — both registries scan at boot only, and writing while the firmware has the volume mounted corrupts reads until reboot.
 
 - GLIM selection persists by file **name**, not index — enumeration order shifts across boots.
 - Corrupt FAT → the firmware's own `fatfs reformat` shell command, **never** a host-side mkfs (the firmware owns the partition). Then reboot and re-copy files.
@@ -92,13 +100,13 @@ The board's 4 MiB FAT disk mounts over USB mass storage — find/mount procedure
 
 ## 8. Phone-in-the-loop (companion app) — needs the `app` lock
 
-Only when verifying device↔app behavior. Full procedure: app/CLAUDE.md "Launching the App" — summary:
+Only when verifying device↔app behavior. Full procedure: `/launch-app` — summary:
 
 1. Hold `app` the same way as step 1 (`scripts/hw-lock.sh hold app`; combined: `hold board app`, all-or-nothing).
 2. Fresh worktree: `cd app && npm ci` (real install — never symlink `node_modules`).
 3. Launch **only** via `app/scripts/launch-app.sh` (self-gates on the `app` lock), as a harness-managed background task (`run_in_background: true`, no `&`, no redirects). Never `npx expo run:android` directly.
 4. Poll `http://localhost:8081/status` until `packager-status:running`.
-5. Drive the phone via `mcp__execbro__*` (scan_metro/connect_metro, get_logs, screenshots, tap). Phone missing from `adb devices`? Try `adb connect <ip>:5555` first, or `app/scripts/adb-connect.sh` — pairing state lives on the phone.
+5. Drive the phone via `mcp__execbro__*` (scan_metro/connect_metro, get_logs, screenshots, tap). Phone missing from `adb devices`? Report it and stop — never connect or re-pair a device yourself (root `CLAUDE.md` "NEVER connect an ADB device yourself"; diagnosis to hand back: `/launch-app` `references/android.md`).
 
 ## 9. When genuinely done
 

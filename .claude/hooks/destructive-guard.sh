@@ -7,7 +7,8 @@
 #                              (root CLAUDE.md "Process management").
 #   2. mkfs / mkfs.<type>   -- host-formatting the board NAND is owned by the
 #                              firmware `fatfs reformat` shell command
-#                              (fw/CLAUDE.md); genuinely new disks are the
+#                              (.claude/skills/provision-device/references/nand-disk.md);
+#                              genuinely new disks are the
 #                              user's call.
 #   3. reset-project(.js)   -- app/scripts/reset-project.js is Expo template
 #                              scaffolding reset; it deletes the app source
@@ -97,7 +98,7 @@ if re.search(INVOKE + r"(pkill|killall)\b", command, re.MULTILINE):
 
 if re.search(INVOKE + r"mkfs(\.[a-z0-9]+)?\b", command, re.MULTILINE):
     deny("Refusing: never host-format the board NAND -- the firmware shell "
-         "command `fatfs reformat` owns that partition (fw/CLAUDE.md); for a "
+         "command `fatfs reformat` owns that partition (.claude/skills/provision-device/references/nand-disk.md); for a "
          "genuinely new/unformatted disk, ask the user to run mkfs "
          "themselves.")
 

@@ -1,940 +1,180 @@
-# CLAUDE.md
+# fw/CLAUDE.md — RGB Sunglasses firmware
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Zephyr RTOS / Nordic Connect SDK (NCS v3.1.1) firmware for RGB LED sunglasses on an nRF5340. The codebase is mixed
+C/C++; `main.c` is C but most application logic is C++23. Detail for each code area lives in a path-scoped rules file
+that loads when you read that code — see the index at the bottom; hardware procedures live in skills.
 
-## Agent behavior
+## Hardware revisions
 
-- Always use built-in LLM tools to edit files
-- Whenever I say "Remember that" or some similar equivalent, update this file with the information.
-
-## Hardware Revisions
-
-- The legacy "rgb_sunglasses_dk" board was removed from `main` (issue #203): its board support and CI live on the **`dk-support` branch**, which is frozen (no new features, never merge main into it, never cut `fw-v*` tags from it). Do not add DK build steps, board files, or gates on `main`.
-- The "rgb_sunglasses_proto0" board is the latest hardware revision and the only board built from `main`. Always enable new features on the proto0 hardware revision by default. When I ask you to add a new feature, ensure it's enabled on the Proto0 hardware KConfig
+- `rgb_sunglasses_proto0` is the latest hardware revision and the only board built from `main`. **Enable every new
+  feature on proto0 by default** — when asked to add a feature, make sure it is on in the proto0 Kconfig.
+- The legacy `rgb_sunglasses_dk` board was removed from `main` (issue #203): its board support and CI live on the frozen
+  **`dk-support` branch** (no new features, never merge main into it, never cut `fw-v*` tags from it). Do not add DK
+  build steps, board files, or gates on `main`.
 
 ## Project vs SDK
 
-- Files under the `fw` directory are ours to modify as we please.
-- Files under the `~/ncs` directory are NOT modifyable. They are part of the SDK and can NEVER BE TOUCHED.
+- Files under `fw/` are ours to modify. **Files under the NCS SDK (`/root/ncs/v3.1.1` devcontainer, `~/ncs/v3.1.1`
+  macOS) are NEVER modified** — touch them only when explicitly requested. Read Zephyr's docs from
+  `/root/ncs/v3.1.1/zephyr/doc`.
+- The firmware is four images: **MCUboot** (appcore bootloader), **rgb-sunglasses** (`fw`, appcore application),
+  **b0n** (netcore bootloader), **ipc_radio** (netcore application).
+- **The running firmware lives in INTERNAL flash**; external flash holds settings/bonds and the `/NAND:` asset volume —
+  a recurring agent mistake (`.claude/rules/fw-storage-usb.md`).
 
-## Project applications
+## Build and test
 
-The firwmare is composed for 4 applications:
-
-- MCUBoot: the appcore's bootloader
-- rgb-sunglasses: the appcore main application
-- b0n: the netcore bootloader
-- ipc_radio: the netcore's main application
-
-## Build directory
+Use the skills — `/build-proto0`, `/test-fw` — instead of raw `west build`, and `/submit-pr` instead of manually pushing
+and opening PRs (it enforces the build, test and **> 70 % patch-coverage** gates). Which skill fits which task: the
+root `CLAUDE.md` "Task routing" table (the single one; don't duplicate it here). **Before any `git push` or PR**,
+proto0 must build clean (`/build-proto0`) and all tests must pass (`/test-fw`).
 
 | Board | Build dir | When to use |
 |---|---|---|
 | `rgb_sunglasses_proto0` | `fw/build` | Day-to-day development (incremental) |
 
-Never point a different board at the same build dir — switching boards inside one build dir forces a full pristine rebuild (minutes of wasted time).
+Never point a different board at the same build dir — switching boards in one build dir forces a full pristine rebuild.
 
-Use the project skills — `/build-proto0`, `/test-fw` — instead of raw `west build` commands. Use `/submit-pr` instead of manually pushing and creating PRs; it enforces the build and coverage gates.
-
-For which skill fits which task (built-in animation vs. `.llext` extension vs. GATT characteristic, debugging, flashing, releases), see the **Task routing** table in the root `CLAUDE.md` — it is the single routing table; do not duplicate it here.
-
-**Before any `git push` or PR creation**, you must:
-1. Run `/build-proto0` — proto0 must compile clean
-2. Run `/test-fw` — all tests must pass. (`/test-fw` reports **overall** coverage only; the ≥ 50% **patch**-coverage gate is checked by `/submit-pr`.)
-
-## Build and Test Commands (raw — prefer the skills above)
+### Build and Test Commands (raw — prefer the skills above)
 
 ```bash
-# First time build (pristine, setup build system, very slow! Only run if build folder is empty / nonexistent)
-# Exception: a newly ADDED devicetree overlay file also requires --pristine — see "Per-image Kconfig/devicetree overlays (sysbuild)" below.
+# First time build (pristine, very slow! Only if the build folder is empty/nonexistent — or a newly ADDED
+# devicetree overlay, see .claude/rules/fw-sysbuild-mcuboot.md)
 west build --build-dir fw/build fw --pristine --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild --cmake-only -- -DCONFIG_DEBUG_THREAD_INFO=y -DBOARD_ROOT="$(pwd)/fw"
 
 # Full incremental build of proto0 (preferred for daily dev)
 west build --build-dir fw/build fw --board rgb_sunglasses_proto0/nrf5340/cpuapp --sysbuild -- -DBOARD_ROOT="$(pwd)/fw"
 
-# Run all tests on native simulator
+# Run all tests on native simulator / a single suite
 twister -T fw/tests -p native_sim
-
-# Run a single test suite
 twister -T fw/tests/animations/animation_registry -p native_sim
 ```
 
-Commands above are relative to the repo root (or worktree root) — always run them from there, not from inside `fw/`.
-
-**Agent sessions: the shell cwd PERSISTS across tool calls, and a stale cwd makes
-these commands fail in ways that look like success.** Observed 2026-08-02 (three
-times in one session): `west build ... fw` from inside `fw/` prints `ERROR: fw
-doesn't contain a CMakeLists.txt` yet the wrapping command can still exit 0; a
-backgrounded `twister -T fw/tests` from inside `fw/` dies with "No testsuites
-found" while a **stale** `fw/twister-out/twister.json` from the previous run reads
-as a plausible all-green result; `pytest tools/tests/` collects zero tests. Rules:
-prefix every `west`/`twister`/`pytest` invocation with an explicit
-`cd /workspaces/rgb-sunglasses &&` (never rely on a previous call's cwd, especially
-for `run_in_background` commands, which capture the cwd at launch); after any
-supposedly-green re-run, verify freshness (artifact mtime, or a suite/test-count
-that reflects what was just added) before trusting it.
-
-### An incremental build IGNORES a changed Kconfig `default`
-
-Zephyr loads the existing `fw/build/fw/zephyr/.config` as the **base** for each configure pass, so editing a `default` in `fw/Kconfig` (or a driver `Kconfig`) and rebuilding incrementally silently keeps the **old** value. The build succeeds, so nothing warns you — verified 2026-08-01 while retuning thread priorities for issue #267: `default 3` → `default 2` rebuilt clean and `autoconf.h` still read `3`, and the flashed board ran the old priority.
-
-Note this only affects **defaults**. An explicit `CONFIG_FOO=...` in `prj.conf` or a board `.conf` *does* override on an incremental build — that asymmetry is what makes the failure so easy to miss.
-
-Either of these fixes it:
-
-```bash
-rm fw/build/fw/zephyr/.config      # cheaper than --pristine; forces one Kconfig regeneration
-```
-
-or set the value explicitly in `fw/prj.conf` instead of relying on the default (this is also the right way to build a throwaway A/B variant without touching committed defaults).
-
-**Always confirm the value actually landed before flashing** — this is the concrete reason for the root `CLAUDE.md` rule about checking `build/fw/zephyr/include/generated/zephyr/autoconf.h`:
-
-```bash
-grep CONFIG_APP_LED_DISPLAY_THREAD_PRIORITY fw/build/fw/zephyr/include/generated/zephyr/autoconf.h
-```
-
-Treat successful `west build` as the primary validation step after any change. The NCS SDK lives at:
-
-| Host | NCS v3.1.1 path | How west gets on PATH |
-|---|---|---|
-| Linux devcontainer | `/root/ncs/v3.1.1` | already on PATH (base image) |
-| macOS host (Mac Mini) | `~/ncs/v3.1.1` | `. scripts/fw-env.sh` (venv + ZEPHYR_BASE; installed by `scripts/macos-setup.sh`) |
-
-Docs in this file that reference `/root/ncs/v3.1.1/...` paths (Kconfig sources, Zephyr docs) map to `~/ncs/v3.1.1/...` on macOS.
-
-**Always use `west build` for building — never invoke `cmake` or `ninja` directly.** The `west build` command handles multi-image (sysbuild) coordination correctly; raw `cmake`/`ninja` invocations bypass that and produce misleading results.
+- **Run every `west`/`twister`/`pytest` from the repo (or worktree) root, prefixed with an explicit
+  `cd "$(git rev-parse --show-toplevel)" &&`** — the agent shell's cwd persists across tool calls, and from inside `fw/`
+  these commands fail in ways that look like success (`run_in_background` captures the cwd at launch). After any
+  supposedly-green re-run, verify freshness (artifact mtime, or a test count reflecting what you just added)
+  (`docs/agent-incidents.md#2026-08-02-stale-cwd-made-a-failed-build-look-green`).
+- **Always use `west build`** — never `cmake` or `ninja` directly; raw invocations bypass sysbuild's multi-image
+  coordination. Treat a successful `west build` as the first validation step after any change. If a build fails, read
+  the log files instead of building again.
+- **An incremental build IGNORES a changed Kconfig `default`** — the old `.config` wins silently. `rm
+  fw/build/fw/zephyr/.config` (or set the value explicitly in `prj.conf`), and always confirm the value landed in
+  `fw/build/fw/zephyr/include/generated/zephyr/autoconf.h` before flashing (`.claude/rules/fw-kconfig-build.md`).
+- NCS on the macOS host: `. scripts/fw-env.sh` first (`.claude/skills/flash-and-verify/references/macos-host.md`).
 
 ### Known non-blocking build warnings (issue #164 cleanup, 2026-07-17)
 
-A clean proto0 sysbuild still emits these warnings; all are accepted — do not
-"fix" them, and treat anything NOT on this list as new and worth investigating:
+A clean proto0 sysbuild still emits these; all are accepted — do not "fix" them, and treat anything NOT on this list as
+new and worth investigating:
 
-- `Experimental symbol USB_DEVICE_STACK_NEXT / UDC_DRIVER is enabled` (×2 each)
-  — deliberate choice of the new USB stack (see prj.conf comment).
-- `Experimental symbol DEBUG_COREDUMP_BACKEND_NRF_FLASH_PARTITION is enabled`
-  — deliberate coredump backend choice.
-- `usbd_cdc_acm.c: #warning "USBD_CDC_ACM_LOG_LEVEL forced to LOG_LEVEL_NONE"`
-  — upstream NCS code, not ours to change.
+- `Experimental symbol USB_DEVICE_STACK_NEXT / UDC_DRIVER is enabled` (×2 each) — deliberate choice of the new USB stack
+  (see the `fw/prj.conf` comment).
+- `Experimental symbol DEBUG_COREDUMP_BACKEND_NRF_FLASH_PARTITION is enabled` — deliberate coredump backend choice.
+- `usbd_cdc_acm.c: #warning "USBD_CDC_ACM_LOG_LEVEL forced to LOG_LEVEL_NONE"` — upstream NCS code, not ours to change.
 
-(The old `-Wcomment` note that used to live here referred to
-`src/bluetooth/bt_service.h`, which no longer exists. The old `Deprecated
-symbol TINYCRYPT is enabled` note also no longer applies: `netcore_version.c`
-was migrated to stock Zephyr mbedTLS SHA-256, issue #181.)
+(An old `-Wcomment` note referred to `src/bluetooth/bt_service.h`, which no longer exists; the old `Deprecated symbol
+TINYCRYPT is enabled` note no longer applies since `netcore_version.c` moved to stock mbedTLS SHA-256, issue #181.)
 
 ## Commenting rules
 
-- **Preserve existing comments.** Never delete comments unless they are factually incorrect about the code that remains (e.g., a comment that describes a removed code path). Refactoring to change an API does not justify removing comments — update variable/function names in the comment text to match the new API, but keep the explanation.
-- **Commented-out code (`/*...*/` or `//`) is intentional.** Developers in embedded projects often comment out alternative implementations, debug printk calls, or reference snippets as quick-enable stubs. Do not remove these blocks.
-- **Add comments to non-obvious logic.** If you write code whose purpose or mechanism is not immediately clear from reading the code alone, add a comment.
-- **Never put a `/*` sequence inside a comment** — glob paths like `/NAND:/ext/*.llext` trip `-Wcomment` ("/* within comment"). Rephrase as ".llext files in /NAND:/ext".
+- **Preserve existing comments.** Never delete comments unless they are factually incorrect about the code that remains
+  (e.g., a comment that describes a removed code path). Refactoring an API does not justify removing comments — update
+  names in the comment text to match the new API, but keep the explanation.
+- **Commented-out code (`/*...*/` or `//`) is intentional.** Developers in embedded projects often comment out
+  alternative implementations, debug printk calls, or reference snippets as quick-enable stubs. Do not remove them.
+- **Add comments to non-obvious logic.** If the purpose or mechanism of code is not clear from reading it, comment it.
+- **Never put a `/*` sequence inside a comment** — glob paths like `/NAND:/ext/*.llext` trip `-Wcomment` ("/* within
+  comment"). Rephrase as ".llext files in /NAND:/ext".
 
 ## Coding rules
 
-- **Always use bounded string copies** (`strncpy` + explicit NUL, `snprintf`, `memcpy` with a checked length) — never `strcpy`/`sprintf`, even when the buffers are provably the same size today (PR #89 review feedback).
-- **Never do flash/filesystem I/O from a cooperative-priority thread** — a long flash write starves every other thread in the system. Do it from a low-priority workqueue instead (PR #51).
-- **Wrap every multi-step I2C/register transaction in a per-device `k_mutex`** (e.g. the TPS25750 I2Cm bridge's CMD1/DATA1 sequences), with `_locked` inner functions so every early return releases the lock, and bounded poll loops (timeout → `-ETIMEDOUT`) instead of infinite ones. Interleaving corruption shows up as **plausible-but-wrong values** (e.g. VBAT read back as the VBUS value), not as I2C errors (PR #111).
-- **No info-level logs in steady-state/per-tick paths** (render ticks, notify calls, poll loops) — they become permanent log spam that buries real events (PR #110).
-- **Never persist a value on a per-interaction path** (an animation switch, a button press, a shuffle hop, anything that fires once per user action rather than once per deliberate setting change). Flash endurance is a first-class budget: the NAND has finite erase/write cycles and they were measurably being burned. Persisting the active animation on every switch is what issue #311 removed — the device now boots to the default rather than restoring the last selection, and that trade was made on purpose. A settings write is for a value the user asked to keep, not for tracking state.
-- **A settings-key MISS is orders of magnitude more expensive than a hit.** `settings_nvs_save()` resolves a name by walking every name id with an `nvs_read()` per id; a hit exits early, a miss (first write of a new key, or a delete of a key that is not present) runs the walk to completion. Measured on proto0 with 19 keys resident: **1-15 ms for a hit, 850-1500 ms for a miss.** `CONFIG_SETTINGS_NVS_NAME_CACHE=y` (in `fw/prj.conf`) removes the miss walk — but only while the cache is not overflowed, and **overflow is silent**: `cache_total > CONFIG_SETTINGS_NVS_NAME_CACHE_SIZE` just reverts to the slow path with no warning. **`settings list` cannot detect that overflow** — it reports RESIDENT keys, and the counter that overflows is cumulative: `cache_total` is set to the resident count at load and thereafter only ever incremented, once per first-write of a new name; the delete branch returns before any cache bookkeeping, so deleting a key never frees its slot. A device that has been re-paired a few times and had extensions installed and removed can be past the cache size while `settings list` still shows ~20 keys. Size it against CHURN — the budget and the `settings_nvs.c` line references live next to `CONFIG_SETTINGS_NVS_NAME_CACHE_SIZE` in `fw/prj.conf`, and the value actually flashed is in `build/fw/zephyr/include/generated/zephyr/autoconf.h` (a board fragment can override `prj.conf`; see the Kconfig-confirmation rule above). No size is quoted here on purpose: this bullet carried one that was wrong from the day it was written — introduced in `df326c42` alongside the `prj.conf` line it contradicted, so it never drifted, it was simply never checked against the tree.
-
-This is a Zephyr RTOS / Nordic Connect SDK (NCS) firmware project for RGB LED sunglasses. The target SoC is an nRF53 series device. The codebase is mixed C/C++; `main.c` is C but most application logic is C++23.
-
-### Subsystems and their roles
-
-**LED rendering pipeline**
-
-- `src/led_controller.cpp` — manages dual-bank WS2812 LED strip hardware and a double-framebuffer. Callers claim a buffer via `claimBufferForRender`, write pixels via `set_pixel_in_framebuffer`, then release it.
-- `src/pattern_controller.cpp` — sits above the LED controller. Owns the active animation slot and an optional `Indicator` overlay (BT advertising/connecting/pairing). Callers request an indicator with `pattern_controller_request_indicator` or switch animations with `pattern_controller_change_to_animation`. **Note `pattern_controller_change_to_animation()` runs synchronously on the caller's thread** — BT RX for GATT writes, the shell thread for `anim set`; only the boot-time switch to the default animation in the thread entry runs on the pattern-controller thread itself. Nothing in this file may assume pattern-controller-thread context, and no automated gate checks this.
-- `src/led_config.h` — compile-time constants for the frame LED geometry (40×12 logical display over two banks, serpentine wiring) and the proto0 onboard status-LED geometry (2×1). All rendering code receives a `const LedConfig*` so the same logic runs on any geometry.
-
-**Animation system**
-
-- `src/animations/animation_base.h` — pure abstract `BaseAnimation` with `init()`, `tick()`, and `setActive()`.
-- `src/animations/animation.h` — `BaseAnimationTemplate<T, A>` CRTP base that adds a Meyer's singleton (`getInstance()`) and wires `setActive()` to the registry.
-- `src/animations/animation_types.h` — `Animation` enum (ZigZag, Text, Rainbow, BtAdvertising, etc.).
-- `src/animations/animation_registry.{h,cpp}` — runtime map of `Animation` → factory function + optional is-active setter callback. BT-free. Populated by `animation_registry_register_defaults()`. **Registration order matters and returns must be checked**: `animation_registry_register_is_active()` returns `-ENOENT` unless `animation_registry_register()` already created the id's entry — an ignored return here silently killed the extensions' entire Is Active read/notify path on PR #89 (invisible to every build/test/shell gate; only a real app connection exposed it).
-- `src/animations/animation_registry_defaults.cpp` — registers all animations and calls each animation's `bind_default_dependencies()` helper; conditionally compiled via `CONFIG_ANIMATION_*` Kconfig symbols.
-- Each animation (`zigzag`, `rainbow`, `text`, `my_eyes`) has a dependency struct holding `const` references to `AnimationUint32ParameterSource` (or similar abstract interfaces). The animation's `tick()` reads parameters only through these interfaces, keeping animation logic BT-free.
-
-**Bluetooth / GATT layer**
-
-- `src/bluetooth.cpp` — BT thread + state machine (IDLE → ADVERTISING → CONNECTING → CONNECTED). Uses `K_MSGQ` to decouple connection callbacks from state transitions. Requires `BT_SECURITY_L4` before transitioning to CONNECTED.
-  - **Requests a fast connection interval once security completes (issue #41)**: right before transitioning CONNECTING → CONNECTED, calls `bt_conn_le_param_update(ctx->conn, &fast_conn_param)` with `fast_conn_param = BT_LE_CONN_PARAM_INIT(6, 12, 0, 400)` (~7.5-15ms interval). Without this, the connection runs at whatever the central defaults to (Zephyr's own unrequested default is `BT_GAP_INIT_CONN_INT_MIN/MAX`, 30-50ms), and the app's discovery walk does ~170+ sequential GATT reads — one full connection interval each, since Android only allows one outstanding GATT op per connection. This is a belt-and-suspenders complement to the app's own `requestConnectionPriority(ConnectionPriority.High)` call in `use-ble-connection.ts` (see `app/CLAUDE.md`) — either side's request should produce the same effect; having both means it still works if one side's request doesn't take for some reason. A non-zero return from `bt_conn_le_param_update()` is logged but non-fatal.
-  - **`bt_conn_info` shell command and `le_param_updated` connection callback (issue #41 follow-up)**: added to verify, rather than assume, what connection interval is actually in effect — `bt_conn_le_param_update()` only sends a _request_; it doesn't tell you what the central actually granted. `le_param_updated(conn, interval, latency, timeout)` (registered in `conn_callbacks`, a `BT_CONN_CB_DEFINE`) logs the real negotiated parameters every time they change, with a timestamp, so you can see exactly when/whether a fast-interval request converged relative to other events. `bt_conn_info` (a standalone `SHELL_CMD_REGISTER`, no subcommands) prints the _current_ parameters of `s_active_conn` (a diagnostic-only tracked pointer, ref-counted via the existing `connected()`/`disconnected()` callbacks) on demand — useful for polling mid-connection from a second shell session while the app is mid-discovery. Confirmed finding from using these: the interval briefly converges to 7.5ms right after `CONNECTED`, has a ~400ms excursion to 45ms about 2s in (during the app's `connectToDevice()`/GATT-cache-refresh phase, before the per-characteristic read loop starts), then settles at **15ms** (the slow end of our requested 7.5-15ms range) for the rest of the connection — not the 7.5ms fast end originally assumed. This is very likely Android's own `CONNECTION_PRIORITY_HIGH` policy floor (~11.25-15ms is its documented range), which as GAP central it has final say over regardless of what `fast_conn_param` proposes — there's no public Android API tier faster than "high priority" to request instead.
-- `src/bluetooth/bt_service_cpp.h` — C++23 compile-time GATT server assembler. `BtGattServer<Providers...>` collects `BtGattAttributeProvider` objects, assigns auto UUIDs in provider-declaration order, and flattens them to a `bt_gatt_attr[]` backed by a `std::array`. Use `BT_GATT_SERVER_REGISTER(name, server)` to register with Zephyr.
-  - **Bulk metadata characteristic, gated by `CONFIG_APP_BT_METADATA_CHARACTERISTIC` (issue #41 follow-up)**: `BtGattServer` automatically synthesizes and appends one extra read-only characteristic per service (fixed shared UUID `kMetadataCharacteristicUuid`, same pattern as `kAnimationNameCharacteristicUuid`) whose value is a compile-time-constant packed blob containing every sibling characteristic's CUD name + CPF format — `[version][entry_count]` then `[cpf_format][name_len][name_bytes]` per entry, in `Providers...` declaration order. This lets the app read one characteristic per service instead of two descriptor reads (CUD + CPF) per characteristic, cutting ATT op count roughly in half for discovery. **No per-service `.cpp` file needs to change** — the blob is derived automatically from the same `Providers...` pack each service already passes into `BtGattServer(...)`, via `getDescription()`/`getCpf()` static accessors added to `BtGattCharacteristicCommon` and the `BtGattMetadataBearingProvider` concept + `MetadataBlobBuilder<Ps...>` fold (both just above `BtGattServer` in this file), which skip the primary-service provider automatically since it doesn't expose those statics. Hardware-verified: discovery across all 9 services dropped from ~13-30s to ~6s with zero fallback/mismatch warnings.
-    - **Disabled on the legacy `rgb_sunglasses_dk` board** (`CONFIG_APP_BT_METADATA_CHARACTERISTIC=n` in its board `.conf`, now on the `dk-support` branch): the blob duplicates every characteristic's CUD description string as packed binary data, which pushed that board's image past its internal-flash slot size (confirmed: imgtool `Image size ... exceeds requested size` with this enabled) — same flash-budget reasoning as `CONFIG_APP_PERSIST_BT_CONFIG` below. When disabled, `getMetadataAttrsTuple()`/`kMetadataBlob` are never referenced and so are never instantiated (class template members are only instantiated when used) — zero flash cost on that board.
-    - **Ordering assumption**: the app's positional zip (`use-ble-connection.ts`) assumes `characteristicsForService()` returns characteristics in the same order as this blob, i.e. firmware GATT declaration order. This holds because ATT "Read By Type" (used internally by characteristic discovery) is spec-required to return attributes in ascending handle order, and handles are assigned in exactly `Providers...`'s declaration order — not a platform convention that could silently change. Verified (this session) that react-native-ble-plx's Android module (`BleModule.java:511-517` → `Service.java:51-53`) passes Android's native `BluetoothGattService.getCharacteristics()` result straight through with no client-side re-sort. A same-count _reordering_ would not be caught by the blob's `entry_count` check — only a count mismatch is detected — this residual risk is accepted rather than paying for a fully self-describing (per-entry UUID-tagged) wire format.
-  - Characteristic aliases: `BtGattReadWriteCharacteristic`, `BtGattReadNotifyCharacteristic`, `BtGattAutoReadWriteCharacteristic`, etc.
-  - Write hooks: if a characteristic class defines `onWrite(const T&)`, it is called automatically after each successful remote write.
-  - `src/bluetooth/persistent_characteristic.h` — `BtGattPersistentCharacteristic<Key, Description, Notify, T, Default>`: a `BtGattAutoCharacteristicExt` subclass (same shape as `IsActiveCharacteristic` below) that backs a plain POD/`BtGattColor`/`BtGattString<N>` characteristic with Zephyr's settings subsystem, so its value survives a power cycle. `Key` is an explicit string literal (e.g. `"core/brightness"`) — never derive it from declaration order, since `BtGattServer`'s auto-UUID assignment is positional but settings keys must stay stable across reorderings. See "Settings-backed config persistence" below for the full mechanism. `BtGattDropdownList<N>` characteristics (glim selection/loop mode) don't fit this generic mixin and persist by hand instead — see `glim_player_animation_bt.cpp`.
-  - **`notify()` only sends the actual string length for string-backed types (`BtGattString<N>`/`BtGattDropdownList<N>`), matching `read()`'s `strnlen()`-based length** — not `sizeof(storage_)` (the full fixed-capacity buffer). A `bt_gatt_notify()` call cannot fragment a value across multiple ATT PDUs the way long writes/reads can; the whole payload must fit in one packet bounded by the connection's *current* ATT MTU (not necessarily the negotiated one — see below). Before this was fixed, a `BtGattDropdownList<512>` characteristic (e.g. `GlimSelectionCharacteristic`) always tried to notify the full 512-byte buffer regardless of how short the actual string content was, so every notify failed (`bt_att: No ATT channel for MTU ...` / `Notify failed: -12`) even with a 2-file (~28-byte) selection list — a real bug, not a hypothetical. On failure, `notify()` now logs the characteristic's `Description` and attempted payload length so an MTU-related failure can be traced to which characteristic caused it without guessing. The app side also needs an adequately large negotiated MTU in the first place — see `requestMTU` in `app/CLAUDE.md`'s Known Issues section.
-    - **Follow-up gap (same symptom, narrower cause): `BtGattNotifyTraits<BtGattDropdownList<N>>` now also caps the first-token length it reports to 20 bytes** (`kGuaranteedSafeNotifyLen` in `bt_gatt_traits.h`), on top of the strnlen-based fix above. Sending just the first token fixed the common case, but a GLIM filename's first token can still be up to `kMaxNameLen` (32, see `glim_registry.h`) bytes — long enough that `payload + 3-byte ATT header` can exceed the connection's *current* MTU whenever that MTU hasn't (yet, or ever) been negotiated above the BLE-spec default/floor of 23 octets (`BT_ATT_DEFAULT_LE_MTU` in Zephyr's `att_internal.h`; an MTU Exchange requesting less is rejected outright, so 23 is a hard floor on any connected+encrypted ATT bearer). That default-MTU window isn't rare: it's hit by any connection that is momentarily un-negotiated, and durably by the stale-Android-GATT-cache split-brain (issue #115 — `bt_state` shows `ATT MTU: 23` on an otherwise-healthy `CONNECTED`/`L4` link). 20 bytes (23 − 3-byte header) is the largest payload guaranteed to fit regardless of negotiation state. This is safe because the app never trusts the notified bytes for a dropdown-list characteristic anyway — it treats any notification as "go re-read" (see the `DROPDOWN_LIST` branch in `use-ble-connection.ts`), so truncating the preview costs nothing functionally.
-  - **Refusing a GATT write: return an ATT error, never "success + corrective notify"** (hardware-verified on PR #89). The app applies its optimistic update when the write *response* arrives, and a notification sent from inside the write handler reaches the phone *before* that response — so the optimistic update lands last and clobbers the corrective value; the UI shows the write as accepted. Returning `BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED)` instead makes the app's own catch-and-revert restore the previous value deterministically (see `write_is_active` in `src/extensions/extension_bt.cpp`). Notifications are the right tool only for state changes that originate device-side (e.g. a sandbox fault long after the write completed).
-- `src/animations/bt_animations.{h,cpp}` — animation classes for the visual BT status indicators (advertising pulse, connecting flash, pairing code display). BT-themed by design, but driven externally (via `BtStateObserver`) — see "Animation / BT decoupling" below.
-- `src/animations/animation_is_active_binding.h` — BT-free template that bridges the registry's `setActive` callback to a GATT characteristic setter; also routes remote BLE writes back to `pattern_controller_change_to_animation`.
-- `src/animations/animation_is_active_characteristic.h` — `IsActiveCharacteristic<A>`: a `BtGattAutoCharacteristicExt` subclass that hooks `onWrite` to `AnimationIsActiveBinding<A>::onRemoteActiveChange`.
-
-**DI interfaces (added in `animation-refactor-part2`)**
-
-- `src/bluetooth/bt_state_observer.h` — `BtStateObserver`: pure abstract observer; `bluetooth.cpp` calls through this instead of including `pattern_controller.h` / `bt_animations.h`. Register with `bluetooth_register_state_observer()`.
-- `src/configuration_provider.h` — `ConfigurationProvider`: abstract interface over `CoreConfig` singleton (getBrightnessFactor, getDisplayRateMs, getRenderRateMs). `CoreConfig` inherits from it. Injected into `led_controller` and `pattern_controller` via setter functions; lazy fallback to `CoreConfig::getInstance()` if not set.
-- `src/button_event_listener.h` + `src/buttons.h` — `ButtonEventListener`: `onButtonPressed(size_t buttonId)`. Dispatch is ISR-safe: GPIO interrupt → `K_MSGQ_DEFINE` → `k_work` → listener on work-queue thread. Register with `buttons_register_listener()`. Button IDs 0–3 = sw0–sw3; ID 4 = wake button.
-  - **Physical layout (proto0, a directional grid):** button 0 = Up, button 1 = Left, button 2 = Right, button 3 = Down. The devicetree labels in `boards/others/rgb_sunglasses_proto0/rgb_sunglasses_proto0_nrf5340_cpuapp_common.dts` reflect this (e.g. "Push button 1 (Up)"), but the `sw0`–`sw3` aliases themselves are unchanged. When wiring button behavior for a new animation, use this mapping rather than guessing — e.g. `GlimPlayerAnimation` (`src/animations/glim_player_animation.cpp`) uses button 0 (Up) to advance to the next GLIM file and button 3 (Down) to go to the previous one; buttons 1/2 (Left/Right) are intentionally unassigned there.
-
-**Important: `CoreConfig` getters are non-const.** `getBrightnessFactor()` writes back to clamp the value against the BT characteristic range. Any abstract interface it implements must therefore declare those methods without `const`, otherwise `CoreConfig` becomes abstract and `Singleton<CoreConfig>` fails to instantiate.
-
-### Animation / BT decoupling — COMPLETE
-
-The `animation-refactor-part2` decoupling is **done**: every parameterized animation's GATT service, parameter sources, and is-active wiring live in an adapter under `src/bluetooth/animation_adapters/` (9 adapters as of 2026-07 — re-verify), and no animation `.cpp` includes BT headers. Keep it that way — new animations get a BT-free `.cpp` plus an adapter file; see `/add-animation` for the full add procedure (including the easy-to-miss registration spots). Verify the separation with (from the repo root, like all commands in this file):
-
-```bash
-grep -rlE 'bluetooth|BT_GATT|BtGatt' fw/src/animations/
-# Matches only comments (adapter cross-references, a BtGattString size note) — no code.
-```
-
-`bt_animations.{h,cpp}` (the visual BT-status animations: advertising pulse, connecting flash, pairing code) stay in `src/animations/` intentionally — they render BT state but are driven externally via `BtStateObserver`, and today contain no BT includes themselves. Do not "fix" or relocate them. `fw/docs/animation-bluetooth-decoupling-plan.md` is the historical plan, now executed.
-
-### Other subsystems
-
-- `src/power.cpp` / `drivers/` — TPS25750 USB PD controller (custom driver, patch loaded via LZ4-compressed blob) and BQ25792 battery charger (custom driver). I2C-based.
-  - **Power subsystem: safe vs danger.** All `power` shell commands are registered in `src/power.cpp`.
-  - **SAFE (read-only)**: `power bq status`, `power bq limits` (ICHG/IINDPM/VINDPM/ICO/watchdog readbacks + DPM status flags — the first stop for "charging too slow" symptoms), `power bq dump`, `power pd dump`, `power pd contract` (negotiated PD contract / Type-C budget + advertised sink caps), `power vreghvout`, and the `bq25792_get_*` driver getters. All `bq25792_get_*` getters propagate I2C errors (negative errno, output untouched) — the legacy ADC/status getters used to swallow bus errors and return stale/zero-but-plausible data, which hid I2Cm bridge outages (fixed alongside the PTCH-wedge recovery work; callers that key on the return value, like the charger status thread's `vbat_ok`/`chg_ok`, rely on this).
-  - **DANGER (writes)**: any register write, 4CC task, or patch operation — `power pd patch ...` (`tps25750_download_patch()`), `power pd clear_dbfg`, `power pd go2p` (TRM-cited GO2P task intended to force PTCH mode for recovery testing; refuses to run without a battery present, and hardware-tested 2026-07-17: **cleanly REJECTED on proto0** with PatchConfigSource=6 per TRM Table 3-12 — see `tps25750_go2p()`), the `power bq charge`/`adc`/`pfm`/`freq`/`temp_override` setters (`bq25792_set_*`), and **especially `power boost`**, which writes UICR `VREGHVOUT` — irreversible without a mass chip erase. Every one of these is governed by root `CLAUDE.md`'s "NEVER write unverified commands or data into hardware parts" rule: authoritative datasheet/TRM in hand first, or stop and ask.
-  - **A wrong/implausible BQ25792 current or voltage report has two known in-repo root-cause classes** — missing two's-complement sign extension in the ADC decode (IBAT/IBUS are 16-bit signed; fixed in PR #106, regression suite `fw/tests/drivers/bq25792_decode`) and interleaved I2Cm bridge transactions (fixed in PR #111 with the `task_mutex`). Rule both out (see `/debug-fw`'s device-symptoms table) before pursuing any external fix or register write. And remember every BQ25792 register access — the bq25792 DT node is a child of the tps25750 node — goes through the TPS25750 I2Cm bridge's CMD1/DATA1 4CC sequence under that `task_mutex` (`fw/drivers/tps25750/tps25750.c`); any new BQ25792 write inherits that path and its serialization requirements.
-  - Prefer exercising power code on native_sim first: `tests/drivers/emul_tps25750` runs the **real** tps25750 + bq25792 drivers against an emulated register file — no hardware, no risk.
-- `src/buttons.cpp` — GPIO button handling. Button callback runs in ISR context; dispatch to `ButtonEventListener` is deferred via `K_MSGQ_DEFINE` + `k_work` for thread safety.
-- `src/fonts/` — `FontAtlas` and `FontShell` provide bitmap font rendering used by `TextAnimation` and `BtPairingAnimation`.
-- `src/sound/sound.cpp` — PDM microphone capture + AGC + audio DSP thread; conditionally compiled with `CONFIG_AUDIO`. (The VM3011 driver path is compiled out on proto0 — `CONFIG_VM3011` unset.) Beat detection lives in the BT-free `src/sound/audio_dsp.cpp`. **Debugging/tuning beat detection**: see `fw/docs/beat-detection-debugging.md` — on-device capture (`sound mic record_wav`, `sound dump`, `sound agc freeze/gain`, `sound dsp`), a native_sim WAV-replay harness (`fw/tests/sound/audio_dsp_replay/`), and offline scoring/plot tooling (`fw/tools/beat_lab/`). The firmware-side pieces are gated by `CONFIG_APP_AUDIO_DEBUG`, which is **`default n`** — it costs 33,440 B of RAM (92.04% -> 84.62% of the appcore region), so it is opt-in per debugging session: rebuild with `-DCONFIG_APP_AUDIO_DEBUG=y`, remembering that a changed Kconfig *default* needs `rm fw/build/fw/zephyr/.config` or `--pristine` to take effect. `sound dsp set`, `sound agc status|gate`, and `record_wav`'s raw fallback all still work without it. A capture (shell `capture start`, or the app's Capture screen) writes **two** files under `/NAND:`: `cap_NNNN.wav` and `cap_NNNN.wav.csv`. That second file is ONE combined sidecar — IMU `I,` rows interleaved with per-frame `D,` analysis rows (AGC gain / beat mask / spectrogram, same `audio_tap_format.h` wire format as `sound dump`) — gated by `CONFIG_APP_CAPTURE_AUDIO_SIDECAR` (`default y`, but `depends on !APP_AUDIO_DEBUG`, since a debug build routes to `record_wav_tap()` and never reaches this path). It is one file rather than two because `FF_FS_TINY` makes every open FIL share one sector window, so a capture holds two FatFs handles instead of three. One caveat, because it is easy to state this too absolutely: that layout is what `record_wav_capture()` writes, and `sound_record_wav()` only routes there while the DSP thread is streaming. If it is not (boot-failure diagnosis), a stock build falls through to `record_wav_direct()`, which writes `cap_NNNN.wav` + `cap_NNNN.wav.imu.csv` and **no** `.csv` — the older split layout, on a stock image. `capture_to_scenario.py` picks between them by content rather than name for exactly this reason. The analysis exists because the capture path deliberately does **not** freeze the AGC: the gain steps mid-recording and the samples already contain those steps, so a host cannot re-derive from the WAV what the device actually saw. It costs ~6 KB RAM and ~11 KB/s of volume, which is why the longest capture the 6.9 MiB volume holds is ~160 s rather than the 180 s cap; `kBytesPerSecond` in `src/sound/capture.cpp` is the single place that figure is derived from, and the app's Remaining S readout reads through it.
-- `src/core_config.cpp` — device-level settings (brightness, display/render thread rates, status LED brightness), each backed by `BtGattPersistentCharacteristic` so they persist via Zephyr's settings subsystem (see below).
-
-### Settings-backed config persistence
-
-Every BT-settable config value (core config, animation parameters/strings/colors, glim selection/loop mode) persists across power cycles — **except the currently-active animation, which is deliberately NOT persisted** (issue #311; see the flash-endurance rule above and the note at the top of `pattern_controller.cpp`'s anonymous namespace) via Zephyr's settings subsystem. The storage backend itself (`CONFIG_SETTINGS`/`CONFIG_SETTINGS_NVS`/`CONFIG_NVS`, the `settings_storage` NVS partition on external flash in `pm_static_rgb_sunglasses_proto0_nrf5340_cpuapp.yml`, and the `settings_load()` call in `bluetooth_init()`) predates this and exists for BT bonding — this just adds a second consumer.
-
-- `src/settings/persistent_value_registry.{h,cpp}` — BT-free registry mapping a stable key string → `{target, load_fn, save_fn}`, self-populated by static-init constructors. Lets one shared settings subtree handler dispatch `settings_load()` callbacks to dozens of independently-registered values instead of needing one `SETTINGS_STATIC_HANDLER_DEFINE` per characteristic. Storage is an **intrusive `sys_slist_t` of caller-owned `PersistentValueRegistryEntry` records** (issue #114) — each registrant embeds the entry in its own long-lived object (a characteristic instance's member, an extension `Slot` field, a file-scope static) and passes its address to `persistent_value_registry_register(entry*)`; the registry links it by pointer. Same idiom as Zephyr's own settings backend (`settings_store.c`). There is **no fixed capacity and no `-ENOMEM` path** — a registration can never be silently dropped. Registration must stay single-threaded at static-init/boot (unchanged invariant; list-append isn't concurrency-safe on its own).
-- `src/settings/persistent_value_store.{h,cpp}` — owns the single `SETTINGS_STATIC_HANDLER_DEFINE("appcfg", ...)` handler (forwards to the registry's dispatch) and a shared debounced `k_work_delayable`. `request_save()` (re)schedules a flush of every registered value `CONFIG_APP_SETTINGS_SAVE_DEBOUNCE_MS` after the last call, coalescing rapid writes (typing a string, dragging a color picker) into one flash write. **Don't reuse `CONFIG_BT_SETTINGS_DELAYED_STORE_MS` for this or anything else BT-free** — this module intentionally has its own Kconfig symbol so it has no dependency on the Bluetooth stack.
-- `src/bluetooth/persistent_characteristic.h` — see the GATT layer bullet above.
-- Bespoke (non-mixin) persistence: `glim_player_animation_bt.cpp` persists the glim selection by **file name**, not index (`glim_registry`'s enumeration order can shift between boots) — and since `glim_registry::init()` runs after `settings_load()`, the loaded name is resolved to an index later, in `glim_player_animation_bind_default_bt_dependencies()`. `pattern_controller.cpp` **used to** persist a single "last active animation" key hooked into `pattern_controller_change_to_animation()`. That was removed in issue #311: it cost 850-1500 ms of NVS work per switch and burned flash endurance on a per-interaction event. The device now always boots to the default animation, and an explicit "all animations off" (`Animation::None`) does not survive a power cycle either. Do not re-add a write on that path.
-- **Extension animation parameters** (`extensions/extension_param_persistence.{h,cpp}` + `extensions/extension_host.cpp`, issue #90 follow-up): a third bespoke consumer, same idea as glim — one combined `Blob` (every scalar + string param value) per extension, registered against `persistent_value_registry` under key `"ext/<sanitized displayName>"` (never slot index, since `/NAND:/ext/` file sets can shift between boots) in `scan_slot()`. Extensions hit a real ordering wrinkle glim doesn't: their identity (`displayName`) is only known from the manifest, discovered on the pattern-controller thread — strictly *after* `bluetooth_init()`'s boot-wide `settings_load()` replay has already run — so the registry's automatic dispatch-during-`settings_load()` path can never find these keys. `scan_slot()` therefore calls the new `persistent_value_store::load_value()` (a direct, synchronous `settings_load_one()`, symmetric with the existing `save_value()`) right after registering, instead of relying on the replay. Saves reuse `persistent_value_registry_mark_dirty()` + `request_save()` unchanged, hooked into `extension_host::setParamValue()`/`writeParamString()` exactly like `BtGattPersistentCharacteristic::onWrite()` does for built-ins. **A faulted extension has its persisted params cleared**: `sandbox_fault()` resets `paramValues`/`stringValues` to manifest defaults and synchronously (not via the debounce) overwrites the persisted blob with those defaults, since a bad persisted value could be what caused the crash — without this, both an `ext select` retry and a future reboot would immediately reproduce the same crash from the same poisoned value.
-- **`CONFIG_APP_PERSIST_BT_CONFIG`** (default `y`; the legacy DK board set it to `n`) gates the whole feature: every call site above is wrapped in `if constexpr (IS_ENABLED(CONFIG_APP_PERSIST_BT_CONFIG))` (in the template mixin) or `if (IS_ENABLED(...))` (in plain `.cpp` files), so the doLoad/doSave code is fully compiled out and linked away when disabled. The gate exists because the DK's internal-flash image slot had no spare room for it (already at ~75% before this feature existed) and the DK got no new features — disabling needed its own gate rather than `#ifdef`-ing every one of the ~33 characteristic declarations. The gate is kept on `main` (DK now lives on the `dk-support` branch) for any future flash-tight board.
-
-### Kconfig and optional features
-
-Animations are conditionally compiled via:
-
-```
-CONFIG_ANIMATION_MY_EYES=y
-CONFIG_ANIMATION_RAINBOW=y
-CONFIG_ANIMATION_ZIGZAG=y
-```
-
-App modules are compiled via `target_sources_ifdef(CONFIG_<MODULE> app PRIVATE ...)` lines in `fw/CMakeLists.txt` — that CMake line is the compile gate; in-source `#if DT_HAS_ALIAS(...)` guards (e.g. `led_strip_2` in `fw/src/status_led/status_led.cpp`) are secondary, never the gate. When adding a tunable for an existing module, check that module's `target_sources_ifdef` line first and add `depends on <MODULE>` to the new symbol, matching every other `APP_*` int in `fw/Kconfig` (e.g. `APP_EXT_TICK_CPU_BUDGET_MS` depends on `APP_EXTENSION_HOST`).
-
-Text animation is always compiled. Audio is gated on `CONFIG_AUDIO`. Check `prj.conf` for the full configuration and memory-saving flags (`CONFIG_ASSERT=n`, `CONFIG_CBPRINTF_FP_SUPPORT=n`); `CONFIG_SIZE_OPTIMIZATIONS=y` lives in the proto0 **board** conf, not `prj.conf`.
-
-**No `%f`/`%g` in log or shell format strings.** `CONFIG_CBPRINTF_FP_SUPPORT` and `CONFIG_PICOLIBC_IO_FLOAT` are disabled (~10KB FLASH, issue #79 ROM pass); a `%f` prints the literal specifier instead of the value (no crash). Print floats via integer fixed-point instead — see `fmt_fixed4()` / `agc_gain_db10()` in `src/sound/sound.cpp`, or `fmt_param_f32()` in `src/extensions/extension_host.cpp` (the FLOAT extension-param shell path).
-
-**Logging an enum OR a `bool` from C++ prints GARBAGE without an `(int)` cast.** `LOG_*("%d", someEnum)` / `LOG_*("%d", someBool)` from a `.cpp` file silently prints the true value in the low byte with three bytes of adjacent stack in the upper bits — e.g. `BT_SECURITY_L4` (literally `4`) printed as `59609092` (`0x038D9004`), and `err 2` as `66701314` (`0x03F9C802`). It does **not** crash and it is **not** obviously wrong at a glance, which is what makes it expensive: it cost most of a debugging session on a real BLE pairing failure (2026-08-14) because `PIN_OR_KEY_MISSING` was unreadable.
-
-Mechanism (verified in the SDK, `zephyr/include/zephyr/sys/cbprintf_cxx.h`): under `CONFIG_LOG_MODE_DEFERRED` the log arguments are packed, not passed as varargs, so **no integer promotion happens**. The C path (`_Generic` in `cbprintf_internal.h`) explicitly lists `char`/`short`/etc. and promotes them; the C++ path has matching `z_cbprintf_cxx_store_arg()` overloads for those scalar types (`int tmp = arg + 0;`) but **none for enums and none for `bool`**, so both fall through to the generic template. (For `bool` and for a scoped enum, `T` is an *exact* match for that template, which beats every conversion-requiring candidate — so it wins outright rather than merely by default.)
-
-```c
-size_t wlen = z_cbprintf_cxx_arg_size(arg) / sizeof(int);  /* MAX(sizeof(T), 4) = 4 bytes */
-void *p = &arg;                                            /* ...address of a 1-byte object */
-z_cbprintf_wcpy((int *)dst, (int *)p, wlen);               /* copies 4 bytes out of 1 */
-```
-
-Nearly every enum here is 1 byte: Zephyr marks many `enum __packed` (`bt_security_t`, `bt_conn_type`), and the ARM EABI build uses short enums, which shrinks small **project-defined** enums too. So this applies to our own enums, not just SDK ones — and `bool` is 1 byte everywhere.
-
-Rule: **cast every enum log argument — scoped or unscoped — and every `bool`, to `(int)`** (`src/bluetooth.cpp`'s `security_changed()` carries the full rationale; its `pairing_complete()` is the `bool` case; `charger_policy.cpp:113` and `buttons.cpp:68` are other examples).
-
-**`enum class` is NOT safe by construction — do not assume the compiler catches it.** It is tempting to think a scoped enum can't reach a `%d` silently, but nothing here stops it: Zephyr's argument checker (`z_log_printf_arg_checker`, `log_core.h`) is only `__printf_like`, so a mismatch is a **`-Wformat` warning**, and this build enables **no `-Werror`** (verified: neither `fw/prj.conf` nor `fw/CMakeLists.txt` sets it) — so `LOG_INF("state %d", BtThreadState::CONNECTED)` compiles clean and ships the identical garbage. Worse, an *unscoped* packed enum produces **no warning at all**, which is exactly why this went unnoticed for so long. Treat the warning as a bonus, never as the gate.
-
-Where the SDK ships a stringifier, prefer it over a hand-rolled name table (`bt_security_err_to_str()` needs `CONFIG_BT_SECURITY_ERR_TO_STR`, which is EXPERIMENTAL and costs a string table — currently off).
-
-**Changing a `default` here does not take effect on an incremental build** — see "An incremental build IGNORES a changed Kconfig `default`" above before you conclude a new value isn't working.
-
-**Don't reuse a Kconfig symbol from one subsystem to configure unrelated code in another, even if the value/semantics happen to line up.** E.g. a BT-free module's debounce/delay tunable should get its own `CONFIG_APP_*` symbol, not borrow `CONFIG_BT_SETTINGS_DELAYED_STORE_MS` just because the timing happens to match — that creates a hidden cross-subsystem dependency and works against this project's general push to decouple BT from non-BT code (see the animation/BT decoupling refactor above).
+- **Always use bounded string copies** (`strncpy` + explicit NUL, `snprintf`, `memcpy` with a checked length) — never
+  `strcpy`/`sprintf`, even when the buffers are provably the same size today (PR #89 review feedback).
+- **Never do flash/filesystem I/O from a cooperative-priority thread** — a long flash write starves every other thread.
+  Do it from a low-priority workqueue instead (PR #51).
+- **Wrap every multi-step I2C/register transaction in a per-device `k_mutex`** (e.g. the TPS25750 I2Cm bridge's
+  CMD1/DATA1 sequences), with `_locked` inner functions so every early return releases the lock, and bounded poll loops
+  (timeout → `-ETIMEDOUT`) instead of infinite ones. Interleaving corruption shows up as **plausible-but-wrong values**,
+  not as I2C errors (PR #111; `.claude/rules/fw-power.md`).
+- **No info-level logs in steady-state/per-tick paths** (render ticks, notify calls, poll loops) — they become permanent
+  log spam that buries real events (PR #110).
+- **Never persist a value on a per-interaction path** (an animation switch, a button press, a shuffle hop) — flash
+  endurance is a budget, and a settings write is for a value the user asked to keep (issue #311).
+- **A settings-key MISS is orders of magnitude more expensive than a hit**, and the NVS name cache that hides it
+  overflows silently — size it against churn (`.claude/rules/fw-settings-persistence.md`).
+- **Logging an enum OR a `bool` from C++ prints GARBAGE without an `(int)` cast** — cast every enum (scoped or not) and
+  every `bool` log argument; `enum class` is not safe by construction (`.claude/rules/fw-logging.md`).
+- **No `%f`/`%g` in log or shell format strings** — float printf is compiled out and prints the literal specifier; use
+  integer fixed-point (`.claude/rules/fw-logging.md`).
+- **Don't reuse a Kconfig symbol from one subsystem to configure unrelated code in another**, even if the value lines up
+  — give it its own `CONFIG_APP_*` symbol (`.claude/rules/fw-kconfig-build.md`).
+- **Animations must draw near full-scale (255)** — the global brightness factor scales every pixel down, so a "dim"
+  animation is invisible (`.claude/rules/fw-animations.md`).
 
 ### Thread priorities and stack sizes
 
-**`fw/docs/threading.md` is the single system-wide map** — every thread, its priority, its
-stack symbol, and the invariants between them. Read it before changing any thread priority
-or adding a new thread; the important relationships (which threads are cooperative and
-therefore unpreemptable, which must stay preemptible because they touch flash) are not
-visible from any one call site.
-
-Every application thread priority and stack size is a Kconfig symbol (issue #269) — grouped
-under the `Thread priorities and stack sizes` menu in `fw/Kconfig`, plus the pre-existing
-`IMU_THREAD_*` / `APP_EXT_HOST_*` / `APP_*_WORKQ_STACK_SIZE` symbols left in place next to
-their modules. **Never re-introduce a bare literal** into a `K_THREAD_DEFINE` /
-`K_KERNEL_THREAD_DEFINE` / `k_thread_create` / `k_work_queue_start` call. Ordering
-invariants are enforced by `BUILD_ASSERT`s next to the threads they constrain, so a bad
-`prj.conf` override fails the build instead of misbehaving at runtime.
-
-A standalone Twister app does not see `fw/Kconfig`. Any test suite that compiles a
-thread-owning `.cpp` needs a test-local `Kconfig` redeclaring the symbols with matching
-defaults — see `fw/tests/led_controller/Kconfig` and `fw/tests/imu/pipeline/Kconfig`.
+**`fw/docs/threading.md` is the single system-wide map** — every thread, its priority, its stack symbol, and the
+invariants between them. Read it before changing a thread priority or adding a thread. Every application thread
+priority and stack size is a Kconfig symbol (issue #269); **never re-introduce a bare literal** into a
+`K_THREAD_DEFINE` / `K_KERNEL_THREAD_DEFINE` / `k_thread_create` / `k_work_queue_start` call. Ordering invariants are
+`BUILD_ASSERT`s next to the threads they constrain. A standalone Twister app does not see `fw/Kconfig` — see
+`/add-fw-test` for the test-local `Kconfig`. Converting a thread to user mode: `.claude/rules/fw-userspace.md`.
 
 ### SYS_INIT ordering for early registration
 
-`SYS_INIT(fn, APPLICATION, N)` runs before `K_THREAD_DEFINE` threads are scheduled. Lower N runs first. When an observer or listener must be registered before a thread can fire its first event, use `SYS_INIT(APPLICATION, 0)`. Both `bluetooth_init` and `button_init` run at priority 1, so registering observers at priority 0 guarantees the observer is in place before either subsystem starts.
+`SYS_INIT(fn, APPLICATION, N)` runs before `K_THREAD_DEFINE` threads are scheduled; lower N runs first. When an observer
+or listener must be registered before a thread can fire its first event, use `SYS_INIT(APPLICATION, 0)`: both
+`bluetooth_init` and `button_init` run at priority 1, so priority-0 registration is in place before either starts.
 
-**C++ static constructors run after POST_KERNEL but BEFORE APPLICATION-level SYS_INIT** (`z_static_init_gnu()` in NCS v3.1.1's `zephyr/kernel/init.c` `bg_thread_main`, between the two `z_sys_init_run_level()` calls). Any container that static-init constructors register into — e.g. `src/settings/persistent_value_registry.cpp`, populated by the `BtGattPersistentCharacteristic` / `ChargeEnableCharacteristic` ctors and the `LastActiveAnimationRegistrar` / `GlimPersistenceRegistrar` structs — must be constant-initialized (plain zero-initialized statics, like that file's `sRegistry[]` + `sRegistryCount`), never initialized from an APPLICATION SYS_INIT, which runs after the ctors and would silently discard every registration.
+**C++ static constructors run after POST_KERNEL but BEFORE APPLICATION-level SYS_INIT** (`z_static_init_gnu()` in NCS
+v3.1.1's `zephyr/kernel/init.c` `bg_thread_main`, between the two `z_sys_init_run_level()` calls). Any container that
+static-init constructors register into — e.g. `fw/src/settings/persistent_value_registry.cpp`, populated by the
+`BtGattPersistentCharacteristic` / `ChargeEnableCharacteristic` ctors and the `GlimPersistenceRegistrar` struct — must
+be constant-initialized (like that file's `SYS_SLIST_STATIC_INIT` list head), never initialized from an APPLICATION
+SYS_INIT, which runs after the ctors and would silently discard every registration.
 
-It's very important that SYS_INIT() priority levels must ALWAYS be a plain pre-processor directive that derives to a single number. SYS_INIT() priority levels CANNOT be expressions that require evaluation, they MUST be a plain number or a single pre-processor directive that is replaced directly with a number.
-
-For example, this is illegal:
+**SYS_INIT() priority levels must ALWAYS be a plain number or a single preprocessor macro that expands directly to a
+number** — never an expression. Both of these are illegal:
 
 ```
 SYS_INIT(mcuboot_info_init, APPLICATION, CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY + 1);
-```
 
-This is also illegal:
-
-```
 #define MCUBOOT_INFO_INIT_PRIORITY (CONFIG_RETENTION_BOOTLOADER_INFO_INIT_PRIORITY + 1)
 SYS_INIT(mcuboot_info_init, APPLICATION, MCUBOOT_INFO_INIT_PRIORITY);
 ```
 
-To enforce init ordering, use a plain KConfig value and then add `static_assert()`s as needed to guarantee ordering.
+To enforce init ordering, use a plain Kconfig value and add `static_assert()`s as needed to guarantee ordering.
 
-### On-device (HIL) test suite
+## Where the detail lives
 
-`fw/tests_device/` runs pytest suites against the real production sysbuild
-image on a flashed proto0, via `twister --device-testing` + the
-pytest-twister-harness `shell`/`dut` fixtures. Entry point:
-`fw/scripts/run-device-tests.sh` (agents: hold the `board` lock first, same
-as flashing). Architecture + CI north-star: `fw/docs/on-device-testing.md`;
-tier semantics and house rules: `fw/tests_device/README.md`. It complements —
-never replaces — the native_sim suites below; anything testable on native_sim
-belongs there.
+Path-scoped rules load automatically when you Read a matching file; Read them by hand when planning (subagents may not
+load them).
 
-### Test structure
-
-Tests live under `tests/` as Zephyr Twister test suites using `ztest`. Each suite has its own `CMakeLists.txt`, `prj.conf`, and `testcase.yaml`:
-
-- `tests/animations/animation_registry/` — unit tests for the registry itself.
-- `tests/animations/*_animation_di/` — dependency-injection tests per animation, compiling the pure animation `.cpp` without BT. **No DI suite sets `CONFIG_BT`** (as of 2026-07 the only firmware test suite that does is `tests/bluetooth/battery_service` — re-verify from the repo root with `grep -rln CONFIG_BT=y fw/tests --include=prj.conf`). Coverage is not 1:1: `matrix_code` has no DI suite (as of 2026-07).
-- `tests/bt_state_observer/` — interface contract tests for `BtStateObserver` (does not link `bluetooth.cpp`).
-- `tests/configuration_provider/` — interface contract tests for `ConfigurationProvider`.
-- `tests/power/tps25750_patch_decompression/` — verifies the LZ4-compressed TPS25750 patch round-trips correctly.
-- `tests/drivers/emul_bmi270/` — exercises the **real upstream bmi270 driver** on native_sim through the out-of-tree BMI270 emulator at `drivers/emul_bmi270/` (upstream Zephyr has no BMI270 emul; ours is SPI-only, matching proto0). Two Twister scenarios: poll mode, and `CONFIG_BMI270_TRIGGER_OWN_THREAD` where the data-ready trigger is fired by toggling INT2 (**irq-gpios index 1** — the driver maps data-ready to INT2, not INT1) via native_sim's `gpio_emul`. Tests inject SI-unit samples with `emul_sensor_backend_set_channel()` and can peek registers via `emul_bmi270_get_reg()`. `CONFIG_EMUL_BMI270` depends on `EMUL && BMI270` so hardware builds never compile it. Deferred follow-ups: I2C support, bad-chip-id failure path.
-- `tests/drivers/emul_tps25750/` — exercises the **real tps25750 + bq25792 drivers** on native_sim through the out-of-tree TPS25750 emulator at `drivers/emul_tps25750/`: the bq25792 node is a DT child of the tps25750 node (same topology as proto0), so every BQ register access runs through the real I2Cm bridge (CMD1/DATA1 4CC tasks + `task_mutex`) into the emulated register file. Two Twister scenarios: default (boots in "APP " mode), and `.patch_download` (`CONFIG_EMUL_TPS25750_BOOT_MODE_PTCH=y` + `CONFIG_TPS25750_INTERNAL_PATCH=y`, asserting the full boot-time PBMs → chunked upload → PBMc flow via received-byte count + FNV-1a hash). Non-obvious mechanics: (1) patch chunks arrive on a **second I2C address** (the DT `patch-address`), which `EMUL_DT_DEFINE` can't cover — the emulator's init hand-registers an extra `struct i2c_emul` for it via `i2c_emul_register()`; (2) the emulated CMD1 must stay **busy for a nonzero window** (`emul_tps25750_set_cmd_delay_ms`) or a bridged transfer contains no blocking point on native_sim, threads never interleave, and the concurrency regression test (for the task_mutex serialization fix) can't reproduce the race — validated by disabling the mutex: 17/100 concurrent reads then return the *other* register's value; (3) the test app needs `list(APPEND DTS_ROOT ...fw)` before `find_package(Zephyr)` or the custom `ti,tps25750`/`ti,bq25792` bindings aren't found; (4) all BQ getters (`bq25792_get_*`) now propagate I2C errors — error-path tests can assert getter errnos directly (driving the bridge with `i2c_burst_read(tps_dev, 0x6B, ...)` also still works).
-- `tests/imu/pipeline/` — end-to-end test of `src/imu/imu.cpp` (compiled directly into the test app) against the BMI270 emulator: boot-time ODR/power config, DRDY-driven frames into `imu_result_q`, and the msgq purge-keep-freshest overflow path. Timing gotcha: the bmi270 driver's per-register `k_usleep` delays each round up to a full 10 ms tick on native_sim, so `imu_thread`'s startup config takes ~200 ms of simulated time (the suite setup polls PWR_CTRL for completion) and DRDY pulses need ~50 ms spacing or they coalesce on the driver's trigger semaphore and frames are dropped. `imu.cpp`'s two `fw/Kconfig` symbols (`IMU_THREAD_PRIORITY`/`IMU_THREAD_STACK_SIZE`) are redeclared in the test-local `Kconfig`.
-
-**Pulling out-of-tree drivers + their Kconfig symbols into a standalone test app**: the pattern (used by both `tps25750_patch_decompression` and `emul_bmi270`) is a test-local `Kconfig` containing `source "Kconfig.zephyr"` + `rsource "../../../drivers/Kconfig"`, plus `add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../../drivers ${CMAKE_CURRENT_BINARY_DIR}/app_drivers)` in the test `CMakeLists.txt`. No Zephyr module registration needed. Driver dirs use `zephyr_sources()`, not `zephyr_library()` (see the comment in `drivers/vm3011/CMakeLists.txt`).
-
-**Twister `testcase.yaml` naming**: The `name` field must use a dotted `category.name` format (e.g., `interfaces.bt_state_observer`). A plain single-word name causes a `TwisterException` at runtime.
-
-**C++23 in test `prj.conf`**: Use `CONFIG_STD_CPP2B=y` (not `CONFIG_STD_CPP23` — that symbol does not exist). Also add `CONFIG_REQUIRES_FULL_LIBCPP=y` and `CONFIG_REQUIRES_FULL_LIBC=y`.
-
-**Test isolation from heavy dependencies**: If a registration function (e.g., `bluetooth_register_state_observer`) lives in a file with heavy BT stack dependencies, avoid linking that file in unit tests. Test the interface/observer contract directly on a mock implementation without calling the real registration function.
-
-### CONFIG_USERSPACE / kernel-user mode separation (issue #79, proto0 only)
-
-Enabled on proto0 (`CONFIG_USERSPACE=y` in `boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`). **Never enabled on the legacy DK board** (dk-support branch) — its flash budget was already tight (~95% used) and the motivation (LLEXT animation sandboxing) is proto0-only anyway.
-
-**FLASH cost**: `CONFIG_USERSPACE=y` alone (no threads converted) costs ~105-246KB — mostly `z_vrfy_*`/`z_mrsh_*` syscall verifier functions Zephyr generates for every syscall-covered API already compiled in (GPIO, I2C, SPI, flash, sensor, LED, etc.), regardless of whether anything actually calls them from user mode. This is generated per-Kconfig-enabled-subsystem, not per-actual-usage — **there is no way to selectively emit syscalls for only the subsystems a converted thread needs**; confirmed by reading `parse_syscalls.py`/`gen_syscalls.py`/`syscall_dispatch.c`. `CONFIG_EMIT_ALL_SYSCALLS` only widens emission further, never narrows it. Fitting this required a dedicated flash-reduction pass first: `CONFIG_DUMP_DEVICE_REGISTERS=n` (~94KB, see the comment at its Kconfig line), `CONFIG_FLASH_SIMULATOR_STATS=n` in `prj.conf` (~4KB), and a `tuple_cat` collapse in `bt_service_cpp.h` (see that file's comment).
-
-**Second ROM pass (issue #79 follow-up)** took the appcore from 94.6% to **64.6% FLASH** (624,492 B of the 966,144 B `app` slot), measured deltas:
-- `CONFIG_SIZE_OPTIMIZATIONS=y` replacing `CONFIG_DEBUG_OPTIMIZATIONS=y` (proto0 board conf): **~255KB**. The entire image had been compiling `-Og`. Flip back temporarily for deep GDB sessions if needed.
-- Shell pruning (`CONFIG_SENSOR_SHELL=n`, `CONFIG_FLASH_SHELL=n`, `CONFIG_DEVMEM_SHELL=n`): **~29KB** FLASH + ~21KB RAM.
-- Float printf removal (`CONFIG_CBPRINTF_FP_SUPPORT=n`, `CONFIG_PICOLIBC_IO_FLOAT=n`, after converting `sound.cpp` to integer prints): **~4.9KB**.
-- Deliberately kept: LLEXT (+shell/EDK, ~20-30KB — groundwork for the loadable-extensions branch), DEBUG_COREDUMP (feature planned), CMSIS-DSP (all four sub-options genuinely used by `audio_dsp.cpp`: rfft_fast/cmplx_mag_squared/mean/std/hanning).
-- Biggest remaining single item: `bt_service_cpp.h` template instantiations, **~70KB** of `fw/src`'s ~152KB (per-service `BtGattServer<...>` constructors + `tupleToArray` expansions). Recovering it means building the `bt_gatt_attr` tables at runtime instead of per-service templates — a separate, riskier refactor (tracked as a follow-up issue).
-
-**`imu_thread` (`src/imu/imu.cpp`) is the first (and so far only) thread converted to `K_USER`.** Two real, non-obvious crashes were hit converting it — both root-caused via GDB+SWD (USB never enumerates when either crash happens at boot, so serial logs aren't available):
-
-1. **`K_THREAD_DEFINE` + `k_mem_domain_add_thread()` crashes on this SoC.** This SoC config has `CONFIG_ARCH_HAS_CUSTOM_SWAP_TO_MAIN=1`, which means `K_THREAD_DEFINE`-created (static) threads are set up with `_current == NULL` — this skips `z_mem_domain_init_thread()` and leaves the thread's `mem_domain_info` permanently zeroed (never linked into `k_mem_domain_default` or any domain). `k_mem_domain_add_thread()` unconditionally tries to unlink the thread from its prior domain first (`remove_thread_locked()` → `sys_dlist_remove()`), which faults on that never-linked list node. **Fix: create the thread dynamically instead** — `K_THREAD_STACK_DEFINE` + `struct k_thread` + `k_thread_create(..., K_FOREVER)` called from a SYS_INIT hook (so `_current` is a real, already-domain-linked thread), do the access-grant/domain setup, then `k_thread_start()`. Matches the pattern in Zephyr's own `samples/userspace/prod_consumer/src/app_a.c`. This is a project-wide fact, not specific to `imu_thread`: **every** `K_THREAD_DEFINE` thread in this project has this same zeroed `mem_domain_info` (confirmed via GDB on `status_led_thread` too) — any future thread conversion needs the same dynamic-creation treatment, not just a `K_USER` flag added to its existing `K_THREAD_DEFINE`.
-2. **A converted thread also needs `z_libc_partition`, not just its own partition.** `z_arm_tls_ptr` (the current thread's TLS pointer, read by literally every thread at entry via `__aeabi_read_tp()` since `CONFIG_CURRENT_THREAD_USE_TLS=y` here) lives in `z_libc_partition`, which is part of `k_mem_domain_default` by default — so every thread has it for free until it's moved to a custom domain. Moving a thread to its own memory domain (as any `K_USER` conversion does) silently drops that access unless `z_libc_partition` (`#include <zephyr/sys/libc-hooks.h>`) is added to the new domain's partition list alongside the thread's own partition. Without it: a usage fault on the very first instruction of `z_thread_entry()`, before the thread's own entry function even starts.
-
-See `src/imu/imu.cpp`'s `imu_init()` for the working reference implementation of both fixes.
-
-**Threads still blocked from conversion** (missing syscall coverage in NCS v3.1.1, confirmed by grepping `__syscall` across the actual headers this project uses, not inferred): the entire Bluetooth host stack, the USB device_next stack, mcumgr, the settings subsystem, the filesystem API (`fs_*`), `flash_area_*`, `dmic_*`, and the WS2812 `led_strip_update_rgb()` driver call all have **zero** `__syscall` wrappers. `bt_thread`, `audio_dsp_thread` (also does raw MMIO register pokes for AGC gain), the MCUboot updater work queue, and the settings-save work queue should stay kernel-mode indefinitely barring upstream NCS syscall additions (per the "never touch the NCS SDK" rule). `led_display_thread`/`status_led_thread` are conceptually simple but blocked on `led_strip_update_rgb` not being a syscall — would need one small custom project-defined syscall wrapper shared by both. `pattern_controller_thread` (the actual LLEXT-motivated target) needs its FS (`glim_registry::init()`) and settings-persistence (`persistent_value_store::request_save()`) calls hoisted out into an IPC/message-passing call to a kernel-mode helper first, since those can't be called directly from user mode.
-
-**MPU region budget**: nRF5340's Cortex-M33 MPU has 8 hardware regions; 2 are permanently consumed by Zephyr's default flash/RAM background map, leaving ~6 dynamic regions (~4-5 usable partitions per active memory domain in practice) — a real constraint for anyone adding more domains.
-
-**Note the old per-thread conversion plan above is superseded for the LLEXT case** by the extension-host design (issue #85, implemented below): only extension code runs in user mode; `pattern_controller_thread`/`led_display_thread`/`status_led_thread` stay kernel-mode, so no `led_strip_update_rgb` syscall or FS-hoisting is needed.
-
-### Sandboxed animation extensions (issue #85, `src/extensions/` + `fw/extensions/`)
-
-`.llext` animation extensions are discovered at boot from `/NAND:/ext/` and executed **exclusively on one K_USER sandbox thread** confined to a single shared memory domain re-initialized per activation (`z_libc_partition` + llext's 4 TEXT/RODATA/DATA/BSS partitions = 5, hardware-verified to fit the MPU budget). The kernel-side pattern controller exchanges data purely through the extension's own exported globals (ABI in `include/rgbx/rgbx_api.h` — 16 params of type UINT32/COLOR/BOOL/STRING/FLOAT (FLOAT rides in the shared u32 slot as raw IEEE-754 bits, added with NO ABI version bump — layout unchanged; non-finite values are rejected at every write/restore path via `extension_manifest::f32_bits_non_finite`), IMU + audio + button inputs; C++ wrapper `include/rgbx/rgbx_animation.h`), enforces a per-tick **CPU** budget (`CONFIG_APP_EXT_TICK_CPU_BUDGET_MS`, with `CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS` as a wall-clock ceiling), and recovers from hangs/faults by tearing the sandbox down. Extensions appear as first-class animations: runtime GATT services (`extension_bt.cpp`, `CONFIG_BT_GATT_DYNAMIC_DB=y`, ids `0x40 + slot`, capacity/ID constants + static_asserts in `extension_limits.h`) that the app renders with zero app-side changes, including the bulk metadata characteristic (`extension_metadata_blob.{h,cpp}`, issue #90 follow-up): a runtime-built mirror of `bt_service_cpp.h`'s compile-time `MetadataBlobBuilder` — same wire format, same fixed UUID/version, threaded through `extension_bt.cpp`'s existing `append_characteristic()` helper so blob order can never drift from GATT handle order. Gated by the same `CONFIG_APP_BT_METADATA_CHARACTERISTIC` symbol as the compile-time mechanism, though the cost here is a few hundred bytes of RAM per extension slot, not flash (no template instantiation). Manifest validation is a pure function (`extension_manifest.cpp`, covered by the `extensions.manifest` native_sim suite) — every manifest-embedded pointer is untrusted and bounds-checked before any kernel-mode dereference. Developer docs: `fw/extensions/README.md`; API docs are published at <https://rgb-sunglasses.autom8ed.com/api> and built locally with `fw/extensions/build-docs.sh` (never a bare `doxygen Doxyfile` — the script fixes the CWD the Doxyfile's relative paths depend on and asserts the pinned Doxygen version, because an older one exits 0 while leaving the HTML header template's placeholders unsubstituted). That build is warnings-as-errors and gated pre-merge by `sdk-ci.yml`'s `docs` job, so **anything added to `include/rgbx/` needs a `@brief` plus `@param`/`@return` on every parameter and return value or CI fails**. **Standalone/community extensions** (developed outside this repo) are a separate flow — route via the root `CLAUDE.md` task-routing table; don't restate the route here. The one firmware-side invariant that lives in this repo: `check-allowed-symbols.sh` (build.yaml) asserts the SDK's `allowed-symbols.txt` ⊆ the built firmware's export table — **deliberately one-directional**. REMOVING a base-image `EXPORT_SYMBOL` that the list sanctions breaks CI; ADDING one is NOT flagged — a new export only becomes usable by standalone extensions after a manual `fw/sdk/arm/allowed-symbols.txt` addition (otherwise the SDK gate keeps rejecting it even though the device would resolve it; issue #295's libm additions must update both sides together). `allowed-symbols.txt` has a **third** lockstep partner as of issue #351: `fw/include/rgbx/rgbx_sys.h`, which must DECLARE every sanctioned symbol with the correct prototype, asserted by `check-sys-header.sh` (sdk-ci.yml) — it generates a typed function-pointer initialization per symbol and compiles it, so an undeclared symbol and a wrong prototype both fail, in both directions. Shipping the list without prototypes was its own silent-failure class: `extern "C"` matches on the name, so a wrong signature still links, and the consequences then diverge by target — ARM/ELF resolves by name alone (a wrong return type survives AAPCS, a wrong parameter type corrupts the call silently), while wasm types calls by full signature and traps with `RuntimeError: unreachable` on the first call. The wasm link now passes `-Wl,--fatal-warnings` (both `fw/sim/build-extensions.sh` and `rgbx-sdk-config.cmake`) so wasm-ld's signature-mismatch warning is a build error; there is no ARM equivalent, which is why the header — not the gate — is the fix. Non-obvious facts learned the hard way:
-
-- **Load-on-activate**: boot discovery loads each ELF transiently (validate + copy metadata), then unloads; only the ACTIVE extension is llext-resident. `activate()` (often on the BT RX thread) only queues the load — the pattern-controller thread performs the FAT read + relocation + sandbox bring-up lazily on the first `tick()`, so an `rgbx_init` failure is reported *asynchronously* (fault + Is Active notify), not as an `activate()` return value. Consequence: the heap only needs the largest single extension (`CONFIG_LLEXT_HEAP_SIZE=24` KB) and 16 slots fit.
-- **The llext heap buffer is `.noinit` but IS counted in the linker's RAM percentage** (verified in zephyr.map — don't "discover" 64 KB of free RAM that isn't there).
-- **`k_sys_fatal_error_handler` is overridden in `sandbox_fatal_handler.cpp`** (it moved there from `extension_host.cpp` when the Wasm runtime gained the same containment) (root-caused via GDB+SWD): Zephyr's default weak handler halts the WHOLE system on any fault — z_fatal_error() only demotes to a thread abort if the handler *returns*. The override returns only for faults on the sandbox thread; all other faults keep the stock halt-for-GDB behavior. Without it, an extension MPU fault parked the CPU in `arch_system_halt()`.
-- **C++ extensions require a partial link** (`ld -r`, done by `fw/extensions/build.sh`): COMDAT group sections (`.text._Z...`) interleave with `.data`/`.bss` file offsets in a single object and fail llext's region-overlap check ("Region 0 ELF file range ... overlaps with 1").
-- **The `llext-edk` cmake target does not rebuild when headers change** — delete `build/fw/zephyr/llext-edk.tar.xz` first (build.sh does).
-- **Extension init arrays run inside the sandbox** via `llext_bringup()` from the user-mode thread entry (`llext_get_fn_table` is a syscall) — needed for C++ static constructors, though GCC constant-initializes simple instances (vtable pointer via `.rel.data`).
-- Re-initializing the shared `k_mem_domain` is safe **only after the sandbox thread is aborted** (`k_mem_domain_init` fully resets the object; `k_thread_abort` unlinks the thread) — every teardown path preserves that order.
-- Debug shell: `ext list` / `ext select <slot>` / `ext param <slot> <idx> [<value>]` (type-aware: bools 0/1, strings as text) / `ext stats` (per-tick **cpu** and **wall** min/avg/max µs, printed separately — see the budget bullet below) / `ext faults` + `ext faults clear`. The hello kitchen-sink demo doubles as the recovery test (`Crash`/`Hang` bool params).
-  - **`ext faults` is the post-mortem surface** (issue #308): the fault reason is otherwise a single `LOG_ERR` that scrolls out of the UART backlog, and boot-time faults may never reach a console at all (the USB CDC backend attaches seconds into boot, after `CONFIG_LOG_BUFFER_SIZE` has overflowed). It latches per slot — verdict, name, uptime, the cpu/wall that tripped it, whether params were reset, and current state — **until explicitly cleared**, and it reports slots that have since recovered, which is the whole point: a transient fault looks perfectly healthy in `ext list`. Discovery-time failures latch too, so an empty report is real evidence rather than absence of evidence.
-  - **A CPU fault also latches its crash site**: `k_sys_fatal_error_handler` (`sandbox_fatal_handler.cpp`) hands the reason + exception frame to `extension_host::noteSandboxFault()`, which resolves PC and LR against the resident llext's `mem[]`/`mem_size[]` into **section-relative offsets** (the dependency-free `extension_fault_pc.h`, suite `extensions.fault_pc`) and parks them in `sPendingCrash` for the next `sandbox_fault()` to fold into the record. `ext faults` then prints `pc 0x... = .text+0x<off>` plus a paste-ready `arm-none-eabi-addr2line -f -j .text -e <file>.llext.debug 0x<off>` line for the release's debug sidecar (PR #429). Two non-obvious points: the handler runs in exception context (no lock, no log, no allocation) and reads a dedicated `sCrashExt` pointer, because `runtime_load()` starts the sandbox thread *before* `sResident.ext` is assigned and `rgbx_init` can fault in that window; and the verdict order (CPU overrun → Completed → SandboxDied) means a crashed thread can be reported as `CpuBudgetExceeded` — the crash site is attached whenever one is pending, regardless of verdict. Verified on proto0 2026-09-02: `hello` with `Crash` set reports `pc = .text+0x11c`, which a `-g` build of the same source resolves to `hello.c:137` (the deliberate kernel-SRAM write), while the LR is *outside* the extension — it resolves in `zephyr.elf` to the host's `sandbox_entry`, the normal shape for a crash directly in `rgbx_tick`. Reader-facing recipe: `fw/extensions/README.md` "Resolving a crash to a source line".
-- **The per-tick budget is CPU time, never wall time (issue #276).** `CONFIG_APP_EXT_TICK_CPU_BUDGET_MS` is charged against the sandbox thread's own `execution_cycles` (hence `APP_EXTENSION_HOST select THREAD_RUNTIME_STATS`); `CONFIG_APP_EXT_TICK_WALL_BACKSTOP_MS` is only a ceiling for an extension that *blocks* rather than spins. Both handshake sites are covered — the steady-state tick and the `rgbx_init` wait in `runtime_load()` — sharing one deadline per `tick()`. Decision logic is the dependency-free `src/extensions/extension_tick_budget.h`, covered by the `extensions.tick_budget` native_sim suite. **If you reintroduce a wall-clock deadline in this path you reintroduce the bug.** Full rationale, measured numbers, the lock-hold trade-off and the exact bounds live in `fw/docs/threading.md` — the single system-wide map; don't restate them elsewhere.
-- **Every tick-time fault clears the slot's persisted params; load/init-time failures do not.** Params reach the extension only at tick time, so an init failure can't have been caused by them. Do not try to spare the blocked/wall-backstop case: an extension that burns no CPU is often blocked *because* a parameter sent it down a waiting path, and sparing it leaves the slot unable to recover across `ext select` or a reboot.
-- **Animations must render near full-scale (255) channel values**: the pattern controller multiplies every pixel by the global brightness factor (default 20/1000 = 0.02), so a "dim" animation drawing at 32/255 is invisible on the panel. This looked like a crash on the original hello demo — it was just arithmetic.
-  - **Corollary — a color's hue visibly drifts as an animation dims it, and that is NOT a bug in the animation.** The same 0.02 factor means a full-scale channel reaches the strip as ~5, so an animation that also scales by its own envelope (e.g. `PulseAnimation`'s triangle-wave brightness) is working with 0-5 PWM levels. Integer truncation then kills the smaller channels first: a saturated pink `(255,0,129)` renders `(5,0,2)` at the peak and degrades `(2,0,1)` → `(1,0,0)` — i.e. **pure red** — at the dim end, so it reads as "fading between pink and red". Confirmed on hardware (issue #259) by writing the same color as a plain Static value: identical shift, no color mode involved. Pastels hide it (their channel ratios survive truncation); fully-saturated hues, which is exactly what `anim_color_from_hue()` emits, show it most. Reproduce with a Static color before blaming animation or color-mode logic.
-- **Fault recovery is deliberate**: a dead sandbox is unloaded, un-marks + notifies the animation's Is Active characteristic (app toggle turns off), scrolls a `FAULT: <name>` banner on the panel (proxy), and BLE re-activation is rejected; only `ext select <slot>` clears the fault and retries. The host serializes activate/deactivate/tick/param-writes with a mutex — `pattern_controller_change_to_animation()` runs synchronously on the *caller's* thread (BT RX for GATT writes, shell), so nothing here may assume pattern-controller thread context.
-
-### Scope reminder
-
-Prefer changes under `fw/` (app code, relative to the current repo/worktree root). Only touch `/root/ncs/v3.1.1` (NCS SDK) when explicitly requested.
-
-### Zephyr RTOS
-
-This project uses the Zephyr RTOS.
-
-Read the documentation directly from /root/ncs/v3.1.1/zephyr/doc
-
-## Hardware Environment
-
-Run `/check-hardware` at the start of any session to discover what's available. The skill checks for the dev board (lsusb on Linux, IORegistry on macOS), verifies the TTY ports, and checks for the phone (Android via ADB in the devcontainer; iPhone via devicectl on macOS).
-
-### Validating the IMU coordinate frame on hardware
-
-`fw/docs/imu-coordinate-frame.md` documents the BMI270 axes as worn, and its "Bench
-verification" section records the measured result (2026-08-24, fw v3.4.0-stable).
-That doc deliberately carries the *result* only; the method and its failure modes
-live here. Each trap below cost real session time.
-
-**Capture.** Hold the `board` lock, then `capture start <seconds>` on the shell. The
-`.csv` sidecar carries `I,ms,seq,ax,ay,az,gx,gy,gz` rows at 25 Hz, scaled ×1000
-(mm/s², mrad/s); pull it off the USB mass-storage volume read-only, identifying the
-disk by its `RGB-SG` SCSI string rather than a fixed `/dev/sdX`. Do **not** reach for
-the `mcp__serial__rgb_sunglasses_capture_scenario` MCP tool for this: it front-loads
-an AGC freeze via a `sound agc` subcommand v3.4.0-stable does not have, and aborts
-before recording anything. The AGC is irrelevant to IMU work — the plain shell
-command is the right tool.
-
-**Accelerometer.** Six static poses, each putting one axis up; the up-axis reads +1 g
-and the other two ~0. Segment by detecting stationary plateaus in the data rather
-than slicing by wall clock — then the operator needs no start cue and timing slop
-costs nothing. **Set the stillness threshold from hand tremor, not from zero**: a
-hand-held pose runs 0.2–0.5 rad/s, so a 0.15 rad/s cutoff chops each plateau into
-sub-minimum fragments and drops poses from the result entirely. That reads exactly
-like the operator skipped them, and it is not what happened. 0.6 rad/s works.
-
-**Gyro polarity.** Sweep briskly in the named direction, return slowly, repeat. The
-peak sign is then unambiguous without full rotations, which the USB tether prevents
-anyway.
-
-**Cross-check the gyro signs independently of operator execution.** For a rigid body
-a fixed world vector obeys `d(a)/dt = −ω × a`, so the accelerometer's gravity reading
-predicts what the gyro must report; correlate measured against predicted derivative.
-Two conditions gate a usable sample and **both** produce a convincing false negative
-when missed:
-
-- **ω must not be parallel to gravity**, or `ω × a = 0` and there is nothing to
-  correlate. Yaw with the head upright is exactly that case — a session that only
-  yaws upright learns **nothing** about X yet reports a cosine near zero, which looks
-  like a refuted axis rather than an untested one. Include at least one X rotation
-  with the glasses tipped; the pose-transition rotations already present in the
-  accelerometer capture serve well.
-- **Rate must be low enough for a central difference at 25 Hz.** Deliberate sweeps
-  reach 13 rad/s — 30° of rotation per sample — which aliases badly and drags the
-  correlation down across every axis. Band-limit to roughly 1–5 rad/s.
-
-Well-conditioned samples give median cosine ≈ 0.9. A value near 0 means the geometry
-was degenerate, not that the axis is wrong.
-
-### macOS host (Mac Mini)
-
-The full firmware dev loop (build → flash → serial verify) also runs natively on the Mac Mini when the board is attached there. One-time setup: `scripts/macos-setup.sh` (idempotent — Homebrew bash for hw-lock, Go + mcumgr, NCS v3.1.1 west workspace + Zephyr SDK at `~/ncs`, `serial_mcp`, and the GLIM converter tooling: ffmpeg + a python venv with Pillow/numpy/lz4/yt-dlp). Differences from the devcontainer:
-
-| Aspect | devcontainer | macOS host |
+| Area | Code | Rules file |
 |---|---|---|
-| Shell port | `/dev/ttyACM0` (iface x.0) | `/dev/cu.usbmodem*`, lower suffix (data iface 1) |
-| MCUmgr port | `/dev/ttyACM1`/`ttyACM2` (iface x.2) | `/dev/cu.usbmodem*`, higher suffix (data iface 3) |
-| Flashing (app + netcore) | J-Link fast path (`jlink-flash.sh`) | **MCUmgr OTA only** (`fw/scripts/mcumgr-flash.sh`) — no SEGGER tooling |
-| MCUboot reflash | J-Link, or `mcuboot_update` shell path | `mcuboot_update` sideload/commit shell path only |
-| b0n (netcore bootloader) reflash | J-Link | not possible — use the devcontainer |
-| Build env | west on PATH | `. scripts/fw-env.sh` first (skills do this) |
-| Twister tests | `/test-fw` (native_sim) | **not supported** (native_sim is Linux-only) — use CI or the devcontainer |
-| GLIM converter deps | pip/apt in the image | `. scripts/tools-env.sh` first (venv installed by `scripts/macos-setup.sh`) |
-| /NAND: disk mount | `dmesg`/`lsblk`/`mount` | Finder/`diskutil` (`/Volumes`); same sync → eject → reboot discipline |
-
-Never hardcode the `cu.usbmodem` names — discover them via `/check-hardware` (they can shift on re-enumeration, same rule as ttyACM). Everything else — hw-lock discipline, `mcp__serial__*` usage, the shell command surface — is identical; `scripts/hw-lock.sh` re-execs itself into Homebrew bash on macOS.
-
-**`fw-env.sh` and `tools-env.sh` activate different python venvs** — whichever is sourced last owns `python3`, and a `west build` after `tools-env.sh` configures against the wrong interpreter. Use separate shells: one for building firmware, one for generating GLIM assets.
-
-**The NAND disk mounts on macOS**, and `/provision-device` is supported there (`fw/scripts/provision-device.sh` finds the disk via IOKit and uses `diskutil`). Verified end-to-end on the Mac Mini 2026-08-13: assets generated, extensions built, files copied to `/Volumes/NO NAME`. The same FAT-concurrency rule as the devcontainer applies: write → `sync` → `diskutil unmount` → **reboot the board**.
-
-Three macOS-specific behaviours that will otherwise waste hours:
-
-- **A locked screen means no disk — macOS ejects it on sight.** Root-caused 2026-08-13 (issue #367): when the console is locked, `loginwindow` "RegisterDiskArbCallbacks to block disk mounts during screen lock" (its own log wording) — on the board's next attach, DiskArbitration probes the FAT successfully (`msdos_fskit success`), a mount-approval client dissents with `0xF8DA0008` (kDAReturnNotPermitted), and **loginwindow requests a full eject ~2.7 s after the disk appears**. The `IOMedia` exists for under a second, so polling `ioreg`/`diskutil` makes it look like the disk was never published at all. Zephyr's MSC then latches the eject (`medium_loaded = false`, hardcoded-removable LUN per `usbd_msc_scsi.c`) until the board reboots. Recovery: **unlock the screen, then reboot the board** — nothing is wrong with the board, the cable, or the FAT. Do not chase USB re-enumeration, absence duration, or replugging: a replug only ever "fixed" this because a human replugging is standing at an unlocked Mac. Three more measured facts: the shield engages on **display dim** (`kLWLockFromDisplayDim`), not just explicit lock, so `sudo pmset -a displaysleep 0` is the setting that actually keeps the disk reachable on the Mac Mini (`macos-setup.sh` checks it and prints the command, but deliberately never modifies machine config itself); `AutomountDisksWithoutUserLogin` does **not** stop the lock-shield eject (tested — identical dissent + eject with it set; it only covers mounting with no user logged in); and `IOConsoleLocked` stays *false* during the dim-shield window, so `provision-device.sh`'s fail-fast guard catches hard locks but not a freshly dimmed display — if provisioning reports no disk right after the display blanks, that's why.
-- **macOS `cp` writes AppleDouble sidecars (`._name`) onto FAT, and the firmware treats them as real assets.** Hardware-verified: `glim list` showed `._4096.glim`, `._bad_apple.glim`, `._nyan_cat.glim` next to the real files, with the 4 KB `._4096.glim` **selected** as the active animation. `COPYFILE_DISABLE=1` does NOT prevent this (it governs tar/copyfile, not `cp` — hardware-verified); `provision-device.sh` uses `cp -X` plus a post-copy `._*` sweep, and any manual `cp` to the board must do the same. (The extension registry rejects sidecars via manifest validation, so only GLIM is user-visibly affected.)
-- **`MODE_SENSE_06 failed ... DetermineMediumWriteProtectState` in the macOS log is benign noise.** It is emitted on *every* attach, including ones that mount perfectly — Zephyr's MODE SENSE(6) handler only accepts page code `0x3F`. Do not chase it.
-
-Note `log` is shadowed by a zsh builtin: a bare `log show ...` fails with "too many arguments" and the empty output reads as "nothing logged". Always use `/usr/bin/log`.
-
-## Serial Console (Zephyr Shell)
-
-The dev board exposes two USB-CDC-ACM ports (Linux names shown; on macOS they are `/dev/cu.usbmodem*` — lower suffix = shell, higher = MCUmgr, see "macOS host" above; always discover via `/check-hardware`, names shift on both OSes):
-
-| Port           | Role                                        | Baud   |
-| -------------- | ------------------------------------------- | ------ |
-| `/dev/ttyACM0` | Zephyr interactive shell (`uart:~$` prompt) | 115200 |
-| `/dev/ttyACM1` | MCUmgr UART transport (firmware updates)    | 115200 |
-
-A SEGGER J-Link (VID:PID `1366:0101`) may also be connected for advanced operations (reflashing MCUboot, GDB debugging). `/check-hardware` probes it and prints status, VTref, and serial number. See [Flashing via J-Link](#flashing-via-j-link-fast-path) below for the fast flash path.
-
-Note: `JLinkExe -CommandFile` only opens the USB connection lazily, on the first command that actually needs it — a command file containing just `Exit` never touches USB at all. The probe (and `jlink-flash.sh`) use `ShowHWStatus` to force the connect; that banner is also where the `S/N:` serial number comes from.
-
-**If both ports are missing despite the board showing up in `lsusb`**, the `cdc_acm` kernel module is not loaded in the WSL docker-desktop VM. Run `wsl -d docker-desktop -- modprobe cdc_acm` from Windows, then replug the board.
-
-- **Prompt**: `uart:~$` (appears after the boot log completes)
-
-### Using the `mcp__serial__*` tools
-
-**Always use the `mcp__serial__*` MCP tools to interact with the Zephyr shell.** Never shell out via Bash to read/write `/dev/ttyACM0` directly (e.g. `cat`/`echo` redirects, `screen`, `picocom`) — it races with the MCP server's background reader thread for ownership of the port and produces garbled/lost data.
-
-**Hold the `board` hardware lock before connecting.** Another agent in a different worktree may be flashing, resetting, or already talking to this same board. Run `Monitor(command: "scripts/hw-lock.sh hold board", persistent: true)` (see root `CLAUDE.md` "Hardware locking") before opening any `mcp__serial__*` connection here — a `PreToolUse` hook auto-denies these calls without it, so hold it proactively rather than finding out from a denial mid-flow.
-
-**Graduate working shell interactions into serial MCP plugins.** Once you've figured out how to reliably drive a shell subsystem over raw `serial_write`/`serial_read_until` — correct command syntax, response parsing, any device-specific quirks — don't keep repeating that raw sequence in future sessions. Write or extend a plugin under `.serial_mcp/plugins/` (use `serial_plugin_template` to scaffold, `serial_plugin_load`/`serial_plugin_reload` to pick it up) so the next interaction is a single typed tool call instead of hand-rolled read/write. `rgb_sunglasses.py` (see below) is the first instance of this pattern, for the `anim` subsystem — add new plugin files (or new tools in the existing one) the same way for other shell subsystems as they come up.
-
-**Wait for boot before sending commands.** Boot log output interleaves with shell echoed input and causes `command not found` errors. Wait until `uart:~$` appears before issuing any shell commands.
-
-**Sending newlines correctly.** `serial_write` with `data: "\r\n"` sends the four literal characters `\`, `r`, `\`, `n` — not a CR+LF. The same applies to every escape sequence: `"\x03"` sends four literal characters, NOT Ctrl+C — and those literal bytes land in the shell's line editor and corrupt the next command (`command not found` on otherwise-correct input; recover with flush + resend). To send control characters use the `as: "hex"` form or the `rgb_sunglasses` plugin's commands (which handle Ctrl+C internally). Always use one of these instead:
-
-```jsonc
-// Option 1 — append_newline flag (preferred)
-{ "data": "kernel version", "append_newline": true }
-
-// Option 2 — explicit hex
-{ "data": "kernel version\r", "as": "hex" }   // hex-encode the CR separately
-```
-
-### Animation shell control — the `rgb_sunglasses` serial MCP plugin
-
-The `anim` shell command (`anim get` / `anim set <name>` / `anim indicator clear`,
-defined in `src/pattern_controller.cpp`) is exposed as a serial MCP plugin at
-`.serial_mcp/plugins/rgb_sunglasses.py` — prefer it over hand-rolled
-`serial_write`/`serial_read_until` calls, which are error-prone (see the prompt
-redraw quirk below). Requires `SERIAL_MCP_PLUGINS=rgb_sunglasses` in `.mcp.json`'s
-`serial` server env (already set); reconnect via `/mcp` after enabling. As other
-shell subsystems get plugin coverage, add their tools to this same file (or a
-new file under `.serial_mcp/plugins/`) and update `SERIAL_MCP_PLUGINS` accordingly.
-
-Tools: `rgb_sunglasses.get_animation`, `rgb_sunglasses.set_animation` (name one of
-`none, zigzag, text, rainbow, my_eyes, beat, fft_bars, bad_apple, nyan_cat`),
-`rgb_sunglasses.clear_indicator`, plus the beat-detection capture tools
-`rgb_sunglasses.sound_record` (freeze AGC gain → `sound mic record_wav` → parsed
-result incl. dropped-frame count) and `rgb_sunglasses.sound_dump` (capture N
-frames of live analysis to a host file) — see `fw/docs/beat-detection-debugging.md`.
-
-**Always clear the active BT indicator before starting an animation.** A BT
-indicator (advertising/connecting/pairing overlay) overrides whatever animation
-is set and will visually hide it. `rgb_sunglasses.set_animation` already does
-this automatically (calls `clear_indicator` before `anim set` and verifies via
-`anim get`) — don't bypass it by calling the shell directly.
-
-**Zephyr shell prompt redraw quirk:** the shell redraws `uart:~$` after _every_
-async log line (BT notifications, GLIM decoder logs, etc.), not just after a
-command finishes. A naive `read_until("uart:~$ ")` can match a stale redraw left
-over from a previous command's delayed logging, before the current command's
-own echo has even arrived — this caused a real false-failure during testing.
-The plugin works around it by flushing the input buffer before each write, then
-accumulating `read_until` chunks until the command's own echo is found followed
-by a prompt (see `_run_command` in the plugin file).
-
-**Stray input right after a board reset:** a boot-log fragment (e.g. `rf: Preinit`)
-can land in the shell's own input line editor before the first command is ever
-sent, corrupting it (observed as `command not found` on the very first call after
-reset). `_run_command` sends Ctrl+C before every command to cancel whatever's
-sitting in the line editor, not just on the first call — cheap and fully general.
-
-**Old boot logs flushing on port-open look like a spontaneous reboot — they aren't.**
-The USB CDC shell buffers unread output while no terminal is attached; freshly
-opening the port can dump a backlog that starts with `[00:00:00.xxx]` boot logs
-from a reset that happened minutes earlier. Before concluding the board just
-rebooted (or crashed), run `kernel uptime` — if uptime is large, you're reading
-backlog, not a fresh boot.
-
-**Trying out new GLIM content:** `GlimPlayerAnimation` (`anim set glim_player`) replaced the
-old per-file `bad_apple`/`nyan_cat` animations — it enumerates every `.glim` file under
-`/NAND:/glim` on boot (`glim_registry`) and can play any of them, picked via BLE (a
-generic "drop-down list" characteristic, see `glim_player_animation_bt.cpp`), the
-`glim` shell command (`glim list` / `glim select <index>` / `glim get_selected` /
-`glim set_loop_mode <mode>`), or a button press (sw0 cycles to the next file). It reads
-geometry/frame-count/pixel-format (mono `Raw` or `Rgb24`) from each file's own header
-rather than hardcoding anything, so trying new footage is just a matter of dropping a
-new `.glim` file into `/NAND:/glim/` and resetting — no firmware rebuild needed; see
-`tools/convert_video_to_glim.py` / `tools/convert_bad_apple.py` / `tools/convert_gif_to_glim.py`
-to generate one.
-
-**Setting up GLIM files on a new board:** All GLIM assets are generated using in-repo Python scripts — nothing is checked in as a binary. Generate them before provisioning:
-
-```bash
-. scripts/tools-env.sh   # Pillow/numpy/lz4 + yt-dlp/ffmpeg; no-op in the devcontainer
-python3 fw/tools/generate_nyan_cat_glim.py --output fw/nyan_cat.glim
-python3 fw/tools/convert_bad_apple.py --output fw/bad_apple.glim   # downloads from YouTube, ~1 min
-# 4096 "greatest hits" (issue #96) — canonical LZ4-compressed GLIM (format 4):
-python3 fw/tools/convert_video_to_glim.py --url "https://youtu.be/e9DfSCk-6Ko" --output fw/4096.glim --fps 24 --lz4
-```
-
-Then copy both into `/NAND:/glim/` on the board and reset (this works on macOS too — see the macOS host section). If the NAND disk on a new board is unformatted (FAT read errors in dmesg), it needs `mkfs.vfat -F 12 -s 8 -S 4096 /dev/sdX` before mounting — ask the user to run this as it is destructive.
-
-### Useful shell commands
-
-```
-kernel version          # print Zephyr/NCS version
-kernel thread list      # list all threads and their stack usage
-bt connect              # (if shell BT commands are enabled)
-bt_state                 # SNAPSHOT of BLE link health: state (advertising/connected),
-                         # peer addr, security level, negotiated ATT MTU, conn params.
-                         # ALWAYS RUN THIS FIRST when debugging a BLE connection that
-                         # looks stuck (see the "Debugging a stuck BLE connection" note
-                         # below) - it distinguishes the split-brain in one command.
-bt_conn_info             # print the *actual* current LE connection interval/latency/timeout
-                         # (see bluetooth.cpp's le_param_updated callback for the issue #41
-                         # connection-interval investigation this was added for)
-mcuboot_version         # read MCUboot version from retention registers (major.minor.rev+tweak)
-mcuboot_update verify   # read /NAND:/mcuboot.bin, print GRMB header fields, compute and compare CRC
-mcuboot_update sideload # open /NAND:/mcuboot.bin and validate it (no BLE upload needed)
-mcuboot_update commit   # flash validated package to internal MCUboot region and reboot
-mcuboot_update request_reboot  # set gpregret2=BOOT_MODE_REQ and reboot (MCUboot skips fprotect)
-fatfs reformat          # nuke and recreate the NAND FAT filesystem (all files erased)
-```
-
-**Debugging a stuck BLE connection ("split-brain") — run `bt_state` FIRST.** The
-classic symptom is the board's status LED solid (not breathing) while the companion
-app reports a connection failure/timeout: the board thinks it's connected, the app
-doesn't. `bt_state` (`src/bluetooth.cpp`, added issue #90) prints the whole picture
-in one shot — state, peer address, **security level**, and the **negotiated ATT
-MTU** — so you don't have to reconstruct it from a two-sided native `adb logcat`
-BLE trace. The decisive tells:
-- `Security level: L1 (UNENCRYPTED)` on a connection that's been up more than a
-  second → LE Secure Connections pairing stalled (often a passkey dialog waiting on
-  the phone — see the root `CLAUDE.md` pairing note).
-- `ATT MTU: 23 (DEFAULT - MTU exchange did not complete)` on a `CONNECTED` + `L4`
-  link → **this is the split-brain**: the phone's GATT stack is wedged (it never
-  completed the ATT MTU exchange, so its discovery is hung too). The usual root
-  cause is a **stale bonded GATT cache** after a firmware reflash that changed the
-  GATT layout. Whether the phone auto-recovers is **device-dependent** (hardware
-  proven, issue #90): a **Pixel 9 Pro (stock Android)** honors the firmware's
-  Service Changed indication and re-discovers on its own (no split-brain), but the
-  shared **OnePlus 9 Pro (OxygenOS)** does **not** — it hangs, and the only fix is
-  **forget the device on the phone and re-pair**. So this MTU-23 hang is expected on
-  the OnePlus after any GATT-changing reflash, and NOT expected on a Pixel.
-  Resetting the *board* (`kernel reboot warm`) clears the board's half of the
-  split-brain so it advertises again, but does not fix the phone's stale cache.
-
-**The running firmware lives in INTERNAL flash. External flash holds assets and settings — not the firmware image.** Stated because it is a recurring agent mistake, corrected again 2026-08-15. Internal (1 MB): `mcuboot`, `app` (the image that actually executes), `coredump_partition`. External (MX25R6435F, 8 MB): `settings_storage` NVS at 0x11C000 (BT bonds + persisted config) and `fat_storage` at 0x124000 (the `/NAND:` volume — GLIM assets, `.llext` extensions, captures, drained coredumps). The `mcuboot_secondary` / `mcuboot_secondary_1` regions at the bottom of external flash are **OTA staging only**: an image sits there transiently between upload and the next boot, then MCUboot moves it into internal flash. Do not read them as "the firmware is on external flash".
-
-Two consequences worth holding onto: a J-Link flash writes internal flash (+ the netcore image) and therefore does **not** disturb assets or bonds — reprovisioning after a plain reflash is unnecessary; and conversely, erasing external flash to "reset the firmware" destroys assets and pairing while leaving the running image untouched. Authoritative layout: `fw/pm_static_rgb_sunglasses_proto0_nrf5340_cpuapp.yml` (the firmware confirms it at boot — `flashdisk: offset 124000, sector size 4096, volume size 7192576`).
-
-**`storage` is a reserved macro in NCS** — `nrf/include/flash_map_pm.h` defines `#define storage settings_storage` (conditionally). The `UTIL_CAT` macro used inside `SHELL_CMD_REGISTER` double-expands its arguments, so `SHELL_CMD_REGISTER(storage, ...)` silently registers a command named `settings_storage` instead of `storage`. Use `fatfs` (or any other token not in `flash_map_pm.h`) for shell commands related to the FAT disk.
-
-**MCUboot VERSION incremental build** — editing `fw/sysbuild/mcuboot/VERSION` alone does NOT trigger ninja to recompile. Force a rebuild of the version-stamped objects by deleting `fw/build/mcuboot/CMakeCache.txt` (forces cmake reconfigure) and then touching `fw/build/mcuboot/zephyr/include/generated/zephyr/app_version_override.h` (forces recompile of `boot_record.c.obj` and `banner.c.obj`).
-
-**Serial connection pool limit** — the MCP serial server defaults to 10 concurrent connections. After several J-Link flashes + reboots, ttyACM ports accumulate and connections are never GC'd. When you hit the limit, close all stale connections explicitly before opening the new port.
-
-**ttyACM port numbers shift after every reboot or J-Link flash** — the device re-enumerates and Linux assigns the next available minor numbers. After each reset: loop over `/sys/class/tty/ttyACM*`, create any missing `/dev/ttyACMN` nodes with `mknod`, then probe each new port with Ctrl+C to find the shell (look for `uart:~$`). Verify a stale node is actually current by comparing `cat /sys/class/tty/ttyACMN/dev` (major:minor) against `ls -la /dev/ttyACMN`.
-
-**TPS25750 log fires at ~10 ms after boot** — the USB PD controller always logs `tps25750: MODE is not PTCH (got APP) Cannot download patch!` around 10 ms uptime. If the first shell command sent after boot is read with `read_until("uart:~$")`, this log fires first, matches the redraw prompt, and swallows the command's actual output. Fix: flush the RX buffer and resend the command; the second call completes cleanly.
-
-## USB Flash Disk (`/NAND:` — GLIM/animation assets)
-
-**The flashdisk driver under `/NAND:` is a PATCHED IN-REPO COPY of the SDK's**
-(`fw/drivers/flashdisk/flashdisk.c`, enabled by `CONFIG_DISK_DRIVER_FLASH_PATCHED`
-with the SDK's `CONFIG_DISK_DRIVER_FLASH=n` — issue #380). NCS v3.1.1's copy
-swallows every disk-write error (`disk_flash_access_write()` computes `rc` and then
-`return 0;`), so a failed QSPI erase/program silently lost FatFS FAT/directory
-sectors — the root cause of the "file size exceeds cluster chain" fsck corruption.
-The copy carries upstream zephyr commit `81db3fff8f` (the one-line fix) plus
-failure instrumentation: per-disk error counters via the `flashdisk stats` shell
-command / `flashdisk_stats.h`, and a LOG_ERR with op/address/errno on every
-underlying flash-op failure. **Delete the whole directory and re-enable
-`CONFIG_DISK_DRIVER_FLASH` once NCS ships a Zephyr containing that commit** — the
-`storage.fat_flashdisk_fault.sdk_tripwire` twister scenario asserts the SDK bug is
-still present and will fail when that day comes; don't "fix" that scenario, act on
-it. Keep the copy byte-diffable against upstream: no changes beyond the marked
-`/* PATCHED */` blocks.
-
-**The proto0 BOM part is MX25R6435FZA`IH0`, and its `-H-` ordering option
-makes High Performance mode the factory default** — the MX25R6435F *family*
-default is Ultra Low Power (5 of the 8 orderable variants are L-parts), so an
-L-variant re-BOM would invalidate the 32 MHz QSPI SCK and must revisit it. The
-volatile L/H bit reverts to the ordering default at every power-on (datasheet
-PDF p.77/p.31, checked in at `fw/docs/datasheets/MX25R6435F/`), and the BOM is
-the single point of truth: L and H variants share the same JEDEC ID, and the
-`nordic,qspi-nor` driver exposes no public API to read CR2 back (a ~10-line
-hand-rolled boot-time RDCR via `nrfx_qspi_cinstr_xfer` is possible if variant
-detection is ever wanted — issue #387). No software mode switch is
-needed on this board, and none is possible through this driver (it ignores
-`mxicy,mx25r-power-mode`; its WRSR helper can't reach CR2) — don't reintroduce
-the "stuck in low-power mode" theory that issue #380 briefly carried. QSPI SCK
-runs at 32 MHz (HP mode allows 80; the old 8 MHz was the ULP-mode ceiling, see
-the mx25r64 DTS node comment).
-
-The dev board exposes a ~6.9 MiB FAT filesystem over USB Mass Storage (SCSI Bulk-Only,
-interface 4 of the composite USB device). This is the "NAND" disk Zephyr mounts at
-`/NAND:` (`src/storage/storage.cpp`; LUN registered in `src/usb/usb_init.c` as
-`USBD_DEFINE_MSC_LUN(nand, "NAND", "RGB-SG", "FlashDisk", "0.00")`). It's how
-`bad_apple.glim`, `nyan_cat.glim`, and similar assets get onto the device (see
-`fw/tools/convert_bad_apple.py`, `generate_nyan_cat_glim.py`).
-
-**GLIM format**: `src/storage/GLIM_FORMAT.md` is the normative spec, with `src/storage/glim_decoder.{h,cpp}` as the reference implementation; converters live in `fw/tools/` and are gated by CI's `python-tests` job (run locally **in the devcontainer**: `cd fw && pytest tools/tests/ -v` — the macOS tools venv deliberately carries only what the converters import, not pytest or the `beat_lab` scipy/librosa stack). `fw/scripts/img_to_c.py` is a broken stub (it never writes any output) — do not use it.
-
-This is exclusive-write access to the board's disk — hold the `board` lock first (`Monitor(command: "scripts/hw-lock.sh hold board", persistent: true)`) if doing this by hand instead of via `/provision-device` (which enforces it for you). The hook can't catch an ad-hoc `mount` command — this remains convention-only.
-
-**Finding and mounting it from the devcontainer:**
-
-```bash
-# It enumerates as a SCSI disk alongside the container's own disks — identify it
-# by the SCSI string, not a fixed /dev/sdX (the letter shifts based on what else
-# is attached).
-dmesg | grep -A2 "RGB-SG"       # confirms detection, e.g. "scsi 1:0:0:0: Direct-Access RGB-SG FlashDisk"
-lsblk                            # cross-reference the ~6.9 MiB size to find the device node, e.g. /dev/sdg
-blkid /dev/sdg                   # TYPE="vfat" confirms it's the right one
-
-mkdir -p /mnt/sunglasses-fs
-mount -o rw /dev/sdg /mnt/sunglasses-fs
-cp bad_apple.glim nyan_cat.glim /mnt/sunglasses-fs/
-sync
-umount /mnt/sunglasses-fs
-rmdir /mnt/sunglasses-fs
-```
-
-**The board will not see new/changed files until it's reset.** After unmounting,
-reset via mcumgr (`mcumgr --conntype serial --connstring dev=/dev/ttyACM1,baud=115200 reset`)
-or a physical reset — the firmware's own FAT mount has to be re-established before
-`bad_apple`/`nyan_cat` (or anything else that opens `/NAND:`) can see newly-copied
-files. Wait ~15s for `ttyACM*` to re-enumerate, then re-run `/check-hardware` before
-issuing more serial commands.
-
-**FAT concurrent access causes read corruption.** The firmware mounts the FAT volume at boot and caches cluster allocations. If you write a file over USB while the firmware still has the volume mounted, the firmware's in-memory FAT doesn't know about the new cluster chain — subsequent reads return stale data (wrong CRC, wrong file content). Always write via USB → sync → umount → **reboot the device** before reading the file from firmware. A warm reboot (`kernel reboot warm`) is sufficient; no J-Link needed. This also applies to `mcuboot.bin` staging.
-
-**Reformatting the NAND filesystem from the shell**: use `fatfs reformat` (requires the firmware to be built with `CONFIG_FILE_SYSTEM_MKFS=y`, which is already on for proto0). This is the correct fix for FAT corruption. After the reformat you must reboot the board and re-copy any files you need.
-
-## Coredumps (issue #80, proto0 only)
-
-A fatal fault captures a Zephyr coredump to the 64 KB internal-flash `coredump_partition`
-(0xF0000) via the NCS `DEBUG_COREDUMP_BACKEND_NRF_FLASH_PARTITION` backend — raw
-`nrfx_nvmc` pokes, the only flash path that works inside the fault handler (IRQs locked;
-the external QSPI driver needs interrupts/scheduler, so dumps can NEVER target external
-flash directly). `z_fatal_error()` writes the dump BEFORE calling
-`k_sys_fatal_error_handler`, so extension-sandbox faults produce dumps too even though
-the handler demotes them to a thread abort.
-
-**Post-fault behavior** (`k_sys_fatal_error_handler` in `src/extensions/sandbox_fatal_handler.cpp`):
-sandbox faults → thread abort as before; anything else → cold reboot, UNLESS a debugger
-is attached (DHCSR C_DEBUGEN), in which case it halts for GDB as before. Expect a ~2 s
-freeze during capture (16-page partition erase + write, IRQs locked) — including on
-recoverable sandbox faults.
-
-**Drain** (`src/debug/coredump_manager.cpp`, `CONFIG_APP_COREDUMP_MANAGER`):
-every `CONFIG_APP_COREDUMP_REMINDER_PERIOD_S` (60 s) a dedicated workqueue checks the
-partition, copies any verified dump to `/NAND:/coredump/core_NNNN.bin`, and invalidates
-the partition. **There is no recurring "awaiting collection" reminder** — it was removed
-because it re-logged every 60 s forever on any board carrying an uncollected dump. Check
-on demand with `coredump_mgr status`, and collect with `coredump-fetch.sh` (`--delete` frees
-the space; the board must be rebooted after, see the FAT note below).
-
-**That 60 s period is a data-loss window, not just a poll interval.** The NCS flash
-backend erases the whole coredump partition at the *start* of every capture
-(`coredump_flash_backend_start()` → `flash_area_flatten()`), so the next crash is always
-captured — what the drain rescues is the *previous* dump. A second fault inside the
-period destroys the first one, which on a boot-looping board is the dump you actually
-wanted. Do not raise it to quiet logs. The
-pure logic lives in `coredump_manager_core.cpp` behind a `PartitionOps` seam so
-`tests/debug/coredump_manager` covers it on native_sim (where `DEBUG_COREDUMP` doesn't
-exist).
-
-**Fetch + debug from the host:**
-
-```bash
-fw/scripts/coredump-fetch.sh --delete ./dumps   # mount MSC disk, copy core_*.bin off
-fw/scripts/coredump-debug.sh dumps/core_0000.bin  # gdbserver --pipe + arm-zephyr-eabi-gdb, prints bt
-```
-
-The dump files are the raw Zephyr coredump stream ("ZE" magic) that
-`coredump_gdbserver.py` consumes directly. The ELF passed to coredump-debug.sh must be
-from the build that produced the crash. Serial fallback when USB is unavailable:
-`coredump print` on the shell, then `coredump_serial_log_parser.py` on the captured log.
-The built-in `coredump find/verify/print/erase` shell commands are enabled on proto0.
-
-**Test commands**: `crash panic` (kernel panic) and `crash mpu` (write to RO flash →
-MemManage fault), `CONFIG_APP_CRASH_TEST_COMMANDS`. Full loop: `crash panic` → reboot →
-within ~5 s the manager logs `coredump ... saved to /NAND:/coredump/core_0000.bin` →
-fetch + debug → GDB backtrace shows `cmd_crash_panic` on the shell thread.
-
-**Dump-size budget — 64 KB is a hard cap, not a truncation point.** The NCS backend
-drops the ENTIRE dump if it doesn't fit (`-ENOMEM`, header never written, nothing to
-find on reboot). The budget is enforced by `DEBUG_COREDUMP_THREAD_STACK_TOP_LIMIT=1536`
-(each thread's stack dumped only from SP down, capped at 1536 B) — worst case ~55 KB at
-~27 threads; the arithmetic lives next to the Kconfig in
-`boards/rgb_sunglasses_proto0_nrf5340_cpuapp.conf`. Redo it before raising the limit or
-adding many threads.
-
-**Legacy DK board (dk-support branch)**: coredump support was dropped entirely
-(`DEBUG_COREDUMP` left `prj.conf` for the proto0 board conf) — no partition, no spare
-flash, legacy board.
-
-## Flashing via J-Link (fast path)
-
-When `/check-hardware` reports the J-Link `Status: OK`, prefer flashing over it instead of the slow MCUmgr/UART upload path below.
-
-`jlink-flash.sh` refuses to run unless this session holds the `board` hardware lock (`Monitor(command: "scripts/hw-lock.sh hold board", persistent: true)`) — see root `CLAUDE.md` "Hardware locking". If you're iterating (build → flash → check behavior over `mcp__serial__*` → adjust → rebuild → reflash), hold the lock across the whole cycle rather than releasing between passes — release once the iteration is actually done, not preemptively between steps you're about to repeat.
-
-```bash
-fw/scripts/jlink-flash.sh                  # uses fw/build by default
-fw/scripts/jlink-flash.sh /path/to/build    # explicit build dir
-fw/scripts/jlink-flash.sh -- --skip-rebuild # extra args forwarded to `west flash`
-```
-
-`jlink-flash.sh` auto-detects the attached J-Link's serial number and runs `west flash -d <build-dir> --dev-id <serial>` — no need to hardcode or look up `--dev-id` yourself. `/check-hardware` also prints the serial directly under the J-Link section (`Serial: ...`) if you need it for some other tool.
-
-- This triggers a `west build` rebuild-check first (fast no-op if nothing changed), then flashes via the **`nrfutil` runner** (not raw `JLinkExe`) — it programs both `merged_CPUNET.hex` (netcore) and `merged.hex` (appcore), each with erase → program → verify → reset.
-- **A STAGED MCUmgr OTA SILENTLY REVERTS ANY J-LINK FLASH ON THE NEXT BOOT** (observed 2026-08-11, PR #341 debugging): a J-Link flash writes slot 0, but a pending `image test` image sitting in slot 1 makes MCUboot overwrite slot 0 with it on the very next boot — the flash "succeeds", verifies, resets, and ~40 s later (the slot-copy time) the board is running the OTHER image, with zero errors anywhere. The shared board can carry a staged OTA from another agent's session. After any J-Link flash, verify what's actually running (`mcumgr image list`: active slot hash, and no `pending` flags — the on-device test suite's `no_staged_ota` fixture in `fw/tests_device/conftest.py` automates this check for HIL runs). If a pending image is present, `mcumgr image confirm`/erase it (or coordinate with whoever staged it) before trusting any flash.
-- Typical total time: ~30-45s, plus ~15s for USB re-enumeration afterward. Re-run `/check-hardware` to confirm both ttyACM ports are back before issuing further serial/mcumgr commands.
-- This is the only way to reflash the bootloader (MCUboot/b0n); MCUmgr can only update the application images.
-- **The default build dir is resolved relative to the script's own location, not the caller's cwd or the main checkout** (`REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"`), so `fw/scripts/jlink-flash.sh` with no arguments correctly uses *this* worktree's `fw/build` when run from a worktree — no need to pass the build dir explicitly.
-
-### J-Link "Cannot connect" / nrfutil "Failed to open connection": run fix-usb-dev-nodes.sh
-
-Almost always a missing (or bogus 0-byte regular-file) `/dev/bus/usb` node after re-enumeration — the devcontainer has no udev. **Rule: run `fw/scripts/fix-usb-dev-nodes.sh` before every J-Link flash attempt and again after the board re-enumerates**; a failed flash → fix → retry cycle converging on the second attempt is normal. Full symptom table — including the distinct APPROTECT/debug-port lockout and its `nrfutil device recover` procedure — lives in `/debug-fw`.
-
-### Recovering a wedged shell UART without reflashing
-
-If the shell UART (ttyACM0, `cdc_acm_uart0`) stops accepting writes (host-side `serial.write` times out) while the other CDC interface (ttyACM1, mcumgr) still works, the shell thread is likely wedged — e.g. a `sensor stream <dev> on ...` left running combines with `hw-flow-control`'s blocking `poll_out` to starve the OUT endpoint. This is a firmware hang, not a USB/WSL2 dropout (confirm via `lsusb | grep 2fe3` — device still enumerates).
-
-Don't reach for a full `jlink-flash.sh` reflash for this — it's slower and reprograms flash unnecessarily. Just reset the target CPU over the J-Link's SWD connection:
-
-```bash
-nrfutil device reset --serial-number <jlink-serial> --reset-kind RESET_PIN
-```
-
-(`<jlink-serial>` is the same S/N `/check-hardware` and `jlink-flash.sh` print, e.g. `50104975`.) This power-cycles/resets the target without touching flash contents. The board re-enumerates over USB afterward the same as after any reset — poll `lsusb`/`/dev/ttyACM*` before issuing further commands.
-
-## MCUmgr
-
-`mcumgr` is installed in the devcontainer (built from source during image build) and on the Mac Mini (via `scripts/macos-setup.sh`). The MCUmgr port is always USB interface x.2 on Linux (`/dev/cu.usbmodem*` with the higher suffix on macOS) — run `/check-hardware` to find the current port (it shifts after resets; see WSL2 note below).
-
-```bash
-# Run /check-hardware first to identify the current MCUmgr port (may be ttyACM1, ttyACM2, etc.)
-CONN="--conntype serial --connstring dev=/dev/ttyACM2,baud=115200"  # example — verify with /check-hardware
-
-mcumgr $CONN image list       # list firmware images
-mcumgr $CONN echo "hello"     # connectivity check
-mcumgr $CONN reset            # soft-reset the device
-```
-
-### Image layout
-
-The board exposes two images via MCUmgr (confirmed from `image list`):
-
-| image | Slot | Core                      |
-| ----- | ---- | ------------------------- |
-| 0     | 0    | App core (rgb-sunglasses) |
-| 1     | 0    | Net core (ipc_radio)      |
-
-Both currently report `version: 0.0.0` — the build version string is not yet wired up.
-
-### Firmware update flow (OTA via MCUmgr)
-
-**Prefer the wrapper script `fw/scripts/mcumgr-flash.sh`** — it auto-detects the MCUmgr port, uploads the app + net-core images (from `dfu_application.zip`), auto-parses the slot hashes, tests, resets, and confirms. Default (`--app`) uses the running app's SMP server; `--recovery` targets MCUboot serial-recovery mode (hold the Left button/P1.11 at reset) for a bricked board that won't boot the app. It requires the `board` lock **only when run by an agent** (`CLAUDECODE` set), so human end-users can run it lock-free. Human-facing runbook: `fw/docs/flashing-without-jlink.md` (published at <https://rgb-sunglasses.autom8ed.com/recovery>).
-
-Under the hood it's the same MCUmgr flow: `image upload` the signed image (`fw/build/fw/zephyr/zephyr.signed.bin`, ~3-4 min over serial), `image test <hash>`, `reset`, then `image confirm` after a good boot. The step-by-step procedure (with re-enumeration handling) also lives in `/flash-and-verify`; prefer the J-Link fast path above when a J-Link is attached.
-
-### Commands
-
-```bash
-mcumgr $CONN taskstat      # list all threads with stack/runtime info
-mcumgr $CONN stat list     # list stat groups (e.g. flash_sim_stats)
-mcumgr $CONN stat read flash_sim_stats
-```
-
-- `taskstat` requires `CONFIG_THREAD_MONITOR=y`, `CONFIG_MCUMGR_GRP_OS_TASKSTAT=y`, and a large-enough TX FIFO on the CDC-ACM mcumgr port (see DTS note below). All three are set on proto0.
-- `shell exec` — returns status=8 (ENOTSUP); the Zephyr shell is on ACM0, not the MCUmgr transport
-
-### File management (group 8), fenced to `/NAND:/ext`
-
-`CONFIG_MCUMGR_GRP_FS=y` on proto0, so the companion app can sync animation extensions during an OTA update: it asks for each `.llext` file's SHA256, compares it against the digest GitHub reports for that release asset, and re-uploads the ones that differ (`app/services/extension-sync.ts`). Adds ~4.9 KB FLASH / ~832 B RAM to the appcore.
-
-Three non-obvious things, all learned the hard way:
-
-- **Enabling the group alone hands a bonded peer read+write access to the entire FAT disk**, including `/NAND:/mcuboot.bin` (the bootloader updater's staging image). `CONFIG_APP_EXT_FILE_TRANSFER` (`src/extensions/extension_file_transfer.cpp`) registers an `MGMT_EVT_OP_FS_MGMT_FILE_ACCESS` callback that rejects every operation — read, write, status, hash — outside `extension_registry::kDirectory`. Zephyr itself prints a CMake WARNING when the group is on without an access hook; that warning is the intended alarm, don't silence it by other means. The decision is the pure predicate `extension_file_transfer::path_allowed()`, covered by the `extensions.file_transfer` native_sim suite. **A prefix check is not sufficient**: FATFS resolves `/NAND:/ext/../mcuboot.bin` straight out of the fenced directory, so `..` components are rejected over the whole path.
-- **`CONFIG_MCUMGR_GRP_FS_HASH_SHA256` cannot be set from a `.conf` on this build, and setting it there fails silently.** It is `depends on BUILD_WITH_TFM || MBEDTLS_SHA256`, and `MBEDTLS_SHA256` is declared inside `if !(NRF_SECURITY || NORDIC_SECURITY_BACKEND)` in `zephyr/modules/mbedtls/Kconfig.mbedtls` — unreachable, because this build uses nRF Security. Assigning either symbol in a `.conf` is ignored with no error; the only way to notice is that it never appears in `autoconf.h`. The dependency is stale rather than real: `fs_mgmt_hash_checksum_sha256.c` picks its backend off `CONFIG_MBEDTLS_PSA_CRYPTO_CLIENT`, which nRF Security does set. It is therefore force-enabled by an override in `fw/Kconfig` (a second, prompt-less definition with `default y if APP_EXT_FILE_TRANSFER`).
-- **Do NOT "work around" that by registering a SHA256 group at runtime** via the public `fs_mgmt_hash_checksum_register_group()`. It compiles, looks clean, and smashes the stack: `fs_mgmt.c` hashes into `char output[MCUMGR_GRP_FS_CHECKSUM_HASH_LARGEST_OUTPUT_SIZE]`, sized **from Kconfig alone** — 4 bytes when only CRC32 is enabled — while a registered SHA256 group writes 32. That macro is only 32 when `CONFIG_MCUMGR_GRP_FS_HASH_SHA256` is set, so the symbol is what makes SHA256 *safe*, not merely available.
-
-Extension files are read once at boot by `extension_registry::init()`, so a sync only takes effect after a reboot. The FS group itself has no delete or directory-listing command (IDs are only 0 `FILE`, 1 `STAT`, 2 `HASH_CHECKSUM`, 3 `SUPPORTED_HASH_CHECKSUM`, 4 `OPENED_FILE`) — listing and removal live in this firmware's own **FILE_MGMT group (64, `MGMT_GROUP_ID_PERUSER`)** instead, `src/extensions/extension_mgmt.{h,cpp}` (PR #303, design: `fw/docs/extension-management.md`):
-
-- **LIST** (cmd 0, read, paginated) returns the union of the fenced directory's disk contents and the boot slot registry by FILE name, so "uploaded since boot" and "deleted since boot but still loaded" are first-class states the app renders directly. **One deliberate exception to the join**: a disk file whose matching slot is RETIRED is emitted *un-joined* (`loaded: false`, no slot annotations) — a remove-then-reinstall of the same name reads as a fresh "takes effect after restart" file, not as "removed", because the ghost's message is subsumed by the fresh file's. Don't write app state or a union test asserting every slot-matched disk file comes back `loaded: true`.
-- **DELETE** (cmd 1, write) is retire-first + quiesced: the boot slot is retired (activation rejected until restart, shuffle skips it), the unlink runs under the host lock so an in-flight llext load finishes before clusters are freed (FatFs is `FF_FS_LOCK=0` — an unsynchronized unlink SUCCEEDS against an open file and corrupts the volume), then the display switches away if the file backed the current animation (healthy OR fault banner) and its persisted settings are purged asynchronously. A failed unlink un-retires: a failed delete is a true no-op.
-- The wire enums in `extension_mgmt.h` are an app↔firmware compatibility surface (`app/services/mcumgr.ts` mirrors them) — **append-only**, kind-parameterized (`"ext"` today, `"glim"` reserved).
-- DELETE runs the full animation-switch path on the SMP workqueue thread — its stack is 4096 on proto0 for exactly that (see the board conf comment); don't shrink it back.
-
-### CDC-ACM TX FIFO (why `hw-flow-control` matters)
-
-The `zephyr,cdc-acm-uart` driver's `poll_out` silently **drops bytes** when the TX ring buffer is full and `hw-flow-control` is NOT set. With the default 1024-byte FIFO a multi-frame `taskstat` response (~1850 wire bytes) overflows mid-stream and the client times out.
-
-Fix applied in `rgb_sunglasses_proto0_nrf5340_cpuapp_common.dts`:
-
-```dts
-cdc_acm_uart1: cdc_acm_uart1 {
-    compatible = "zephyr,cdc-acm-uart";
-    hw-flow-control;      /* poll_out blocks instead of dropping */
-    tx-fifo-size = <4096>;
-};
-```
-
-`hw-flow-control` makes `poll_out` sleep 1 ms and retry when the buffer is full. `tx-fifo-size = 4096` is large enough to hold a full taskstat response without blocking at all.
-
-### WSL2 / udev: ttyACM node numbering can shift
-
-After a firmware reset, the board re-enumerates as a new USB device. The Linux kernel assigns the next available ACM minor numbers — if the previous ttyACM0 node wasn't cleaned up, the new device gets ttyACM1/ttyACM2 instead. Additionally, WSL2's udev sometimes fails to create /dev nodes for new ACM interfaces even though they appear in sysfs.
-
-**If mcumgr times out after a reset:**
-
-```bash
-# Check sysfs for all registered ACM devices
-ls /sys/class/tty/ttyACM*
-
-# Create any missing /dev nodes
-for d in /sys/class/tty/ttyACM*; do
-    n=$(basename $d)
-    maj_min=$(cat $d/dev)
-    maj=${maj_min%:*}; min=${maj_min#*:}
-    [ -e /dev/$n ] || mknod /dev/$n c $maj $min && chmod 666 /dev/$n
-done
-
-# Determine which port is mcumgr by trying each one
-for p in /dev/ttyACM*; do
-    echo -n "$p: "
-    mcumgr --conntype serial --connstring dev=$p,baud=115200 echo ping 2>&1 | head -1
-done
-```
-
-The mcumgr port is whichever responds to `echo`. Update `CONN` accordingly.
-
-**This also breaks already-open `mcp__serial__*` connections, not just mcumgr.** After flashing via J-Link (`jlink-flash.sh` resets the board) or any other board reset, an existing `mcp__serial__*` connection_id to the Zephyr shell goes stale: the first write after the reset fails with an I/O error (`[Errno 5] Input/output error`), and `serial_open` on the _same path_ then fails with `[Errno 6] No such device or address` because the board re-enumerated under a new ttyACM minor number (the old path's underlying device is just gone). Fix: `serial_close` the stale connection_id, re-run `/check-hardware` (or the `ls`/`mknod` loop above) to find the shell's _new_ port, then `serial_open` on that new path. Don't retry the old connection_id or the old path — it will keep failing.
-
-## Build Failures
-
-If a build fails, prefer to read the log files instead of building it again.
-
-## Per-image Kconfig/devicetree overlays (sysbuild)
-
-This is a sysbuild project with 4 images sharing one board-level devicetree. To scope a change to a single image (e.g. MCUboot only), use sysbuild's per-image config directory convention, not `fw/conf/<board>/sysbuild.cmake`:
-
-```
-fw/sysbuild/<image-name>/prj.conf                          # per-image Kconfig fragment
-fw/sysbuild/<image-name>/boards/<board>.conf                # per-image, per-board Kconfig fragment
-fw/sysbuild/<image-name>/boards/<board>.overlay              # per-image, per-board devicetree overlay
-```
-
-e.g. `fw/sysbuild/mcuboot/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.overlay` only applies to the MCUboot image. These are auto-discovered by Zephyr's CMake — no wiring needed beyond creating the file in the right place.
-
-**`add_overlay_dts(${DEFAULT_IMAGE}, ...)` in `fw/conf/<board>/sysbuild.cmake` targets the main "fw" app image, not MCUboot.** `${DEFAULT_IMAGE}` is sysbuild's default/main image, which is `fw` in this project. Don't reach for this mechanism when you actually want to target MCUboot, b0n, or ipc_radio — use the per-image `sysbuild/<image-name>/` directory above instead.
-
-**A newly-added overlay file may not be picked up without a `--pristine` rebuild.** Zephyr's overlay auto-discovery (`zephyr_file(CONF_FILES ... DTC_OVERLAY_FILE ...)`) is gated behind `if(NOT DEFINED DTC_OVERLAY_FILE)` — if a prior configure already ran and cached `DTC_OVERLAY_FILE` (even as an empty string) in `build/<image>/CMakeCache.txt`, the auto-discovery block is permanently skipped on every subsequent incremental build, even after adding the right file in the right place. If a new overlay doesn't seem to take effect, check `grep DTC_OVERLAY_FILE build/<image>/CMakeCache.txt` — if it's defined-but-empty, do a full `--pristine` rebuild instead of debugging the overlay content. Deleting just `build/<image>/CMakeCache.txt` (as in the MCUboot VERSION-file trick elsewhere in this file) has NOT been validated for overlay rediscovery — use the full `--pristine` rebuild.
-
-## MCUboot and LED data pins (GPIO retention across warm resets)
-
-MCUboot never links the SPI/LED_STRIP drivers, so the 3 WS2812 data-in pins (P0.29, P1.05, P1.01 — see `fw/docs/proto0-board-pinout.md`) are left completely unmanaged during MCUboot's runtime. On the nRF53, GPIO peripheral state (direction/level) is retained across a CPU/software (warm) reset — only a power-on/brownout reset clears it. So if the app was driving a data line high before a warm reset (e.g. the `sys_reboot(SYS_REBOOT_WARM)` that follows MCUmgr's `image test`/`reset`), MCUboot inherits that stuck-high state, and a WS2812 strip can read it as a steady "on" signal and pull max-brightness current for the entire bootloader boot window — risking a brownout that prevents boot entirely.
-
-Fixed via Zephyr's built-in GPIO hogs feature (`CONFIG_GPIO_HOGS`, auto-enabled by the presence of `gpio-hog` devicetree nodes): see `fw/sysbuild/mcuboot/boards/rgb_sunglasses_proto0_nrf5340_cpuapp.overlay`. It forces all 3 pins to a driven-low GPIO output very early in boot (`SYS_INIT` priority 41), independent of any driver, for MCUboot's entire runtime. If you add more LED data pins in future hardware revisions, extend this overlay too.
+| BLE wire contract (writes, metadata blob, notify/MTU, conn interval, UUIDs, colors) | `fw/src/bluetooth/`, `fw/src/extensions/extension_bt.cpp`, app | `.claude/rules/ble-gatt-contract.md` |
+| GATT server, BT state machine, `bt_state`/`bt_conn_info` | `fw/src/bluetooth.cpp`, `fw/src/bluetooth/` | `.claude/rules/fw-bluetooth-gatt.md` |
+| LED pipeline, animations, registry, buttons, pattern controller, GLIM player | `fw/src/animations/`, `fw/src/pattern_controller.cpp` | `.claude/rules/fw-animations.md` |
+| Settings persistence, NVS cost, no per-interaction writes | `fw/src/settings/` | `.claude/rules/fw-settings-persistence.md` |
+| Extension sandbox runtime, faults, tick budget, `ext` shell | `fw/src/extensions/`, `fw/extensions/` | `.claude/rules/fw-extensions.md` |
+| rgbx ABI, SDK, exported-symbol lockstep, API-doc gate | `fw/include/rgbx/`, `fw/sdk/` | `.claude/rules/fw-rgbx-sdk-abi.md` |
+| Extension install/list/delete (MCUmgr FS + FILE_MGMT) | `fw/src/extensions/extension_mgmt.cpp`, app | `.claude/rules/extension-file-management.md` |
+| Kconfig defaults, CMake gates, memory flags | `fw/Kconfig`, `fw/prj.conf`, board confs | `.claude/rules/fw-kconfig-build.md` |
+| Sysbuild overlays, MCUboot VERSION, overwrite-only, LED GPIO hogs | `fw/sysbuild/`, `fw/conf/` | `.claude/rules/fw-sysbuild-mcuboot.md` |
+| C++ logging mechanics (enum/bool casts, no `%f`) | `fw/src/**/*.cpp` | `.claude/rules/fw-logging.md` |
+| USERSPACE, K_USER conversion, MPU budget | `fw/src/imu/imu.cpp`, board conf | `.claude/rules/fw-userspace.md` |
+| TPS25750 / BQ25792 power (SAFE vs DANGER commands) | `fw/src/power.cpp`, `fw/drivers/` | `.claude/rules/fw-power.md` |
+| Audio, beat detection, capture files | `fw/src/sound/` | `.claude/rules/fw-sound-capture.md` |
+| Flash layout, `/NAND:` volume, patched flashdisk, CDC-ACM FIFO | `fw/src/storage/`, `fw/drivers/flashdisk/` | `.claude/rules/fw-storage-usb.md` |
+| Coredumps (capture, drain, fetch, debug) | `fw/src/debug/` | `.claude/rules/fw-coredump.md` |
+| Test suites, emulators, HIL suite | `fw/tests/`, `fw/tests_device/` | `.claude/rules/fw-tests.md` |
+
+| Hardware task | Reference |
+|---|---|
+| Serial shell (ports, `mcp__serial__*`, plugin, quirks, useful commands, ttyACM shifts, wedged UART) | `.claude/skills/flash-and-verify/references/serial-shell.md` |
+| J-Link flashing, staged-OTA revert | `.claude/skills/flash-and-verify/references/jlink.md` |
+| MCUmgr, image layout, OTA flow | `.claude/skills/flash-and-verify/references/mcumgr.md` |
+| macOS host (Mac Mini) | `.claude/skills/flash-and-verify/references/macos-host.md` |
+| NAND disk: GLIM assets, mounting, FAT concurrency, reformat | `.claude/skills/provision-device/references/nand-disk.md` |
+| IMU coordinate-frame validation | `.claude/skills/capture-scenario/references/imu-frame-validation.md` |

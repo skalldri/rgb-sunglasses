@@ -8,7 +8,7 @@ Usage: observe-power.py [OUT_LOG] [--port /dev/ttyACM0] [--interval 20]
                         [--duration 600]
 
 OWNS the UART for the whole run: hold the `board` hw-lock first, and close any
-open MCP serial connection to the port (two readers race — see fw/CLAUDE.md).
+open MCP serial connection to the port (two readers race — see .claude/skills/flash-and-verify/references/serial-shell.md).
 """
 import argparse
 import re

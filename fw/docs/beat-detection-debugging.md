@@ -76,7 +76,7 @@ sound agc gain 0x28          # frozen, known gain (pick a level that doesn't cli
 sound mic record_wav 30      # play music near the glasses meanwhile
 #    → /NAND:/sound.wav + /NAND:/sound.wav.csv ("... 0 dropped, 0 io retries")
 
-# 2. Pull both files off the USB mass-storage disk (see fw/CLAUDE.md "USB Flash
+# 2. Pull both files off the USB mass-storage disk (see .claude/skills/provision-device/references/nand-disk.md "USB Flash
 #    Disk" for mount procedure; read-only mount, umount when done).
 
 # 3. Host replay of the same WAV through the same DSP code:

@@ -6,7 +6,7 @@ allowed-tools: Bash, Read
 
 Run all firmware tests using Twister with lcov coverage. Output goes to `fw/twister-out`.
 
-**Linux/devcontainer only** — `native_sim` does not build on macOS. On the Mac Mini, rely on CI (or a devcontainer session) for Twister runs; local iteration there is build + on-device verification (see `fw/CLAUDE.md` "macOS host").
+**Linux/devcontainer only** — `native_sim` does not build on macOS. On the Mac Mini, rely on CI (or a devcontainer session) for Twister runs; local iteration there is build + on-device verification (see `.claude/skills/flash-and-verify/references/macos-host.md` "macOS host").
 
 ```bash
 twister \
@@ -70,7 +70,7 @@ Per-scenario artifacts live at
 
 - This skill reports **overall** line coverage only
   (`lcov --summary fw/twister-out/coverage.info`).
-- The **≥ 50% patch coverage gate** is a separate check computed by
+- The **> 70% patch coverage gate** is a separate check computed by
   `/submit-pr`, which extracts the changed files from
   `fw/twister-out/coverage.info`. **Passing `/test-fw` alone does not satisfy
   the gate** — a green run with low coverage on your changed files will still

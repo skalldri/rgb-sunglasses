@@ -155,12 +155,12 @@ Iterate here until the sim is clean, THEN do the ARM build (§2) — both must p
 Do not duplicate provisioning by hand — `/provision-device` builds and pushes every
 extension (plus GLIM assets) and verifies via `ext list`. For a single-file manual
 push, follow "Installing on the device" in `fw/extensions/README.md` (mount the USB
-mass-storage disk per `fw/CLAUDE.md` "USB Flash Disk", `cp` the `.llext` into the
+mass-storage disk per `.claude/skills/provision-device/references/nand-disk.md`, `cp` the `.llext` into the
 `ext/` subdirectory, `sync`, `umount`, then reboot the board — the firmware only
 re-discovers extensions on boot). Files can also be listed and **removed over
 BLE/SMP** via the firmware's FILE_MGMT group (64) — the companion app's
 Extensions screen, or the wire surface in `fw/src/extensions/extension_mgmt.h`
-(`fw/CLAUDE.md` "File management"); a delete retires the slot until the next
+(`.claude/rules/extension-file-management.md` "File management"); a delete retires the slot until the next
 reboot. **Heads-up when driving the app against a dev board**: in-repo dev
 extensions are never release assets (see `/release`), so the app files your
 USB-installed `.llext` under "Not in this release" with removal *suggested* —
@@ -170,7 +170,7 @@ developing: the delete retires its slot until reboot and re-installing means
 another USB mount + copy + reboot cycle. If you changed **host-side** extension code (`fw/src/extensions/`),
 that's a firmware change: use `/flash-and-verify`.
 
-Debug over the Zephyr shell (`mcp__serial__*`, see `fw/CLAUDE.md`):
+Debug over the Zephyr shell (`mcp__serial__*`, see `.claude/skills/flash-and-verify/references/serial-shell.md`):
 `ext list` / `ext select <slot>` / `ext param <slot> <idx> [<value>]` / `ext stats`.
 A crashed/hung extension shows `[FAULTED]`, its BLE activation is rejected, and
 **only `ext select <slot>` clears the fault** — that's deliberate recovery design,

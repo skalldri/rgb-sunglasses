@@ -165,7 +165,7 @@ export function useScopedCharacteristicMonitors(targets: ScopedMonitorTarget[]) 
                             // list: bt_gatt_notify can't fragment across ATT PDUs, so the
                             // firmware deliberately sends a short preview. Trusting these
                             // bytes would collapse the picker to a single option — re-read
-                            // for the full value. See fw/CLAUDE.md (BtGattNotifyTraits).
+                            // for the full value. See .claude/rules/ble-gatt-contract.md.
                             safeRead(characteristic, charUuid,
                                      value => applyValue(serviceUuid, charUuid, value));
                             return;

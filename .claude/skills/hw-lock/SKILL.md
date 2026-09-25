@@ -50,7 +50,7 @@ process is the *current* tracked pid ever releases.
 
 ## Launching the companion app
 
-Hold `app` first — `app/scripts/launch-app.sh` only verifies the lock, never acquires (usage conventions: `app/CLAUDE.md`):
+Hold `app` first — `app/scripts/launch-app.sh` only verifies the lock, never acquires (usage conventions: `/launch-app`):
 
 ```
 Monitor(command: "scripts/hw-lock.sh hold app", persistent: true)
@@ -64,6 +64,11 @@ Metro/lock lifecycle is asymmetric (release stops Metro; Metro dying never relea
 - `launch-app.sh` records its pid against the lock right before exec-ing into Metro
   (`note-metro-pid`, internal subcommand), so same-session release stops Metro precisely,
   not by process-name pattern-matching.
+- Metro stopping or crashing on its own does **not** release the lock — manage that side
+  yourself. A human force-releasing a *different* session's still-live lock does not kill
+  that session's Metro either; only same-session release does.
+- Never call `npx expo run:android` directly — it bypasses the lock check and the
+  single-Metro bookkeeping (`/launch-app`).
 - Orphan sweep: a Metro/expo process left by a now-dead session is killed by the next
   `hold app` (targeted `pgrep`+`kill`, never `pkill`/`killall`) before the hold considers
   itself established — the pattern-based backstop for a `hold` killed before it recorded a pid.
@@ -133,8 +138,11 @@ The guard denies `mcp__serial__*`/`mcp__execbro__*` calls and Bash invoking
 - The Bash pattern list is a heuristic, not exhaustive — e.g. an ad-hoc `mount` of the
   board's NAND disk isn't caught.
 - The hook only applies inside a Claude Code session; humans or external processes are
-  unaffected. Outside Claude Code, only `fw/scripts/jlink-flash.sh` and
-  `fw/scripts/provision-device.sh` self-refuse without the `board` lock (root `CLAUDE.md`).
+  unaffected. Independently of the hook, `fw/scripts/jlink-flash.sh`,
+  `fw/scripts/provision-device.sh`, `fw/scripts/mcumgr-flash.sh`, `scripts/re-pair.py` and
+  `app/scripts/launch-app.sh` self-refuse without their lock — but **only when run under
+  Claude Code** (`CLAUDECODE` set), so humans run them lock-free; `RGBSG_NO_LOCK=1`
+  overrides. None of them ever acquires the lock, they only check it.
 - No session can push a notification into another running session's conversation —
   `hold`'s printed notice works only because it's *your own* `Monitor` task. A fully-gone
   (not merely idle) process hears nothing — but its tracked pid is gone too, so the next

@@ -291,7 +291,7 @@ input[type="range"] {
 }
 
 /* The buttons are laid out as the physical d-pad they are on proto0
- * (fw/CLAUDE.md: a directional grid — 0=Up, 1=Left, 2=Right, 3=Down),
+ * (.claude/rules/fw-animations.md: a directional grid — 0=Up, 1=Left, 2=Right, 3=Down),
  * with the separate Wake button off to the side. */
 .buttons {
   display: grid;

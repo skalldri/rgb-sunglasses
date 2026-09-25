@@ -8,7 +8,7 @@
 #   Detach & exit:  Ctrl-A then k  (then y)
 #
 # NOTE: do not run this while an mcp__serial__ connection is open to the same port —
-# two readers race for the port and both see garbled data (see fw/CLAUDE.md).
+# two readers race for the port and both see garbled data (see .claude/skills/flash-and-verify/references/serial-shell.md).
 set -euo pipefail
 
 # shellcheck source=lib/serial-port.sh

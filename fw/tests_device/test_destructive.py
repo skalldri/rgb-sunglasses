@@ -345,7 +345,7 @@ def test_ext_param_persists_by_name(rgb: RgbShell):
         # failure that carries the evidence (PR #348/#359 review). Only
         # rewrite cpptest if it was actually removed (`deleted`) — a "wb"
         # truncate of an un-deleted file reallocates its cluster chain under
-        # the live FAT mount (double-writer corruption, fw/CLAUDE.md).
+        # the live FAT mount (double-writer corruption, .claude/skills/provision-device/references/nand-disk.md).
         try:
             if deleted:
                 provisioning.nand_write_ext(EARLIER, cpptest_bytes)

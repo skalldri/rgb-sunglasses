@@ -50,6 +50,6 @@ imu.cpp and sound.cpp"). Silent waivers are review-blocking.
 
 - `gh pr view <n>` shows the **body only**; `gh pr view <n> --comments` shows the
   **comments only** — run both when reading a PR's full discussion.
-- Responding to inline review comments, and the 422 "one pending review" trap: root
-  CLAUDE.md, section "GitHub PR review comments via `gh api`". Do not restate it here —
-  that section is the source of truth.
+- Responding to inline review comments, and the 422 "one pending review" trap: 
+  `gh-review-comments.md` (next to this file). Do not restate it here — that file is the
+  source of truth.

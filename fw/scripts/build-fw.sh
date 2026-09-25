@@ -11,7 +11,7 @@
 # netcore image, MCUboot, and the app), so it takes noticeably longer than the
 # incremental builds after it. Use --pristine if a devicetree overlay or a
 # board .conf fragment was newly ADDED (their cached paths gate re-discovery —
-# see fw/CLAUDE.md, "Per-image Kconfig/devicetree overlays").
+# see .claude/rules/fw-sysbuild-mcuboot.md, "Per-image Kconfig/devicetree overlays").
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

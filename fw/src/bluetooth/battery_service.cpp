@@ -32,7 +32,7 @@ static constexpr const char kChargeEnableKey[] = "battery/charge_enable";
  * dispatch), but uses the fallible onWriteChecked hook instead of onWrite: if
  * the EN_CHG I2C write fails, the remote write is rejected with an ATT error
  * and storage rolls back, so the app's optimistic UI update reverts
- * deterministically (fw/CLAUDE.md: never "success + corrective notify").
+ * deterministically (.claude/rules/ble-gatt-contract.md: never "success + corrective notify").
  *
  * Defaults to ON per issue #97; the persisted value (if any) overrides it via
  * doLoad's operator= before BT comes up, which bypasses onWriteChecked — the

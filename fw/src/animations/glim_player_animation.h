@@ -68,8 +68,8 @@ class GlimPlayerAnimation : public BaseAnimationTemplate<GlimPlayerAnimation, An
     uint32_t goodSwitchPointGraceMs() const override;
 
    private:
-    // Physical button layout is a directional grid (see fw/CLAUDE.md): 0=Up, 1=Left, 2=Right,
-    // 3=Down. Up cycles to the next GLIM file (mirroring PlayAll's auto-advance); Down cycles to
+    // Physical button layout is a directional grid (.claude/rules/fw-animations.md): 0=Up,
+    // 1=Left, 2=Right, 3=Down. Up cycles to the next GLIM file (mirroring PlayAll's auto-advance); Down cycles to
     // the previous one. Left/Right are intentionally unassigned.
     static constexpr size_t kNextButtonId = 0;  // Up
     static constexpr size_t kPrevButtonId = 3;  // Down

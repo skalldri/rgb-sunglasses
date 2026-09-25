@@ -25,7 +25,8 @@ const FirmwareUpdateContext = createContext<FirmwareUpdateContextValue | null>(n
  * The release lookup lives here because every screen wants it and pushed screens never
  * unmount — a per-screen `useFirmwareRelease()` meant the landing page, the extensions
  * screen and the flow each fired their own unauthenticated GitHub fetch, stacking up
- * against the 60 req/hr per-IP cap that `app/CLAUDE.md` warns not to multiply, plus
+ * against the 60 req/hr per-IP cap that `.claude/rules/app-firmware-update.md` warns not to
+ * multiply, plus
  * duplicate `getOsInfo`/`getImageState` SMP traffic on every navigation.
  */
 export function FirmwareUpdateProvider({ children }: { children: React.ReactNode }) {

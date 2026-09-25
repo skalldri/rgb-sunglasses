@@ -281,7 +281,7 @@ int TelemetryControlCharacteristic::onWriteChecked(const uint32_t &control) {
     if (!req.valid) {
         /* Refusing a write means an ATT error, never "success plus a corrective notify" —
          * the app's optimistic update lands after the response and would paper over it
-         * (fw/CLAUDE.md). */
+         * (.claude/rules/ble-gatt-contract.md). */
         LOG_WRN("rejecting telemetry control 0x%08x", control);
         return req.error;
     }

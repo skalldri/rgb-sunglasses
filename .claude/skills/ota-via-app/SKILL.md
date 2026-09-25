@@ -29,7 +29,7 @@ existed; it was not consulted. Read `/drive-app` first, then follow this in orde
   different image when the test needs it; there is **no rollback** (overwrite-only
   bootloader — see `fw/docs/e2e-test-plan.md` E2E-02).
 - **Close any `mcp__serial__*` connection before the restart step.** The board
-  re-enumerates and the old connection goes stale (`fw/CLAUDE.md`, "USB re-enumeration").
+  re-enumerates and the old connection goes stale (`.claude/skills/flash-and-verify/references/serial-shell.md`, "A board reset breaks an already-open connection").
 
 ## 1. Put the zip where the app's file picker can see it
 
@@ -66,7 +66,7 @@ with `FlowStep`. Poll the on-screen title, nothing else:
 | Preparing update | parsing the zip | automatically |
 | Ready to install | waiting for the Install tap | **your tap** |
 | Uploading firmware | SMP upload, `Uploading image N of M…`, `NN%` | automatically |
-| Preparing images | `image test` on the staged hashes | automatically |
+| Preparing images | staging the uploaded hashes as permanent (`setImageState(hash, true)`; overwrite-only, no test/confirm step) | automatically |
 | Ready to restart | staged; extension sync summary shown | **your tap** on `fw-update-restart` |
 | Restarting device | `reset` sent; the board goes away | automatically |
 | Waiting for device | reconnect loop | automatically |
@@ -116,7 +116,7 @@ Things that do **not** work, each tried and failed:
 ## 4. Verify on the board, not just in the app
 
 After "Update complete" (which already means the app verified the active slot's
-`IMAGE_TLV_SHA256` against the zip — `app/CLAUDE.md`, "Firmware update"):
+`IMAGE_TLV_SHA256` against the zip — `.claude/rules/app-firmware-update.md`, "Firmware update"):
 
 ```bash
 /check-hardware                                             # ports shift after the reset

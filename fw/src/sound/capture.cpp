@@ -276,7 +276,7 @@ void worker(void *, void *, void *) {
 
 /* K_KERNEL_THREAD_DEFINE, not K_THREAD_STACK_DEFINE + k_thread_create: this thread
  * stays kernel-mode, so it needs none of the dynamic-creation workaround a K_USER
- * conversion does (fw/CLAUDE.md, CONFIG_USERSPACE), and a kernel stack avoids the
+ * conversion does (.claude/rules/fw-userspace.md), and a kernel stack avoids the
  * ~1 KB of privileged stack a userspace-capable stack reserves per thread. */
 K_KERNEL_THREAD_DEFINE(capture_worker_thread, CONFIG_APP_CAPTURE_THREAD_STACK_SIZE, worker, NULL,
                        NULL, NULL, CONFIG_APP_CAPTURE_THREAD_PRIORITY, 0, 0);

@@ -26,7 +26,7 @@ v3.1.1):
   DropdownList bug: `notify()` used to send `sizeof(storage_)` (e.g. 512 bytes for
   `GlimSelectionCharacteristic`) instead of the actual string length, so every notify
   failed even for a tiny selection list. Fixed in-tree (string-backed types now notify
-  `strnlen`-based length — fw/CLAUDE.md `notify()` entry), but any new characteristic
+  `strnlen`-based length — `.claude/rules/ble-gatt-contract.md` notify entry), but any new characteristic
   whose content can grow past ~244 bytes re-creates it.
 - **23 < `N` ≤ 247** — the link is likely still at the 23-byte default MTU: the app's
   `requestMTU: 247` (grep `requestMTU` in `app/hooks/use-ble-connection.ts`) never took
@@ -47,5 +47,5 @@ v3.1.1):
 
 Never conclude from the app UI alone — cross-check the characteristic's firmware-side
 source of truth on the serial shell (e.g. `glim get_selected` for the GLIM selection
-list; board lock required). Full background: fw/CLAUDE.md (`bt_service_cpp.h notify()`
-bullet) and app/CLAUDE.md "Known Issues & Quirks" MTU entry.
+list; board lock required). Full background: `.claude/rules/ble-gatt-contract.md` "Notify payloads must fit the
+connection's *current* MTU" (both the firmware and app sides).

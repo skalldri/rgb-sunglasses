@@ -75,7 +75,7 @@ export function getCurrentAppVersion(): string {
  * Returns null when up to date (or when no app release exists yet).
  *
  * Unauthenticated and one-shot — do not poll (GitHub rate-limits anonymous
- * requests to 60/hr per IP; see app/CLAUDE.md).
+ * requests to 60/hr per IP; see .claude/rules/app-firmware-update.md).
  */
 export async function checkForAppUpdate(): Promise<AppUpdateInfo | null> {
     const release = await fetchLatestAppRelease(REPO_OWNER, REPO_NAME);

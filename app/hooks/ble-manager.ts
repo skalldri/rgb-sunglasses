@@ -19,7 +19,7 @@ export type RestoredPeripheral = { mac: string; name: string };
 // NOTE: iOS only relaunches the app for Core Bluetooth events after a SYSTEM
 // termination (jetsam). After a user force-quit (App Switcher swipe) the
 // restore callback never fires - platform limitation; the user must reopen
-// the app. See the matching note in app/CLAUDE.md.
+// the app. See the matching note in .claude/rules/app-ios.md.
 let restoredPeripheral: RestoredPeripheral | null = null;
 let restoredSubscriber: ((peripheral: RestoredPeripheral) => void) | null = null;
 

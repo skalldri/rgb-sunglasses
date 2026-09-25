@@ -86,7 +86,7 @@ Review GitHub PR #<N> in <owner>/<repo> and post the findings to the PR.
      gh api --paginate repos/<owner>/<repo>/pulls/<N>/comments \
        --jq '.[] | select(.body | test("^\\s*@\\S+\\s*$")) | "STALE \(.id) \(.body)"'
    Any output means a comment body was posted as a literal @path — repair it
-   with PATCH (see root CLAUDE.md § "GitHub PR review comments via gh api").
+   with PATCH (see .claude/skills/submit-pr/references/gh-review-comments.md).
    Note --paginate: these endpoints cut off at 30 comments.
    To POST, prefer `gh pr comment --body-file` or `gh api --input <json>`. The
    `-f body="$(cat ...)"` form is correct but is sometimes refused by the
@@ -220,8 +220,8 @@ few minutes. Offer these rather than silently burning the budget:
   authored change (one wasted review); a base-branch retarget changes the whole
   diff with no SHA move (one missed review). Watch for retargets by hand on a
   stacked series; neither case justifies the `updatedAt` loop.
-- **`-f body=@file` posts the literal string `@file`.** Root `CLAUDE.md`
-  § "GitHub PR review comments via `gh api`" has the full trap and the fix.
+- **`-f body=@file` posts the literal string `@file`.** `.claude/skills/submit-pr/references/gh-review-comments.md`
+  has the full trap and the fix.
   It bit this workflow on 2026-08-15 (PR #377, 5 empty comments), which is why
   step 2 of the template is mandatory rather than advisory.
 - **Comment listings paginate at 30.** Without `--paginate`, a PR several

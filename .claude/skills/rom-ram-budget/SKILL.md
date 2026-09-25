@@ -21,6 +21,18 @@ The summary lines land at the end of build output as
 `Memory region  Used Size  Region Size  %age Used` with `FLASH:` and `RAM:` rows —
 one block per image; the appcore app image is the one that matters here.
 
+**A before/after diff of the FLASH/RAM totals can have the wrong SIGN.** Under
+`CONFIG_USERSPACE` the gperf-generated `kobject_data` section is sized by a perfect hash
+over kernel-object *addresses*, so any change that shifts the layout resizes it by
+kilobytes in either direction, unrelated to what the change actually costs. Measured
+2026-08-11 adding two GATT characteristics (issue #148): the totals moved −2,720 B FLASH /
+−5,216 B RAM, which reads as a saving, while the change itself cost **+2,904 B FLASH /
++412 B RAM** — `kobject_data` had simply hashed 5,632 B smaller. Attribute cost from the
+map's per-output-section deltas (`text`/`rodata`/`datas`/`bss`), and treat a
+`kobject_data` delta as noise to be reported separately, never as part of the change's
+cost. Same family as the unexplained `kMaxAttrs` nonlinearity documented in the comment
+above `kMaxAttrs` in `fw/src/extensions/extension_bt.cpp`.
+
 ## Current envelope — historically observed as of 2026-07, re-verify from build output
 
 - **The legacy DK board (dk-support branch) ran at 92–94% appcore FLASH** — the
@@ -30,6 +42,9 @@ one block per image; the appcore app image is the one that matters here.
 - **proto0 appcore RAM history:** 75.3% (PR #81) → 90.5% (USERSPACE #82 + LLEXT #89)
   → 76.2% (recovery pass PR #103). proto0 FLASH was ~66% after #103.
 - Do not treat any of these as current facts — rebuild and read the real numbers.
+
+Issue #79's two ROM-reduction passes (what was cut, what was deliberately kept, measured deltas):
+[references/rom-pass-history.md](references/rom-pass-history.md).
 
 ## Cost catalog (from PRs #81, #82, #103; issue #84)
 
@@ -58,7 +73,7 @@ Details:
   An `=n` override only reclaims flash if the feature's code compiles out cleanly when
   disabled — wrap call sites in `IS_ENABLED(CONFIG_...)` / `if constexpr (IS_ENABLED(...))`
   or gate the sources with `target_sources_ifdef` in `fw/CMakeLists.txt` (working
-  precedent: `CONFIG_APP_PERSIST_BT_CONFIG`, documented in `fw/CLAUDE.md`).
+  precedent: `CONFIG_APP_PERSIST_BT_CONFIG`, documented in `.claude/rules/fw-settings-persistence.md`).
 - **`default y` Kconfig danger:** a new feature symbol in `fw/Kconfig` with a bare
   `default y` lands on EVERY board built from this tree. Either gate it
   (`default y if BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP` + `default n` — precedent:
@@ -104,7 +119,7 @@ Details:
 statically-defined threads have a zeroed `mem_domain_info`, and
 `k_mem_domain_add_thread()` faults on them; a converted thread also needs
 `z_libc_partition` in its memory domain or it usage-faults on its first instruction.
-Both crash classes are documented in `fw/CLAUDE.md` ("CONFIG_USERSPACE / kernel-user
+Both crash classes are documented in `.claude/rules/fw-userspace.md` ("CONFIG_USERSPACE / kernel-user
 mode separation"). Copy the working pattern from `imu_init()` in `fw/src/imu/imu.cpp`:
 `K_THREAD_STACK_DEFINE` + `k_thread_create(..., K_FOREVER)` from a SYS_INIT hook,
 access grants, `k_mem_domain` with `{own_partition, z_libc_partition}`, then

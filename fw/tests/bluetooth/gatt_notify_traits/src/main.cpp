@@ -3,7 +3,7 @@
 // BLE-spec default/minimum ATT_MTU of 23 octets (3-byte ATT header + this length must be <= 23).
 // Regression coverage for the "Notify failed: -12" / "No ATT channel for MTU 23" symptom seen
 // when a GLIM Selection notify's first-token (selected filename) length exceeded that floor.
-// See fw/CLAUDE.md ("notify() only sends the actual string length...") for the full history.
+// See .claude/rules/ble-gatt-contract.md ("Notify payloads must fit") for the full history.
 
 #include <bluetooth/bt_gatt_traits.h>
 #include <zephyr/ztest.h>
@@ -58,7 +58,8 @@ ZTEST(gatt_notify_traits, test_long_selected_name_capped_to_guaranteed_safe_len)
 }
 
 ZTEST(gatt_notify_traits, test_multi_option_list_uses_first_token_not_whole_list) {
-    // Regression guard for the ORIGINAL bug this trait fixed (see fw/CLAUDE.md): notify() must
+    // Regression guard for the ORIGINAL bug this trait fixed (see
+    // .claude/rules/ble-gatt-contract.md): notify() must
     // key off the first "\n"-delimited token (the current selection), never the full
     // "Selected\nOther\nOther2..." canonical list, regardless of how many options exist.
     auto list = makeList<512>("a.glim\nb.glim\nc.glim\nd.glim\ne.glim");

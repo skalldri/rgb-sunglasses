@@ -10,7 +10,8 @@
 # re-enumerates or a flash is interrupted, after which JLinkExe reports
 # "Cannot connect to J-Link" and nrfutil "Failed to open connection" even though lsusb
 # shows the probe. (Same class of problem as the shifting ttyACM nodes documented in
-# fw/CLAUDE.md, which check-hardware.sh already handles for tty devices.)
+# .claude/skills/flash-and-verify/references/serial-shell.md, which check-hardware.sh already
+# handles for tty devices.)
 #
 # The same missing-node problem hits the board's FAT "NAND" disk, which enumerates as
 # a SCSI block device (/dev/sdX): without its node, coredump-fetch.sh and any manual

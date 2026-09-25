@@ -238,7 +238,7 @@ while its owning account is logged into a GUI session. It runs under a **dedicat
 macOS account** — created solely to host CI — rather than a developer's own login, so that:
 
 - The `ios-testflight` job's throwaway signing keychain (created/imported/torn down per run — see
-  the "TestFlight releases" section of `app/CLAUDE.md`) never shares a keychain search list with a
+  the "TestFlight releases" section of `.claude/rules/app-release-ci.md`) never shares a keychain search list with a
   human's interactive session.
 - A developer can stay logged into their own account (different desktop, different unlock state)
   without a CI job silently depending on that session.

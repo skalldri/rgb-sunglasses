@@ -24,7 +24,7 @@
 # Notes:
 #   - MCUmgr/serial recovery updates APPLICATION images only (app + net core).
 #     Reflashing MCUboot itself still needs a J-Link or the in-app mcuboot_update
-#     path — see fw/CLAUDE.md.
+#     path — see .claude/skills/flash-and-verify/references/mcumgr.md.
 #   - Uploading the app image over serial takes ~3-4 minutes; be patient.
 set -euo pipefail
 

@@ -19,7 +19,7 @@ new protocol client. Validation for all of it: /validate-app (don't hand-roll je
 | Tests | `__tests__/` |
 
 If any doc still cites a single-file "device-state.tsx" (with or without line numbers), it is
-stale — `app/(tabs)/device-state/` is a directory (`index.tsx` + `[serviceUuid].tsx`) and the
+stale — `app/app/(tabs)/device-state/` is a directory (`index.tsx` + `[serviceUuid].tsx`) and the
 render dispatch lives in `use-characteristic-editor.tsx`. (`app/CLAUDE.md` is already correct
 on this as of 2026-07.)
 

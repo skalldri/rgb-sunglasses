@@ -6,7 +6,7 @@ description: "Diagnose device↔app Bluetooth problems: phone connects but app h
 # Debug a device↔app BLE symptom
 
 Every BLE symptom has a firmware side and an app side. Before touching either, read
-`fw/CLAUDE.md` ("Serial Console (Zephyr Shell)") and `app/CLAUDE.md` ("Debugging BLE",
+`.claude/skills/flash-and-verify/references/serial-shell.md` and `.claude/rules/app-ble-connection.md` ("Structure",
 "Known Issues & Quirks", "Autonomous Agent Notes"). PR/issue numbers are background
 (`gh issue view N` / `gh pr view N`), not facts to re-assert; when in doubt the code wins.
 
@@ -175,9 +175,8 @@ PRs #48/#54, background). The only real levers, already in place:
 If the device stops advertising and a fresh scan finds nothing while the app thinks
 it's disconnected, the OS still holds the native link. Fix: force-stop the app so the
 OS drops the link, then relaunch. Both triggers (discovery-loop throw, `reload_app` /
-mid-session reflash) and the exact force-stop procedure are in app/CLAUDE.md — see
-"Known Issues & Quirks" and "BLE Link Can Get Orphaned by App Reloads, Not Just
-Discovery Failures". Anything `adb`-shaped needs the `app` lock (see final section).
+mid-session reflash) and the exact force-stop procedure are in
+`.claude/rules/app-ble-connection.md` "Split-brain triggers". Anything `adb`-shaped needs the `app` lock (see final section).
 
 ## 8. Notify silently dropped: payload exceeds negotiated MTU
 
@@ -221,6 +220,6 @@ Never conclude from app UI alone — cross-check against the firmware serial she
 `anim get` (actual current animation), `bt_state` (link health, see §1 caveat),
 `power bq status` (actual battery voltage/current vs. the app's battery card). Needs
 the `board` lock (root CLAUDE.md "Hardware locking") and the `mcp__serial__*` tools per
-fw/CLAUDE.md "Using the `mcp__serial__*` tools" — never raw Bash on `/dev/ttyACM*`.
-Driving the phone (execbro/adb) needs the `app` lock; follow app/CLAUDE.md "Autonomous
-Agent Notes" for tapping/coordinates — don't improvise.
+.claude/skills/flash-and-verify/references/serial-shell.md "Using the `mcp__serial__*` tools" — never raw Bash on `/dev/ttyACM*`.
+Driving the phone (execbro/adb) needs the `app` lock; follow `/drive-app` for tapping/coordinates and `/launch-app` for launching — don't
+improvise.

@@ -1,7 +1,7 @@
 """RgbShell — the suite's one way to talk to the board's Zephyr shell.
 
 Wraps pytest-twister-harness's Shell/DeviceAdapter with the quirks this board
-is known to need (catalogued in fw/CLAUDE.md and .serial_mcp/plugins/
+is known to need (catalogued in .claude/skills/flash-and-verify/references/serial-shell.md and .serial_mcp/plugins/
 rgb_sunglasses.py, the interactive-session equivalent of this class):
 
 - Ctrl+C before every command: a boot-log fragment can land in the shell's

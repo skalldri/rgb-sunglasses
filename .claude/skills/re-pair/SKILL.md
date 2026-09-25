@@ -125,6 +125,9 @@ this is safe to leave half-done — but re-enable it before the pairing phase or
 will not be listed. Pair afterwards with `--no-forget`. Worth trying **before** the
 manual prompt, since the manual path needs a human at the phone.
 
+Passkey mechanics, the manual pairing fallback, and the full forget-failure ladder:
+[references/manual-pairing.md](references/manual-pairing.md).
+
 ## Success
 
 The script drives `bt_state` over the UART and requires `CONNECTED` + `Security level: L4`

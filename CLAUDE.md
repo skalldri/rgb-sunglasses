@@ -2,199 +2,93 @@
 
 ## Memory policy
 
-**Always use in-repo files for memory.** This devcontainer is rebuilt frequently, so `~/.claude/` is ephemeral and must never be used to store facts that need to survive across sessions. Record everything worth remembering in:
+**Always use in-repo files for memory.** The devcontainer is rebuilt often, so `~/.claude/` is ephemeral — never store
+lasting facts there. Agent knowledge is layered so only what is relevant loads:
 
-- This file (cross-cutting agent behavior, project-wide facts)
-- `fw/CLAUDE.md` (firmware-specific guidance)
-- `app/CLAUDE.md` (React Native app guidance)
-- Other committed files in the repo
+| Layer | Loads | Holds |
+|---|---|---|
+| This file | every session | cross-cutting rules, routing |
+| `fw/CLAUDE.md`, `app/CLAUDE.md` | first Read in that subtree | conventions + index of rules files |
+| `.claude/rules/*.md` | a Read file matches its `paths:` | code-area detail, numbers, history |
+| `.claude/skills/*/` (+ `references/`) | the task matches the skill | procedures, hardware ops |
+| `docs/agent-incidents.md` | on demand, by anchor | stories behind rules with no code trigger |
 
-Never write to `~/.claude/projects/` or any other `~/.claude/` path for persistent notes.
+**"Remember" instructions:** when the user says "Remember" (or "Remember that"), record it at once in the most specific
+layer — a code-area fact in the `.claude/rules/` file whose `paths:` cover that code (create one and index it in fw/ or
+app/ if none does), a procedure in its skill, a cross-cutting rule here. Always-loaded files carry the rule plus a
+pointer; numbers, dates and stories go in the chunk. Run `python3 scripts/check-agent-docs.py` after editing an agent
+doc. Always use the built-in file tools to edit files.
+
+## Session startup
+
+**Your first output in every new conversation must be the environment status summary table — before any task work, even
+when the user opens with a specific request.** A `SessionStart` hook injects `check-hardware` + `check-software` output
+as "Environment status (auto-checked at session start)"; render it as a brief table (dev board, J-Link, Android/ADB,
+`gh`, …) and call out anything NOT AUTHENTICATED / NOT READY up front. Only run `/check-hardware` / `/check-software`
+yourself if that block is missing.
+
+- **Launch agents from the repo root or a worktree root only** — settings, hooks and `.claude/rules/` live at the root;
+  subdirectory launches are unsupported.
+- Read `fw/CLAUDE.md` / `app/CLAUDE.md` before planning work there. On a macOS host (Mac Mini), read
+  `.claude/skills/flash-and-verify/references/macos-host.md`.
 
 ## Working with hardware
 
-**Never run `/check-hardware` (or anything else that calls `adb kill-server`) while an app deploy/install is in flight.** The skill restarts the adb server as part of its phone probe, which kills any in-progress `adb install` — observed 2026-07-25: an `expo run:android` install failed with a bare exit-1 because check-hardware was run right after a firmware flash while the install was streaming. Board-side re-enumeration checks after a flash can use `lsusb | grep 2fe3` + `fix-usb-dev-nodes.sh` directly when Metro/expo is mid-deploy.
-
-**Always check for device presence with the `/check-hardware` skill (`.devcontainer/scripts/check-hardware.sh`), never a bare `adb devices` / `lsusb`.** The skill applies USB device-node fixes (re-triggers enumeration/authorization) as part of the check, so a device that a raw `adb devices` reports as NOT CONNECTED can show up correctly once check-hardware runs. Do not conclude "no phone/board attached" from a bare `adb devices` — run check-hardware first (observed 2026-07-19: `adb devices` empty, check-hardware then reported the phone CONNECTED over USB).
-
-Hardware iterations are slow and mistakes can cause damage. Before flashing anything:
-
-- Read the relevant source code to confirm assumptions (Kconfig deps, handler logic, buffer sizes)
-- Verify changes in `build/fw/zephyr/include/generated/zephyr/autoconf.h` before uploading
-- Don't rely on web search results for Kconfig symbol names — check the actual NCS source under `/root/ncs/v3.1.1/` (devcontainer) / `~/ncs/v3.1.1/` (macOS host)
-- Verify memory-accounting claims against the linker map (`build/fw/zephyr/zephyr.map`) before proposing size/config changes — e.g. `.noinit` buffers (like the llext heap) ARE counted in the linker's RAM percentage, and secondary reports (footprint scripts) use different accounting than what governs link success
-- **A before/after diff of the build's FLASH/RAM totals can have the wrong SIGN.** Under `CONFIG_USERSPACE` the gperf-generated `kobject_data` section is sized by a perfect hash over kernel-object *addresses*, so any change that shifts the layout resizes it by kilobytes in either direction, unrelated to what the change actually costs. Measured 2026-08-11 adding two GATT characteristics (issue #148): the totals moved −2,720 B FLASH / −5,216 B RAM, which reads as a saving, while the change itself cost **+2,904 B FLASH / +412 B RAM** — `kobject_data` had simply hashed 5,632 B smaller. Attribute cost from the map's per-output-section deltas (`text`/`rodata`/`datas`/`bss`), and treat a `kobject_data` delta as noise to be reported separately, never as part of the change's cost. Same family as the unexplained `kMaxAttrs` nonlinearity documented at `fw/src/extensions/extension_bt.cpp:48`.
+- **Check presence with `/check-hardware`, never a bare `adb devices` / `lsusb`** — it fixes USB device nodes first, so
+  a raw probe can miss a connected device.
+- **Never run `/check-hardware` (or anything calling `adb kill-server`) during an app install** — it can kill the
+  install; use `lsusb | grep 2fe3` + `fw/scripts/fix-usb-dev-nodes.sh` instead
+  (`docs/agent-incidents.md#2026-07-25-check-hardware-killed-an-in-flight-app-install`).
+- **Use only the `mcp__serial__*` tools for the board's shell**, never raw Bash on `/dev/ttyACM*`
+  (`.claude/skills/flash-and-verify/references/serial-shell.md`).
+- Hardware iterations are slow and mistakes can cause damage: follow the pre-flash gates in `/flash-and-verify` §2.
 
 ### NEVER write unverified commands or data into hardware parts
 
-**Never send a command, register write, 4CC task, or configuration value to a physical
-part (I2C/SPI peripheral, PD controller, charger, sensor, etc.) based on memory,
-inference, or pattern-matching. LLM-recalled datasheet content is a hallucination until
-proven otherwise, and a wrong write can permanently damage or wedge a chip.**
+**Never send a command, register write, 4CC task, or configuration value to a physical part (I2C/SPI peripheral, PD
+controller, charger, sensor, …) based on memory, inference, or pattern-matching.** Recalled datasheet content is a
+hallucination until proven otherwise, and a wrong write can permanently wedge a chip. Before ANY write that is not an
+established, hardware-proven code path:
 
-Before ANY write to a hardware part that is not already an established, in-repo,
-hardware-proven code path:
+1. **Obtain the authoritative source first** — the datasheet / TRM, from the user or checked into the repo
+   (`fw/docs/datasheets/`: TPS25750 TRM + datasheet, BQ25792, MX25R6435F). Web summaries, recall, and "the other
+   constants look like this" do NOT count.
+2. **If the source is not available, STOP and ask the user for it.** Hardware is not a REPL.
+3. Cite the doc section for the exact bytes/values written in the code comment.
+4. Reads are comparatively safe; writes are the danger. An unused define is NOT evidence.
 
-1. **Obtain the authoritative source first** — the actual datasheet / technical
-   reference manual (a PDF or excerpt provided by the user, or a doc checked into the
-   repo). Web search summaries, training-data recall, and "the other constants look
-   like this" pattern-matching do NOT count.
-2. **If the source is not available, STOP and ask the user for it.** Do not "try
-   something plausible and see" — hardware is not a REPL. The user would rather be
-   asked than have a part bricked.
-3. Cite the doc section for the exact bytes/values being written in the code comment,
-   so the next reader can re-verify.
-4. Reads are comparatively safe; writes are the danger. A define existing unused in
-   the codebase is NOT evidence it is correct — unused code was never
-   hardware-validated.
-
-Before implementing any externally-suggested hardware fix for a symptom (e.g. wrong
-current/voltage readings), check `.claude/skills/debug-fw/` first — known root causes
-for these symptoms are catalogued there (BQ25792 sign extension, PR #106; TPS25750
-I2Cm bridge race, PR #111).
-
-This rule exists because of a real incident (2026-07-05): unverified TPS25750 4CC
-commands ("GO2P"/"Go2P" — spelling and semantics asserted from memory, not from the
-TRM) were written to CMD1 on live hardware while attempting to force a patch
-re-download, and the part ended up in a broken state. The correct move at step zero
-was: "I don't have the TPS25750 host-interface TRM — please provide it before I write
-anything to this chip."
-
-The TRM (and the TPS25750/BQ25792 and MX25R6435F datasheets) are now checked in
-under `fw/docs/datasheets/` — that is the authoritative source this rule demands. GO2P
-itself has since been implemented the sanctioned way (user-commissioned 2026-07-17,
-cited to TRM SLVUC05A Table 3-12): `tps25750_go2p()` + the `power pd go2p` shell
-command, which refuses to run without a battery present (the 2026-07-05 wedge was
-likely aggravated by running VBUS-only when GO2P dropped the PD PHY). It exists to
-exercise the runtime PTCH-wedge recovery path — see `/debug-fw`'s symptom table.
+For a hardware symptom (e.g. wrong current/voltage readings), check `/debug-fw` before any externally-suggested fix.
+Why: `docs/agent-incidents.md#2026-07-05-tps25750-go2p-wedge`; power parts: `.claude/rules/fw-power.md`.
 
 ### Choosing which phone to use
 
-**Any connected phone is viable.** If a phone answers over ADB, it is fair game — do not
-stop and ask merely because a particular device is absent. It does not have to be one of
-the phones named below: those are simply the *known* handsets, documented because their
-quirks are known, not because they are the only permitted ones. Identify which phone is
-attached (`adb devices -l`, or the `device` field in any execbro result) and read the
-phone-specific notes in `app/CLAUDE.md` through that lens.
+**Any connected phone is viable.** The phones in `.claude/skills/drive-app/references/phones.md` are the *known* ones,
+with their tap recipes and BLE quirks. BLE strictness changes what a pass proves: when a change touches the GATT layout,
+say which phone you verified on and what that covers (`docs/agent-incidents.md#2026-08-24-phone-choice-rule-relaxed`).
 
-**NEVER connect an ADB device yourself.** Use whatever is already connected; never bring
-one online. That means no `adb connect`, no `adb disconnect`, no `adb pair`, no re-pairing
-a dropped wireless-debugging session, no switching to a different transport, and no
-walking the user through it as a way of getting a device back. **If nothing is connected,
-or a connected device drops mid-session, say so plainly and stop.** Report what you
-observed — `adb devices -l` output, whether the host still answers a ping, whether the
-port is refused — and hand it back. Do not work around it.
-
-This is the part of the pre-2026-08-24 rule that survives, and it is the part that
-matters: the original rule bundled "use the OnePlus specifically" together with "do not
-go connecting things on your own", and only the first half was lifted. Broken 2026-08-26:
-an agent whose phone dropped its wireless-debugging session ran `adb disconnect` and
-`adb connect <ip:port>` to try to recover it instead of stopping — the connection is the
-user's to make, and an agent probing for it is exactly the autonomy this forbids.
-
-The one real caveat is that **only a few phones have validated UI control paths**. The
-tap/scroll recipes differ per device — coordinate taps from a screenshot land high on the
-OnePlus 9 Pro and must use `tap(text=…, strategy="accessibility")` or the fiber-walk
-recipes, while the same coordinate taps are reliable on the Pixel 9 Pro. If you are on a
-phone with no validated recipe, prefer the accessibility strategy first and say so in your
-report rather than trusting a coordinate tap that silently missed.
-
-Phones also differ in BLE strictness, which changes what a result *proves* rather than
-whether you may use it. The OnePlus 9 Pro ignores Service Changed and wedges bonded
-reconnects at `ATT MTU: 23` after a board reboot or GATT-changing reflash (recover with
-`/re-pair`); the Pixel 9 Pro re-discovers on its own. So a pass on the OnePlus carries
-over to the Pixel, while a pass on the Pixel does not by itself prove the OnePlus path.
-When a change touches the GATT layout, say which phone you verified on and what that does
-and does not cover. When it does not touch GATT, either phone is a genuine result.
-
-Superseded 2026-08-24 (maintainer instruction, reconfirmed 2026-08-27): this section
-previously required the OnePlus 9 Pro (LE2125) specifically and told agents to stop and
-ask if it was absent. Any connected Android phone is now allowed — the named phones are
-the *known* ones, not the permitted ones. The "never connect a device yourself" half of
-the old rule was restored 2026-08-27 (maintainer instruction) after it was lifted along
-with the phone-choice half it had been bundled with.
+**NEVER connect an ADB device yourself.** No `adb connect`, `adb disconnect`, `adb pair`, no re-pairing a dropped
+wireless session, no switching transport, no walking the user through it. **If nothing is connected, or a device drops
+mid-session, say so plainly and stop** — report `adb devices -l`, whether the host answers a ping, whether the port is
+refused (`docs/agent-incidents.md#2026-08-26-agent-reconnected-a-dropped-adb-session`).
 
 ### NEVER reboot the shared Android phone on your own
 
-**Never run `adb reboot` (or any full OS-level reboot) against the shared test
-phone without asking the user first.** Rebooting the dev board is fine and
-routine (it re-enumerates over USB automatically); rebooting the phone is not
-— it comes back up locked, and unlocking a phone's screen is not something
-`adb`/`execbro` can do (no ADB command enters a PIN/pattern/biometric), so a
-self-triggered phone reboot strands the session until the user physically
-walks over and unlocks it by hand.
-
-If BLE/ADB connectivity to the phone seems stuck (e.g. Android's BLE scan
-returns `SCAN_FAILED_APPLICATION_REGISTRATION_FAILED` / error code 6 from a
-stale scan-client registration), prefer lighter, reversible recovery steps
-first — `adb shell svc bluetooth disable` then `enable` to reset just the
-Bluetooth stack, re-navigating the app's screen to restart a scan, or
-resetting the *board* (not the phone) if a stale GATT link is suspected. Only
-ask the user to power-cycle the phone themselves if those don't resolve it —
-never do it unilaterally via `adb reboot`.
-
-**When `svc bluetooth disable`/`enable` does not clear error 6, restart the
-Bluetooth stack PROCESS instead: `adb shell am force-stop com.android.bluetooth`**
-(it restarts itself; `settings get global bluetooth_on` still reads 1 afterwards).
-Measured 2026-08-12 on the OnePlus: four `svc` cycles left every scan failing with
-registration error 6, and one force-stop of the stack process fixed it on the next
-app launch. Force-stop the app first either way — its own registrations are part of
-what leaks. This is strictly lighter than the phone reboot the rule above forbids,
-so it belongs in the ladder before ever asking the user.
-
-Two things that will otherwise cost an hour on that phone:
-
-- **`pm grant` is blocked on OxygenOS** (`SecurityException: neither user 2000 nor
-  current process has GRANT_RUNTIME_PERMISSIONS`), so the pre-grant recipe in
-  `app/CLAUDE.md` does not work there. Grant through the UI instead:
-  `adb shell am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:<pkg>`
-  → Permissions → Location → "Allow only while using the app".
-- **Every board reboot needs a re-pair on this phone**, not just a GATT-changing
-  one — a plain reflash-and-reset wedges the bonded reconnect at `ATT MTU: 23`. Budget
-  for `/re-pair` after each flash, and expect its automated forget to need the
-  halt-the-board recipe (see `app/CLAUDE.md`); the forget only succeeds while the
-  board is unreachable.
+**Never `adb reboot` the phone without asking** — it comes back locked and nothing over ADB can unlock it. Rebooting the
+*board* is fine. If BLE/ADB seems stuck (e.g. scan error 6), climb: force-stop the app → `adb shell svc bluetooth
+disable`/`enable` → `adb shell am force-stop com.android.bluetooth` → reset the board → only then ask the user to
+power-cycle the phone (`docs/agent-incidents.md#2026-08-12-bt-stack-registration-leak-on-the-oneplus`).
 
 ### BLE pairing — use the `/re-pair` skill; otherwise ask the user for the passkey
 
-The firmware requires `BT_SECURITY_L4` (LE Secure Connections + bonding). On a
-fresh pairing (board recently unpaired, or its bond info was cleared), the
-serial console prints something like:
-
-```
-[00:23:51.161,041] <inf> bluetooth: Passkey for D0:49:7C:17:7B:E1 (public): 123456
-[00:23:51.161,560] <inf> bluetooth: Peer needs to enter a pin code to pair
-```
-
-This is the firmware's own `passkey_display` auth callback (`fw/src/bluetooth.cpp`,
-IO capability = Display-only, no `passkey_entry`/`passkey_confirm`/`pairing_confirm`
-registered) — the phone's Android BLE stack shows a native "Enter pairing code"
-system dialog (not part of the companion app's own UI, so `mcp__execbro__android_screenshot`
-won't necessarily surface it as an app screen — check for it explicitly) expecting
-that exact 6-digit code typed in and submitted.
-
-**The sanctioned way to (re-)pair is `scripts/re-pair.sh` / the `/re-pair` skill**
-(user-commissioned 2026-07-11): it forgets the stale bond and re-pairs hands-off, with
-a local autoresponder that reads the passkey off the UART and types it into Android's
-dialog fast enough to beat the pairing timeout — the exact read-and-enter flow this rule
-used to forbid, now packaged as an auditable script that self-gates on the board + app
-locks. Use it (see `/debug-ble` for when the OnePlus stale-GATT split-brain needs it).
-
-**Outside that script, still stop and ask the user before entering a passkey via ADB.**
-Ad-hoc `adb shell input text`/`mcp__execbro__android_input_text` of a passkey you scraped
-by hand remains off-limits without the user's go-ahead — this is BLE pairing state on the
-one shared physical phone, same spirit as the phone-reboot rule above. The difference is
-that `/re-pair` *is* that go-ahead, standardized.
+The firmware requires `BT_SECURITY_L4`; a fresh pairing prints a 6-digit passkey on the board's serial console for
+Android's native dialog. **Re-pair with `/re-pair`**; outside it, **ask the user before entering a passkey via ADB**
+(`.claude/skills/re-pair/references/manual-pairing.md`).
 
 ## Hardware locking
 
-Multiple agents, each in its own worktree, share one physical dev board
-(+J-Link) and one physical Android phone. Before flashing, provisioning,
-opening an `mcp__serial__*` connection to the board, or driving the phone via
-`mcp__execbro__*`/ADB, hold the relevant lock. `hold` is the *only* way to
-take a lock — there is no bare "acquire and forget." Launch it as a
-long-lived task via the `Monitor` tool, then confirm before touching
-hardware:
+Agents in separate worktrees share one dev board (+J-Link) and one phone. Before flashing, provisioning, opening
+`mcp__serial__*`, or driving the phone (`mcp__execbro__*`/ADB), hold the lock. `hold` is the *only* way to take one —
+run it as a long-lived `Monitor` task, then confirm:
 
 ```
 Monitor(command: "scripts/hw-lock.sh hold board", description: "board hw-lock heartbeat", persistent: true)
@@ -203,219 +97,104 @@ Monitor(command: "scripts/hw-lock.sh hold board", description: "board hw-lock he
 timeout 15 bash -c 'until scripts/hw-lock.sh check board >/dev/null 2>&1; do sleep 0.5; done'
 ```
 
-When done, either stop the `hold` task (`TaskStop` — its own exit trap
-releases automatically) or run `scripts/hw-lock.sh release board app`
-yourself. **Holding a lock means exclusive access for as long as you keep the
-`hold` task running — full stop.** It's never released by a timer or by a
-hardware surface going quiet (e.g. the J-Link de-enumerating mid-flash is
-normal and is never evidence the lock is safe to release); the only things
-that end a hold are you stopping it, or the process dying (crash, kill,
-container restart), which the stale-pid reclaim already handles safely on
-the next attempt.
-
-By default a conflicting `hold` fails immediately. Pass `--wait SECONDS`
-(e.g. `hold board --wait 300`) to queue instead of bailing out — a real
-FIFO queue (ticket per resource, oldest arrival goes first), not independent
-agents racing each other when the resource frees up, and still strictly
-all-or-nothing on every attempt so waiting agents can never deadlock on each
-other.
-
-If **your own session already holds** the resource and you run `hold` again
-(e.g. after a heartbeat/`Monitor` task died or was lost across a context
-reset), the new `hold` **adopts** the lock — it takes over as the tracked
-heartbeat and reports success immediately, rather than refusing or waiting on
-itself. So the recovery move after any board-lock heartbeat failure is simply
-to **re-run `hold`**: if a prior in-session hold is still alive it's adopted, if
-it died cleanly the lock was already released, and if it died hard the stale-pid
-reclaim clears it first — every case ends with you holding a live heartbeat. A
-`--wait` on a lock your own session holds is never futile now (it can't be — the
-adopt path returns before queueing). A **different** session's hold still
-conflicts exactly as before.
-
-A `PreToolUse` hook (`.claude/hooks/hw-lock-guard.sh`) auto-denies every
-`mcp__serial__*`/`mcp__execbro__*` call and known hardware-touching Bash
-commands (`jlink-flash.sh`, `provision-device.sh`, `JLinkExe`, `mcumgr`,
-`west flash`, `adb`, `expo run:android`) unless the relevant lock is held —
-this is a backstop, not a substitute for holding proactively, since a denial
-interrupts whatever flow triggered it. `fw/scripts/jlink-flash.sh` and
-`fw/scripts/provision-device.sh` hard-refuse to run without the `board` lock
-on their own, independent of the hook, so they're covered even outside a
-Claude Code session — and neither ever acquires the lock itself, only checks
-it. Launch the companion app via `app/scripts/launch-app.sh` (never call
-`npx expo run:android` directly) — it follows the same check-only pattern
-now: it refuses to run unless `app` is already held, and it no longer
-acquires the lock itself, but the relationship isn't fully symmetric.
-Stopping the `hold` task (or `release app`, same-session) now also stops
-Metro if it's still running — releasing the lock guarantees Metro has
-quit. Metro stopping or crashing on its own, though, still does not release
-the lock — you still manage that side yourself. (A human force-releasing a
-*different* session's still-live lock does not kill that session's Metro —
-only same-session release does; the acquire-time cleanup below handles it
-instead.) If a Metro/expo process is still running from an earlier, now-dead
-session when `app` is next held, that hold kills it automatically before
-considering itself established.
-
-While holding a lock, if another agent is queued waiting for it, you'll be
-nudged three ways: an `additionalContext` reminder on your next hardware tool
-call, the same on your next turn (`UserPromptSubmit` hook), and — the one
-that reaches you even fully idle — a notice `hold` itself prints, delivered
-via the `Monitor` task's event stream. None of these ever force a release;
-they're purely advisory.
-
-**Release once you're genuinely done — not preemptively, and not so late
-you're just squatting on it.** Don't release and re-acquire between steps of
-one ongoing task you expect to repeat (e.g. a build → flash → test → build →
-flash → test iteration loop) — hold across the whole cycle; releasing
-between passes you're about to repeat just adds a race for zero benefit. But
-don't keep holding "just in case" once the task that needed the resource is
-actually finished — the waiter-notice above tells you exactly when someone
-else needs it, which is the right moment to wrap up, not something to guess
-at preemptively.
-
-See `.claude/skills/hw-lock/SKILL.md` for the full command surface (status,
-`--steal`, `--force`, `release --all`) and known enforcement limitations.
-
-Locking works on a macOS host too: `hw-lock.sh` re-execs itself into Homebrew
-bash ≥ 4 (installed by `scripts/macos-setup.sh`) when invoked under the stock
-macOS bash 3.2. Locks are per-host (stored under the repo's `$GIT_COMMON_DIR`),
-which is correct: the physical hardware is attached to exactly one host at a
-time, and agents on that host contend with each other, not with agents
-elsewhere.
-
-Note the hook's Bash matcher keys on command **text**: even read-only commands
-containing the literal tokens `adb`/`mcumgr`/`JLinkExe` (e.g. a `grep` for them)
-are denied without the lock — use the Read/Grep tools or avoid the tokens
-(see /worktree-setup).
-
-## "Remember" instructions
-
-When the user says "Remember" (or "Remember that"), update the appropriate CLAUDE.md file immediately with the information. Prefer the root `CLAUDE.md` for cross-cutting rules and `fw/CLAUDE.md` for firmware-specific facts.
+- **A lock is exclusive for as long as the `hold` task runs — full stop.** No timer or quiet hardware releases it.
+  Release by stopping the task (`TaskStop`) or `scripts/hw-lock.sh release board app`; releasing `app` also stops Metro.
+- A conflicting `hold` fails at once; `--wait SECONDS` queues FIFO. Re-running `hold` on a lock your own session holds
+  adopts it — the recovery move after a lost heartbeat.
+- **Release once genuinely done** — hold across a whole build → flash → test loop, but don't squat. You are nudged when
+  someone queues behind you; nothing forces a release.
+- A `PreToolUse` hook denies `mcp__serial__*`/`mcp__execbro__*` and Bash containing `jlink-flash.sh`,
+  `provision-device.sh`, `JLinkExe`, `nrfutil`, `mcumgr`, `west flash`, `adb` or `expo run:android` without the lock.
+  **It matches command text** — even a `grep` mentioning them is denied; use the Read/Grep tools.
+- Launch the app only via `/launch-app`, never `npx expo run:android` directly. Command surface, Metro/lock lifecycle,
+  macOS and enforcement limits: `/hw-lock`.
 
 ## Worktree isolation — NEVER touch the main checkout from a worktree
 
-**When working in a git worktree (`.claude/worktrees/<name>/`), operate ONLY on files under that worktree root. Never read, build against, copy from, edit, or flash artifacts from the main checkout at `/workspaces/rgb-sunglasses` (or any other worktree).** Every path you Read/Write/Edit and every `--build-dir`/artifact reference must stay under the current worktree. If something you need doesn't exist in the worktree yet (e.g. `fw/build`), **create/build it here** — do not reach into the main repo's copy. Reading the main checkout's build, docs, or source from a worktree gives stale/wrong results and silently crosses branches. (This is a hard rule from real mistakes: editing main-checkout files while the branch lived in the worktree, and trying to flash the main checkout's build from a worktree.)
+**In a git worktree (`.claude/worktrees/<name>/`), operate ONLY on files under that worktree. Never read, build against,
+copy from, edit, or flash artifacts from the main checkout (`/workspaces/rgb-sunglasses`) or another worktree.** Every
+path and `--build-dir` stays in the worktree; if something is missing there (e.g. `fw/build`), build it there. Both
+mistakes have happened.
 
 ## Git workflow — ALWAYS branch before committing
 
-**Never commit directly to `main`.** Always create a feature branch first (`git checkout -b <branch-name>`), then commit, push the branch, and open a PR. Do this before editing any files if possible, but at minimum before the first `git commit`. A `PreToolUse` hook (`.claude/hooks/destructive-guard.sh`) denies `git commit` while on `main`, so branch creation must come first.
-
-### GitHub PR review comments via `gh api`
-
-- While this account has a **pending (draft) review** on a PR, the API rejects ALL new review comments from it with 422 "user can only have one pending review per pull request" — both `POST /pulls/<n>/reviews` and standalone `POST /pulls/<n>/comments` (standalone line comments are single-comment reviews internally). Never touch or submit the user's pending review; fall back to regular PR comments (`gh pr comment`) with `https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>` permalinks, which render the referenced snippet inline.
-- Once a review is submitted, reply to its line-comment threads with `gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body=...`.
-- **`-f body=@file` does NOT read the file — it posts the literal string `@file`.** `-f`/`--raw-field` is verbatim; only `-F`/`--field` interprets a leading `@` as a file path. Writing a long comment to a temp file and passing `-f body=@/tmp/c1.md` (a natural-looking move, and how `curl` behaves) silently publishes a comment whose entire body is `@/tmp/c1.md`. Observed 2026-08-15 on PR #377: five review comments posted this way, all stale on GitHub until repaired. Prefer the unambiguous form, which works regardless of flag semantics:
-
-  ```bash
-  gh api -X POST repos/<owner>/<repo>/pulls/<n>/comments -f body="$(cat /tmp/c1.md)" ...
-  ```
-
-  Note the temp file is still the right way to carry markdown — heredocs and inline quoting mangle backticks and `$` in code snippets. It is only the `@` hand-off that is broken.
-- **Always verify a posted comment round-trips.** The POST returns 201 with a valid comment object either way, so the failure is invisible without an explicit check. After posting, re-read the bodies and assert none is a bare `@path`:
-
-  ```bash
-  gh api --paginate repos/<owner>/<repo>/pulls/<n>/comments \
-    --jq '.[] | select(.body | test("^\\s*@\\S+\\s*$")) | "STALE \(.id) \(.body)"'
-  ```
-
-  Repair in place with `gh api -X PATCH repos/<owner>/<repo>/pulls/comments/<comment_id> -f body="$(cat …)"` — no need to delete and repost, which would lose thread replies.
-- Comment listing endpoints **paginate at 30**. A PR with several review rounds silently truncates, so a "did my comment land?" check without `--paginate` can report a false negative.
+**Never commit directly to `main`** — branch first (`git checkout -b <branch-name>`), then commit, push, and open a PR
+via `/submit-pr`. `.claude/hooks/destructive-guard.sh` denies `git commit` on `main`. Replying to PR review comments
+with `gh api` has traps (`-f body=@file` posts the literal path, pending reviews, pagination):
+`.claude/skills/submit-pr/references/gh-review-comments.md`.
 
 ## Process management — NEVER use pkill
 
-**Never use `pkill` or `killall` inside the devcontainer.** These commands kill processes across the entire container (including the container init, the MCP server, and the VS Code server), which crashes the devcontainer and terminates the session. To stop a background process, use its PID from `$!` or find it with `pgrep` and send a targeted `kill <pid>`. To restart Metro/Expo, just launch a new `npx expo run:android --device <device name> --app-id com.autom8ed.rgbsunglassesapp.dev` — it starts a fresh Metro instance. A `PreToolUse` hook (`.claude/hooks/destructive-guard.sh`) now hard-denies `pkill`/`killall` (and `mkfs`, `reset-project.js`, and commits on `main`) as a backstop — the rule stands regardless.
+**Never use `pkill` or `killall` in the devcontainer** — they kill container-wide (init, MCP server, VS Code server) and
+end the session. Kill by PID (`$!`, or `pgrep` + `kill <pid>`). To restart Metro, stop the `app/scripts/launch-app.sh`
+task and relaunch it (`/launch-app`). `destructive-guard.sh` also denies `pkill`/`killall`, `mkfs` and
+`reset-project.js`.
 
 ## Installing tools
 
-When installing any new CLI tool or dependency, **always add it to the environment's setup definition** so it is available to all users after a rebuild/re-run — never ad-hoc `apt install`/`brew install`/`pip install` commands that only affect the current instance:
-
-- Linux devcontainer: `.devcontainer/Dockerfile` or `postCreateCommand` in `.devcontainer/devcontainer.json`
-- macOS host (Mac Mini): `scripts/macos-setup.sh` (firmware + agent tooling) or `app/scripts/macos-setup.sh` (iOS app toolchain) — both idempotent, safe to re-run
+**Add every new tool or dependency to the environment's setup definition** so it survives a rebuild — never an ad-hoc
+`apt`/`brew`/`pip install`: `.devcontainer/Dockerfile` or `postCreateCommand` in `.devcontainer/devcontainer.json`
+(Linux); `scripts/macos-setup.sh` or `app/scripts/macos-setup.sh` (macOS host, both idempotent).
 
 ## Don't rebuild what already exists
 
-**Reimplementing something that already exists in the Zephyr/NCS tree requires an
-extremely strong reason. Reimplementing something that already exists in THIS repo must
-always be flagged to the user for review before you build it.**
+**Reimplementing something in the Zephyr/NCS tree needs an extremely strong reason; reimplementing something already in
+THIS repo must be flagged to the user before you build it.** Check the SDK first (`zephyr/drivers/`, `zephyr/subsys/`,
+the `*_shell.c` files). A strong reason means the stock version cannot do the job and you can say why — not that it is
+awkward, or formats output differently, or **that a design decision of yours broke it**: when the argument is "the
+existing one does not work here", check whether YOUR change stopped it working
+(`docs/agent-incidents.md#2026-08-11-pr-325-reset_cause-module`).
 
-The SDK is the first place to look, not the fallback. Before writing a driver, a shell
-command, a decoder, a state machine or a utility, check whether Zephyr already ships one —
-`zephyr/drivers/`, `zephyr/subsys/`, and the `*_shell.c` files in particular. A stock
-implementation is maintained upstream, is already documented, already has more surface
-than you will write, and does not cost review time.
-
-"An extremely strong reason" means the stock version cannot do the job, and you can say
-concretely why. It does NOT mean:
-
-- the stock version is slightly awkward to call;
-- you would like different output formatting;
-- **a design decision you made yourself broke it.** This is the trap. Real incident
-  (2026-08-11, PR #325): a custom `reset_cause` module was written with its own copy of
-  Zephyr's `RESET_*` name table, justified on the grounds that
-  `CONFIG_HWINFO_SHELL`'s `hwinfo reset_cause show` "would read 0 and therefore lie". It
-  would only read 0 because that same new module cleared `RESETREAS` at boot. The
-  justification was a consequence of the thing being justified. Removing the clear made
-  the built-in work correctly and the custom module unnecessary.
-
-  When the argument for building something is "the existing one does not work here",
-  check whether YOUR change is what stopped it working.
-
-Two habits that catch this early:
-
-- When you find yourself writing a warning comment explaining why a stock feature is
-  disabled or misleading, treat that as a signal to re-examine the design rather than to
-  write the comment. Needing several such comments is close to proof.
-- Compare the right two options. Measuring "stock feature added ON TOP of my version"
-  answers nothing; the comparison that decides it is "my version" versus "stock version
-  alone".
-
-## Session startup
-
-**Your first output in every new conversation must be the environment status summary table — before any task work, even when the user opens with a specific request.** A `SessionStart` hook (configured in `.claude/settings.json`) already runs `check-hardware` and `check-software` automatically and injects their output into context as "Environment status (auto-checked at session start)", so you normally do **not** need to re-run the skills — just read that injected block and surface it. Only run `/check-hardware` / `/check-software` yourself if that injected block is missing.
-
-Render the results as a brief markdown table (hardware: dev board, J-Link, Android/ADB; software: `gh` and any other tools). If any tool is NOT AUTHENTICATED or NOT READY, call it out explicitly in that first message — **don't wait until it blocks a later step** (e.g. `gh` auth blocks PR creation). Having the data in context is not enough; the user needs to see it up front.
-
-Before working on any subsystem, **read its CLAUDE.md first** — those files are the project's persistent memory and contain critical workflow rules (correct commands, known pitfalls, launch procedures) that are not derivable from the code alone. Skipping them leads to doing the wrong thing (e.g. launching the Android app incorrectly). Specifically:
-
-- About to touch firmware (`fw/`)? Read `fw/CLAUDE.md` first.
-- About to touch the app (`app/`)? Read `app/CLAUDE.md` first.
+Habits: a warning comment explaining why a stock feature is disabled is a signal to re-examine the design (needing
+several is close to proof); and compare "my version" against "stock version alone", never "stock added on top of mine".
 
 ## Repository layout
 
-| Directory           | Contents                                                                                 |
-| ------------------- | ---------------------------------------------------------------------------------------- |
-| `fw/`               | Zephyr RTOS firmware (nRF5340). See `fw/CLAUDE.md` for build/test commands.              |
-| `app/`              | React Native companion app (Expo). See `app/CLAUDE.md` for architecture and agent notes. |
-| `.devcontainer/`    | Devcontainer definition and setup scripts.                                               |
-| `.claude/skills/`   | Project skills (slash commands).                                                         |
-| `.claude/hooks/`    | Claude Code hooks (e.g. the hardware-lock `PreToolUse` guard).                           |
-| `scripts/`          | Cross-cutting host tooling shared by all subsystems — `hw-lock.sh`, the multi-agent hardware-lock coordinator (see "Hardware locking" above), and `pr-watch.sh`, the GitHub PR watcher behind /pr-review-watch. |
+| Directory | Contents |
+| --- | --- |
+| `fw/` | Zephyr RTOS firmware (nRF5340) — `fw/CLAUDE.md` |
+| `app/` | React Native companion app (Expo) — `app/CLAUDE.md` |
+| `.devcontainer/` | Devcontainer definition, `check-hardware.sh`, `check-software.sh` |
+| `.claude/` | `rules/` (path-scoped), `skills/`, `agents/`, `hooks/`, `settings.json` |
+| `scripts/` | Host tooling: `hw-lock.sh`, `re-pair.sh`, `pr-watch.sh`, `check-agent-docs.py`, `macos-setup.sh`, env scripts, `tests/` |
+| `docs/` | `agent-incidents.md`, `plans/` (dated design plans) |
+| `extensions/` | Community extension registry |
 
 ## Task routing
 
-This is the project's **single** routing table — other docs link here, never copy it. Match your task to a skill before improvising:
+This is the project's **single** routing table — other docs link here, never copy it:
 
 | Task | Skill |
 | ---- | ----- |
 | Add or modify a built-in animation | /add-animation |
 | Add or change a GATT service/characteristic (+ app UI) | /add-gatt-characteristic |
 | Write or modify a loadable `.llext` extension (in-repo) | /add-extension |
-| Standalone extension repo / rgbx-sdk / community registry | `fw/docs/standalone-extension-repos.md` + `extensions/README.md` (SDK code: `fw/sdk/`) |
+| Standalone extension repo / rgbx-sdk / community registry | `fw/docs/standalone-extension-repos.md` + `extensions/README.md` (SDK: `fw/sdk/`) |
+| Build the firmware (proto0, incremental) | /build-proto0 |
+| Run the firmware tests + coverage | /test-fw |
 | Add or fix a firmware test (native_sim/Twister) | /add-fw-test |
-| Run or extend the on-device (HIL) test suite | `fw/tests_device/README.md` (runner: `fw/scripts/run-device-tests.sh`; architecture: `fw/docs/on-device-testing.md`) |
-| App+device E2E test run (AI-driven, phone + board) | /e2e-test (executes `fw/docs/e2e-test-plan.md`) |
+| Run or extend the on-device (HIL) suite | `fw/tests_device/README.md` (`fw/scripts/run-device-tests.sh`, `fw/docs/on-device-testing.md`) |
+| App+device E2E test run (AI-driven) | /e2e-test (`fw/docs/e2e-test-plan.md`) |
 | Debug a firmware symptom | /debug-fw |
 | Debug a device↔app BLE symptom | /debug-ble |
+| Re-pair the phone to the board | /re-pair |
 | Record a real audio + IMU capture as a sim scenario | /capture-scenario |
 | Validate app changes without a phone | /validate-app |
-| Drive the app's UI on the physical phone (tap, wait for a screen change) | /drive-app |
-| Run a firmware OTA through the companion app end to end (the /submit-pr step 5a gate) | /ota-via-app |
+| Launch / deploy the companion app on a phone | /launch-app |
+| Drive the app's UI on the phone | /drive-app |
+| Firmware OTA through the app end to end (/submit-pr step 5a) | /ota-via-app |
 | Memory / FLASH / RAM work | /rom-ram-budget |
 | Flash + on-device verification | /flash-and-verify |
-| Flash / recover firmware without a J-Link (MCUmgr serial, MCUboot DFU) | `fw/scripts/mcumgr-flash.sh` + `fw/docs/flashing-without-jlink.md` |
+| Provision a board's NAND (FAT, GLIM assets, extensions) | /provision-device |
+| Flash / recover without a J-Link (MCUmgr serial, MCUboot DFU) | `fw/scripts/mcumgr-flash.sh` + `fw/docs/flashing-without-jlink.md` |
+| Hold / release / inspect hardware locks | /hw-lock |
 | Fresh worktree/session orientation | /worktree-setup |
 | Prove a change actually works | /verify |
 | Pre-PR gate | /submit-pr |
-| Watch GitHub for new PRs/pushes and auto-review them in parallel | /pr-review-watch |
+| Watch GitHub PRs and auto-review them | /pr-review-watch |
 | Cut a release | /release |
 
-Four things sound alike — don't mix them up: a **built-in C++ animation** compiled into firmware = /add-animation; an in-repo **loadable `.llext` extension** = /add-extension; a **community extension** (same `.llext` on the device, but developed in a standalone repo against the released `rgbx-sdk`, never the in-repo EDK path) = the standalone-extension row above; a **`.glim` asset file** (stored animation data) = `fw/src/storage/GLIM_FORMAT.md` + the `fw/tools/` converters (see `fw/CLAUDE.md`).
+Four things sound alike: a **built-in C++ animation** compiled into firmware = /add-animation; an in-repo **loadable
+`.llext` extension** = /add-extension; a **community extension** (same `.llext`, built in a standalone repo against the
+released `rgbx-sdk`) = the standalone row; a **`.glim` asset file** = `fw/src/storage/GLIM_FORMAT.md` + the `fw/tools/`
+converters.

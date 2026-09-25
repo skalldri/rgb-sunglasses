@@ -46,6 +46,11 @@ mcp__serial__rgb_sunglasses_capture_scenario(
     connection_id=<id>, duration_s=20, name="bob_120bpm")
 ```
 
+**The tool needs a `CONFIG_APP_AUDIO_DEBUG=y` build**: it freezes AGC gain with `sound agc
+gain`/`freeze`, which a stock image does not have, and aborts before recording without them
+(`.claude/rules/fw-sound-capture.md`). On a stock image use the shell `capture start` or the
+app path below.
+
 Play the music and do the movement **during** those seconds — the whole point is that
 the stimulus is real. Returns `wav_path`, `imu_csv_path`, `imu_samples`, and —
 when the firmware wrote one — `analysis_csv_path` + `analysis_frames`.
@@ -85,7 +90,7 @@ umount /mnt/sunglasses-fs && rmdir /mnt/sunglasses-fs
 ```
 
 Mount **read-only**: the firmware still has the volume mounted, and a host-side write
-against a mounted FAT is what corrupts it (see `fw/CLAUDE.md`, "FAT concurrent access").
+against a mounted FAT is what corrupts it (see `.claude/skills/provision-device/references/nand-disk.md`, "FAT concurrent access").
 
 ## 3. Convert
 
@@ -95,7 +100,7 @@ python3 fw/tools/capture_to_scenario.py <dest>/bob_120bpm.wav \
     --beat-response
 ```
 
-Writes `fw/sim/scenarios/bob_120bpm.json` and `fw/sim/scenarios/assets/bob_120bpm.wav`.
+Writes `fw/sim/scenarios/bob_120bpm.json` and `fw/sim/scenarios/assets/bob_120bpm.wav`. <!-- agent-docs: allow-missing -->
 
 - **Write a real `--description`.** It is the only record of what physically happened;
   the default is a placeholder that says nothing about the movement.
@@ -130,6 +135,11 @@ generates its assets from scripts, so a 20 s capture (~640 KB) needs a reason.
 If it is worth keeping, consider adding it to `GOLDEN_SPECS` in `fw/sim/node/golden.ts`
 and the smoke list in `.github/workflows/sim-ci.yml`, so it is re-run rather than only
 executed when someone types its name.
+
+## Validating the IMU axes
+
+Using a plain `capture start` IMU sidecar to verify the coordinate frame (and the two ways that
+silently produces a false negative): [references/imu-frame-validation.md](references/imu-frame-validation.md).
 
 ## Pitfalls
 

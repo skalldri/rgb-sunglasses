@@ -1,7 +1,8 @@
 """Baseline provisioning manifest for the on-device suite.
 
 The canonical asset set comes from fw/scripts/provision-device.sh (the same
-list documented in fw/CLAUDE.md, "Setting up GLIM files on a new board").
+list documented in .claude/skills/provision-device/references/nand-disk.md,
+"Setting up GLIM files on a new board").
 Tests never provision the board themselves in the smoke/integration tiers —
 the session fixture verifies the baseline and fails fast with instructions.
 The destructive tier's reprovision teardown lands with that tier (PR 2).
@@ -48,7 +49,7 @@ def nand_mount(ro: bool = False):
     """Mount the board's NAND over USB MSC. FAT-coherence contract: a rw mount
     (the default) dirties FAT metadata that the firmware's live mount then
     can't see, so after any host-side WRITE the caller MUST reboot the board
-    before firmware reads the files (fw/CLAUDE.md, 'FAT concurrent access
+    before firmware reads the files (.claude/skills/provision-device/references/nand-disk.md, 'FAT concurrent access
     causes read corruption'). Pass ro=True for a pure read — a read-only mount
     touches nothing on the volume, so no reboot is needed (PR #359 review)."""
     disk = _find_nand_disk()
@@ -123,7 +124,8 @@ def plant_corrupt_extension(name: str = "zz_bad.llext", source: str = "hello.lle
 def hard_reset(jlink_serial: str) -> None:
     """Reset the target over the J-Link's SWD connection — works even when
     the firmware is halted and the shell is gone. Never touches flash
-    (fw/CLAUDE.md, 'Recovering a wedged shell UART without reflashing')."""
+    (.claude/skills/flash-and-verify/references/serial-shell.md,
+    'Recovering a wedged shell UART without reflashing')."""
     subprocess.run(
         ["nrfutil", "device", "reset",
          "--serial-number", str(jlink_serial), "--reset-kind", "RESET_PIN"],

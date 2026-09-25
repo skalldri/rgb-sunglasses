@@ -2,11 +2,14 @@
 name: provision-device
 description: Provision (or verify provisioning of) a connected board's NAND flash — FAT filesystem health, known GLIM assets, and all animation extensions
 allowed-tools: Bash, Read, AskUserQuestion, mcp__serial
+
+By-hand disk procedure, GLIM asset generation and the FAT-concurrency rule: [references/nand-disk.md](references/nand-disk.md).
+
 ---
 
 Provisions a connected board's external NAND flash: confirms the FAT filesystem is healthy, generates and pushes every known `.glim` asset, and compiles and pushes every animation extension. Safe to re-run on an already-provisioned board (idempotent — it regenerates and overwrites files).
 
-`fw/scripts/provision-device.sh` does all the host-side mechanical work (locating/mounting the USB mass-storage disk, running the GLIM generators, building extensions, copying files). It never reformats the filesystem itself. This skill wraps it with the parts that require live interaction with the board's Zephyr shell — which per `fw/CLAUDE.md` must go through `mcp__serial__*` tools, never raw Bash reads/writes to `/dev/ttyACM0` — including the **only** reformat path: the firmware's own `fatfs reformat` shell command. Never reformat the NAND disk with a host-side `mkfs.vfat` — the firmware owns the partition and `fatfs reformat` is the documented, tested way to rebuild it.
+`fw/scripts/provision-device.sh` does all the host-side mechanical work (locating/mounting the USB mass-storage disk, running the GLIM generators, building extensions, copying files). It never reformats the filesystem itself. This skill wraps it with the parts that require live interaction with the board's Zephyr shell — which must go through `mcp__serial__*` tools (`.claude/skills/flash-and-verify/references/serial-shell.md`), never raw Bash reads/writes to `/dev/ttyACM0` — including the **only** reformat path: the firmware's own `fatfs reformat` shell command. Never reformat the NAND disk with a host-side `mkfs.vfat` — the firmware owns the partition and `fatfs reformat` is the documented, tested way to rebuild it.
 
 ---
 
@@ -55,7 +58,7 @@ fw/scripts/provision-device.sh
 
 - **If it fails to mount the disk** (corrupt/unformatted FAT slipped past step 2's check, or step 2 was skipped): go back to step 2 and run `fatfs reformat` over the shell, reboot, then re-run this script. Do not reach for `mkfs.vfat` — the script deliberately doesn't offer it.
 - **If it fails because the build dir isn't configured**: tell the user to run `/build-proto0` first (do not build it yourself as a side effect of provisioning), then re-run this skill.
-- **If it succeeds**: the known GLIM assets (`nyan_cat.glim`, `bad_apple.glim`) and every extension under `fw/extensions/*/` have been copied to `/NAND:/glim/` and `/NAND:/ext/`.
+- **If it succeeds**: the known GLIM assets (`nyan_cat.glim`, `bad_apple.glim`, `4096.glim`) and every extension under `fw/extensions/*/` have been copied to `/NAND:/glim/` and `/NAND:/ext/`.
 
 ---
 
@@ -75,7 +78,7 @@ Wait ~15s for the board to re-enumerate, then re-run `/check-hardware` to get th
 
 Over `mcp__serial__*`:
 
-- `glim list` (or the `rgb_sunglasses.glim_list` plugin tool) — expect both `nyan_cat.glim` and `bad_apple.glim`.
+- `glim list` (or the `rgb_sunglasses.glim_list` plugin tool) — expect `nyan_cat.glim`, `bad_apple.glim` and `4096.glim`.
 - `ext list` — expect `hello` and `cpptest` (the in-repo dev extensions; a
   device that has also synced from a release will additionally show the
   registry extensions, e.g. `demo_wave`, `plasma` and `mask_eyes`), none marked
