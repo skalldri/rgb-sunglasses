@@ -7,7 +7,14 @@
       "Bash(adb devices *)",
       "Bash(adb connect *)",
       "Bash(.devcontainer/scripts/check-hardware.sh *)",
-      "Bash(.devcontainer/scripts/check-software.sh *)"
+      "Bash(.devcontainer/scripts/check-software.sh *)",
+      "Bash(west build *)",
+      "Bash(twister *)",
+      "Bash(pytest *)",
+      "Bash(python3 -m pytest *)",
+      "Bash(arm-zephyr-eabi-nm *)",
+      "Bash(arm-zephyr-eabi-size *)",
+      "Read(//root/ncs/v3.1.1/**)"
     ]
   },
   "hooks": {
