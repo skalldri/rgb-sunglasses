@@ -16,8 +16,8 @@ lasting facts there. Agent knowledge is layered so only what is relevant loads:
 **"Remember" instructions:** when the user says "Remember" (or "Remember that"), record it at once in the most specific
 layer — a code-area fact in the `.claude/rules/` file whose `paths:` cover that code (create one and index it in fw/ or
 app/ if none does), a procedure in its skill, a cross-cutting rule here. Always-loaded files carry the rule plus a
-pointer; numbers, dates and stories go in the chunk. Run `python3 scripts/check-agent-docs.py` after editing an agent doc.
-Always use the built-in file tools to edit files.
+pointer; numbers, dates and stories go in the chunk. Run `python3 scripts/check-agent-docs.py` after editing an agent
+doc. Always use the built-in file tools to edit files.
 
 ## Session startup
 
@@ -41,8 +41,7 @@ yourself if that block is missing.
   (`docs/agent-incidents.md#2026-07-25-check-hardware-killed-an-in-flight-app-install`).
 - **Use only the `mcp__serial__*` tools for the board's shell**, never raw Bash on `/dev/ttyACM*`
   (`.claude/skills/flash-and-verify/references/serial-shell.md`).
-- Hardware iterations are slow and mistakes can cause damage: follow the pre-flash gates in `/flash-and-verify` §2
-  (confirm assumptions in source, confirm Kconfig in `autoconf.h`).
+- Hardware iterations are slow and mistakes can cause damage: follow the pre-flash gates in `/flash-and-verify` §2.
 
 ### NEVER write unverified commands or data into hardware parts
 
@@ -113,14 +112,15 @@ timeout 15 bash -c 'until scripts/hw-lock.sh check board >/dev/null 2>&1; do sle
 ## Worktree isolation — NEVER touch the main checkout from a worktree
 
 **In a git worktree (`.claude/worktrees/<name>/`), operate ONLY on files under that worktree. Never read, build against,
-copy from, edit, or flash artifacts from the main checkout or another worktree.** Every path and `--build-dir` stays in
-the worktree; if something is missing there (e.g. `fw/build`), build it there. Both mistakes have happened.
+copy from, edit, or flash artifacts from the main checkout (`/workspaces/rgb-sunglasses`) or another worktree.** Every
+path and `--build-dir` stays in the worktree; if something is missing there (e.g. `fw/build`), build it there. Both
+mistakes have happened.
 
 ## Git workflow — ALWAYS branch before committing
 
-**Never commit directly to `main`** — branch first, then commit, push, and open a PR via `/submit-pr`.
-`.claude/hooks/destructive-guard.sh` denies `git commit` on `main`. Replying to PR review comments with `gh api` has
-traps (`-f body=@file` posts the literal path, pending reviews, pagination):
+**Never commit directly to `main`** — branch first (`git checkout -b <branch-name>`), then commit, push, and open a PR
+via `/submit-pr`. `.claude/hooks/destructive-guard.sh` denies `git commit` on `main`. Replying to PR review comments
+with `gh api` has traps (`-f body=@file` posts the literal path, pending reviews, pagination):
 `.claude/skills/submit-pr/references/gh-review-comments.md`.
 
 ## Process management — NEVER use pkill

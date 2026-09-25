@@ -3,7 +3,11 @@ name: flash-and-verify
 description: "Flash firmware to the physical board over J-Link and verify it on-device via the serial shell — the full hardware iteration loop (build → flash → verify), including USB re-enumeration handling and MCUmgr OTA updates. HARDWARE skill: requires the board lock for the whole loop."
 ---
 
-Read `fw/CLAUDE.md` first if you haven't — it is the authoritative memory for every mechanism below; this skill sequences it into one loop.
+Read `fw/CLAUDE.md` first if you haven't. This skill sequences the loop; the mechanisms live in its
+references: [references/serial-shell.md](references/serial-shell.md) (ports, `mcp__serial__*`, shell
+quirks, useful commands, ttyACM shifts), [references/jlink.md](references/jlink.md) (J-Link fast path,
+staged-OTA revert), [references/mcumgr.md](references/mcumgr.md) (MCUmgr, image layout, OTA flow) and
+[references/macos-host.md](references/macos-host.md) (Mac Mini differences).
 
 **Platform routing**: in the Linux devcontainer with a J-Link attached, use the J-Link fast path (§3). On a **macOS host** (e.g. the Mac Mini — see `fw/CLAUDE.md` "macOS host"), there is no J-Link/SEGGER tooling: flash via the MCUmgr OTA path (§6, `fw/scripts/mcumgr-flash.sh`), skip `fix-usb-dev-nodes.sh` (Linux-only; macOS manages /dev itself), and read every `/dev/ttyACM*` reference as `/dev/cu.usbmodem*` (`/check-hardware` identifies them on both OSes). OTA covers app + netcore images, and MCUboot alone can go via the `mcuboot_update` sideload/commit shell path — only a b0n (netcore bootloader) reflash still needs the devcontainer + J-Link.
 

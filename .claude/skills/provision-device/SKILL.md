@@ -2,11 +2,14 @@
 name: provision-device
 description: Provision (or verify provisioning of) a connected board's NAND flash — FAT filesystem health, known GLIM assets, and all animation extensions
 allowed-tools: Bash, Read, AskUserQuestion, mcp__serial
+
+By-hand disk procedure, GLIM asset generation and the FAT-concurrency rule: [references/nand-disk.md](references/nand-disk.md).
+
 ---
 
 Provisions a connected board's external NAND flash: confirms the FAT filesystem is healthy, generates and pushes every known `.glim` asset, and compiles and pushes every animation extension. Safe to re-run on an already-provisioned board (idempotent — it regenerates and overwrites files).
 
-`fw/scripts/provision-device.sh` does all the host-side mechanical work (locating/mounting the USB mass-storage disk, running the GLIM generators, building extensions, copying files). It never reformats the filesystem itself. This skill wraps it with the parts that require live interaction with the board's Zephyr shell — which per `fw/CLAUDE.md` must go through `mcp__serial__*` tools, never raw Bash reads/writes to `/dev/ttyACM0` — including the **only** reformat path: the firmware's own `fatfs reformat` shell command. Never reformat the NAND disk with a host-side `mkfs.vfat` — the firmware owns the partition and `fatfs reformat` is the documented, tested way to rebuild it.
+`fw/scripts/provision-device.sh` does all the host-side mechanical work (locating/mounting the USB mass-storage disk, running the GLIM generators, building extensions, copying files). It never reformats the filesystem itself. This skill wraps it with the parts that require live interaction with the board's Zephyr shell — which must go through `mcp__serial__*` tools (`.claude/skills/flash-and-verify/references/serial-shell.md`), never raw Bash reads/writes to `/dev/ttyACM0` — including the **only** reformat path: the firmware's own `fatfs reformat` shell command. Never reformat the NAND disk with a host-side `mkfs.vfat` — the firmware owns the partition and `fatfs reformat` is the documented, tested way to rebuild it.
 
 ---
 

@@ -96,5 +96,5 @@ intended — agreeing with median cosine similarity 0.92 (X), 0.91 (Y), 0.89 (Z)
 The gyro triad is therefore right-handed with respect to the accelerometer axes
 above, which pins the polarity by the right-hand rule.
 
-Method, and the two ways it silently produces a false negative: `fw/CLAUDE.md`,
-"Validating the IMU coordinate frame on hardware".
+Method, and the two ways it silently produces a false negative:
+`.claude/skills/capture-scenario/references/imu-frame-validation.md`.

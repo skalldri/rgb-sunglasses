@@ -43,6 +43,9 @@ above `kMaxAttrs` in `fw/src/extensions/extension_bt.cpp`.
   → 76.2% (recovery pass PR #103). proto0 FLASH was ~66% after #103.
 - Do not treat any of these as current facts — rebuild and read the real numbers.
 
+Issue #79's two ROM-reduction passes (what was cut, what was deliberately kept, measured deltas):
+[references/rom-pass-history.md](references/rom-pass-history.md).
+
 ## Cost catalog (from PRs #81, #82, #103; issue #84)
 
 | What | Cost / saving | Where verified |

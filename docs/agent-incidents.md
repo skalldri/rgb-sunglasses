@@ -69,7 +69,7 @@ Rule: root `CLAUDE.md` "Don't rebuild what already exists" — when the argument
 something is "the existing one does not work here", check whether YOUR change is what
 stopped it working.
 
-A custom `reset_cause` module was written with its own copy of Zephyr's `RESET_*` name
+In PR #325, a custom `reset_cause` module was written with its own copy of Zephyr's `RESET_*` name
 table, justified on the grounds that `CONFIG_HWINFO_SHELL`'s `hwinfo reset_cause show`
 "would read 0 and therefore lie". It would only read 0 because that same new module cleared
 `RESETREAS` at boot. The justification was a consequence of the thing being justified.

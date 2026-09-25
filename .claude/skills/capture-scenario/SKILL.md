@@ -95,7 +95,7 @@ python3 fw/tools/capture_to_scenario.py <dest>/bob_120bpm.wav \
     --beat-response
 ```
 
-Writes `fw/sim/scenarios/bob_120bpm.json` and `fw/sim/scenarios/assets/bob_120bpm.wav`.
+Writes `fw/sim/scenarios/bob_120bpm.json` and `fw/sim/scenarios/assets/bob_120bpm.wav`. <!-- agent-docs: allow-missing -->
 
 - **Write a real `--description`.** It is the only record of what physically happened;
   the default is a placeholder that says nothing about the movement.
@@ -130,6 +130,11 @@ generates its assets from scripts, so a 20 s capture (~640 KB) needs a reason.
 If it is worth keeping, consider adding it to `GOLDEN_SPECS` in `fw/sim/node/golden.ts`
 and the smoke list in `.github/workflows/sim-ci.yml`, so it is re-run rather than only
 executed when someone types its name.
+
+## Validating the IMU axes
+
+Using a plain `capture start` IMU sidecar to verify the coordinate frame (and the two ways that
+silently produces a false negative): [references/imu-frame-validation.md](references/imu-frame-validation.md).
 
 ## Pitfalls
 
