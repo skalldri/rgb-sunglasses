@@ -105,15 +105,17 @@ app just never sees the new value. Symptom playbook: `/debug-ble` (`references/n
   because the app treats any dropdown-list notification as "go re-read" (the `DROPDOWN_LIST`
   branch in `use-ble-connection.ts`).
 - **The app requests a larger MTU**: `connect()` calls `requestMTU(247)` as its own awaited,
-  non-fatal step after the link is up. Without it the link stays at 23 (~20 usable bytes).
+  non-fatal step after the link is up. Without it the link stays at the BLE default `ATT_MTU` of 23 (~20 usable bytes).
   Even at 247, a notifiable characteristic whose *content* can grow past ~244 bytes (e.g.
   `Glim Selection` with many GLIM files) needs a bigger MTU, a smaller payload, or
   read-after-notify. iOS negotiates 293 on its own (`requestMTU` is a no-op there).
 
 ## Connection interval (issue #41, issue #188)
 
-The app's discovery walk is ~170 sequential GATT operations (Android allows one outstanding
-op per connection), so each costs roughly one connection interval. Neither side gets a fast
+The app's discovery walk is ~170 sequential GATT operations (one
+`descriptorsForCharacteristic`/`descriptor.read()`/`characteristic.read()` round-trip each on the
+per-descriptor path; Android allows one outstanding op per connection), so each costs roughly one
+connection interval. Neither side gets a fast
 interval by default (Zephyr's unrequested default is `BT_GAP_INIT_CONN_INT_MIN/MAX`, 30-50 ms).
 
 - **App:** `connect()` calls `requestConnectionPriority(ConnectionPriority.High)` right after

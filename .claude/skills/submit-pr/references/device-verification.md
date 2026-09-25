@@ -24,16 +24,38 @@ in that case skip locking and go straight to the `AskUserQuestion` waiver in SKI
 Flash with `fw/scripts/jlink-flash.sh` (it self-refuses without the `board` lock), then:
 
 1. Connect the app (phone via ADB + execbro, or ask the user to drive their phone;
-   read `app/CLAUDE.md` first for launch/tap procedures — launch only via
-   `app/scripts/launch-app.sh`, never `npx expo run:android` directly) and confirm
+   launch via `/launch-app` — never `npx expo run:android` directly — and drive it
+   via `/drive-app`) and confirm
    discovery completes with no fallback/mismatch warnings.
 2. Exercise every changed read/write/notify path end-to-end **and cross-check against
    the firmware's own source of truth** (the `mcp__serial__*` shell, e.g. `ext param`,
    `glim`, `anim get`, `bt_conn_info`), not just the app UI — optimistic updates make the
-   UI lie (see app/CLAUDE.md "Verifying a write/notify round-trip").
+   UI lie (see "Verifying a write/notify round-trip" below).
 3. If the change involves notifications, verify the app *receives* them (a value
    changes in the app without a re-read) — notify failures are firmware-log-only and
    completely silent app-side.
+
+## Verifying a write/notify round-trip — don't trust a single "it updated" observation
+
+A characteristic whose write-value and notified/stored value differ (e.g. any dropdown-list
+characteristic, see `app/components/characteristic-dropdown.tsx`) is easy to mis-verify, because
+several distinct bugs all produce the _same_ surface symptom: "I picked an option and the UI
+showed the new value." That observation alone does not distinguish:
+
+- a correct write + correct notify (the real success case),
+- an optimistic update that clobbers the real value before the (possibly failed) notify arrives,
+- a no-op: the option tapped happened to match what the UI already (possibly stale) believed was
+  selected, so no write was even sent,
+- a notify that silently failed (e.g. exceeded the negotiated MTU —
+  `.claude/rules/ble-gatt-contract.md`) while the UI happened to already show the right value
+  from a stale read.
+
+What actually caught the MTU/notify bugs in this codebase: reopening the picker afterward to
+confirm _all_ options are still listed (not just the one that appeared selected), and
+cross-checking the characteristic's value against the firmware's own source of truth immediately
+after the write (the `glim` shell command, via the `mcp__serial__*` tools) — not a
+different/unrelated characteristic. When verifying any BLE write, always do both before calling
+it confirmed.
 
 ## 3. Always release both locks when finished
 

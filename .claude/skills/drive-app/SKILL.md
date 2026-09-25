@@ -9,7 +9,11 @@ Hold the `app` hardware lock first (root CLAUDE.md "Hardware locking"). Everythi
 is `mcp__execbro__*`; the hook denies these without the lock.
 
 Which phone is attached changes what works: per-phone tap reliability, BLE strictness and
-OxygenOS quirks are in [references/phones.md](references/phones.md).
+OxygenOS quirks are in [references/phones.md](references/phones.md). Fallback recipes that call a
+component's own handler (same-label buttons, Switches, `onWrite` inputs):
+[references/fiber-recipes.md](references/fiber-recipes.md). Incidents that look like app bugs
+(`navigate()` pushing duplicates, restored stacks, blind keyevents) and coordinate details:
+[references/navigation-traps.md](references/navigation-traps.md).
 
 This skill exists because of a real, expensive failure (2026-08-07): an agent spent
 several minutes of a validation run failing to press an `Install` button, then several
