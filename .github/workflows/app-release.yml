@@ -229,7 +229,7 @@ jobs:
       - uses: actions/checkout@v5
 
       # Fail fast with an actionable message if the Apple credentials aren't
-      # configured yet (they're a one-time manual setup — see app/CLAUDE.md).
+      # configured yet (they're a one-time manual setup — see .claude/rules/app-release-ci.md).
       - name: Check Apple credentials are configured
         env:
           ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}

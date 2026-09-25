@@ -24,7 +24,8 @@ LOG_MODULE_REGISTER(ipc_radio, CONFIG_IPC_RADIO_LOG_LEVEL);
  * widens honestly - that declaration lives in the per-image board fragment
  * fw/sysbuild/ipc_radio/boards/rgb_sunglasses_proto0_nrf5340_cpunet.conf. A newly-added
  * per-image fragment can silently fail to apply on an incremental build (see
- * fw/CLAUDE.md), which shipped a netcore that dropped every idle downgrade with
+ * .claude/rules/fw-sysbuild-mcuboot.md), which shipped a netcore that dropped every idle
+ * downgrade with
  * "Disconnected (reason 8)" (issues #188 / #199). Fail the proto0 netcore build instead.
  * Gated to proto0: the legacy DK board (dk-support branch, governor compiled out) has
  * no such requirement.

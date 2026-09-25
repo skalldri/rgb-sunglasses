@@ -34,7 +34,7 @@ guess at what a missing or outdated skill would have said.
 
 | Missing | Fix | Notes |
 |---|---|---|
-| `app/node_modules` | `cd app && npm ci` | ~30s; `postinstall` reapplies the ble-plx patch. **Never** symlink from the main checkout — Metro breaks (see `app/CLAUDE.md`, "Running the app from inside a git worktree"). |
+| `app/node_modules` | `cd app && npm ci` | ~30s; `postinstall` reapplies the ble-plx patch. **Never** symlink from the main checkout — Metro breaks (see `/launch-app`). |
 | `fw/build` (proto0) | `/build-proto0` | First build is pristine and slow; the skill handles it. |
 | `fw/twister-out` | `/test-fw` creates it | See coverage trap below. |
 

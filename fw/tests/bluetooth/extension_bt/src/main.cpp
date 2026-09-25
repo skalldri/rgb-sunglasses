@@ -511,7 +511,7 @@ ZTEST(extension_bt, test_param_characteristics) {
     zassert_equal(do_write(paramAttr[4], &quarter, sizeof(quarter)), sizeof(quarter));
     zassert_equal(extension_host::paramValue(slot, 4), quarter);
     /* Non-finite payloads are refused with an ATT error and leave the value
-     * untouched (never accept-and-correct — see fw/CLAUDE.md's GATT write
+     * untouched (never accept-and-correct — see .claude/rules/ble-gatt-contract.md's GATT write
      * rule). */
     const uint32_t nanBits = 0x7FC00000u;
     zassert_equal(do_write(paramAttr[4], &nanBits, sizeof(nanBits)),

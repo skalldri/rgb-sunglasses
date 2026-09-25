@@ -284,7 +284,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             // thinking the connection failed while the board thinks it's
             // connected (and has stopped advertising, so no reconnect/rescan
             // can reach it either). stopDeviceScan is a safe no-op if nothing
-            // is currently scanning (see CLAUDE.md's "Scan must stop before
+            // is currently scanning (see .claude/rules/app-ble-connection.md "Scan must stop before
             // connecting").
             bleManager.stopDeviceScan();
 
@@ -315,7 +315,8 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
             //    the firmware's Service Changed / DB-hash to recover (verified: added a
             //    characteristic, reflashed without re-pairing -> hang). The ONLY reliable
             //    recovery from a stale bonded cache is forget+re-pair on the phone (see
-            //    the Known-Issues entry in app/CLAUDE.md). So refreshGatt bought nothing
+            //    the split-brain notes in .claude/rules/app-ble-connection.md). So refreshGatt
+            //    bought nothing
             //    for the stale case and taxed every healthy connect - dropped.
             //
             // retry: the first connectToDevice() to a just-rebooted bonded board can
@@ -646,7 +647,7 @@ export function useBleConnection(macAddress: string, deviceName: string): UseBle
                                     // (and failure risk) with the total option count instead of
                                     // with what actually changed. Re-read to get the full,
                                     // correctly-ordered value instead of trusting the notified
-                                    // bytes directly. See fw/CLAUDE.md (BtGattNotifyTraits).
+                                    // bytes directly. See .claude/rules/ble-gatt-contract.md.
                                     characteristic.read()
                                         .then(read => {
                                             if (read.value) updateCharValue(charUuid, read.value);

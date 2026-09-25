@@ -10,7 +10,7 @@
 # mounting the board's USB mass-storage disk, generating .glim files,
 # building extensions, and copying everything over. It deliberately does NOT
 # talk to the board's Zephyr shell (that must go through the mcp__serial__*
-# MCP tools per fw/CLAUDE.md, not raw Bash) and does NOT reformat the FAT
+# MCP tools per .claude/skills/flash-and-verify/references/serial-shell.md, not raw Bash) and does NOT reformat the FAT
 # filesystem itself — a corrupt/unformatted disk must be rebuilt with the
 # firmware's own `fatfs reformat` shell command (fw/src/storage/storage.cpp),
 # not host-side mkfs.vfat, since the firmware owns the partition and that
@@ -139,7 +139,7 @@ if [ ! -f "$BUILD_DIR/fw/CMakeCache.txt" ]; then
 fi
 
 # 3. Generate the known GLIM assets. This is the canonical set documented in
-#    fw/CLAUDE.md ("Setting up GLIM files on a new board") — add another
+#    .claude/skills/provision-device/references/nand-disk.md ("Setting up GLIM files on a new board") — add another
 #    line here if a new known asset is introduced.
 TMP_GLIM="$(mktemp -d /tmp/provision-glim.XXXXXX)"
 trap 'rm -rf "$TMP_GLIM"' EXIT
@@ -237,7 +237,7 @@ ls -la "$MNT/glim"
 ls -la "$MNT/ext"
 
 # Unmount so the firmware's own FAT mount is the only writer again — the reboot
-# below is what makes the board see the new files (see fw/CLAUDE.md on FAT
+# below is what makes the board see the new files (see .claude/skills/provision-device/references/nand-disk.md on FAT
 # concurrent access).
 if [ "$HOST_OS" = "Darwin" ]; then
     diskutil unmount "$DISK" >/dev/null

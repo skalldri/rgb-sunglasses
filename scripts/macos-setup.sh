@@ -241,7 +241,7 @@ ln -sf "${DOXYGEN_PREFIX}/bin/doxygen" "${BREW_BIN}/doxygen"
 
 # --- 10. GLIM asset tooling (the fw/tools converters) --------------------------
 # Every .glim asset is generated from source by fw/tools/convert_*.py — nothing is
-# checked into the repo as a binary (fw/CLAUDE.md, "Setting up GLIM files on a new
+# checked into the repo as a binary (.claude/skills/provision-device/references/nand-disk.md, "Setting up GLIM files on a new
 # board"). Those scripts need four things this Mac ships none of: ffmpeg and
 # yt-dlp as subprocesses, plus Pillow/numpy/lz4 as importable modules.
 #

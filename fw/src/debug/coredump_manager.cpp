@@ -169,7 +169,7 @@ void check_work_handler(struct k_work* work) {
      * long as any core_*.bin sat on /NAND:, which is until someone runs
      * coredump-fetch.sh — so on a board with an old dump it is a permanent
      * warning every minute, burying real events (the same log-spam reasoning as
-     * fw/CLAUDE.md's "no info-level logs in steady-state paths"). It also cost an
+     * fw/CLAUDE.md "No info-level logs in steady-state/per-tick paths"). It also cost an
      * fs_opendir + readdir sweep of the directory every period purely to decide
      * whether to print it. `coredump_mgr status` answers the same question on
      * demand. The drain above still runs on this period — that is the part that

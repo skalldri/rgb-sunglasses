@@ -15,7 +15,7 @@
  * `power sys boost`/`power sys vreghvout` (NRF5340 UICR/VREGHVOUT access)
  * are compiled out entirely on native_sim (power.cpp now guards them behind
  * CONFIG_SOC_NRF5340_CPUAPP, which native_sim never defines) - genuinely
- * hardware-only, out of scope here, same as the CLAUDE.md "power subsystem:
+ * hardware-only, out of scope here, same as the .claude/rules/fw-power.md "Power subsystem:
  * safe vs danger" boost/UICR warning already treats them.
  *
  * CONFIG_APP_CHARGER_POLICY / CONFIG_APP_BATTERY_MONITOR /
@@ -279,7 +279,7 @@ ZTEST(power_shell, test_pd_go2p_refused_without_battery) {
 
 /* The emulator deliberately always accepts GO2P (see emul_tps25750.c) so
  * native_sim exercises the success path; hardware may legitimately return
- * REJECTED instead (see tps25750_go2p()'s own comment / fw/CLAUDE.md). */
+ * REJECTED instead (see tps25750_go2p()'s own comment / .claude/rules/fw-power.md). */
 ZTEST(power_shell, test_pd_go2p_accepted_with_battery) {
     emul_tps25750_bq_set_vbat_present(tps_emul, true);
 

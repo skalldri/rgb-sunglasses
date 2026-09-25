@@ -14,7 +14,8 @@ export default function DeviceStateLayout() {
   // screen component (which needs a real navigator context that isn't present in unit tests).
   return (
     /* ONE telemetry provider for the whole device-state stack, mounted here for exactly the
-       reason app/CLAUDE.md gives for the MCUmgr client: a pushed screen does NOT unmount the
+       reason .claude/rules/app-firmware-update.md gives for the MCUmgr client: a pushed
+       screen does NOT unmount the
        one below it. The tuning screen and the wizard are both in this stack, so a
        per-screen provider meant two notification registrations on one characteristic
        (against Android's ~15-slot budget), two 30 s watchdogs fighting over tier and rate,

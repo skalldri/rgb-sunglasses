@@ -8,7 +8,7 @@
  * copy-out. Extension code can only touch its own llext-allocated regions
  * (TEXT/RODATA/DATA/BSS partitions, added by llext_add_domain()) plus
  * z_libc_partition (TLS pointer — see the CONFIG_USERSPACE notes in
- * fw/CLAUDE.md for why every user thread needs it). 5 partitions total;
+ * .claude/rules/fw-userspace.md for why every user thread needs it). 5 partitions total;
  * hardware-verified to fit the nRF5340's MPU budget (8 hardware regions,
  * ~4-5 usable partitions per domain after Zephyr's fixed background
  * mappings).

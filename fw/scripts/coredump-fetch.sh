@@ -13,7 +13,7 @@
 #              reminder to silence — use `coredump_mgr status`). NOTE: the
 #              firmware caches the FAT state it mounted at boot — reboot the
 #              board after deleting so it re-reads the filesystem (see
-#              fw/CLAUDE.md "FAT concurrent access causes read corruption").
+#              .claude/skills/provision-device/references/nand-disk.md "FAT concurrent access causes read corruption").
 #   dest-dir   where to copy the dumps (default: current directory)
 #
 # Debug a fetched dump with: coredump-debug.sh <core_NNNN.bin>

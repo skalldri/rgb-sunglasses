@@ -1,14 +1,15 @@
 ---
 name: validate-app
-description: "Run all companion-app checks that need no phone or hardware lock: jest unit tests, TypeScript typecheck, eslint. Use after any app/ change and before any PR touching app code — CI only runs jest, so clean CI does not mean clean types or lint."
+description: "Run all companion-app checks that need no phone or hardware lock: jest unit tests, TypeScript typecheck, eslint. Use after any app/ change and before any PR touching app code — CI gates all three, but run them locally so a type error or lint warning doesn't wait on CI."
 ---
 
 # Validate the companion app (device-free)
 
 Three checks cover the app's entire device-free validation surface. CI
-(`.github/workflows/app-ci.yml`) runs only `npm test -- --ci` plus a Gradle
-`assembleDebug` — it runs **neither** `tsc` **nor** lint, so a green CI run does not
-mean the types or lint are clean. Run all three locally.
+(`.github/workflows/app-ci.yml`) gates all three — the `test` job runs jest and the
+`typecheck-lint` job runs `tsc --noEmit` and eslint with `--max-warnings 0` (issue #130) —
+but run them locally so you're not waiting on CI to catch a type error or a new lint
+warning (any warning fails CI).
 
 ## 0. Precondition — install dependencies (fresh worktree)
 
@@ -22,7 +23,7 @@ cd app && npm ci
   `app/patches/react-native-ble-plx+3.5.0.patch` automatically.
 - **NEVER symlink `node_modules` from the main checkout** — Metro cannot resolve
   modules through a symlink outside the project root; this broke a real session
-  (see `app/CLAUDE.md`, "Running the app from inside a git worktree").
+  (see `/launch-app`).
 - Skip this step only if `app/node_modules/` already exists from an earlier `npm ci`.
 
 ## 1. Unit tests (jest)
@@ -72,7 +73,7 @@ errors, exit 0.
   *regenerates* the patch file by diffing current `node_modules`, and running it on an
   already-patched tree **corrupts** `app/patches/react-native-ble-plx+3.5.0.patch`.
   Never run the package-name form unless you are deliberately saving a new patch edit
-  (procedure in `app/CLAUDE.md`, "Known Issues & Quirks").
+  (procedure in `.claude/rules/app-ble-connection.md`, "react-native-ble-plx patch").
 - **hw-lock hook false positive**: the `PreToolUse` guard
   (`.claude/hooks/hw-lock-guard.sh`) denies any Bash command whose *text* matches
   `\bmcumgr\b` (needs the `board` lock) or `\badb\b` (needs the `app` lock) — even a
@@ -93,7 +94,7 @@ add the matching `app/__tests__/<name>.test.ts` in the same change.
 These three checks are the complete device-free surface. Actually driving the app on
 the phone is a separate, hardware-locked activity: it requires holding the `app` lock
 and launching via `app/scripts/launch-app.sh` — follow the **mandatory launch
-procedure in `app/CLAUDE.md`** ("Launching the App" and the worktree section) exactly;
+procedure in `/launch-app`** exactly;
 do not improvise with `npx expo run:android`.
 
 ## Exit criteria

@@ -11,8 +11,19 @@ diff. **Read-only**: report findings; never edit, build, test, or touch hardware
 
 ## Step 0 — load the house rules
 
-Read `fw/CLAUDE.md` `## Commenting rules` and `## Coding rules` first — they are the
-source of truth for several rules below.
+Read `fw/CLAUDE.md` `## Commenting rules`, `## Coding rules` and
+`### SYS_INIT ordering for early registration` first — they are the source of truth for
+several rules below. Then Read every `.claude/rules/*.md` whose `paths:` frontmatter matches a
+changed file (a subagent may not get them auto-loaded). The ones this checklist leans on:
+
+| Checklist items | Rules file |
+| --- | --- |
+| 5 (registry order / returns) | `.claude/rules/fw-animations.md` |
+| 11–13 (GATT layout, refused writes, notify length) | `.claude/rules/ble-gatt-contract.md`, `.claude/rules/fw-bluetooth-gatt.md` |
+| 15 (`K_USER` conversion) | `.claude/rules/fw-userspace.md` |
+| Logging casts, `%f` | `.claude/rules/fw-logging.md` |
+| Persistence, settings keys | `.claude/rules/fw-settings-persistence.md` |
+| Power-part writes | `.claude/rules/fw-power.md` |
 
 ## Step 1 — obtain the diff
 
@@ -55,7 +66,7 @@ verification needs a build/profiling/hardware).
 **Error handling — major**
 5. **Every error return propagated or LOG_ERR'd — never swallowed.** Ignoring an
    `int`/`ssize_t` result is a finding — a dropped `animation_registry_register_is_active()`
-   return silently disabled Is Active notify (PR #89; fw/CLAUDE.md `animation_registry` notes).
+   return silently disabled Is Active notify (PR #89; `.claude/rules/fw-animations.md` "Registration order matters").
 
 **Concurrency and timing — critical**
 6. **Multi-step I2C/register sequences wrapped in a per-device `k_mutex`**, with
@@ -91,15 +102,15 @@ verification needs a build/profiling/hardware).
 11. **Never reorder, remove, or insert-in-the-middle `BtGattServer` providers** —
     auto-UUIDs are positional, Android caches attribute handles per bonded device (a
     reorder breaks every bonded phone — issue #115 / PR #43), and the app's metadata
-    blob assumes declaration order. Appending is the only safe change. See the
-    `bt_service_cpp.h` notes in fw/CLAUDE.md.
+    blob assumes declaration order. Appending is the only safe change. See
+    `.claude/rules/ble-gatt-contract.md` "Bulk metadata characteristic".
 12. **Refusing a GATT write: return `BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED)` — never
     "success + corrective notify"** — the notify races the write response and the app's
-    optimistic update wins (fw/CLAUDE.md; `write_is_active`, `fw/src/extensions/extension_bt.cpp`).
+    optimistic update wins (`.claude/rules/ble-gatt-contract.md`; `write_is_active`, `fw/src/extensions/extension_bt.cpp`).
 13. **`notify()` for string-backed types must send the actual string length**
     (`strnlen`-based, matching `read()`), never `sizeof(storage_)` — a full buffer
     cannot fragment across ATT PDUs, so the notify fails (`Notify failed: -12`; see
-    fw/CLAUDE.md's `bt_service_cpp.h` notes).
+    `.claude/rules/ble-gatt-contract.md` "Notify payloads must fit").
 
 **Init and threading — major**
 14. **`SYS_INIT()` priority must be a plain number or a single macro that expands
@@ -111,7 +122,7 @@ verification needs a build/profiling/hardware).
     (PR #103, as of 2026-07 — re-verify via
     `grep -n 'priv_stacks' fw/build/fw/zephyr/zephyr.map`; see /rom-ram-budget). Any
     `K_USER` conversion must follow the dynamic-creation + `z_libc_partition` recipe
-    in fw/CLAUDE.md `### CONFIG_USERSPACE` — a bare `K_USER` flag on
+    in `.claude/rules/fw-userspace.md` — a bare `K_USER` flag on
     `K_THREAD_DEFINE` crashes on this SoC.
 
 **Comments and docs — minor**

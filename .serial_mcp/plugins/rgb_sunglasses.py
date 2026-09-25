@@ -6,7 +6,7 @@ serial_write/serial_read_until sequences and ANSI/echo parsing.
 
 IMPORTANT: a BT indicator (advertising/connecting/pairing) overlays the active
 animation and overrides what's actually rendered on the LEDs. set_animation
-ALWAYS clears the indicator first — see fw/CLAUDE.md "Animation shell control"
+ALWAYS clears the indicator first — see .claude/skills/flash-and-verify/references/serial-shell.md "Animation shell control"
 for why this is required, not optional.
 """
 

@@ -2,9 +2,8 @@
  * Tests for the compile-time BT animation adapters
  * (fw/src/bluetooth/animation_adapters/*.cpp, issue #175), compiled with the
  * real BT host headers on native_sim - same CONFIG_BT=y / no-bt_enable()
- * pattern as fw/tests/bluetooth/battery_service, per fw/CLAUDE.md's note
- * that battery_service is (as of 2026-07) the only suite exercising that
- * path.
+ * pattern as fw/tests/bluetooth/battery_service, the first suite to exercise
+ * that path (the fw/tests/bluetooth/ suites now all do; .claude/rules/fw-tests.md).
  *
  * Every adapter here uses the compile-time `BtGattServer<Providers...>` /
  * `BT_GATT_SERVER_REGISTER` machinery (bt_service_cpp.h), so each service's

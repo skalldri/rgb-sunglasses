@@ -50,7 +50,7 @@ process is the *current* tracked pid ever releases.
 
 ## Launching the companion app
 
-Hold `app` first — `app/scripts/launch-app.sh` only verifies the lock, never acquires (usage conventions: `app/CLAUDE.md`):
+Hold `app` first — `app/scripts/launch-app.sh` only verifies the lock, never acquires (usage conventions: `/launch-app`):
 
 ```
 Monitor(command: "scripts/hw-lock.sh hold app", persistent: true)

@@ -237,7 +237,7 @@ Copy the `.llext` into `/NAND:/ext/` on the board's USB mass-storage disk, then
 reboot so the firmware re-mounts the filesystem and rescans:
 
 ```bash
-# Mount the board's USB mass-storage disk (see fw/CLAUDE.md "USB Flash Disk"),
+# Mount the board's USB mass-storage disk (see `.claude/skills/provision-device/references/nand-disk.md`),
 # then:
 cp <your-extension>.llext /mnt/sunglasses-fs/ext/
 sync && umount /mnt/sunglasses-fs

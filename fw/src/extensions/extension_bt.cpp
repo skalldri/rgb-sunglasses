@@ -276,7 +276,7 @@ ssize_t write_param(struct bt_conn *, const struct bt_gatt_attr *attr, const voi
             memcpy(&value, buf, sizeof(value));
             /* FLOAT shares the raw 4-byte wire shape but rejects non-finite
              * payloads (NaN/Inf) with an ATT error — never accept-and-correct
-             * (see the GATT write-rejection rule in fw/CLAUDE.md). A NaN
+             * (see the write-rejection rule in .claude/rules/ble-gatt-contract.md). A NaN
              * reaching an extension's math defeats every range clamp (all
              * comparisons false), and a rejected default could never be
              * written back. */

@@ -5,7 +5,7 @@ import { APP_SELF_UPDATE_SUPPORTED, AppUpdateInfo, checkForAppUpdate } from '@/s
 // Run the update check at most once per app launch. GitHub's anonymous REST API
 // is rate-limited to 60 req/hr per IP, so we cache the result process-wide and
 // share a single in-flight request across any components that mount the hook
-// (see app/CLAUDE.md — no polling/retry-on-mount without a token).
+// (see .claude/rules/app-firmware-update.md — no polling/retry-on-mount without a token).
 let cached: AppUpdateInfo | null | undefined;
 let inFlight: Promise<AppUpdateInfo | null> | null = null;
 

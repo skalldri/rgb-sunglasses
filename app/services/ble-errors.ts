@@ -2,7 +2,7 @@
  * Human-readable message for a failed BLE characteristic write.
  *
  * react-native-ble-plx surfaces a `BleError` (or, defensively, anything) in the write helpers'
- * catch. The firmware convention (see fw/CLAUDE.md `bt_service_cpp.h`) is to refuse an
+ * catch. The firmware convention (see .claude/rules/ble-gatt-contract.md) is to refuse an
  * unacceptable write with an ATT error — most importantly `BT_ATT_ERR_WRITE_REQ_REJECTED`
  * (ATT code 0xFC / 252), e.g. when activating a faulted extension. We map that specific case to a
  * friendly line and fall back to a generic message otherwise. See issue #92.

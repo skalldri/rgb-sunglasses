@@ -729,7 +729,7 @@ function syncDataFor(scope: HTMLElement, kind: string): void {
 
 function buildButtons(): void {
   const keys = ["↑", "←", "→", "↓", "space"];
-  // Grid areas mirror proto0's physical directional layout (fw/CLAUDE.md:
+  // Grid areas mirror proto0's physical directional layout (.claude/rules/fw-animations.md:
   // 0=Up, 1=Left, 2=Right, 3=Down; Wake is a separate button).
   const areas = ["pad-up", "pad-left", "pad-right", "pad-down", "pad-wake"];
   BUTTON_NAMES.forEach((name, i) => {

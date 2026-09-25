@@ -27,11 +27,12 @@ contracts, report back. You never edit, never build, never touch hardware.
 | Cross-component BLE constants | `app/constants/bluetooth.ts` (anchors: `KnownServiceIds`, `UUID_`, `BLE_GATT_CPF_FORMAT_`) ↔ firmware `fw/src/bluetooth/gatt_cpf.h` + `fw/src/bluetooth/bt_service_cpp.h`. When tracing a UUID, quote both sides |
 | CI / releases | `.github/workflows/`: `build.yaml` (firmware + fw/tools pytest, path-filtered `fw/**` + `.github/workflows/**` + `.devcontainer/**`), `app-ci.yml` (path-filtered `app/**`), `app-ios-ci.yml`; three tag-triggered release workflows: `release.yaml` (`fw-v*`), `mcuboot-release.yaml` (`mcuboot-v*`), `app-release.yml` (`app-v[0-9]+.[0-9]+.[0-9]+` — strict three-part version, not a bare prefix glob) |
 | Host tools | `fw/tools/` (GLIM converters, `package_mcuboot.py`, `dump_dfu_tlv.py`; pytest suite in `fw/tools/tests/` runs in CI), `fw/scripts/` (`jlink-flash.sh`, `provision-device.sh`, font/audio pipelines), `scripts/hw-lock.sh` (multi-agent hardware lock) |
-| Project memory / workflow rules | root `CLAUDE.md`, `fw/CLAUDE.md`, `app/CLAUDE.md`; skills in `.claude/skills/` |
+| Project memory / workflow rules | root `CLAUDE.md`, `fw/CLAUDE.md`, `app/CLAUDE.md` (each indexes its rules files); code-area knowledge in `.claude/rules/*.md` — grep their `paths:` frontmatter for the file you're tracing; skills in `.claude/skills/`; incident history in `docs/agent-incidents.md` |
 
 ## Known dead ends — don't send the caller here
 
-- `fw/README.md` is a 7-line stub; the real firmware doc is `fw/CLAUDE.md`.
+- `fw/README.md` is the human overview, not the agent knowledge base — that is `fw/CLAUDE.md`
+  plus the `.claude/rules/fw-*.md` files it indexes.
 - `fw/scripts/img_to_c.py` is a broken stub (resize result discarded, never writes
   output). The real image pipeline is the GLIM converters in `fw/tools/`.
 - `fw/src/led_old.cpp` is dead code — not referenced in `fw/CMakeLists.txt`.

@@ -7,7 +7,7 @@ description: "Add or modify a firmware BLE GATT service or characteristic (anima
 
 Firmware half below; **the companion-app half (constants, codec, component, tests) is in
 [references/app-side.md](references/app-side.md)** — a device↔app change is not done until both
-halves land. Read `fw/CLAUDE.md` ("Bluetooth / GATT layer") first if you haven't.
+halves land. Read `.claude/rules/ble-gatt-contract.md` and `.claude/rules/fw-bluetooth-gatt.md` first if you haven't.
 
 ## COMPATIBILITY RULES — read before editing any service
 
@@ -75,10 +75,11 @@ one write-hooked characteristic + `BT_GATT_SERVER_REGISTER`. Steps:
    `bt_service_cpp.h`): `BtGattAutoReadNotifyCharacteristic<"Label", T, Default>`,
    `BtGattAutoReadWriteCharacteristic`, etc.; persisted values use
    `BtGattPersistentCharacteristic` (`fw/src/bluetooth/persistent_characteristic.h`). All
-   persisted characteristics share one fixed-cap registry — `kMaxRegistryEntries = 96` in
-   `fw/src/settings/persistent_value_registry.cpp` (issue #114 tracks removing the cap); a full
-   table drops new entries at boot (`LOG_ERR` "Persisted value table is full", `-ENOMEM` — no
-   build error), so check remaining headroom when adding persisted characteristics.
+   persisted characteristics register into one registry
+   (`fw/src/settings/persistent_value_registry.cpp`, an uncapped intrusive list since issue
+   #114), keyed by an explicit, stable string — never derive the key from declaration order
+   (`.claude/rules/fw-settings-persistence.md`). Each new key also costs a first-write miss and
+   a slot in the NVS name cache; size against churn.
    The CUD label + CPF format (deduced from `T`) are what the app auto-renders as a control —
    no app change needed for standard types. Assemble with `BtGattServer server(primary, a, b, ...);`
    then `BT_GATT_SERVER_REGISTER(nameStatic, server);` — registration is link-time, no init call.

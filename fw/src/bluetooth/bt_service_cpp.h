@@ -299,7 +299,7 @@ concept BtGattWriteHook =
  * BT_GATT_ERR(BT_ATT_ERR_WRITE_REQ_REJECTED). Use this when accepting the write
  * depends on a side effect that can fail (e.g. an I2C register write), so the
  * app's optimistic UI update reverts deterministically instead of relying on a
- * corrective notify (see the "Refusing a GATT write" rule in fw/CLAUDE.md).
+ * corrective notify (see the "Refusing a GATT write" rule in .claude/rules/ble-gatt-contract.md).
  *
  * A characteristic type must define either onWrite or onWriteChecked, not both.
  */

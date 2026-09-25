@@ -14,7 +14,7 @@
 # That USB copy is the loop for LOCAL builds. Extensions that ship on a GitHub
 # release reach end users a different way: the companion app's firmware-update
 # modal hashes each on-device .llext and re-uploads the ones that don't match
-# the release's asset digest (see fw/CLAUDE.md, "File management (group 8)").
+# the release's asset digest (see .claude/rules/extension-file-management.md, "File management (group 8)").
 #
 # Third-party extension developers don't use this script — see "Building" in
 # fw/extensions/README.md for the supported standalone flow.

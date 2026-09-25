@@ -1,0 +1,31 @@
+name: 'agent-docs'
+# Drift checker for the agent-facing docs (CLAUDE.md files, .claude/rules, skills, agents) —
+# see scripts/check-agent-docs.py. Deliberately NOT path-filtered: a code-only PR that renames
+# or moves a file can orphan a path-scoped rule's glob or a doc's backticked path, and that is
+# exactly the drift this exists to catch. Stdlib-only and fast (a few seconds), so running it
+# on every PR costs nothing.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  agent-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pytest
+
+      - name: Check agent docs
+        run: python3 scripts/check-agent-docs.py
+
+      - name: Checker self-tests
+        run: pytest scripts/tests/test_check_agent_docs.py -v

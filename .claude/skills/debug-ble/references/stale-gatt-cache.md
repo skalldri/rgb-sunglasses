@@ -30,6 +30,7 @@ read failures.
 
 ## `refreshGatt: "OnConnected"`
 
-Already passed by the app (grep `refreshGatt` in `app/hooks/use-ble-connection.ts`) —
-keep it; it fixes the post-firmware-update `GATT_INVALID_HANDLE` case on compliant
-stacks. Full entry: app/CLAUDE.md "Known Issues & Quirks".
+**No longer passed by the app** (issue #90): hardware testing showed it does not rescue
+the stale-cache hang on a non-compliant stack, while forcing a full re-discovery on every
+healthy connect. Compliant stacks recover through the firmware's Service Changed
+indication instead; OxygenOS-class stacks need forget + `/re-pair`. Full entry: `.claude/rules/app-ble-connection.md` "Split-brain triggers".

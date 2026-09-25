@@ -7,7 +7,7 @@
  * .exported_sym table the llext loader resolves against AND pulls the
  * implementation out of the picolibc/libgcc archives into the image.
  *
- * INVARIANT (CI-asserted one way, manual the other — see fw/CLAUDE.md):
+ * INVARIANT (CI-asserted one way, manual the other — see .claude/rules/fw-rgbx-sdk-abi.md):
  * every addition here must be mirrored in fw/sdk/arm/allowed-symbols.txt or
  * standalone extensions still can't use it (the SDK's undefined-symbol gate
  * rejects anything not on that list); build.yaml's check-allowed-symbols.sh

@@ -44,7 +44,7 @@ Deliverable of issue #333 part (b). First validated run: tracking issue
    shell port — discover it via `/check-hardware`, it shifts across resets). This
    is the single sanctioned reader of that port; do NOT read `/dev/ttyACM*` from
    Bash and do NOT drive `fw/scripts/tty-bridge.py` by hand — both race the MCP
-   server's reader thread and corrupt every response (`fw/CLAUDE.md`). The
+   server's reader thread and corrupt every response (`.claude/skills/flash-and-verify/references/serial-shell.md`). The
    `rgb_sunglasses` serial plugin's typed tools (`get_animation`, `glim_list`, …)
    cover common commands; use `serial_write` + `serial_read_until` for the rest.
 

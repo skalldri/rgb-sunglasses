@@ -3,7 +3,8 @@
 /*
  * Pure decision logic for the stack watcher, split out so the native_sim suite
  * (fw/tests/debug/stack_watch) can cover it without a kernel, a thread analyzer or a
- * shell — the same seam extension_tick_budget.h uses, which fw/CLAUDE.md records as the
+ * shell — the same seam extension_tick_budget.h uses, which .claude/rules/fw-extensions.md
+ * records as the
  * pattern for exactly this.
  *
  * Only the MEASUREMENT needs the SDK. The two decisions this module actually contributes

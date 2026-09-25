@@ -8,7 +8,7 @@ Build the proto0 firmware. Build dir: `fw/build`. Never use `--pristine` unless 
 **Exception**: a newly **added** devicetree overlay or Kconfig `.conf` fragment is never picked up
 by an incremental build — `DTC_OVERLAY_FILE`/`CONF_FILE` are cached in
 `fw/build/<image>/CMakeCache.txt`, which permanently gates auto-discovery. `--pristine` is the fix;
-see fw/CLAUDE.md, "Per-image Kconfig/devicetree overlays (sysbuild)".
+see `.claude/rules/fw-sysbuild-mcuboot.md`, "Per-image Kconfig/devicetree overlays (sysbuild)".
 
 **Always capture the entire build output to a temp file** (the `tee` below) — a sysbuild run links 4
 images and prints 4 separate memory tables, so anything you need later (the appcore table, an error
@@ -46,6 +46,6 @@ west build \
      Any size claim beyond those printed percentages goes through /rom-ram-budget
      (`fw/build/fw/zephyr/zephyr.map` is ground truth).
    - If the change added/edited a Kconfig symbol: confirm it landed in
-     `fw/build/fw/zephyr/include/generated/zephyr/autoconf.h` (root CLAUDE.md pre-flash rule).
+     `fw/build/fw/zephyr/include/generated/zephyr/autoconf.h` (`/flash-and-verify` §2 pre-flash gates).
    - This build is a prerequisite for `fw/extensions/build.sh` and `fw/scripts/provision-device.sh`
      (both default to `fw/build`).

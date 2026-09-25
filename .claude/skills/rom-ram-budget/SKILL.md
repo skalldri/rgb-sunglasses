@@ -73,7 +73,7 @@ Details:
   An `=n` override only reclaims flash if the feature's code compiles out cleanly when
   disabled — wrap call sites in `IS_ENABLED(CONFIG_...)` / `if constexpr (IS_ENABLED(...))`
   or gate the sources with `target_sources_ifdef` in `fw/CMakeLists.txt` (working
-  precedent: `CONFIG_APP_PERSIST_BT_CONFIG`, documented in `fw/CLAUDE.md`).
+  precedent: `CONFIG_APP_PERSIST_BT_CONFIG`, documented in `.claude/rules/fw-settings-persistence.md`).
 - **`default y` Kconfig danger:** a new feature symbol in `fw/Kconfig` with a bare
   `default y` lands on EVERY board built from this tree. Either gate it
   (`default y if BOARD_RGB_SUNGLASSES_PROTO0_NRF5340_CPUAPP` + `default n` — precedent:
@@ -119,7 +119,7 @@ Details:
 statically-defined threads have a zeroed `mem_domain_info`, and
 `k_mem_domain_add_thread()` faults on them; a converted thread also needs
 `z_libc_partition` in its memory domain or it usage-faults on its first instruction.
-Both crash classes are documented in `fw/CLAUDE.md` ("CONFIG_USERSPACE / kernel-user
+Both crash classes are documented in `.claude/rules/fw-userspace.md` ("CONFIG_USERSPACE / kernel-user
 mode separation"). Copy the working pattern from `imu_init()` in `fw/src/imu/imu.cpp`:
 `K_THREAD_STACK_DEFINE` + `k_thread_create(..., K_FOREVER)` from a SYS_INIT hook,
 access grants, `k_mem_domain` with `{own_partition, z_libc_partition}`, then

@@ -10,7 +10,7 @@
  * @file
  * @brief Pure (Zephyr-free) helpers for persisting extension parameter values
  * via the existing persistent_value_registry/persistent_value_store
- * mechanism (see fw/CLAUDE.md's "Settings-backed config persistence").
+ * mechanism (see .claude/rules/fw-settings-persistence.md, "Settings-backed config persistence").
  *
  * Deliberately dependency-free, like extension_manifest.h, so it compiles on
  * native_sim and is covered by a Twister suite without pulling in Zephyr/BT.

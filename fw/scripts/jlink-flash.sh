@@ -26,7 +26,7 @@ BUILD_DIR="$REPO_ROOT/fw/build"
 # tools). On a macOS host, flash over MCUmgr serial OTA instead.
 if [ "$(uname -s)" = "Darwin" ]; then
     echo "[!] jlink-flash.sh does not support macOS — use fw/scripts/mcumgr-flash.sh (MCUmgr OTA over serial)." >&2
-    echo "    See fw/CLAUDE.md, 'macOS host (Mac Mini)'." >&2
+    echo "    See .claude/skills/flash-and-verify/references/macos-host.md." >&2
     exit 1
 fi
 

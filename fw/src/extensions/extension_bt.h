@@ -17,7 +17,7 @@
  * follow-up), built at runtime by extension_metadata_blob.h and byte-for-byte
  * compatible with the compile-time equivalent built-in services get (see
  * bt_service_cpp.h's MetadataBlobBuilder) — so the companion app's existing
- * fast-discovery path (app/CLAUDE.md) picks these services up automatically,
+ * fast-discovery path (.claude/rules/ble-gatt-contract.md) picks these services up automatically,
  * with no fallback to per-characteristic CUD/CPF descriptor reads needed.
  *
  * @return 0 on success, negative errno on failure (slot out of range, not
